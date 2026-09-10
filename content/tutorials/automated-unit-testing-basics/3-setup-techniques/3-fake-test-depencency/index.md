@@ -1,5 +1,6 @@
 ---
 title: "Fake test dependency"
+aliases: ["/tutorials/automated-unit-testing-basics/3-setup-techniques/3-fake-test-dependency/"]
 date: 2019-02-22T10:25:49Z
 weight: 3
 draft: false

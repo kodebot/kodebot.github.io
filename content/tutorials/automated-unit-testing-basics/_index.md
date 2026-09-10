@@ -1,5 +1,7 @@
 ---
 title: "Automated unit testing basics"
+description: "A language and tool agnostic introduction to automated unit testing: what makes a good test, setup and verification techniques, and test-driven development."
+aliases: ["/tutorials/automated-unit-testing-basics/1-course-overview/"]
 date: 2019-02-22T10:25:49Z
 weight: 1
 draft: false

@@ -1,6 +1,6 @@
 ---
 title: "ASP.NET 5 - Tag Helpers, the HTML way"
-date: 2015-05-014T00:00:00+00:00
+date: 2015-05-14T00:00:00+00:00
 publishdate: 2015-05-14T00:00:00+00:00
 lastmod: 2015-05-14T00:00:00+00:00
 tags: ["ASP.NET", "MVC"]

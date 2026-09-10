@@ -1,6 +1,6 @@
 ---
 title: "Single Responsibility Principle"
-date: 2019-9-18T00:00:00Z
+date: 2019-09-18T00:00:00Z
 weight: 2
 draft: false
 ---

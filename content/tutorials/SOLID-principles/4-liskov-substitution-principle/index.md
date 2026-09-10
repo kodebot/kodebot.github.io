@@ -1,6 +1,6 @@
 ---
 title: "Liskov Substitution Principle"
-date: 2019-9-18T00:00:00Z
+date: 2019-09-18T00:00:00Z
 weight: 4
 draft: false
 ---

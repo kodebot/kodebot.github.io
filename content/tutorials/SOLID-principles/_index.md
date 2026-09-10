@@ -1,6 +1,7 @@
 ---
 title: "SOLID Principles"
-date: 2019-9-18T00:00:00Z
+description: "Design flexible, maintainable object-oriented software with the five SOLID principles. Examples in C#."
+date: 2019-09-18T00:00:00Z
 weight: 1
 draft: false
 images: ["thumbnail.jpg", "banner.jpg"]

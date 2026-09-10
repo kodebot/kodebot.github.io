@@ -1,6 +1,6 @@
 ---
 title: "How to isolate AutoMapper in Unit Tests?"
-date: 2015-05-020T00:00:00+00:00
+date: 2015-05-20T00:00:00+00:00
 publishdate: 2015-05-20T00:00:00+00:00
 lastmod: 2015-05-20T00:00:00+00:00
 tags: ["Unit Testing", "Library"]

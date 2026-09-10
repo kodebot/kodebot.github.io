@@ -40,6 +40,17 @@ To add another book, put its HTML at `static/books/<slug>/index.html` with a cov
 and add an entry to `books` in `content/books/_index.md`.
 
 
+## Videos
+
+The Videos page and the home page's "Latest videos" are read from the kodebot YouTube channel's RSS feeds when the site is built,
+so rebuild and publish to pick up new uploads. Feeds are cached for 10 minutes; `hugo --cleanDestinationDir --ignoreCache` forces a refetch.
+
+To show another playlist, add its id to `playlists` in `content/videos/_index.md`; the order there is the order on the page.
+Each YouTube feed returns at most 15 videos: the latest uploads for the channel, and the first 15 in playlist order for a playlist,
+so a longer playlist shows those plus a "See all on YouTube" link.
+If a feed can't be fetched the build still succeeds with a warning, and that playlist is left out.
+
+
 ## How to write consistently
 Use `h3` (###) onwards for subtitles 
 Always create a folder per post and keep all local files in the folder

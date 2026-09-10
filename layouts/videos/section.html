@@ -1,0 +1,57 @@
+{{ define "main" }}
+{{- $channel := site.Params.youtube.channel }}
+{{- $shelves := slice }}
+{{- with site.Params.youtube.channelId }}
+  {{- $url := printf "https://www.youtube.com/feeds/videos.xml?channel_id=%s" . }}
+  {{- $latest := partialCached "youtube-feed.html" $url $url }}
+  {{- with $latest.videos }}
+    {{- $shelves = $shelves | append (dict "title" "Latest uploads" "anchor" "latest-uploads" "link" $channel "linkText" "Go to the channel" "videos" .) }}
+  {{- end }}
+{{- end }}
+{{- range .Params.playlists }}
+  {{- $url := printf "https://www.youtube.com/feeds/videos.xml?playlist_id=%s" .id }}
+  {{- $feed := partialCached "youtube-feed.html" $url $url }}
+  {{- if $feed.videos }}
+    {{- $title := or .title $feed.title }}
+    {{- $shelves = $shelves | append (dict "title" $title "anchor" (anchorize $title) "link" (printf "https://www.youtube.com/playlist?list=%s" .id) "linkText" "See all on YouTube" "videos" $feed.videos) }}
+  {{- end }}
+{{- end }}
+
+<div class="container">
+  <header class="page-header">
+    <h1>{{ .Title }}</h1>
+    {{- with .Content }}
+    <div class="prose">{{ . }}</div>
+    {{- end }}
+    {{- with $channel }}
+    <p><a class="button button-youtube" href="{{ . }}">{{ partial "icon.html" "youtube" }}<span>Subscribe on YouTube</span></a></p>
+    {{- end }}
+  </header>
+
+  {{- with $shelves }}
+  <nav class="shelf-index" aria-label="Series">
+    <ul>
+      {{- range . }}
+      <li><a href="#{{ .anchor }}">{{ .title }}</a></li>
+      {{- end }}
+    </ul>
+  </nav>
+
+  {{- range . }}
+  <section class="shelf" id="{{ .anchor }}" aria-labelledby="{{ .anchor }}-title">
+    <div class="section-head">
+      <h2 id="{{ .anchor }}-title">{{ .title }}</h2>
+      <a href="{{ .link }}">{{ .linkText }}</a>
+    </div>
+    <ul class="video-row">
+      {{- range .videos }}
+      <li>{{ partial "video-card.html" . }}</li>
+      {{- end }}
+    </ul>
+  </section>
+  {{- end }}
+  {{- else }}
+  <p>The video list couldn't be loaded when this page was built. <a href="{{ $channel }}">Watch the videos on YouTube</a>.</p>
+  {{- end }}
+</div>
+{{ end }}

@@ -1,6 +1,13 @@
 ---
 title: "Books"
 books:
+  - title: "GOV.UK Stack, Fast"
+    label: "New book"
+    subtitle: "Nunjucks, Express and Fastify, GOV.UK Frontend and CASA for React and .NET developers"
+    link: "/books/govuk-stack-fast/"
+    cover: "/books/govuk-stack-fast/cover.svg"
+    badges: ["GOV.UK Frontend 6.5", "Express 5 · Fastify 5", "CASA 10, optional"]
+    summary: "You build React front ends on ASP.NET Core APIs, and your next project is a UK government service on a different stack. This short book maps what you know onto it, layer by layer: the request loop, the plumbing, Nunjucks templates, GOV.UK Frontend's components, journeys, validation and the standards you will be assessed on. Every server example shows Express and Fastify side by side, in TypeScript or JavaScript, quoted from one tested example app. Read it in about 30 minutes, or 35 with the optional part on CASA."
   - title: "GitLab CI/CD, Decoded"
     label: "New book"
     subtitle: "Read, trace and fix any enterprise pipeline"

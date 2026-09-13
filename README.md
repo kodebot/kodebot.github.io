@@ -31,7 +31,8 @@ Books are self-contained HTML files kept at `static/books/<slug>/index.html`.
 The build serves each one at `/books/<slug>/` unchanged, apart from the site's favicon and a "Kodebot / Books" link
 at the top of its sidebar (see `layouts/books/page.html`). The link goes inside the book's `<div class="masthead">`,
 and the build warns about a book that has none.
-The Books page and the home page list them from the `books` front matter in `content/books/_index.md`.
+The Books page lists them all from the `books` front matter in `content/books/_index.md`.
+The home page lists only the entries marked `home: true`, beside an "All books" link to the Books page.
 
 To update *Java for C# Developers*:
 
@@ -41,6 +42,7 @@ To update *Java for C# Developers*:
 
 To add another book, put its HTML at `static/books/<slug>/index.html` with a cover image beside it,
 and add an entry to `books` in `content/books/_index.md`.
+Add `home: true` to the entry only if the book should also appear on the home page.
 
 
 ## Videos

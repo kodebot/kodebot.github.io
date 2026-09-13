@@ -20,6 +20,7 @@ books:
     badges: ["GitLab 19.3", "Node, Java and OpenTofu labs", "GitLab.com and self-managed"]
     summary: "Your team's pipeline file is twenty lines long; the pipeline it produces is not, and keeping it working is now your job. Write your team's pipeline step by step, in Node or Java, with labs you run on your own GitLab: build and test, merge request pipelines without duplicates, images and secrets, deploys, OpenTofu, and a central team's templates. Then learn to read everything those templates add: where each job comes from, why it ran, what it was given, and what to do when it breaks, with 68 symptom cards for the failures you will meet. Read the core in about three and a quarter hours, plus about two hours of labs, and press ⌘K to look up any keyword, variable or error message."
   - title: "Java for C# Developers"
+    home: true
     subtitle: "A working handbook for .NET engineers moving to Java and Spring Boot"
     link: "/books/java-for-csharp-developers/"
     cover: "/books/java-for-csharp-developers/cover.svg"

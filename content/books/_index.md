@@ -1,6 +1,12 @@
 ---
 title: "Books"
 books:
+  - title: "AWS for Azure Architects and Developers"
+    subtitle: "Design enterprise AWS systems end to end, whatever you know of Azure"
+    link: "/books/aws-for-azure-architects-and-developers/"
+    cover: "/books/aws-for-azure-architects-and-developers/cover.svg"
+    badges: ["AWS as of September 2026", "Terraform 1.16 · Java 25", "125 figures with official icons"]
+    summary: "You design and build on Azure, or know only part of it, and your next system runs on AWS. This book teaches AWS on its own terms and uses Azure only as a bridge, so no page depends on knowing Azure well. Follow MegaCorp's payments team from its first account to a platform across two Regions: accounts, identity and networks; compute, data, messaging and the edge; then security, resilience, cost, delivery and operations. Each service is told as a story: how it works, when to use it and when not, its limits, cost, security and traps, and the history that lets you date what you inherit. Words that mean something else on AWS are flagged where they appear. Three end-to-end designs and a set of review drills pull it together, and 125 figures use the official AWS and Azure icons. Read the teaching chapters in under three hours; the appendices add a service map, an IAM policy cookbook, an error index and a cheat card, and ⌘K looks up any Azure term or AWS error message."
   - title: "GOV.UK Stack, Fast"
     subtitle: "Nunjucks, Express and Fastify, GOV.UK Frontend and CASA for React and .NET developers"
     link: "/books/govuk-stack-fast/"

@@ -1,6 +1,12 @@
 ---
 title: "Books"
 books:
+  - title: "DDD and Microservices: The Atlas"
+    subtitle: "A short story about drawing the right borders: domain-driven design, the architecture styles and microservices, with their history, their traps and the arguments on both sides"
+    link: "/books/ddd-and-microservices/"
+    cover: "/books/ddd-and-microservices/cover.svg"
+    badges: ["DDD · hexagonal · CQRS · sagas", "Java 21 snippets", "109 named traps", "30 diagrams"]
+    summary: "You have heard bounded context, aggregate, hexagonal, saga and outbox in meetings and nodded. This book is one story in twenty-one short chapters. Bramble is an online shop that starts as a monolith that works, splits itself badly into a distributed monolith, is rescued by strategic and tactical DDD, learns to integrate across borders with events, the outbox and sagas, reshapes its teams around its contexts, strangles its legacy, and ends with the judgement to build its next product as a modular monolith. Every chapter opens with something breaking; the fix is the chapter's idea, and it arrives with a place in one running metaphor (an atlas of countries, languages and treaties), a diagram of the mechanism, a one-line hook, and a dated account of who thought of it and what they were reacting to. Then the book does what a mentor would do at a whiteboard: names the traps and their tell-tale signs, gives you a small design with one planted flaw to find, and hands you three questions to ask whoever proposes the pattern next, plus the point on which experts still disagree, argued fairly from both sides. Layered, hexagonal, onion, clean, vertical slices and Spring Modulith get one chapter as one idea. Read it in about two and a half hours, and keep the epilogue's review checklist of 109 traps and its 21-question card."
   - title: "From Docker to Kubernetes"
     subtitle: "A short story from one container to a self-running cluster, with the commands that matter"
     link: "/books/from-docker-to-kubernetes/"

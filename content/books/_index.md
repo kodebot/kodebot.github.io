@@ -1,6 +1,12 @@
 ---
 title: "Books"
 books:
+  - title: "From Docker to Kubernetes"
+    subtitle: "A short story from one container to a self-running cluster, with the commands that matter"
+    link: "/books/from-docker-to-kubernetes/"
+    cover: "/books/from-docker-to-kubernetes/cover.svg"
+    badges: ["Docker 27 · kind 0.33", "Kubernetes 1.37", "Helm · Istio · Prometheus · Argo CD", "30 diagrams"]
+    summary: "You have run docker run and heard of Pods, and you would like a clear picture instead of a vague one. This book is one story in twenty short chapters. Maya ships a small app called Pantry, and every chapter opens with something breaking or someone asking for what the current setup cannot do; the fix is the chapter's concept, and by the end a new crack has appeared. Six chapters of Docker, nine of Kubernetes, four on the tools real clusters run alongside it (Helm, Istio, Prometheus and Grafana, Argo CD), and an epilogue with the whole map. Every concept gets a place in one running metaphor, a diagram of how it actually works, and a one-line hook to remember it by; every chapter ends with the twenty percent of commands that do eighty percent of the work and a hands-on section you can paste into a terminal against the companion app. Read it in about an hour and a quarter, and keep the epilogue's cheat sheet."
   - title: "AWS for Azure Architects and Developers"
     subtitle: "Design enterprise AWS systems end to end, whatever you know of Azure"
     link: "/books/aws-for-azure-architects-and-developers/"

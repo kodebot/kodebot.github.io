@@ -40,6 +40,13 @@ To update *Java for C# Developers*:
 2. Copy `dist/handbook.html` to `static/books/java-for-csharp-developers/index.html`
 3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
 
+To update *From Docker to Kubernetes*:
+
+1. In the book repo (`quick-guide-to-docker-kubernetees`), render the Mermaid diagrams to `dist/svgs.json`
+   (an array of SVG strings in book order; see `scripts/build-site.py` for how) and run `python3 scripts/build-site.py`
+2. Copy `dist/index.html` to `static/books/from-docker-to-kubernetes/index.html`
+3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
+
 To add another book, put its HTML at `static/books/<slug>/index.html` with a cover image beside it,
 and add an entry to `books` in `content/books/_index.md`.
 Add `home: true` to the entry only if the book should also appear on the home page.

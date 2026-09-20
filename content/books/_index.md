@@ -1,6 +1,12 @@
 ---
 title: "Books"
 books:
+  - title: "Cybersecurity: The Keep"
+    subtitle: "A short story about defending one company, from the wax seal to the machine learning model: how each control actually works, the traps it falls into, and what every vendor calls it"
+    link: "/books/cybersecurity-the-keep/"
+    cover: "/books/cybersecurity-the-keep/cover.svg"
+    badges: ["Ciphers to zero trust and AI", "Microsoft · AWS · Google · IBM", "204 named traps", "37 diagrams", "Laptop-only demos"]
+    summary: "You have heard encryption, hashing, RBAC, mTLS, zero trust and EDR in meetings and nodded. This book is one story in thirty-six short chapters. Thistle is a small savings app that starts with a spreadsheet emailed to four hundred customers and ends with an architecture that would survive most of what it met on the way: a settlement file with one row changed, a forged invoice, a domain nobody had looked at since it was installed, a role that could start eleven instances, a laptop taken from a café table, a dependency three levels down that phones abroad, an AI assistant asked to read customer tickets, and an alert at 02:41 on a Sunday. Every chapter opens with something breaking; the fix is the chapter's idea, and it arrives with a place in one running metaphor (a medieval keep that modernises without ever being demolished), a diagram of what is actually sent and checked, a one-line hook, and a dated account of who invented it and what they were reacting to — Kerckhoffs in 1883, Diffie and Hellman in 1976, the confused deputy in 1988, zero trust in 2010, prompt injection in 2022. Then it does what a mentor would do: names the traps and their tell-tale signs, hands you commands you can run on your own laptop with no cloud account, tells you what Microsoft, AWS, Google, IBM and the independents each call the thing, and gives you three questions to ask whoever proposes it next, plus the point on which the field still genuinely disagrees. The metaphor is retired on purpose in chapter 23, because a keep has an inside and an outside and no real system does any more. Read it in about five hours, and keep the epilogue: the full vendor map, an A–Z glossary, every command grouped by task, and a review checklist of all 204 traps. Press / to search any term."
   - title: "DDD and Microservices: The Atlas"
     subtitle: "A short story about drawing the right borders: domain-driven design, the architecture styles and microservices, with their history, their traps and the arguments on both sides"
     link: "/books/ddd-and-microservices/"

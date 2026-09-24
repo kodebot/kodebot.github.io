@@ -54,6 +54,13 @@ To update *DDD and Microservices: The Atlas*:
 2. Run `python3 scripts/build-site.py` and copy `dist/index.html` and `dist/cover.svg` to `static/books/ddd-and-microservices/`
 3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
 
+To update *Maintainable Playwright Tests*:
+
+1. In the book repo (`playwright-book`), run `scripts/check.sh`, `scripts/build.sh`, `node scripts/render-diagrams.mjs`
+   and `python3 scripts/build-site.py`
+2. Copy `dist/index.html` and `dist/cover.svg` to `static/books/maintainable-playwright-tests/`
+3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
+
 To add another book, put its HTML at `static/books/<slug>/index.html` with a cover image beside it,
 and add an entry to `books` in `content/books/_index.md`.
 Add `home: true` to the entry only if the book should also appear on the home page.

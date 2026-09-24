@@ -1,6 +1,12 @@
 ---
 title: "Books"
 books:
+  - title: "Maintainable Playwright Tests"
+    subtitle: "Data-driven, DRY, multi-locale end-to-end tests with TypeScript"
+    link: "/books/maintainable-playwright-tests/"
+    cover: "/books/maintainable-playwright-tests/cover.svg"
+    badges: ["Playwright 1.63 · TypeScript 7", "en-GB · en-US · de-DE · ja-JP", "43 named traps", "15 diagrams", "Every snippet type-checked"]
+    summary: "You can write decent code, you have probably written Selenium tests, and now you have to test a long, branching web app in several languages with Playwright. This book is one story in fourteen short chapters. Tomas, a Selenium veteran, rebuilds the suite for Kestrel Insure, a car-insurance quote journey of about forty screens sold in the UK, the US, Germany and Japan. Every chapter opens with something breaking and fixes it the Playwright way: auto-waiting instead of sleeps, locators by role, small page objects, fixtures instead of a BaseTest, scenarios that hold both inputs and expected outputs, a screen registry and driver loop that answers whatever screen the app shows and asserts the path it took, starting mid-flow, market profiles that keep locale differences out of the specs, sessions saved once, third parties mocked at the boundary, and sharded runs that treat flaky tests as bug reports. Each chapter names its traps, with the tell-tale sign, what to do instead and the lint rule that catches them, and ends with a spot-the-flaw exercise and three questions for code review. The last chapter compares Playwright with Cypress and Selenium fairly, including where each of them wins. Every TypeScript snippet is compiled against Playwright 1.63 before publication. Read it in about two hours, and keep the epilogue: a Concept Atlas of every feature with links to the docs, the catalogue of all 43 traps, a baseline config and ESLint setup, and a glossary for Selenium users. Press / to search."
   - title: "Cybersecurity: The Keep"
     subtitle: "A short story about defending one company, from the wax seal to the machine learning model: how each control actually works, the traps it falls into, and what every vendor calls it"
     link: "/books/cybersecurity-the-keep/"

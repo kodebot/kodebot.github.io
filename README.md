@@ -32,6 +32,8 @@ The build serves each one at `/books/<slug>/` unchanged, apart from the site's f
 at the top of its sidebar, and a button beside the link that hides the sidebar, with another at the top left of the page
 to bring it back (see `layouts/books/page.html`). The link goes inside the book's `<div class="masthead">` and
 the buttons need its `<aside class="sidebar">`; the build warns about a book that lacks either.
+With the sidebar hidden, the text may be wider by the sidebar's width: the script reads the book's own `max-width`
+for `main` and `.ch` from its styles and adds `--sidebar` to each, so the right edge of the text stays where it was.
 Each book remembers in the browser whether its sidebar was hidden. Below 860px wide the buttons are not shown,
 as the book's own Contents button already opens and closes the sidebar there.
 The Books page lists them all from the `books` front matter in `content/books/_index.md`.

@@ -132,22 +132,80 @@ kbd { font-family:var(--mono); font-size:.85em; border:1px solid var(--border-st
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
 <style>
-  .kb-site { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; font-size: 12px; line-height: 1.4; color: var(--text-mute); }
+  .kb-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 14px; }
+  .kb-site { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 1.4; color: var(--text-mute); }
   .kb-site a { display: inline-flex; align-items: center; gap: 6px; color: inherit; text-decoration: none; }
   .kb-site a:hover { color: var(--accent); text-decoration: underline; }
   .kb-site img { width: 16px; height: 16px; }
-  @media (max-width: 860px) { .kb-site { margin-top: 40px; } }
+  .btn.kb-side { display: none; padding: 6px 7px; line-height: 0; }
+  .btn.kb-show { position: fixed; top: 12px; left: 6px; z-index: 60; }
+  @media (max-width: 860px) { .kb-bar { margin-top: 40px; } }
+  @media screen and (min-width: 861px) {
+    [data-kb-sidebar="open"] .btn.kb-hide, [data-kb-sidebar="closed"] .btn.kb-show { display: block; }
+    [data-kb-sidebar="closed"] .sidebar { display: none; }
+  }
 </style>
 </head>
 <body>
 <button class="btn menubtn" id="menu-btn" type="button" aria-expanded="false">&#9776; Contents</button>
 <div class="app">
+<button class="btn kb-side kb-show" type="button" aria-expanded="false" aria-label="Show sidebar" title="Show sidebar"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><path d="M6.25 2.75v10.5"/></svg>
+</button>
+<script>
+(function () {
+  var root = document.documentElement, key = "kb-sidebar:" + location.pathname, sideTop = 0;
+  function $(s) { return document.querySelector(s); }
+
+  
+  
+  function topBlock() {
+    var main = $("main"), r = main && main.getBoundingClientRect(), first = null;
+    for (var y = 40; r && y < innerHeight; y += 40) {
+      var el = document.elementFromPoint(r.left + r.width / 2, y), b = el && el.getBoundingClientRect();
+      if (!el || el === main || !main.contains(el) || b.height >= innerHeight) continue;
+      if (b.top >= 0) return el;
+      first = first || el;
+    }
+    return first;
+  }
+
+  function set(closed, focus) {
+    var side = $(".sidebar"), at = topBlock(), y = at && at.getBoundingClientRect().top;
+    if (closed && side) sideTop = side.scrollTop;
+    root.dataset.kbSidebar = closed ? "closed" : "open";
+    try { if (closed) localStorage.setItem(key, "closed"); else localStorage.removeItem(key); } catch (e) {   }
+    if (!closed && side) side.scrollTop = sideTop;
+    if (at) scrollBy({ top: at.getBoundingClientRect().top - y, behavior: "instant" });
+    var btn = focus && $(closed ? ".kb-show" : ".kb-hide");
+    if (btn) btn.focus({ preventScroll: true });
+  }
+
+  var closed = false;
+  try { closed = localStorage.getItem(key) === "closed"; } catch (e) {   }
+  root.dataset.kbSidebar = closed ? "closed" : "open";
+
+  document.addEventListener("click", function (e) {
+    if (e.target.closest(".kb-side")) set(root.dataset.kbSidebar !== "closed", true);
+  });
+
+  
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "/" && !e.metaKey && !e.ctrlKey && root.dataset.kbSidebar === "closed" &&
+        matchMedia("(min-width: 861px)").matches && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName) &&
+        $(".sidebar input[type=search]")) set(false);
+  }, true);
+})();
+</script>
 <aside class="sidebar" id="sidebar">
-  <div class="masthead"><nav class="kb-site" aria-label="Kodebot">
-  <a href="/"><img src="/favicon.svg" alt="" width="16" height="16">Kodebot</a>
-  <span aria-hidden="true">/</span>
-  <a href="/books/">Books</a>
-</nav>
+  <div class="masthead"><div class="kb-bar">
+  <nav class="kb-site" aria-label="Kodebot">
+    <a href="/"><img src="/favicon.svg" alt="" width="16" height="16">Kodebot</a>
+    <span aria-hidden="true">/</span>
+    <a href="/books/">Books</a>
+  </nav>
+  <button class="btn kb-side kb-hide" type="button" aria-expanded="true" aria-label="Hide sidebar" title="Hide sidebar"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><path d="M6.25 2.75v10.5"/></svg>
+</button>
+</div>
 
     <h1>DDD and Microservices: The Atlas</h1>
     <p>A short story about drawing the right borders: domain-driven design, the architecture styles and microservices, with their history, their traps and the arguments on both sides</p>

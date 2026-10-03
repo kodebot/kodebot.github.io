@@ -28,9 +28,12 @@ Note: This will ensure each post has its own folder with necessary images, attac
 ## How to publish or update a book
 
 Books are self-contained HTML files kept at `static/books/<slug>/index.html`.
-The build serves each one at `/books/<slug>/` unchanged, apart from the site's favicon and a "Kodebot / Books" link
-at the top of its sidebar (see `layouts/books/page.html`). The link goes inside the book's `<div class="masthead">`,
-and the build warns about a book that has none.
+The build serves each one at `/books/<slug>/` unchanged, apart from the site's favicon, a "Kodebot / Books" link
+at the top of its sidebar, and a button beside the link that hides the sidebar, with another at the top left of the page
+to bring it back (see `layouts/books/page.html`). The link goes inside the book's `<div class="masthead">` and
+the buttons need its `<aside class="sidebar">`; the build warns about a book that lacks either.
+Each book remembers in the browser whether its sidebar was hidden. Below 860px wide the buttons are not shown,
+as the book's own Contents button already opens and closes the sidebar there.
 The Books page lists them all from the `books` front matter in `content/books/_index.md`.
 The home page lists only the entries marked `home: true`, beside an "All books" link to the Books page.
 

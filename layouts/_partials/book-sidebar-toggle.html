@@ -1,0 +1,49 @@
+{{- /* Goes in just before a book's sidebar: the button that brings a hidden sidebar back, and the script
+       behind it and the Hide button in book-site-nav.html. The script runs before the sidebar is parsed,
+       so a book reopened with its sidebar hidden never shows it. Each book remembers its own choice. */ -}}
+<button class="btn kb-side kb-show" type="button" aria-expanded="false" aria-label="Show sidebar" title="Show sidebar">{{ partial "book-sidebar-icon.html" . }}</button>
+<script>
+(function () {
+  var root = document.documentElement, key = "kb-sidebar:" + location.pathname, sideTop = 0;
+  function $(s) { return document.querySelector(s); }
+
+  // The text reflows when main changes width, and the reader keeps their place by a block near the top of the window:
+  // the first that starts inside it, as one that starts above may change height, or failing that the first of any.
+  function topBlock() {
+    var main = $("main"), r = main && main.getBoundingClientRect(), first = null;
+    for (var y = 40; r && y < innerHeight; y += 40) {
+      var el = document.elementFromPoint(r.left + r.width / 2, y), b = el && el.getBoundingClientRect();
+      if (!el || el === main || !main.contains(el) || b.height >= innerHeight) continue;
+      if (b.top >= 0) return el;
+      first = first || el;
+    }
+    return first;
+  }
+
+  function set(closed, focus) {
+    var side = $(".sidebar"), at = topBlock(), y = at && at.getBoundingClientRect().top;
+    if (closed && side) sideTop = side.scrollTop;
+    root.dataset.kbSidebar = closed ? "closed" : "open";
+    try { if (closed) localStorage.setItem(key, "closed"); else localStorage.removeItem(key); } catch (e) { /* ignore */ }
+    if (!closed && side) side.scrollTop = sideTop;
+    if (at) scrollBy({ top: at.getBoundingClientRect().top - y, behavior: "instant" });
+    var btn = focus && $(closed ? ".kb-show" : ".kb-hide");
+    if (btn) btn.focus({ preventScroll: true });
+  }
+
+  var closed = false;
+  try { closed = localStorage.getItem(key) === "closed"; } catch (e) { /* ignore */ }
+  root.dataset.kbSidebar = closed ? "closed" : "open";
+
+  document.addEventListener("click", function (e) {
+    if (e.target.closest(".kb-side")) set(root.dataset.kbSidebar !== "closed", true);
+  });
+
+  // Some books keep their search box in the sidebar and focus it on "/". Capturing runs this before the book's own handler.
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "/" && !e.metaKey && !e.ctrlKey && root.dataset.kbSidebar === "closed" &&
+        matchMedia("(min-width: 861px)").matches && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName) &&
+        $(".sidebar input[type=search]")) set(false);
+  }, true);
+})();
+</script>

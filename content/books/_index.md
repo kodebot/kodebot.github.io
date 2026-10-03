@@ -49,7 +49,7 @@ books:
     link: "/books/java-for-csharp-developers/"
     cover: "/books/java-for-csharp-developers/cover.svg"
     badges: ["Java 25 LTS", ".NET 10 · C# 14", "Spring Boot 3 & 4"]
-    summary: "Where your C# instincts carry over to Java, and where they are confidently wrong. Almost every page puts C# on the left and Java on the right, every idea starts from a small example in plain words, and each Java term is explained where it first appears. Read the everyday path in about 5 hours or everything in about 7, come back to each chapter's quick reference later, and press ⌘K to look up any C# name and land on its Java answer."
+    summary: "Where your C# instincts carry over to Java, and where they are confidently wrong. Every chapter gives its answer first: a table of the differences between C# and Java, with each trap shown as code whose result you predict before you look. Read the essentials in about 2 hours, or everything in about 8. To refresh later, there are tours of Java, Spring Boot and modern C# as annotated code, and a review deck that brings back the questions you missed. Press ⌘K to look up any C# name and land on its Java answer."
 ---
 
 Long-form handbooks you can read online.

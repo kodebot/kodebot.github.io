@@ -66,6 +66,13 @@ To update *System Design: The Depot*:
 2. Run `python3 scripts/build-site.py` and copy `dist/index.html` and `dist/cover.svg` to `static/books/system-design/`
 3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
 
+To update *Software Architecture: The Town Plan*:
+
+1. In the book repo (`software-architecture`), run `scripts/check.sh` and `scripts/build.sh`, then start `python3 scripts/render-server.py`
+   and open `http://localhost:8765/scripts/render-diagrams.html?save` in a browser to write `dist/svgs.json`
+2. Run `python3 scripts/build-site.py` and copy `dist/index.html` and `dist/cover.svg` to `static/books/software-architecture/`
+3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
+
 To update *Maintainable Playwright Tests*:
 
 1. In the book repo (`playwright-book`), run `scripts/check.sh`, `scripts/build.sh`, `node scripts/render-diagrams.mjs`

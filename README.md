@@ -80,6 +80,14 @@ To update *Maintainable Playwright Tests*:
 2. Copy `dist/index.html` and `dist/cover.svg` to `static/books/maintainable-playwright-tests/`
 3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
 
+To update *Computer Networks: The Sorting Office*:
+
+1. In the book repo (`network-for-se-devops`), run `scripts/check.sh`, `scripts/build.sh` and `scripts/render.sh`
+   (headless Chrome writes `dist/svgs.json`; or start `python3 scripts/render-server.py` and open
+   `http://localhost:8765/scripts/render-diagrams.html?save` in a browser)
+2. Run `python3 scripts/build-site.py` and copy `dist/index.html` and `dist/cover.svg` to `static/books/computer-networks/`
+3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
+
 To add another book, put its HTML at `static/books/<slug>/index.html` with a cover image beside it,
 and add an entry to `books` in `content/books/_index.md`.
 Add `home: true` to the entry only if the book should also appear on the home page.

@@ -1,6 +1,12 @@
 ---
 title: "Books"
 books:
+  - title: "Computer Networks: The Sorting Office"
+    subtitle: "A short story about one Friday outage and eighty years of networks: what every piece is, why it exists, what it replaced, and where it breaks"
+    link: "/books/computer-networks/"
+    cover: "/books/computer-networks/cover.svg"
+    badges: ["ARPANET to Kubernetes", "AWS and Azure names", "125 named traps", "69 diagrams", "No code, no labs"]
+    summary: "You type 10.0.0.0/16 into a form and hope, paste a DNS record someone gave you, open port 443 because the tutorial said so, and nod when someone says it's a BGP thing. This book is one story in thirty-one short chapters, told in two timelines. In the present, Nadia, a junior DevOps engineer on call for her first weekend, chases a checkout outage at Kettle, a small coffee-subscription business, from Friday at 16:02 to Monday's review, one layer at a time: the server that is forty-one pods, the packet that was dropped and not refused, the name that gives two answers, the route that is fine, the guard with a list, the address block nobody mentioned. In the past, Ruth, a network engineer two weeks from retirement, answers each why is it like this with how it came to be, as a scene with names and dates: time-sharing in 1961, the first message across ARPANET in 1969, the flag day of 1983, DNS, the worm of 1988, the web, NAT, the VPC in 2009, Kubernetes in 2014. Every chapter explains its concept in plain words with diagrams in one fixed palette, places it in one running metaphor (the postal system: envelopes, addresses, sorting offices, gated estates), gives you a one-line hook, and ends with where it breaks: the misconceptions and the attacks that live at that layer, from ARP spoofing and DNS poisoning to BGP hijacks, DDoS, open security groups and lateral movement, each with its tell-tale sign and what stops it. The cloud chapters are vendor-neutral with the AWS and Azure names at each concept's first use. The mystery is fair: every clue is given before the reveal. Read it in about three and three-quarter hours, and keep the epilogue: the incident review, one request followed from a phone to a pod and back, the metaphor table, three timelines, a checklist of 125 traps by hop, and a glossary of what is what."
   - title: "Maintainable Playwright Tests"
     subtitle: "Data-driven, DRY, multi-locale end-to-end tests with TypeScript"
     link: "/books/maintainable-playwright-tests/"

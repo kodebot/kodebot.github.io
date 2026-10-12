@@ -45,6 +45,12 @@ To update *Java for C# Developers*:
 2. Copy `dist/handbook.html` to `static/books/java-for-csharp-developers/index.html`
 3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
 
+To update *One Server, Three Languages*:
+
+1. In the book repo (`rust-book`), run `make verify` and `python3 build.py`, then `python3 tools/cover.py`
+2. Copy `dist/handbook.html` to `static/books/c-go-rust/index.html` and `dist/cover.svg` to `static/books/c-go-rust/cover.svg`
+3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
+
 To update *From Docker to Kubernetes*:
 
 1. In the book repo (`quick-guide-to-docker-kubernetes`), render the Mermaid diagrams to `dist/svgs.json`

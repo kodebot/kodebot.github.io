@@ -1,6 +1,13 @@
 ---
 title: "Books"
 books:
+  - title: "Leading a Java Team: The Yard"
+    home: true
+    subtitle: "A short story about a lead from .NET taking over a Java team: fifteen arguments the team has, the mechanism and the history behind each one, and the decision the lead makes"
+    link: "/books/java-team-lead/"
+    cover: "/books/java-team-lead/cover.svg"
+    badges: ["Maven · Spring Boot 3.5 → 4", "DocumentDB · JUnit · Mockito · Kubernetes", "15 decision records", "15 diagrams", "Every command runs on a laptop"]
+    summary: "You lead, or are about to lead, a Java team, and your own hands learned the trade somewhere else, .NET most likely. This book is one story in fifteen short chapters: Sam arrives from twelve years of .NET to lead the Payouts team at Sorrel, a mid-sized insurer with forty Java services on Kubernetes, and every chapter opens on two people who want different things. Which Java are we actually on, and why does one service say 11. Why the clean build downloads the internet. Whether Boot 4 is one line or a quarter. Whether Gradle would fix the nine-minute build, measured before anyone decides. The Lombok ban Sam issues on day nine and withdraws in public. Eighty-four percent coverage with sixty-one tests that cannot fail. The green test suite that ran against MongoDB while production ran DocumentDB. Two pods paying the same claim. The jar in the security audit that nobody had heard of. The library that changed under the build on a Saturday. The ledger that slowed down and took Payouts with it. The WebFlux proposal answered with one property. The pod that died at 02:14 with exit code 137. The deploy that dropped a dozen requests a week. And the framework the lead did not trust until it was asked what it had done. Each chapter explains the mechanism, tells the history behind the argument as a scene with names and dates, from Maven out of Jakarta Turbine in 2001 to Project Loom in 2017, gives the commands you would type against a companion Maven project, names the traps, and ends with Sam's decision in Sam's words to the team, including the two where Sam was wrong and what it cost. It points at Java for C# Developers for the syntax instead of repeating it. Read it in two evenings, and keep the epilogue: fifteen architecture decision records, every command by task, a timeline and a glossary."
   - title: "One Server, Three Languages"
     home: true
     subtitle: "Learn C, Go and Rust from scratch by building the same Redis-compatible server three times, and understand the power and the weakness of each"

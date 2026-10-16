@@ -39,6 +39,14 @@ as the book's own Contents button already opens and closes the sidebar there.
 The Books page lists them all from the `books` front matter in `content/books/_index.md`.
 The home page lists only the entries marked `home: true`, beside an "All books" link to the Books page.
 
+To update *Leading a Java Team: The Yard*:
+
+1. In the book repo (`java-team-lead`), run `python3 scripts/check.py`, `bash scripts/build.sh`, render the Mermaid
+   diagrams to `dist/svgs.json` (`scripts/render-server.py` plus `scripts/render-diagrams.html?save` in a browser)
+   and run `python3 scripts/build-site.py`
+2. Copy `dist/index.html` and `dist/cover.svg` to `static/books/java-team-lead/`
+3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
+
 To update *Java for C# Developers*:
 
 1. In the book repo (`dotnet2java`), run `python3 build.py`

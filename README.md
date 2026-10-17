@@ -39,7 +39,9 @@ as the book's own Contents button already opens and closes the sidebar there.
 The Books page lists them all from the `books` front matter in `content/books/_index.md`.
 The home page lists only the entries marked `home: true`, beside an "All books" link to the Books page.
 
-To update *Leading a Java Team: The Yard*:
+To update *Leading a Java Team: The Yard* (unlisted: served at `/books/java-team-lead/` but deliberately absent from
+`content/books/_index.md`, so it appears on neither the Books page nor the home page, and the book template keeps it out
+of lists, feeds and the sitemap):
 
 1. In the book repo (`java-team-lead`), run `python3 scripts/check.py`, `bash scripts/build.sh`, render the Mermaid
    diagrams to `dist/svgs.json` (`scripts/render-server.py` plus `scripts/render-diagrams.html?save` in a browser)

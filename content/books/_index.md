@@ -73,7 +73,7 @@ books:
     subtitle: "A working handbook for .NET engineers moving to Java and Spring Boot"
     link: "/books/java-for-csharp-developers/"
     cover: "/books/java-for-csharp-developers/cover.svg"
-    badges: ["Java 25 LTS", ".NET 10 · C# 14", "Spring Boot 3 & 4"]
+    badges: ["Java 25 LTS", ".NET 10 · C# 14", "Spring Boot 3 & 4", "A DDD microservice, in depth"]
     summary: "Where your C# instincts carry over to Java, and where they are confidently wrong."
 ---
 

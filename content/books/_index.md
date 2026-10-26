@@ -6,8 +6,8 @@ books:
     subtitle: "Learn C, Go and Rust by building the same server three times"
     link: "/books/c-go-rust/"
     cover: "/books/c-go-rust/cover.svg"
-    badges: ["C17 · Go 1.27 · Rust 1.99", "One server, built three times", "62 exercises with solutions", "101-row scorecard", "Part V: Rust from first principles"]
-    summary: "Build one Redis-compatible server in C, Go and Rust, and learn when to choose each."
+    badges: ["C17 · Go 1.27 · Rust 1.99", "One server, built three times", "70 exercises with solutions", "101-row scorecard", "Part V: Rust from first principles", "Part VI: kernels and drivers"]
+    summary: "Build one Redis-compatible server in C, Go and Rust, and learn when to choose each. Then go under it, to a small kernel and a driver in C and Rust."
   - title: "Computer Networks: The Sorting Office"
     subtitle: "Eighty years of networks, told through one Friday outage"
     link: "/books/computer-networks/"

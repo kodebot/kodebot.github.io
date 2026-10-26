@@ -49,10 +49,12 @@ of lists, feeds and the sitemap):
 2. Copy `dist/index.html` and `dist/cover.svg` to `static/books/java-team-lead/`
 3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
 
-To update *Java for C# Developers*:
+To update *Java for C# Developers* and its sibling *The Order Service: Java and Spring Boot in depth*
+(one build writes both; links between them point at each other's page here, so publish both together):
 
 1. In the book repo (`dotnet2java`), run `python3 build.py`
-2. Copy `dist/handbook.html` to `static/books/java-for-csharp-developers/index.html`
+2. Copy `dist/handbook.html` to `static/books/java-for-csharp-developers/index.html` and
+   `dist/in-depth.html` to `static/books/java-spring-boot-in-depth/index.html`
 3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
 
 To update *One Server, Three Languages*:

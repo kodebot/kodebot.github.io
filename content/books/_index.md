@@ -73,8 +73,14 @@ books:
     subtitle: "A working handbook for .NET engineers moving to Java and Spring Boot"
     link: "/books/java-for-csharp-developers/"
     cover: "/books/java-for-csharp-developers/cover.svg"
-    badges: ["Java 25 LTS", ".NET 10 · C# 14", "Spring Boot 3 & 4", "A DDD microservice, in depth"]
+    badges: ["Java 25 LTS", ".NET 10 · C# 14", "Spring Boot 3 & 4", "Sibling: The Order Service, in depth"]
     summary: "Where your C# instincts carry over to Java, and where they are confidently wrong."
+  - title: "The Order Service: Java and Spring Boot in depth"
+    subtitle: "One DDD microservice, every mechanism explained, for C# developers"
+    link: "/books/java-spring-boot-in-depth/"
+    cover: "/books/java-spring-boot-in-depth/cover.svg"
+    badges: ["Spring Boot 4.1 · Java 25", "One order service, 26 chapters", "Companion code, built and tested", "Read in order"]
+    summary: "Build one DDD order service in Spring Boot, and understand every mechanism it relies on."
 ---
 
 Long-form handbooks you can read online.

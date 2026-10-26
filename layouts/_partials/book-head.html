@@ -31,9 +31,88 @@
     .sidebar { max-width: calc(85vw / 1.15); }
     /* A long inline name or file path, a wide diagram or an image never pushes the page sideways. Code blocks
        scroll, and so does a table placed straight in a chapter, as the other books' table wrappers do. */
-    main :not(pre) > code, main figcaption { overflow-wrap: anywhere; }
+    main :not(pre) > code, main figcaption, main summary { overflow-wrap: anywhere; }
+    main summary > * { min-width: 0; }
     main svg, main img { max-width: 100%; height: auto; }
     main pre { overflow-x: auto; }
     main section > table { display: block; overflow-x: auto; }
+
+    /* A table too wide for the screen becomes a stack of cards, one per row, so it never scrolls sideways. The
+       script below marks it kb-cards and copies each column's header onto its cells as data-label. The first cell
+       is the card's title; each other cell shows its label beside its value. A row that is one cell across all
+       columns is a group heading between the cards. */
+    /* The books give their tables widths and minimum widths, so the card rules must win over them. */
+    table.kb-cards, .kb-cards tbody, .kb-cards tr { display: block; width: auto !important; min-width: 0 !important;
+                                                    max-width: 100%; }
+    .kb-cards thead { display: none; }
+    .kb-cards tr { margin: 0 0 10px; padding: 8px 10px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+                   border-radius: 8px; }
+    /* The label sits in a fixed column on the left, and the cell's own content flows as one block beside it, so
+       text, code and a link in one cell stay together. The label floats into the padding, and flow-root makes
+       the cell as tall as the longer of the two. */
+    .kb-cards td, .kb-cards th { display: flow-root; width: auto !important; min-width: 0 !important;
+                                 padding: 3px 0 3px 92px; border: 0; text-align: left; white-space: normal;
+                                 overflow-wrap: anywhere; }
+    .kb-cards td * { white-space: normal; overflow-wrap: anywhere; }
+    .kb-cards td::before { content: attr(data-label); float: left; width: 82px; margin-left: -92px;
+                           font-size: .8em; font-weight: 600; line-height: 1.9; opacity: .7; overflow-wrap: anywhere; }
+    .kb-cards td:not([data-label]), .kb-cards tr > td:first-child { display: block; padding-left: 0; }
+    .kb-cards td:not([data-label])::before, .kb-cards tr > td:first-child::before { content: none; }
+    .kb-cards tr > td:first-child { font-weight: 600; padding-bottom: 6px; }
+    .kb-cards tr.kb-group { padding: 10px 0 2px; border: 0; }
+    .kb-cards tr.kb-group > td { font-weight: 700; }
   }
 </style>
+<script>
+/* Turns each table that does not fit its column on a phone into cards (see kb-cards above), and back when it
+   fits again: after a rotation, or when a folded section with the table opens. A table with cells that span
+   rows, or span columns other than as a group heading, keeps its scrolling, as its labels would not line up. */
+document.addEventListener("DOMContentLoaded", function () {
+  var phone = matchMedia("screen and (max-width: 860px)");
+  var tables = [].filter.call(document.querySelectorAll("main table"), function (t) {
+    if (t.querySelector("[rowspan]")) return false;
+    return [].every.call(t.querySelectorAll("tr"), function (tr) {
+      return !tr.querySelector("[colspan]") || tr.children.length === 1;
+    });
+  });
+  if (!tables.length) return;
+
+  function label(t) {
+    if (t.dataset.kbLabelled) return;
+    var heads = [].map.call(t.querySelectorAll("thead th"), function (th) { return th.textContent.trim(); });
+    [].forEach.call(t.querySelectorAll("tbody tr"), function (tr) {
+      if (tr.children.length === 1 && tr.children[0].colSpan > 1) { tr.classList.add("kb-group"); return; }
+      [].forEach.call(tr.children, function (cell, i) { if (heads[i]) cell.dataset.label = heads[i]; });
+    });
+    t.dataset.kbLabelled = "1";
+  }
+
+  // All the tables are reset first and measured after, so the page lays out once and not once per table.
+  function fit(list) {
+    list.forEach(function (t) { t.classList.remove("kb-cards"); });
+    if (!phone.matches) return;
+    list.filter(function (t) {
+      var box = t.parentElement.clientWidth;
+      return box > 0 && t.scrollWidth > box + 1;
+    }).forEach(function (t) { label(t); t.classList.add("kb-cards"); });
+  }
+
+  // Each table's parent is watched; one parent may hold several tables. Only a change of width refits, as the
+  // cards change the height.
+  var widths = new Map();
+  var watch = new ResizeObserver(function (entries) {
+    var changed = [];
+    entries.forEach(function (e) {
+      var w = Math.round(e.contentRect.width), box = e.target;
+      if (widths.get(box) !== w) { widths.set(box, w); changed = changed.concat(box.kbTables); }
+    });
+    if (changed.length) fit(changed);
+  });
+  tables.forEach(function (t) {
+    var box = t.parentElement;
+    if (!box.kbTables) { box.kbTables = []; watch.observe(box); }
+    box.kbTables.push(t);
+  });
+  phone.addEventListener("change", function () { fit(tables); });
+});
+</script>

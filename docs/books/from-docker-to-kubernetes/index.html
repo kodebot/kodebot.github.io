@@ -198,12 +198,85 @@ figure.codefile pre { margin:0; }
      
     .sidebar { max-width: calc(85vw / 1.15); }
      
-    main :not(pre) > code, main figcaption { overflow-wrap: anywhere; }
+    main :not(pre) > code, main figcaption, main summary { overflow-wrap: anywhere; }
+    main summary > * { min-width: 0; }
     main svg, main img { max-width: 100%; height: auto; }
     main pre { overflow-x: auto; }
     main section > table { display: block; overflow-x: auto; }
+
+     
+     
+    table.kb-cards, .kb-cards tbody, .kb-cards tr { display: block; width: auto !important; min-width: 0 !important;
+                                                    max-width: 100%; }
+    .kb-cards thead { display: none; }
+    .kb-cards tr { margin: 0 0 10px; padding: 8px 10px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+                   border-radius: 8px; }
+     
+    .kb-cards td, .kb-cards th { display: flow-root; width: auto !important; min-width: 0 !important;
+                                 padding: 3px 0 3px 92px; border: 0; text-align: left; white-space: normal;
+                                 overflow-wrap: anywhere; }
+    .kb-cards td * { white-space: normal; overflow-wrap: anywhere; }
+    .kb-cards td::before { content: attr(data-label); float: left; width: 82px; margin-left: -92px;
+                           font-size: .8em; font-weight: 600; line-height: 1.9; opacity: .7; overflow-wrap: anywhere; }
+    .kb-cards td:not([data-label]), .kb-cards tr > td:first-child { display: block; padding-left: 0; }
+    .kb-cards td:not([data-label])::before, .kb-cards tr > td:first-child::before { content: none; }
+    .kb-cards tr > td:first-child { font-weight: 600; padding-bottom: 6px; }
+    .kb-cards tr.kb-group { padding: 10px 0 2px; border: 0; }
+    .kb-cards tr.kb-group > td { font-weight: 700; }
   }
 </style>
+<script>
+
+
+document.addEventListener("DOMContentLoaded", function () {
+  var phone = matchMedia("screen and (max-width: 860px)");
+  var tables = [].filter.call(document.querySelectorAll("main table"), function (t) {
+    if (t.querySelector("[rowspan]")) return false;
+    return [].every.call(t.querySelectorAll("tr"), function (tr) {
+      return !tr.querySelector("[colspan]") || tr.children.length === 1;
+    });
+  });
+  if (!tables.length) return;
+
+  function label(t) {
+    if (t.dataset.kbLabelled) return;
+    var heads = [].map.call(t.querySelectorAll("thead th"), function (th) { return th.textContent.trim(); });
+    [].forEach.call(t.querySelectorAll("tbody tr"), function (tr) {
+      if (tr.children.length === 1 && tr.children[0].colSpan > 1) { tr.classList.add("kb-group"); return; }
+      [].forEach.call(tr.children, function (cell, i) { if (heads[i]) cell.dataset.label = heads[i]; });
+    });
+    t.dataset.kbLabelled = "1";
+  }
+
+  
+  function fit(list) {
+    list.forEach(function (t) { t.classList.remove("kb-cards"); });
+    if (!phone.matches) return;
+    list.filter(function (t) {
+      var box = t.parentElement.clientWidth;
+      return box > 0 && t.scrollWidth > box + 1;
+    }).forEach(function (t) { label(t); t.classList.add("kb-cards"); });
+  }
+
+  
+  
+  var widths = new Map();
+  var watch = new ResizeObserver(function (entries) {
+    var changed = [];
+    entries.forEach(function (e) {
+      var w = Math.round(e.contentRect.width), box = e.target;
+      if (widths.get(box) !== w) { widths.set(box, w); changed = changed.concat(box.kbTables); }
+    });
+    if (changed.length) fit(changed);
+  });
+  tables.forEach(function (t) {
+    var box = t.parentElement;
+    if (!box.kbTables) { box.kbTables = []; watch.observe(box); }
+    box.kbTables.push(t);
+  });
+  phone.addEventListener("change", function () { fit(tables); });
+});
+</script>
 </head>
 <body>
 <button class="btn menubtn" id="menu-btn" type="button" aria-expanded="false">&#9776; Contents</button>

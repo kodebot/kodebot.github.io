@@ -79,7 +79,7 @@ books:
     subtitle: "One DDD microservice, every mechanism explained, for C# developers"
     link: "/books/java-spring-boot-in-depth/"
     cover: "/books/java-spring-boot-in-depth/cover.svg"
-    badges: ["Spring Boot 4.1 · Java 25", "One order service, 36 chapters", "160 design questions, answered from 16 principles", "Companion code, built and tested"]
+    badges: ["Spring Boot 4.1 · Java 25", "One order service, 36 chapters", "164 design questions, answered from 19 principles", "Companion code, built and tested"]
     summary: "Build one DDD order service in Spring Boot, and understand every mechanism it relies on. Then drill the design questions experienced teams ask, each answered from a principle."
 ---
 

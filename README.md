@@ -53,8 +53,10 @@ To update *Java for C# Developers* and its sibling *The Order Service: Java and 
 (one build writes both; links between them point at each other's page here, so publish both together):
 
 1. In the book repo (`dotnet2java`), run `python3 build.py`
-2. Copy `dist/handbook.html` to `static/books/java-for-csharp-developers/index.html` and
-   `dist/in-depth.html` to `static/books/java-spring-boot-in-depth/index.html`
+2. Copy `dist/handbook.html` to `static/books/java-for-csharp-developers/index.html`,
+   `dist/in-depth.html` to `static/books/java-spring-boot-in-depth/index.html`, and the files in
+   `dist/downloads/` to `static/books/java-spring-boot-in-depth/downloads/` (the team guides' PDF,
+   Markdown and Confluence downloads, which the in-depth book links to)
 3. Run `hugo --cleanDestinationDir` to regenerate `docs`, then commit and push
 
 To update *One Server, Three Languages*:

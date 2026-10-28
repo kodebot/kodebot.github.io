@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Pragmatic DDD Guide, for Confluence</title>
+<style>
+body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #231f1c;
+  font-size: 10.5pt; line-height: 1.5; max-width: 860px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 22pt; margin: 0 0 4px; }
+h2 { font-size: 15pt; margin: 28px 0 8px; border-bottom: 1px solid #e6dfd5; padding-bottom: 4px; }
+h3 { font-size: 12pt; margin: 20px 0 6px; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0 16px; font-size: 9pt; }
+th, td { border: 1px solid #cbc1b4; padding: 5px 7px; text-align: left; vertical-align: top; }
+th { background: #f6f2ec; }
+code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.92em; background: #f4f1ec;
+  padding: 0 3px; border-radius: 3px; }
+pre { background: #f4f1ec; border: 1px solid #e6dfd5; border-radius: 4px; padding: 10px 12px;
+  white-space: pre-wrap; font-size: 8.5pt; line-height: 1.45; }
+pre code { background: none; padding: 0; font-size: inherit; }
+a { color: #0f5f66; }
+figure { margin: 14px 0 18px; padding: 12px; border: 1px solid #e6dfd5; border-radius: 4px; }
+figure svg, figure img { display: block; width: 100%; height: auto; max-width: 760px; margin: 0 auto; }
+figcaption { font-size: 9pt; color: #7a7169; text-align: center; margin-top: 8px; }
+.byline { color: #7a7169; margin: 0 0 18px; }
+
+.paste-help { background: #e2f0f1; border: 1px solid #0f5f66; border-radius: 4px; padding: 12px 16px;
+  margin: 0 0 24px; font-size: 10pt; }
+.paste-help button { font: inherit; padding: 6px 14px; margin-top: 6px; cursor: pointer; }
+@media print { .paste-help { display: none; } }
+</style></head>
+<body>
+<div class="paste-help">
+<p><strong>To put this guide on a Confluence page:</strong> press <em>Copy the guide</em>, then
+paste into the Confluence editor. Headings, tables, lists and code come across as Confluence
+formatting. The diagrams are images on kodebot.com. If one does not appear, download its PNG file
+from the same folder and attach it to the page.</p>
+<button type="button" id="copy">Copy the guide</button> <span id="copied"></span>
+</div>
+<article id="guide">
+<h1>Pragmatic DDD Guide</h1>
+<p class="byline">Oct 28, 2026 · @kodebot</p>
+<p>This guide explains how we write code inside our Spring Boot microservices. We use a light form of Domain-Driven Design (DDD). The guide has two aims:</p>
+<ul>
+<li><strong>Every business rule is written in exactly one place.</strong> No code can change data without going through that rule.</li>
+<li><strong>A design mistake can be fixed inside one part of one microservice.</strong> Other microservices do not need to change.</li>
+</ul>
+<p>The reference code is the <code>manage-claim-service</code> repository. If this guide does not answer your question, copy what the reference code does.</p>
+<p><strong>Technology:</strong> Java 21, Spring Boot 4, Spring Data MongoDB and Amazon DocumentDB. DocumentDB is a database that accepts MongoDB commands, but it behaves differently from MongoDB (see section 6). We also use our shared <code>service-platform</code> library, and Amazon SNS and SQS to send and receive events.</p>
+<h3>Terms used throughout</h3>
+<table>
+<thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Microservice</td><td>An application that is deployed on its own and has its own database. Example: <code>manage-claim-service</code></td></tr>
+<tr><td>Feature</td><td>One business area inside a microservice. Each feature has its own folder. Example: <code>claim/</code> or <code>note/</code></td></tr>
+<tr><td>Business action</td><td>One change that the user asks for with one button. Examples: "close claim", "change address". Each business action is one application service method</td></tr>
+<tr><td>Platform library</td><td>Our shared <code>service-platform</code> library. Every microservice uses it. It provides <code>AggregateRoot</code>, <code>Guard</code>, <code>ResilientCalls</code>, the outbox and the inbox</td></tr>
+<tr><td>Design group</td><td>The lead engineer, two or three senior engineers and the business experts. They approve the design decisions in section 4</td></tr>
+<tr><td>Design note</td><td>A one-page description of a feature. The design group approves it before coding starts. The template is in section 4.4</td></tr>
+<tr><td>Migration</td><td>A Java class that changes the database. For example, it creates an index, loads lookup data or fixes data. Each migration runs once, automatically, when the microservice starts</td></tr>
+</tbody>
+</table>
+<p>Other terms are explained where they first appear. They are also listed in the glossary (section 11).</p>
+<h2>1. The example used in this guide</h2>
+<p>A <strong>caseworker</strong> records a <strong>claim</strong> for a person. This person is the <strong>claimant</strong>. The caseworker adds <strong>evidence</strong> to the claim. Evidence is a document, such as a payslip. Later, the caseworker marks each evidence item as verified.</p>
+<p>The caseworker also writes <strong>notes</strong> about the claim. A note can be marked "needs action", for example "call back on Monday". It stays like this until someone marks the action as done. At the end, the caseworker closes the claim.</p>
+<p>Two microservices from other teams are involved:</p>
+<ul>
+<li>The <strong>eligibility</strong> microservice says whether a person may claim.</li>
+<li>The <strong>payment</strong> microservice pays claimants. It tells us when it has paid.</li>
+</ul>
+<p><strong>The business rules:</strong></p>
+<ol>
+<li>A claim can be created only if the eligibility microservice says the claimant is eligible. The claim type must also be active (Standard or Urgent).</li>
+<li>A claim has at most 10 evidence items. Each item can be verified only once.</li>
+<li>A claim can be closed only when all its evidence is verified and no note on it still needs action.</li>
+<li>A closed claim cannot be changed.</li>
+<li>Messages can arrive late or twice. So the claim's last payment is replaced only by a payment with a later payment date.</li>
+<li>Entitlement is the amount owed for a period. Entitlement = weekly rate for the claim type × days the claim was open in the period ÷ 7. Count both the first day and the last day. Count days as dates in UK time. Round half-even to the penny. Example: the rate is £100 a week. The claim opened on 15 January. The period is 1–31 January. The claim was open for 17 days. So £100 × 17 ÷ 7 = £242.86.</li>
+</ol>
+<p><strong>How this is stored:</strong> each claim is one document in the <code>claims</code> collection. Its evidence items are stored inside that document. Each note is a separate document in the <code>notes</code> collection. A note holds the ID of its claim. Section 4.3 explains why evidence is inside the claim but notes are not.</p>
+<h2>2. The building blocks</h2>
+<p>DDD means two things. Write code in the business's own words. Put each business rule inside the object it is about. Compare two ways to close a claim:</p>
+<pre><code>// Without DDD: the rule sits in a service class, and any code can change the status
+if (claim.getEvidence().stream().anyMatch(e -&gt; !e.isVerified())) {
+    throw new RuntimeException("Unverified evidence");
+}
+claim.setStatus("CLOSED");
+
+// With DDD: there is one way to close a claim, and it checks every rule itself
+claim.close(notesNeedingAction, clock);</code></pre>
+<p>In the first version, other code that closes a claim must remember to copy the check. A nightly job is one example. In the second version, other code cannot skip the check.</p>
+<p><strong>Use the business's words</strong> for classes, methods and exceptions. Use <code>close</code>, <code>verifyEvidence</code> and <code>ClaimHasOpenActionsException</code>. Do not use <code>updateStatus</code> or <code>ValidationException</code>.</p>
+<p>These are the building blocks. Do not use any other building block without design group approval.</p>
+<table>
+<thead><tr><th>Building block</th><th>What it is</th><th>How we write it</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td><strong>Entity</strong></td><td>A business object with its own ID. It keeps the same identity when its details change</td><td>A class with a <code>String</code> UUID as its ID. It has private fields and no setters. Its fields change only inside its own business methods</td><td><code>Claim</code>, <code>Note</code></td></tr>
+<tr><td><strong>Value object</strong></td><td>A value with no ID. Its contents define it. Two <code>Money</code> objects of £100.00 are equal. (<code>Money</code> always keeps two decimal places, so £100.0 is stored as £100.00)</td><td>A Java <code>record</code>. It cannot change after it is created. Its constructor checks its values. Use a value object only when a value has rules (money cannot be negative), or when several fields belong together (name and date of birth)</td><td><code>Money</code>, <code>ClaimantDetails</code></td></tr>
+<tr><td><strong>Invariant</strong></td><td>A business rule that must be true at all times, not only when someone checks it</td><td>Write it in the design note with an example. Enforce it in an entity method</td><td>"A claim has at most 10 evidence items"</td></tr>
+<tr><td><strong>Aggregate</strong> and <strong>aggregate root</strong></td><td>A group of objects that are always loaded and saved together, as one document. The root is the top object. All changes go through the root</td><td>The root extends <code>AggregateRoot</code> from the platform library and has <code>@Document</code>. Code outside the aggregate never changes the inner objects directly</td><td><code>Claim</code> (root) with its <code>EvidenceItem</code>s</td></tr>
+<tr><td><strong>Factory method</strong></td><td>The only way to create a new entity. It makes sure the entity is valid from the start</td><td>A <code>static create(...)</code> method on the entity. It checks the rules for creating the entity</td><td><code>Claim.create(type, claimant, eligibility, clock)</code></td></tr>
+<tr><td><strong>Repository</strong></td><td>The interface that loads and saves whole aggregates</td><td>One Spring Data interface for each aggregate root. Only its own feature uses it</td><td><code>ClaimRepository</code></td></tr>
+<tr><td><strong>Domain event</strong></td><td>A record that something happened. Its name is in the past tense</td><td>The root's method creates it with <code>raise(new ClaimClosed(...))</code>. When the root is saved, the feature's event mapper can turn it into an integration event for other microservices (section 7)</td><td><code>ClaimClosed</code></td></tr>
+<tr><td><strong>Domain exception</strong></td><td>An error that names the business rule that was broken</td><td>It extends one of three platform classes. The class sets the HTTP status: <code>NotFoundException</code> (404), <code>BusinessRuleViolationException</code> (422) or <code>InvalidValueException</code> (400)</td><td><code>ClaimClosedException</code></td></tr>
+<tr><td><strong>Domain service</strong></td><td>A business calculation that needs several objects and does not belong to any one of them. It is rare</td><td>A plain class that stores no data. It takes its inputs and returns a result. It does not load or save anything</td><td><code>EntitlementCalculator</code></td></tr>
+<tr><td><strong>Application service</strong></td><td>The class that runs each use case, step by step</td><td>One for each feature. It loads data, calls the entity, saves, and writes the audit record. It contains no business rules and no permission checks</td><td><code>ClaimService</code></td></tr>
+<tr><td><strong>Client adapter</strong></td><td>The only class that talks to another microservice or another system. It translates their data into our types, and their errors into our exceptions. (DDD calls this an anti-corruption layer)</td><td>It lives in <code>client/</code>. It returns our own types</td><td><code>EligibilityClient</code></td></tr>
+</tbody>
+</table>
+<h3>Which rules are always true, and which are checked at a moment</h3>
+<ul>
+<li><strong>Inside one aggregate, rules are always true.</strong> The whole document is saved in one transaction. Each document has a version number. If someone else saved the document after you loaded it, your save is refused with <code>409 Conflict</code>.</li>
+<li><strong>Between two aggregates, a rule is true only at the moment it is checked.</strong> For example, when a claim is closed, the application service counts the notes at that moment. It does not see a note that is added one second later. Other microservices learn about changes a little later, through events.</li>
+</ul>
+<p>So, if a rule must be true at all times, everything the rule needs must be inside one aggregate. If it is enough to check the rule at one moment, separate aggregates are fine. The design note says which one applies.</p>
+<p><img src="https://kodebot.com/books/java-spring-boot-in-depth/downloads/fig-ddd-guide-flow.png" alt="How the building blocks handle one request: the application service runs the steps, and the aggregate decides. A controller or a listener calls the application service. It asks other microservices through a client adapter, loads and saves through the repository, and uses a domain service for a calculation. The Claim root checks the rules and raises events. The repository saves the whole document, with its outbox entry, to DocumentDB in one transaction, and the platform outbox sends the events to SNS after the commit." width="760"></p>
+<p><em>How the building blocks handle one request: the application service runs the steps, and the aggregate decides. A controller or a listener calls the application service. It asks other microservices through a client adapter, loads and saves through the repository, and uses a domain service for a calculation. The Claim root checks the rules and raises events. The repository saves the whole document, with its outbox entry, to DocumentDB in one transaction, and the platform outbox sends the events to SNS after the commit.</em></p>
+<p>How a change flows through the code:</p>
+<ol>
+<li>A request arrives at a controller, or a message arrives at a listener.</li>
+<li>The controller or listener calls the application service.</li>
+<li>If the change needs an answer from another microservice, the application service asks for it through a client adapter. It does this first, before the transaction starts.</li>
+<li>The application service loads the aggregate through its repository.</li>
+<li>It calls a method on the aggregate root. The method checks the rules and makes the change.</li>
+<li>The application service saves the aggregate. In the same transaction, the platform stores the integration events in the outbox. The outbox is a collection that holds events until they are sent (section 7.2).</li>
+<li>After the transaction, the platform sends the events.</li>
+</ol>
+<h2>3. The ten golden rules</h2>
+<p>Rules 1, 3 and 4 apply to Rich features (section 4.2). All other rules apply to every feature. In the "Checked by" column, "Build" means an architecture test fails the build if the rule is broken. "Review" means the reviewer checks the rule.</p>
+<table>
+<thead><tr><th>#</th><th>Rule</th><th>Example</th><th>Why</th><th>Checked by</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>An entity's fields change only inside its own methods. Entities have no public setters</td><td><code>claim.close(...)</code>, never <code>claim.setStatus(CLOSED)</code></td><td>The method checks the rules and records the event. A setter skips both</td><td>Build</td></tr>
+<tr><td>2</td><td>The aggregate root class is also the stored document. It has <code>@Document</code> and extends <code>AggregateRoot</code>. Do not write a second class for the database</td><td><code>@Document("claims") class Claim extends AggregateRoot</code></td><td>A second class and a mapper double the code. DocumentDB does not need them</td><td>Build</td></tr>
+<tr><td>3</td><td>A rule that decides if a change is allowed goes in the entity method that makes the change. If the rule needs information that the entity does not hold, the application service gets the information and passes it in as a method parameter</td><td>The claim does not hold its notes. So the application service counts them: <code>claim.close(notesNeedingAction, clock)</code></td><td>All the rules for one change are in one method. The parameter is required, so nobody can forget the check</td><td>Review</td></tr>
+<tr><td>4</td><td>Application service methods contain only steps, never business decisions. Section 5.3 lists the steps</td><td>No <code>if (claim.status() == CLOSED)</code> in <code>ClaimService</code></td><td>Rules in services get copied to several places. Then the copies become different</td><td>Review</td></tr>
+<tr><td>5</td><td>A transaction saves one aggregate. To save more than one aggregate in one transaction, you need approval in the design note</td><td>Creating a claim with its first notes is approved. Nothing else is approved</td><td>Small transactions have fewer conflicts and stay within DocumentDB's limits</td><td>Review</td></tr>
+<tr><td>6</td><td>An aggregate refers to another aggregate only by its ID, as a <code>String</code></td><td><code>Note</code> has <code>String claimId</code>, not a <code>Claim</code> field</td><td>If it holds the object, both are loaded and saved together. This silently makes one large aggregate</td><td>Review</td></tr>
+<tr><td>7</td><td>A feature uses another feature only by calling its application service. It passes and receives simple values (IDs, numbers, small records), never entities</td><td><code>ClaimService</code> calls <code>notes.countNeedingAction(claimId)</code>, never <code>NoteRepository</code></td><td>Each feature can then change how it stores its data without breaking the others</td><td>Build</td></tr>
+<tr><td>8</td><td>Feature code saves only with the repository's <code>save</code>, <code>saveAll</code> or <code>delete</code>. It never updates documents with <code>MongoTemplate</code>. Migrations are the only exception</td><td><code>claims.save(claim)</code></td><td>Saving through the repository sends the entity's events. A <code>MongoTemplate</code> update changes data and sends no events</td><td>Build</td></tr>
+<tr><td>9</td><td>Check permissions on the controller. Every endpoint has <code>@ClaimsRead</code> or <code>@ClaimsWrite</code>. Application services do not check permissions</td><td><code>@PostMapping("/{claimId}/close") @ClaimsWrite</code></td><td>The controller knows the user, because the request arrives there. Message listeners also call application services, and there is no user there</td><td>Build, plus a test that expects <code>403</code></td></tr>
+<tr><td>10</td><td>Reach other microservices and systems only through a client adapter, or through versioned events. Wrap every call in <code>ResilientCalls</code> (section 7.4)</td><td><code>EligibilityClient</code>, <code>CustomerRecordClient</code></td><td>When another team changes its API, only the adapter changes</td><td>Build and review</td></tr>
+</tbody>
+</table>
+<h2>4. Designing a feature</h2>
+<h3>4.1 Who decides</h3>
+<p>Do not write code for a feature with business rules until its design note is approved.</p>
+<table>
+<thead><tr><th>Decision</th><th>Who decides</th><th>Where it is written</th></tr></thead>
+<tbody>
+<tr><td>Which microservices exist, and what each one owns</td><td>The design group, with the business</td><td>An architecture decision record (ADR) in Confluence</td></tr>
+<tr><td>What each aggregate contains, the business rules with examples, and any transaction that saves two aggregates</td><td>The design group</td><td>The feature's design note</td></tr>
+<tr><td>Endpoints, classes and tests</td><td>The engineers who build the feature</td><td>The code</td></tr>
+</tbody>
+</table>
+<h3>4.2 Simple or Rich</h3>
+<p>Each design note says which level the feature uses:</p>
+<ul>
+<li><strong>Simple</strong> is for data with no business rules, such as lookup lists or user preferences. The entity has fields and getters. Checks can go in the application service. Copy the <code>reference/</code> feature. A Simple feature can also have no entity at all, when another system stores the data (the <code>customer</code> feature).</li>
+<li><strong>Rich</strong> is for data with states and rules, such as claims, payments and awards. Everything in this guide applies. Copy the <code>claim/</code> feature.</li>
+</ul>
+<p>Core business areas are Rich. If a Simple feature gets business rules, it becomes Rich.</p>
+<h3>4.3 Inside the aggregate, or a separate aggregate?</h3>
+<p>Some objects belong to another object. For example, evidence and notes both belong to a claim. For each one, answer four questions:</p>
+<ol>
+<li>Does a rule on the parent need its full details, not only a count?</li>
+<li>Is there a fixed maximum number of them, written in the design note? (A DocumentDB document cannot be bigger than 16 MB. So a list with no maximum will fail one day.)</li>
+<li>Is it changed at the same time as the parent, by the same people?</li>
+<li>Is it meaningless without the parent?</li>
+</ol>
+<p>If all four answers are yes, put it <strong>inside</strong> the aggregate. If any answer is no, make it a <strong>separate aggregate</strong>. The separate aggregate stores the parent's ID.</p>
+<p><strong>Example:</strong> evidence is inside the claim. Closing a claim needs all the evidence, and a claim has at most 10 items. Notes are a separate aggregate. There is no limit on notes. Closing needs only a count. Caseworkers add notes all the time. If notes were inside the claim, two caseworkers could add notes at the same time. Then one of them would get a <code>409</code> error.</p>
+<p>Do not design aggregates by copying mainframe tables. The tables were built for a different system.</p>
+<h3>4.4 Design note template</h3>
+<pre><code># Feature: &lt;name&gt;            Level: Rich | Simple
+Owner: &lt;name&gt;      Approved by: &lt;design group member&gt;      Date: &lt;date&gt;
+
+## Purpose
+One or two sentences in the business's words.
+
+## Aggregates
+| Aggregate | What is inside it | Maximum size | Collection |
+Separate aggregates and the ID they hold: ...
+
+## States
+Example: OPEN -&gt; CLOSED (close). CLOSED is final.
+
+## Rules
+| Rule | Where it is enforced | Example with real values |
+
+## Events
+| Event | Sent to other microservices as | Who uses it |
+
+## Talks to
+| Feature or microservice | Why | How |
+
+## Approved exceptions to this guide
+## Open questions for the business</code></pre>
+<h2>5. Building a feature</h2>
+<p>Start by copying <code>claim/</code> (Rich) or <code>reference/</code> (Simple) from the reference code. Rename it. Delete what you do not need.</p>
+<h3>5.1 Folders</h3>
+<table>
+<thead><tr><th>Folder</th><th>What goes in it</th></tr></thead>
+<tbody>
+<tr><td><code>domain/model</code></td><td>Entities (the classes with <code>@Document</code>), the objects stored inside them, and value objects</td></tr>
+<tr><td><code>domain/service</code></td><td>Domain services, if there are any. Domain services have no Spring annotations. So register each one as a bean in the feature's <code>...Config</code> class</td></tr>
+<tr><td><code>domain/event</code></td><td>Domain events</td></tr>
+<tr><td><code>domain/exception</code></td><td>Domain exceptions</td></tr>
+<tr><td><code>application</code></td><td>The application service</td></tr>
+<tr><td><code>persistence</code></td><td>The Spring Data repository</td></tr>
+<tr><td><code>api</code></td><td>The controller, the request and response classes (DTOs), and the code that turns an entity into a response</td></tr>
+<tr><td><code>client</code></td><td>Client adapters for other microservices, and their request and response classes</td></tr>
+<tr><td><code>messaging</code></td><td>The event mapper, the published event classes, and the listeners for other microservices' events. The event mapper decides which events other microservices receive</td></tr>
+</tbody>
+</table>
+<p>Use only the folders that the feature needs. For example, the <code>customer</code> feature has no <code>persistence</code> folder, because the central customer service stores its data.</p>
+<h3>5.2 Where does this code go?</h3>
+<p>Answer these questions in order. Stop at the first "yes".</p>
+<ol>
+<li><strong>Does the code decide if the entity is allowed to change, based on its current state?</strong> Put it in that entity's method. (Format checks are question 4. Codes from another feature are question 5.) If the code needs information that the entity does not hold, add a method parameter. The application service then passes the information in.</li>
+<li><strong>Is it a business calculation that combines several things, belongs to no single entity, and changes nothing?</strong> Put it in a domain service, such as <code>EntitlementCalculator</code>. Do this only if you can write a table of worked examples with real numbers. If the logic is one or two <code>if</code> statements, put it in the entity (question 1).</li>
+<li><strong>Does it load, save, call another microservice, start a transaction or write an audit record?</strong> Put it in the application service.</li>
+<li><strong>Does it check the format of a single value?</strong> For example: not blank, a valid date, not negative. Put it in the value object's constructor. Or use <code>Guard</code> in the entity's <code>create</code> method. <code>Guard</code> is the platform's one-line check helper.</li>
+<li><strong>Does it check that a code exists in another feature, such as a valid claim type?</strong> Call that feature's application service: <code>referenceData.requireActive(...)</code>.</li>
+</ol>
+<h3>5.3 The six steps of an application service method</h3>
+<p>Every application service method that changes data follows these steps, in this order:</p>
+<pre><code>@Transactional
+public void close(String claimId, Long expectedVersion) {
+    Claim claim = claims.get(claimId);                          // 1. Load the aggregate (404 if it doesn't exist)
+    claim.requireVersion(expectedVersion);                      // 2. Check the user saw the latest version (409 if not)
+    long notesNeedingAction = notes.countNeedingAction(claimId); // 3. Fetch any information the rule needs from elsewhere
+    claim.close(notesNeedingAction, clock);                     // 4. Call the entity method; it checks the rules and changes
+    claims.save(claim);                                         // 5. Save; this also sends the entity's events
+    audit.record(AuditActions.CLAIM_CLOSED, AuditActions.CLAIM, claimId); // 6. Write the audit record
+}</code></pre>
+<ul>
+<li>If the method needs an answer from another microservice, get it <strong>before</strong> the transaction starts. A slow call must never keep a database transaction open. <code>ClaimService.create</code> shows how: it calls the eligibility microservice first, and then saves inside a <code>TransactionTemplate</code>.</li>
+<li>Get the current time from the injected <code>Clock</code>. Never use <code>Instant.now()</code>. Then tests can set the time.</li>
+<li>Some business actions only send a change to another system, such as "change address". They have no load, no save and no transaction. They make one call, and then write the audit record (section 7.4).</li>
+</ul>
+<h3>5.4 Tests</h3>
+<table>
+<thead><tr><th>What you wrote</th><th>Test it with</th><th>What the test proves</th></tr></thead>
+<tbody>
+<tr><td>Entity, value object, domain service</td><td>Plain JUnit, with no Spring and no mocks</td><td>Each business rule works, using the examples from the design note</td></tr>
+<tr><td>Application service</td><td>JUnit, with Mockito mocks for the repository and other features</td><td>The steps happen in order. Nothing is saved when a rule fails. The saved entity has the right events (read them with <code>pullEvents()</code>)</td></tr>
+<tr><td>Controller</td><td><code>@PlatformWebMvcTest</code></td><td>Status codes, validation errors, and <code>403</code> when the user has no permission</td></tr>
+<tr><td>Client adapter</td><td>JUnit with a local fake HTTP server</td><td>Their answers become our types and our exceptions. For a read, a <code>503</code> is retried and a <code>4xx</code> is not. For a change, nothing is retried, and a timeout gives <code>504</code></td></tr>
+<tr><td>Repository, and the whole microservice</td><td>Tests named <code>*IT</code>, with a real database in Docker</td><td>Saving and loading keep every field. Saving with an old version throws <code>OptimisticLockingFailureException</code>. Queries work. The expected events and audit records are stored</td></tr>
+</tbody>
+</table>
+<h3>5.5 Worked example: "a closed claim can be reopened within 28 days"</h3>
+<ol>
+<li><strong>Design note:</strong> add the state change <code>CLOSED -&gt; OPEN (reopen)</code>. Add the rules with examples. For example, a claim closed on 1 March can be reopened on 29 March, but not on 30 March. Add the event <code>ClaimReopened</code>, which is sent to other microservices as <code>ClaimReopenedV1</code>. Change business rule 4 to "A closed claim cannot be changed, except by reopening it within 28 days". Count days as dates in UK time. Get the design note approved.</li>
+<li><strong>Domain:</strong> create the exceptions <code>ClaimNotClosedException</code> and <code>ReopenWindowPassedException</code>. Both extend <code>BusinessRuleViolationException</code>. Create the event record <code>ClaimReopened</code>. Write the entity method:</li>
+</ol>
+<pre><code>private static final ZoneId UK = ZoneId.of("Europe/London");
+
+public void reopen(String reason, Clock clock) {
+    Guard.notBlank(reason, "reason");                                  // 400 if blank
+    if (status != ClaimStatus.CLOSED) throw new ClaimNotClosedException(id());
+    Instant now = clock.instant();
+    LocalDate closedOn = LocalDate.ofInstant(closedAt, UK);            // count days as UK dates
+    LocalDate today = LocalDate.ofInstant(now, UK);
+    if (today.isAfter(closedOn.plusDays(28))) throw new ReopenWindowPassedException(id());
+    status = ClaimStatus.OPEN;
+    closedAt = null;
+    raise(new ClaimReopened(id(), reason, now));
+}</code></pre>
+<ol start="3">
+<li><strong>Domain tests:</strong> write one test for each example in the design note. Make them pass before you do anything else.</li>
+<li><strong>Application service:</strong> add <code>reopen(claimId, reason, expectedVersion)</code>. It loads the claim and checks the version with <code>claim.requireVersion(expectedVersion)</code>. Then it calls <code>claim.reopen(reason, clock)</code>, saves the claim, and records the audit action <code>CLAIM_REOPENED</code>. Add an application service test.</li>
+<li><strong>API:</strong> add <code>POST /claims/{claimId}/reopen</code> with <code>@ClaimsWrite</code>. Its request class is <code>ReopenClaimRequest(@NotNull Long version, @NotBlank String reason)</code>. Test <code>204</code>, <code>403</code>, <code>409</code>, <code>422</code>, <code>400</code> and <code>404</code>. Update <code>contracts/openapi.yaml</code>.</li>
+<li><strong>Messaging:</strong> add the <code>ClaimReopenedV1</code> record. Add a line in the event mapper that turns <code>ClaimReopened</code> into <code>ClaimReopenedV1</code>. Add its JSON schema and a mapper test. Do not write any code to send the event. Saving the claim sends it.</li>
+<li><strong>Database:</strong> there is no new query. So you do not need a new index or migration.</li>
+<li><strong>Pull request:</strong> the reviewer checks the change against the golden rules (section 3) and the DocumentDB rules (section 6).</li>
+</ol>
+<h2>6. DocumentDB rules</h2>
+<p>Amazon DocumentDB accepts MongoDB commands, but it has its own limits. These rules come from the AWS documentation: <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/transactions.html">transactions</a>, <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/retryable-writes.html">retryable writes</a>, <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/functional-differences.html">differences from MongoDB</a>.</p>
+<table>
+<thead><tr><th>Rule</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>A transaction must finish well within one minute. Never call another microservice inside a transaction. Never loop over many records inside a transaction</td><td>DocumentDB cancels any transaction that runs for more than one minute. You cannot change this limit</td></tr>
+<tr><td>A transaction saves one aggregate, or the few aggregates that the design note approves. A job that updates many records runs one transaction for each record</td><td>One transaction cannot change more than 32 MB of data</td></tr>
+<tr><td>A migration creates every collection before any code uses it</td><td>DocumentDB cannot create a collection inside a transaction</td></tr>
+<tr><td>Inside a transaction, keep reads small. Load documents by ID, or run a count. Never read a long list</td><td>DocumentDB does not support cursors inside a transaction. A cursor is how a large, paged result is read</td></tr>
+<tr><td>Start transactions only with <code>@Transactional</code> or <code>TransactionTemplate</code></td><td>The platform library sets up transactions correctly for DocumentDB</td></tr>
+<tr><td>Do not write your own retry loops around saves</td><td>DocumentDB versions before 8.0.2 do not support retryable writes, so the platform sets <code>retryWrites=false</code>. The database never retries a failed write. The caller retries instead: the user tries again, or SQS delivers the message again</td></tr>
+<tr><td>Never remove the version check, and never work around it. A save with an old version is refused with <code>409</code></td><td>Without the check, a second user's save silently overwrites the first user's change</td></tr>
+<tr><td>Every change must be safe to repeat. A repeated request or message must never add a list item, a document or an amount a second time (for example, <code>count = count + 1</code>)</td><td>After a timeout or a database restart, a saved change can be reported as failed. Then it is sent again. Three things stop the repeat from having an extra effect: the version check, the <code>Idempotency-Key</code> header on create requests (the platform returns the first result for a repeated key), and the inbox for messages (section 7.3)</td></tr>
+<tr><td>Always read from the primary database instance (<code>readPreference=primary</code> in the connection string)</td><td>Copies on other instances can be slightly behind. You might not see a change you just made</td></tr>
+<tr><td>Every query that can return more than one document must sort explicitly. Every query must use an index that a migration created, or the built-in <code>_id</code> index</td><td>Without a sort, DocumentDB returns results in no fixed order. DocumentDB does not create indexes automatically</td></tr>
+<tr><td>Do not use <code>$regex</code> (pattern matching), <code>$lookup</code> (joining collections) or unusual aggregation operators without design group approval</td><td>DocumentDB supports them only partly. They often cannot use indexes</td></tr>
+<tr><td>Never edit a migration that has already run in any environment. To change something, add a new migration. Write every migration so that it is safe to run twice</td><td>If you do not, environments end up with different data</td></tr>
+<tr><td>Before you add an index to a large collection, test how long it takes on production-sized data. Agree the release time with the platform team</td><td>DocumentDB builds only one index per collection at a time, and building takes time</td></tr>
+<tr><td>Store money with the <code>Money</code> value object, which is stored as an exact decimal. Store times as <code>Instant</code>, in UTC. When a rule counts days, convert the times to UK dates (<code>Europe/London</code>) first. Give every list inside a document a maximum size</td><td>This avoids rounding errors and daylight-saving mistakes. It also keeps documents under the 16 MB limit</td></tr>
+</tbody>
+</table>
+<p>Open question for the platform team: AWS says that DocumentDB does not support "causally consistent" sessions. The pilot must confirm that Spring transactions work with our DocumentDB version.</p>
+<h2>7. Events and other microservices</h2>
+<h3>7.1 Two kinds of event</h3>
+<ul>
+<li>A <strong>domain event</strong> (such as <code>ClaimClosed</code>) is used only inside our microservice. We can change it at any time.</li>
+<li>An <strong>integration event</strong> (such as <code>ClaimClosedV1</code>) is the message that other microservices receive. It has a JSON schema in <code>contracts/events/</code>. Other teams depend on it, so we can only add fields to it. To remove or rename a field, create a new version (<code>ClaimClosedV2</code>). Send the new version together with V1 until every receiving team has moved to V2.</li>
+</ul>
+<p>Each feature has an <strong>event mapper</strong>. It decides which domain events become integration events. Most domain events are never sent outside the microservice.</p>
+<h3>7.2 How we send events (the outbox)</h3>
+<ol>
+<li>The entity method records a domain event with <code>raise(...)</code>.</li>
+<li>The application service saves the entity with the repository.</li>
+<li>The platform library asks the feature's event mapper which integration event to send for each domain event. Most domain events have none. The platform stores each integration event in the <code>event_publication</code> collection, <strong>in the same transaction</strong> as the entity. This collection is called the <strong>outbox</strong>.</li>
+<li>After the transaction commits, the platform sends the event to SNS. If SNS is not available, the platform tries again later.</li>
+</ol>
+<p>So a saved change always sends its integration events. A change that was not saved never sends them. Never send to SNS in any other way.</p>
+<h3>7.3 How we receive events (the inbox)</h3>
+<ul>
+<li>Each listener extends the platform's <code>InboxMessageHandler</code>. The <strong>inbox</strong> is a list of event IDs that were already processed. Before the listener handles a message, it checks the inbox and skips duplicates. It uses the <code>eventId</code> field inside the event, not the SQS message ID. This is because a resent event arrives as a new SQS message. The listener records the event ID in the same transaction as the change.</li>
+<li>A listener only translates the message into our types and calls an application service. It contains no business rules.</li>
+<li>If handling fails, SQS delivers the message again. After 5 failed attempts, the message moves to a <strong>dead-letter queue</strong>. Someone must investigate it there.</li>
+<li>Messages can arrive late or in the wrong order. So entity methods must handle this. For example, <code>Claim.recordPayment</code> ignores a payment that is older than the one it already has.</li>
+<li>Our copies of other teams' events ignore fields that we do not know. So when other teams add fields, our code does not break.</li>
+</ul>
+<h3>7.4 Calling another microservice or system</h3>
+<ul>
+<li>Call another microservice only when you need its answer before you can continue. For example, you need eligibility before you create a claim. In other cases, use events.</li>
+<li><p>Make every call through a client adapter. Create its HTTP client with the platform's <code>HttpClientFactory</code>, which adds time limits. Wrap each call in <code>ResilientCalls</code>:</p>
+<ul>
+<li><strong>Reads and checks</strong> use <code>callWithRetry</code>. It retries timeouts and server errors. If they keep failing, our endpoint returns <code>503</code>.</li>
+<li><strong>Changes</strong> use <code>callOnce</code>. It never retries. If we could not reach the other system, it returns <code>503</code>, and nothing changed. If the call timed out after it was sent, it returns <code>504</code>. Then we do not know if the change was made, so the user must check before trying again.</li>
+<li>Both use a <strong>circuit breaker</strong>. After repeated failures, a circuit breaker stops calling for a short time. So we do not keep waiting for a failing microservice.</li>
+</ul></li>
+<li>Keep the total time for one request, with all retries, under 4 seconds. The front end waits at most 5 seconds, so our calls must give up first.</li>
+<li>Make the call before the database transaction starts.</li>
+<li>A business action can send its change to another system. For example, "change address" sends the new address to the central customer service. Make exactly one call for the business action. Do not save anything else in the same request. If we keep a copy of the data, update the copy only after the other system confirms the change.</li>
+<li>Every adapter has a client test. It also has a WireMock stub in the <code>local-environment</code> repository, for local development. A WireMock stub is a fake version of the other microservice.</li>
+</ul>
+<h3>7.5 Changes that span several microservices</h3>
+<p>A database transaction cannot cover two microservices. Some business processes must change data in several microservices. Design such a process as a series of steps. Each step changes one microservice. Then it sends an event that starts the next step. If a step fails, a step that was agreed in advance deals with it. For example, the action can be "create a task for a caseworker". Every process like this needs design group approval and an ADR.</p>
+<h2>8. Fixing mistakes</h2>
+<p>Mistakes will happen. You can fix them safely, for two reasons. First, each feature's data is reached only through its application service (golden rule 7). Second, other microservices see only our versioned events. So you can correct a wrong design inside one feature. You change that feature's code and add a migration.</p>
+<p><strong>For every mistake:</strong></p>
+<ol>
+<li>Do the step in the "Do now" column. It is small and safe to release quickly.</li>
+<li>Tell the design group on the same day.</li>
+<li>Create a ticket for the proper fix, with a date. Note the mistake in the feature's design note.</li>
+<li>Do the step in the "Fix properly" column by that date.</li>
+<li>Add an architecture test or a unit test. Then the same mistake fails the build next time.</li>
+</ol>
+<h3>Design mistakes</h3>
+<table>
+<thead><tr><th>Mistake</th><th>How you notice</th><th>Do now</th><th>Fix properly</th><th>Never</th></tr></thead>
+<tbody>
+<tr><td>Two separate aggregates share a rule that must always be true</td><td>Data breaks the rule. Or code keeps saving both aggregates together</td><td>Save both in one transaction, in one application service method. Add this to the design note as an exception, for the design group to approve</td><td>Merge them into one aggregate. A migration moves the child documents into the parent document</td><td>Try to keep the rule true by sending events between them. Events arrive later, so the rule is broken in between</td></tr>
+<tr><td>An aggregate is too big</td><td>Users often get <code>409 Conflict</code>. Documents keep growing</td><td>Keep the version check. Make sure the screen tells the user to reload</td><td>Move the part that changes often, or that has no maximum, into its own aggregate. The new aggregate holds the parent's ID. If a parent rule needs information about it, the application service passes the information in as a parameter</td><td>Turn off the version check. Or update single fields with <code>MongoTemplate</code> to avoid the conflict</td></tr>
+<tr><td>A list inside a document has no maximum</td><td>Some documents are much larger than others</td><td>Add a maximum in the entity method that adds items. Refuse more items with a <code>BusinessRuleViolationException</code> (<code>422</code>). Add an alert on document size</td><td>Move the list into its own aggregate</td><td>Wait until a document reaches DocumentDB's 16 MB limit and writes start to fail</td></tr>
+<tr><td>A business rule is in an application service, a controller or a listener</td><td>There is an <code>if</code> about status, amounts, dates or counts outside <code>domain/</code></td><td>Create a ticket for this sprint</td><td>Move the rule into the entity method. Add a parameter if the rule needs outside information. Add a unit test</td><td>Copy the same <code>if</code> to another place</td></tr>
+<tr><td>The same rule is written in several places</td><td>Two places check the same thing in slightly different ways</td><td>Agree with the business which version is correct</td><td>Keep one copy, in the entity method. Delete the others</td><td>Keep both copies "to be safe"</td></tr>
+<tr><td>A class exists only to hold one or two <code>if</code> statements (such as <code>ClaimClosurePolicy</code>)</td><td>A tiny "policy", "validator" or "helper" class</td><td>Nothing urgent</td><td>Move the check into the entity method that it protects. Delete the class</td><td>Add more classes like it</td></tr>
+<tr><td>An entity is changed without its methods. For example, someone added a setter, or a script writes fields directly</td><td>The architecture test fails. Or data appears that the rules do not allow. Or other microservices miss changes</td><td>Remove the setter or stop the script. Find the affected documents</td><td>Make scripts load each entity and call its method. Repair wrong data in the same way, so that rules, events and audit all apply</td><td>Repair data by writing directly to the database, except in a reviewed migration</td></tr>
+<tr><td>A feature uses another feature's repository or entity</td><td>The architecture test <code>featuresUseEachOtherOnlyThroughApplication</code> fails</td><td>If the release cannot wait, record today's violations with ArchUnit's <code>FreezingArchRule</code>. Then only new violations fail the build. Create a ticket</td><td>Add a method to the other feature's application service that returns a simple value. Call that method</td><td>Turn the architecture test off</td></tr>
+<tr><td>Two features call each other, so Spring needs <code>@Lazy</code> to start</td><td><code>@Lazy</code> appears in more than one place</td><td>One <code>@Lazy</code> is acceptable if the design group approves it</td><td>Make the calls go in one direction only. Use events for the other direction. Or merge the two features</td><td>Add <code>@Lazy</code> without asking</td></tr>
+</tbody>
+</table>
+<h3>Data and DocumentDB mistakes</h3>
+<table>
+<thead><tr><th>Mistake</th><th>How you notice</th><th>Do now</th><th>Fix properly</th><th>Never</th></tr></thead>
+<tbody>
+<tr><td>A query has no index</td><td>The endpoint gets slower as data grows. <code>explain()</code> shows that the whole collection is read</td><td>Add the index in a new migration. If the collection is large, agree the release time</td><td>During review, check that every new query has an index</td><td>Edit an old migration. Or create an index by hand in production</td></tr>
+<tr><td>A migration was wrong, or someone edited it after it ran</td><td>Environments have different data or indexes. Or startup fails</td><td>Stop deploying. Put any edited migration back exactly as it was</td><td>Write a new migration that corrects the data. Make it safe to run twice</td><td>Edit or delete rows in the <code>schema_migrations</code> collection by hand</td></tr>
+<tr><td>A transaction times out, or it contains a call to another microservice</td><td>Errors say that the transaction was aborted, mostly under load</td><td>Move the call to before the transaction</td><td>Make each transaction save one aggregate, with no loops</td><td>Try to raise DocumentDB's one-minute limit. It cannot be changed</td></tr>
+<tr><td>A job updates many records in one transaction</td><td>The job fails part of the way through, and nothing is saved</td><td>Stop the job</td><td>Process one record per transaction, by calling the application service for each record. Make the job skip records that it has already done</td><td>Update many records at once with <code>MongoTemplate</code></td></tr>
+<tr><td>Money is stored as a floating-point number, or times are stored in local time</td><td>Amounts are a penny wrong. Times are an hour wrong after the clocks change</td><td>Use <code>Money</code> and <code>Instant</code> for all new data</td><td>A migration converts the stored values. The business agrees the rounding</td><td>Correct the values only when you display them</td></tr>
+</tbody>
+</table>
+<h3>Event and integration mistakes</h3>
+<table>
+<thead><tr><th>Mistake</th><th>How you notice</th><th>Do now</th><th>Fix properly</th><th>Never</th></tr></thead>
+<tbody>
+<tr><td>A change did not send an event</td><td>Another team never heard about the change. The audit log shows the change, but <code>event_publication</code> has no event</td><td>Add the missing <code>raise(...)</code> to the entity method. Add the line to the event mapper</td><td>Agree with the receiving teams how to send the events they missed. Usually a one-off job sends a correction event for each affected record</td><td>Let other teams read our database to catch up</td></tr>
+<tr><td>A published event was changed in a way that breaks receivers</td><td>Another team's listener fails after our release</td><td>Roll back, or put the field back</td><td>Send both <code>V1</code> and <code>V2</code> until every receiving team has moved to <code>V2</code>. Then stop sending <code>V1</code></td><td>Change a published event without telling the receiving teams</td></tr>
+<tr><td>There are messages in the dead-letter queue, or events are not leaving the outbox</td><td>An alarm goes off</td><td>Find the cause in the logs, using the message's trace ID. Fix it</td><td>Move the messages from the dead-letter queue back to the main queue ("redrive"). The inbox skips any that were already processed</td><td>Delete dead-letter messages before you understand them. Each one is a change that we have not applied</td></tr>
+<tr><td>Our data and another microservice's data do not match</td><td>Two microservices show different answers, for example about a payment</td><td>Use both audit logs to find which side is right</td><td>Add a scheduled job that compares the two and <strong>reports</strong> differences. Make corrections through entity methods, so that they are checked and audited</td><td>Add a job that silently overwrites one side with the other side's data</td></tr>
+<tr><td>A listener handles repeated or late messages wrongly</td><td>The same payment is recorded twice. Or an older payment replaces a newer one</td><td>Make sure the listener extends <code>InboxMessageHandler</code></td><td>Add a check in the entity method that ignores anything older than what it already has</td><td>Assume that each message arrives exactly once and in order</td></tr>
+<tr><td>Another microservice's data classes or terms appear in our domain code</td><td>Their class names or values (such as <code>"ELIGIBLE"</code>) appear outside <code>client/</code></td><td>Nothing urgent</td><td>Translate them into our own types in the client adapter. Remove their types from everywhere else</td><td>Add our own fields to their classes</td></tr>
+<tr><td>A call to another microservice has no time limit or circuit breaker</td><td>When the other microservice is slow, our requests pile up and our microservice slows down too</td><td>Wrap the call in <code>ResilientCalls</code></td><td>Add client tests for timeouts and <code>503</code></td><td>Retry with no limit. Or retry <code>4xx</code> errors</td></tr>
+<tr><td>Two microservices always have to change and be released together</td><td>Most features need changes in both</td><td>Tell the design group</td><td>The design group redraws the boundary and records it in an ADR. The feature folder and its data move to the other microservice</td><td>Let the two microservices share a database</td></tr>
+<tr><td>Code reads another microservice's database</td><td>There is a connection string or collection name that belongs to another team</td><td>Remove it before release</td><td>Use their API or their events</td><td>Allow a "temporary" read</td></tr>
+</tbody>
+</table>
+<h3>Security mistakes</h3>
+<table>
+<thead><tr><th>Mistake</th><th>How you notice</th><th>Do now</th><th>Fix properly</th><th>Never</th></tr></thead>
+<tbody>
+<tr><td>An endpoint has no permission check</td><td>The architecture test fails. Or a test finds an endpoint that any signed-in user can call</td><td>If it is live, follow the security incident process. Add the annotation and release</td><td>Add a test that expects <code>403</code>. Check the controller's other endpoints</td><td>Add the check in the application service instead of the controller</td></tr>
+<tr><td>Personal data is in logs, error messages or events</td><td>A name, date of birth, National Insurance number or address appears where it is not needed</td><td>Remove it and release. If it reached production logs, report it through the data protection process</td><td>Use value objects that hide personal data in <code>toString()</code>, as <code>ClaimantDetails</code> does. Send IDs, not personal details, in events</td><td>Decide on your own that it does not matter</td></tr>
+</tbody>
+</table>
+<h2>9. Never do these</h2>
+<ul>
+<li>Write an entity's fields from outside the entity.</li>
+<li>Turn off the version check, or work around it.</li>
+<li>Edit a migration that has run in any environment.</li>
+<li>Call another microservice inside a database transaction.</li>
+<li>Retry a call that changes data in another system.</li>
+<li>Read or write another microservice's database.</li>
+<li>Send to SNS without the outbox.</li>
+<li>Remove or rename a field in a published event version. Publish a new version instead.</li>
+<li>Delete dead-letter messages without investigating them.</li>
+<li>Repair data by writing directly to the database, except in a reviewed migration.</li>
+<li>Release an endpoint without a permission annotation.</li>
+<li>Log personal data.</li>
+<li>Turn off an architecture test.</li>
+<li>Add any of these without design group approval: CQRS (separate models for reading and writing), event sourcing (storing a record as its list of events, not its current state), generic repositories (one repository class shared by all aggregates), or a domain library shared between microservices.</li>
+</ul>
+<h2>10. Who to ask</h2>
+<table>
+<thead><tr><th>You need</th><th>Ask</th><th>When</th></tr></thead>
+<tbody>
+<tr><td>To know where some code belongs</td><td>A senior engineer, or the weekly design session</td><td>On the same day</td></tr>
+<tr><td>A new aggregate, a change to what an aggregate contains, a transaction that saves more than one aggregate, or a new link between microservices</td><td>The design group, through the design note or an ADR</td><td>Before you write code</td></tr>
+<tr><td>A change to a published event</td><td>The teams that receive it</td><td>Before release</td></tr>
+<tr><td>Help with a mistake from section 8</td><td>The design group</td><td>On the same day</td></tr>
+<tr><td>A security or personal data problem</td><td>The incident process</td><td>Immediately</td></tr>
+</tbody>
+</table>
+<p>Still to be filled in: design group members, the team channel, the design session time, the platform team contact, and the incident process link.</p>
+<h2>11. Glossary</h2>
+<table>
+<thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Aggregate</td><td>A group of objects that are always loaded and saved together, as one document</td></tr>
+<tr><td>Aggregate root</td><td>The top object of an aggregate. All changes go through it (<code>Claim</code>)</td></tr>
+<tr><td>Anaemic model</td><td>A design where entities only hold data, and all logic is in services. Do not use it for Rich features</td></tr>
+<tr><td>Application service</td><td>The class that runs each use case, step by step (<code>ClaimService</code>)</td></tr>
+<tr><td>Bounded context</td><td>A business area with its own words and its own model. Usually it is one microservice</td></tr>
+<tr><td>Business action</td><td>One change that the user asks for with one button, such as "close claim". It is one application service method</td></tr>
+<tr><td>Circuit breaker</td><td>It stops calls to a failing microservice for a short time, after repeated failures</td></tr>
+<tr><td>Client adapter</td><td>The only class that talks to another microservice or system. It translates their data into our types (<code>EligibilityClient</code>)</td></tr>
+<tr><td>Dead-letter queue</td><td>Where a message goes after it fails 5 times. Someone must investigate it</td></tr>
+<tr><td>Domain event</td><td>A record that something happened. It is used only inside our microservice (<code>ClaimClosed</code>)</td></tr>
+<tr><td>Domain service</td><td>A rare class for a business calculation that belongs to no single entity (<code>EntitlementCalculator</code>)</td></tr>
+<tr><td>Entity</td><td>A business object with its own ID (<code>Claim</code>, <code>Note</code>)</td></tr>
+<tr><td>Eventual consistency</td><td>Other microservices learn about a change a little later, through events</td></tr>
+<tr><td>Inbox</td><td>The platform's list of processed event IDs. It is used to skip duplicates</td></tr>
+<tr><td>Integration event</td><td>A versioned event that other microservices receive (<code>ClaimClosedV1</code>)</td></tr>
+<tr><td>Invariant</td><td>A business rule that must be true at all times</td></tr>
+<tr><td>Optimistic locking</td><td>The version check. A save is refused with <code>409</code> if the document changed after it was loaded</td></tr>
+<tr><td>Outbox</td><td>The <code>event_publication</code> collection. Events are stored here with the change, before they are sent</td></tr>
+<tr><td>Ubiquitous language</td><td>The business's own words. Use them in the same way in conversation, design notes, code and tests</td></tr>
+<tr><td>Value object</td><td>A value with no ID that cannot change. Its contents define it (<code>Money</code>)</td></tr>
+</tbody>
+</table>
+<h2>12. Your first week</h2>
+<ol>
+<li>Read sections 1 to 3. Then explain two things to a colleague: the difference between an entity and a value object, and the difference between an application service and a domain service.</li>
+<li>Read <code>Claim</code>, <code>Money</code>, <code>ClaimTest</code> and <code>EntitlementCalculator</code> in the reference code. On a practice branch, add a rule to <code>Claim</code>. Write its test first.</li>
+<li>Read <code>ClaimService</code>, <code>ClaimController</code> and <code>EligibilityClient</code>, and their tests.</li>
+<li>Read sections 6 and 7. Run the microservice on your computer. Create a claim and close it. Then look at the <code>claims</code>, <code>notes</code> and <code>event_publication</code> collections.</li>
+<li>Build the "reopen a claim" example from section 5.5 on a practice branch. Ask a senior engineer to review it against sections 3 and 6.</li>
+</ol>
+</article>
+<script>
+document.getElementById("copy").addEventListener("click", function () {
+  var range = document.createRange();
+  range.selectNodeContents(document.getElementById("guide"));
+  var sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  var ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) {}
+  document.getElementById("copied").textContent = ok
+    ? "Copied. Now paste into Confluence."
+    : "Press Cmd+C or Ctrl+C to copy the selected guide.";
+});
+</script>
+</body></html>

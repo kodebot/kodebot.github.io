@@ -379,7 +379,7 @@ class CustomerClient {
 }
 ```
 
-*Spring: `RestClient` throws `HttpClientErrorException`, `HttpServerErrorException` and `ResourceAccessException`; the adapter turns each into our own error.*
+*Spring: `RestClient` throws `HttpClientErrorException`, `HttpServerErrorException` and `ResourceAccessException`; the adapter turns each into our own error. A `@WireMockTest` proves each row of the table: WireMock plays the customer system and answers `412`, `422`, `503` and a delay.*
 
 Why: Express handles one set of codes for every microservice.
 
@@ -1188,7 +1188,7 @@ ResponseEntity<EvidenceCreated> upload(@PathVariable ClaimId id,
 // spring.servlet.multipart.max-request-size=11MB
 ```
 
-`claimService.addEvidence` sends the bytes to the object store through one adapter and keeps only a `FileReference` on the evidence item; a DocumentDB document holds 16 MiB at most, so the bytes never go into the record.
+`claimService.addEvidence` sends the bytes to the object store through one adapter and keeps only a `FileReference` on the evidence item; a DocumentDB document holds 16 MiB at most, so the bytes never go into the record. The adapter is tested against Floci, which plays the object store locally.
 
 *Spring: `MultipartFile` receives the part, and `spring.servlet.multipart.max-file-size` refuses a bigger one before the controller runs.*
 
@@ -1635,6 +1635,8 @@ test('renders a claim summary', async () => {
   expect(renderRow(claim)).toContain('1 October 2026');
 });
 ```
+
+For an Express test that needs a whole microservice rather than one example, WireMock plays the microservice, with stubs built from the same `openapi.yaml` examples, so the two sides never test against different data.
 
 A rename now fails the Express build on the day the contract changes, and rule 27's three-release path becomes the fix.
 

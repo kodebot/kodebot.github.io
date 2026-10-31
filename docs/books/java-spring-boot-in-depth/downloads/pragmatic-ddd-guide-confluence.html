@@ -560,7 +560,7 @@ public class EligibilityClient {
     }
 }</code></pre>
 <p>Nothing from the other system appears outside its adapter. Nobody reads another microservice's database.</p>
-<p><em>Spring: <code>RestClient</code> is Spring's HTTP client; <code>EligibilityResponse</code> is a record Spring deserialises from their JSON and that only this class sees.</em></p>
+<p><em>Spring: <code>RestClient</code> is Spring's HTTP client; <code>EligibilityResponse</code> is a record Spring deserialises from their JSON and that only this class sees. The adapter is tested against WireMock playing the eligibility microservice (rule 37).</em></p>
 <h3>17. Call another microservice before you open the transaction, never inside it</h3>
 <p>Creating a claim asks eligibility, then saves.</p>
 <p><strong>Bad</strong>:</p>
@@ -990,9 +990,22 @@ void closeRefusedWhenNotesOpen() {
 class ClaimRepositoryTest {
     @Container @ServiceConnection static MongoDBContainer mongo = new MongoDBContainer("mongo:8.0").withReplicaSet();
     @Test void saveAndLoadRoundTrip() { ... }
+}
+
+// the adapter: the translation, against WireMock playing the other microservice; one test class per adapter
+@WireMockTest
+class EligibilityClientTest {
+    @Test void translatesTheirAnswer(WireMockRuntimeInfo wm) {
+        stubFor(get("/v1/eligibility/c88").willReturn(okJson("{\"status\":\"NOT_ELIGIBLE\"}")));
+        assertEquals(Eligibility.NOT_ELIGIBLE, new EligibilityClient(clientFor(wm.getHttpBaseUrl())).check(new ClaimantId("c88")));
+    }
+    @Test void timeoutBecomesOurError(WireMockRuntimeInfo wm) {
+        stubFor(get("/v1/eligibility/c88").willReturn(ok().withFixedDelay(3000)));
+        assertThrows(EligibilityUnavailable.class, () -&gt; client(wm).check(new ClaimantId("c88")));
+    }
 }</code></pre>
-<p>Most tests are entity tests, because that is where the rules are. One <code>@WebMvcTest</code> per endpoint proves the permission check (rule 15). A test that sets the clock to 29 March proves the date rule (rule 13). DocumentDB has no local edition, so the repository test runs against MongoDB; a smoke test against a real DocumentDB cluster runs in the pipeline.</p>
-<p><em>Spring: <code>@DataMongoTest</code> loads only the Mongo slice; <code>@ServiceConnection</code> on the Testcontainers container sets the connection for it; <code>withReplicaSet()</code> is needed for transactions.</em></p>
+<p>Most tests are entity tests, because that is where the rules are. One <code>@WebMvcTest</code> per endpoint proves the permission check (rule 15). A test that sets the clock to 29 March proves the date rule (rule 13). The adapter tests are the only place the other system's JSON appears in our tests. The outbox sender, each message listener and the object-store adapter are tested against Floci, which plays the AWS services locally the way LocalStack does: the test publishes a <code>PaymentMadeV1</code> to the local queue and asserts on the claim. DocumentDB has no local edition, so the repository test runs against MongoDB; a smoke test against a real DocumentDB cluster runs in the pipeline.</p>
+<p><em>Spring: <code>@DataMongoTest</code> loads only the Mongo slice; <code>@ServiceConnection</code> on the Testcontainers container sets the connection for it; <code>withReplicaSet()</code> is needed for transactions. <code>@WireMockTest</code> starts a WireMock server for the adapter test and hands its URL to the test method.</em></p>
 <h3>38. Show two aggregates on one screen and save them with two buttons; one button that saves two things is a design smell to raise</h3>
 <p>The claim page shows the claim and lets the caseworker edit contact details and add a note.</p>
 <p><strong>Bad</strong> — one Save button that sends both:</p>

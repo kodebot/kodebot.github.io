@@ -248,7 +248,9 @@ POST /customers/42/change-address
 <h3>9. Translate the other system's answer into our own status codes</h3>
 <p>You are writing the adapter that calls the customer system in rule 8.</p>
 <p><strong>Bad</strong> — the other system's answer goes straight through:</p>
-<pre><code>catch (HttpError e) { throw new HttpStatusException(e.status(), e.body()); }   // 412 reaches Express</code></pre>
+<pre><code>catch (HttpClientErrorException e) {
+    throw new ResponseStatusException(e.getStatusCode(), e.getResponseBodyAsString());   // 412 reaches Express
+}</code></pre>
 <p>Express gets <code>412 Precondition Failed</code>, a code it has never seen, and shows a generic error page instead of the 409 page.</p>
 <p><strong>Good</strong> — one table, applied in the adapter:</p>
 <table>
@@ -260,10 +262,28 @@ POST /customers/42/change-address
 <tr><td>Does not answer in time</td><td><code>504</code> with code <code>OUTCOME_UNKNOWN</code>. The change may or may not be made. Express tells the user to check before trying again</td></tr>
 </tbody>
 </table>
-<pre><code>catch (PreconditionFailed e)  { throw new ConcurrentUpdate(id); }      // -&gt; 409 CONCURRENT_UPDATE
-catch (Rejected e)            { throw new AddressRejected(e.reason()); } // -&gt; 422 ADDRESS_REJECTED
-catch (Unreachable e)         { throw new DependencyUnavailable(); }    // -&gt; 503
-catch (Timeout e)             { throw new OutcomeUnknown(); }           // -&gt; 504 OUTCOME_UNKNOWN</code></pre>
+<pre><code>@Component
+class CustomerClient {
+    private final RestClient http;        // built once, with the base URL, the bearer token and the time limits
+
+    void changeAddress(CustomerId id, Address address, String etag) {
+        try {
+            http.post().uri("/customers/{id}/change-address", id.value())
+                .header("If-Match", etag).body(address)
+                .retrieve().toBodilessEntity();
+        } catch (HttpClientErrorException e) {
+            if (e.getStatusCode().value() == 412) throw new ConcurrentUpdate(id);     // -&gt; 409 CONCURRENT_UPDATE
+            if (e.getStatusCode().value() == 422) throw new AddressRejected(id);       // -&gt; 422 ADDRESS_REJECTED
+            throw e;
+        } catch (HttpServerErrorException e) {
+            throw new DependencyUnavailable("customers");                              // -&gt; 503; nothing was changed
+        } catch (ResourceAccessException e) {                                          // no connection, or no answer in time
+            if (e.getCause() instanceof SocketTimeoutException) throw new OutcomeUnknown(id);   // -&gt; 504 OUTCOME_UNKNOWN
+            throw new DependencyUnavailable("customers");                              // -&gt; 503
+        }
+    }
+}</code></pre>
+<p><em>Spring: <code>RestClient</code> throws <code>HttpClientErrorException</code>, <code>HttpServerErrorException</code> and <code>ResourceAccessException</code>; the adapter turns each into our own error.</em></p>
 <p>Why: Express handles one set of codes for every microservice.</p>
 <h2>Part B. Endpoints that read data</h2>
 <h3>10. Build read endpoints around records, not around screens</h3>
@@ -350,23 +370,34 @@ Cache-Control: max-age=300
 <h3>15. Check permission on every endpoint, reads included, even when the caller is our own Express</h3>
 <p>You are adding <code>GET /claims/9f1c</code>, a read, called only by Express.</p>
 <p><strong>Bad</strong> — the endpoint trusts a header and skips the check because it is "only a read":</p>
-<pre><code>// GET /claims/{id}
-public ClaimDetail get(String id, String userIdHeader) {
+<pre><code>@GetMapping("/claims/{id}")
+public ClaimDetail get(@PathVariable String id, @RequestHeader("X-User-Id") String userId) {
     return service.get(id);          // no permission check; the header is whatever the caller sent
 }</code></pre>
 <p>Anything on the network can send <code>X-User-Id: admin</code> and read every claimant's details.</p>
 <p><strong>Good</strong> — the endpoint declares the permission it needs, takes the user from the access token, and a test proves a user without the permission gets <code>403</code>:</p>
-<pre><code>// GET /claims/{id}
-public ClaimDetail get(String id, AccessToken token) {
-    permissions.require(token, "claims:read");           // the user comes from the token
-    return claimQueries.detail(new ClaimId(id));         // the string becomes our type at the edge
+<pre><code>@RestController
+@RequestMapping("/claims")
+class ClaimController {
+    @GetMapping("/{id}")
+    @PreAuthorize("hasAuthority('claims:read')")         // the authorities come from the access token
+    ClaimDetail get(@PathVariable ClaimId id) {          // the string becomes our type at the edge (a registered converter)
+        return claimQueries.detail(id);
+    }
 }
 
-// test
-void refusesUserWithoutPermission() {
-    assertEquals(403, getAs(userWithout("claims:read"), "/claims/9f1c").status());
+@WebMvcTest(ClaimController.class)
+class ClaimControllerTest {
+    @Autowired MockMvc mvc;
+
+    @Test
+    @WithMockUser(authorities = "claims:write")          // signed in, but without this permission
+    void refusesUserWithoutPermission() throws Exception {
+        mvc.perform(get("/claims/9f1c")).andExpect(status().isForbidden());
+    }
 }</code></pre>
-<p>The build checks that no endpoint is missing a permission. The microservice refuses even when the call comes from our own Express app. Hiding a button the user cannot use helps the user but is not security.</p>
+<p><em>Spring: <code>@PreAuthorize</code> with <code>@EnableMethodSecurity</code> checks the authority before the method runs; <code>@WebMvcTest</code> and <code>@WithMockUser</code> prove it.</em></p>
+<p>The build checks that no endpoint is missing a <code>@PreAuthorize</code>. The microservice refuses even when the call comes from our own Express app. Hiding a button the user cannot use helps the user but is not security.</p>
 <p>Why: reads return personal data, and anything on the network can call the endpoint.</p>
 <h2>Part C. Processes across several microservices</h2>
 <p>A database transaction cannot cover two microservices. Step 6 of the walkthrough is the example for this part: closing a claim must also stop its payments, which live in the payment microservice.</p>
@@ -408,17 +439,25 @@ broker.publish(new ClaimClosedV1(id));  // process crashes here: closed claim, n
 void on(ClaimClosedV1 e) { payments.stopFor(e.claimId()); }   // runs twice on redelivery</code></pre>
 <p>Either the event is never sent and the payments never stop, or the broker delivers it twice and the second run creates a second "stopped" record.</p>
 <p><strong>Good</strong> — an outbox on the sending side, an inbox on the receiving side:</p>
-<pre><code>// sender: claim and event in one transaction; a background sender publishes afterwards
-transaction(() -&gt; { claims.save(claim); outbox.add(claim.events()); });   // ClaimClosed becomes ClaimClosedV1
+<pre><code>// sender, in the claim microservice: claim and event in one transaction; a background sender publishes afterwards
+@Transactional
+public void close(ClaimId id, long expectedVersion) {
+    Claim claim = claims.findById(id).orElseThrow(() -&gt; new ClaimNotFound(id));
+    claim.requireVersion(expectedVersion);
+    claim.close(noteService.countNeedingAction(id), LocalDate.now(clock));
+    claims.save(claim);          // @Version: an old version throws OptimisticLockingFailureException;
+                                 // @DomainEvents: the Outbox listener stores ClaimClosedV1 in the same transaction (DDD guide, rule 19)
+    audit.record("claim closed", id);
+}
 
-// receiver: event ID and change in one transaction; a repeat is skipped
-void on(ClaimClosedV1 e) {
-    transaction(() -&gt; {
-        if (inbox.contains(e.eventId())) return;
-        paymentService.stopFor(new ClaimId(e.claimId()), e.closedOn());   // their string, our type
-        inbox.record(e.eventId());
-    });
+// receiver, in the payment microservice: called by the message listener for each ClaimClosedV1
+@Transactional
+public void on(ClaimClosedV1 e) {
+    if (mongo.exists(query(where("_id").is(e.eventId())), "inbox")) return;   // seen it: skip
+    paymentService.stopFor(new ClaimId(e.claimId()), e.closedOn());           // their string, our type
+    mongo.insert(new InboxEntry(e.eventId()), "inbox");                        // same transaction; unique _id catches a race
 }</code></pre>
+<p><em>Spring: <code>@Transactional</code> with a <code>MongoTransactionManager</code> bean wraps both writes (DocumentDB 4.0 or later); <code>@DomainEvents</code> on the aggregate and an <code>@EventListener</code> write the outbox entry; <code>MongoTemplate.insert</code> adds the inbox entry.</em></p>
 <p>Why: an event can be delivered more than once, and a crash can happen between any two lines.</p>
 <h3>19. Decide what happens when a step fails before you build the process</h3>
 <p>You are designing the close-claim process, and the payment microservice may be unable to stop a payment that is already with the bank.</p>
@@ -516,15 +555,38 @@ GET  /claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20</code></
 <p>You are handling the case where the claim has notes that need action when the user closes it.</p>
 <p><strong>Bad</strong> — the feature writes its own error response:</p>
 <pre><code>catch (ClaimHasOpenActions e) {
-    return response(400, Map.of("error", "Cannot close: " + e.getMessage()));
+    return ResponseEntity.status(400).body(Map.of("error", "Cannot close: " + e.getMessage()));
 }</code></pre>
 <p>Express gets <code>400</code> and looks for field errors to show next to fields, finds none, and shows a blank error summary; the notes microservice answers the same situation with <code>409</code> and a different body.</p>
 <p><strong>Good</strong> — the feature throws a domain error; one shared error handler maps each kind of error to its status and body:</p>
-<pre><code>if (notesNeedingAction &gt; 0) throw new ClaimHasOpenActions(id, notesNeedingAction);</code></pre>
+<pre><code>if (notesNeedingAction &gt; 0) throw new ClaimHasOpenActions(id, notesNeedingAction);   // in Claim.close
+
+@RestControllerAdvice
+class ApiErrors extends ResponseEntityExceptionHandler {         // the one error handler of the microservice
+
+    @ExceptionHandler(RuleRefused.class)                         // every business rule error extends RuleRefused
+    ProblemDetail ruleRefused(RuleRefused e) {
+        return problem(422, "Business rule violated", e.code(), e.getMessage());   // CLAIM_HAS_OPEN_ACTIONS
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)   // thrown by save() when @Version is old
+    ProblemDetail conflict(OptimisticLockingFailureException e) {
+        return problem(409, "Record changed", "CONCURRENT_UPDATE", e.getMessage());
+    }
+
+    private ProblemDetail problem(int status, String title, String code, String detail) {
+        ProblemDetail p = ProblemDetail.forStatusAndDetail(HttpStatusCode.valueOf(status), detail);
+        p.setTitle(title);
+        p.setProperty("code", code);
+        p.setProperty("traceId", Trace.current());
+        return p;
+    }
+}</code></pre>
 <pre><code>422 Unprocessable Content
 Content-Type: application/problem+json
 { "status": 422, "title": "Business rule violated", "code": "CLAIM_HAS_OPEN_ACTIONS",
   "detail": "Claim 9f1c has 2 notes that need action", "traceId": "4bf92f35..." }</code></pre>
+<p><em>Spring: a <code>@RestControllerAdvice</code> returning <code>ProblemDetail</code> is written as <code>application/problem+json</code>; extending <code>ResponseEntityExceptionHandler</code> lets it shape the <code>400</code>s too (rule 35).</em></p>
 <table>
 <thead><tr><th>Status</th><th>Meaning</th><th>What Express does</th></tr></thead>
 <tbody>
@@ -679,6 +741,22 @@ Content-Type: application/pdf
 201 Created
 Location: /claims/9f1c/evidence/e3a1
 { "evidenceId": "e3a1", "fileName": "payslip.pdf", "size": 812331 }</code></pre>
+<pre><code>@PostMapping(path = "/{id}/evidence", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+@PreAuthorize("hasAuthority('claims:write')")
+ResponseEntity&lt;EvidenceCreated&gt; upload(@PathVariable ClaimId id,
+                                       @RequestParam long version,
+                                       @RequestParam MultipartFile file) throws IOException {
+    FileName fileName = new FileName(file.getOriginalFilename());
+    EvidenceId evidenceId = claimService.addEvidence(id, version, fileName, file.getInputStream());
+    return ResponseEntity.created(URI.create("/claims/" + id.value() + "/evidence/" + evidenceId.value()))
+                         .body(new EvidenceCreated(evidenceId.value(), fileName.value(), file.getSize()));
+}
+
+// application.properties
+// spring.servlet.multipart.max-file-size=10MB
+// spring.servlet.multipart.max-request-size=11MB</code></pre>
+<p><code>claimService.addEvidence</code> sends the bytes to the object store through one adapter and keeps only a <code>FileReference</code> on the evidence item; a DocumentDB document holds 16 MiB at most, so the bytes never go into the record.</p>
+<p><em>Spring: <code>MultipartFile</code> receives the part, and <code>spring.servlet.multipart.max-file-size</code> refuses a bigger one before the controller runs.</em></p>
 <pre><code>// Express: GET /claims/:id/evidence/:evidenceId/file
 app.get('/claims/:id/evidence/:evidenceId/file', async (req, res) =&gt; {
   const upstream = await claims.stream(`/claims/${req.params.id}/evidence/${req.params.evidenceId}/file`);
@@ -693,7 +771,33 @@ app.get('/claims/:id/evidence/:evidenceId/file', async (req, res) =&gt; {
 <pre><code>400 Bad Request
 { "error": "Validation failed: emailAddress, phoneNumber" }</code></pre>
 <p>Express cannot tell which field has which problem, so it shows one vague error at the top and the user hunts for the mistake.</p>
-<p><strong>Good</strong> — one entry per field, with a stable code Express can turn into GOV.UK text:</p>
+<p><strong>Good</strong> — one entry per field, with a stable code Express can turn into GOV.UK text. The constraint's message is the code; the text comes from one message table:</p>
+<pre><code>record ContactPreferencesRequest(
+    @NotNull(message = "REQUIRED") Long version,
+    @NotNull(message = "REQUIRED") ContactMethod contactMethod,
+    @Pattern(regexp = "[0-9 ]*", message = "FORMAT") String phoneNumber,
+    @NotBlank(message = "REQUIRED") String emailAddress) {}
+
+@PutMapping("/{id}/contact-preferences")
+@PreAuthorize("hasAuthority('claims:write')")
+ResponseEntity&lt;Void&gt; saveContactPreferences(@PathVariable ClaimId id, @Valid @RequestBody ContactPreferencesRequest body) {
+    claimService.saveContactPreferences(id, body.version(), body.toContactPreferences());
+    return ResponseEntity.noContent().build();
+}
+
+// in ApiErrors (rule 26): the override that shapes every 400
+@Override
+protected ResponseEntity&lt;Object&gt; handleMethodArgumentNotValid(MethodArgumentNotValidException e, HttpHeaders headers,
+                                                              HttpStatusCode status, WebRequest request) {
+    ProblemDetail p = ProblemDetail.forStatusAndDetail(status, e.getFieldErrorCount() + " fields are invalid");
+    p.setTitle("Request is invalid");
+    p.setProperty("code", "INVALID_REQUEST");
+    p.setProperty("traceId", Trace.current());
+    p.setProperty("errors", e.getFieldErrors().stream()
+        .map(f -&gt; Map.of("field", f.getField(), "code", f.getDefaultMessage(), "message", messages.text(f)))
+        .toList());
+    return ResponseEntity.status(status).body(p);
+}</code></pre>
 <pre><code>PUT /claims/9f1c/contact-preferences
 { "version": 7, "contactMethod": "EMAIL", "phoneNumber": "abc", "emailAddress": "" }
 
@@ -707,6 +811,7 @@ Content-Type: application/problem+json
   ] }</code></pre>
 <pre><code>// Express: one summary at the top, and the same message next to each field
 const errorList = body.errors.map(e =&gt; ({ text: e.message, href: `#${e.field}` }));</code></pre>
+<p><em>Spring: <code>@Valid</code> runs Bean Validation on the request record; overriding <code>handleMethodArgumentNotValid</code> in the <code>ResponseEntityExceptionHandler</code> subclass shapes every <code>400</code>.</em></p>
 <p>Why: a field error is something the user can fix on the page; a business-rule refusal (<code>422</code>, rule 26) is not, and Express shows the two differently.</p>
 <h3>36. Run a bulk action as one request per record from Express; add a batch endpoint only when the business names the batch as one action, and then return a result per item</h3>
 <p>A team lead ticks 40 claims and presses <strong>Close selected</strong>.</p>
@@ -794,25 +899,34 @@ await httpClient.get(`/claims/${claimId}/payment-schedule`, {
 <h3>40. Receive an outside system's callback on its own endpoint: check the signature, store it with its ID, answer <code>202</code>, and raise our own event; no business logic in the handler</h3>
 <p>The document-check provider posts the result of a payslip check.</p>
 <p><strong>Bad</strong> — the callback handler does the work:</p>
-<pre><code>// POST /document-checks/callback
-public void callback(DocumentCheckCallback body) {
-    Claim claim = claims.get(body.claimReference());
+<pre><code>@PostMapping("/document-checks/callback")
+public void callback(@RequestBody DocumentCheckCallback body) {
+    Claim claim = claims.findById(body.claimReference()).orElseThrow();
     claim.verifyEvidence(body.documentId(), body.result());   // their IDs and words, straight in
     claims.save(claim);
 }</code></pre>
 <p>Anyone who finds the URL can verify evidence; a slow save makes the provider time out and resend, and the second call fails on the already-verified item.</p>
 <p><strong>Good</strong>:</p>
-<pre><code>// POST /document-checks/callback
-public int callback(String rawBody, String signatureHeader) {
-    signatures.require(rawBody, signatureHeader);                        // 401 if wrong
-    DocumentCheckCallback body = parse(rawBody);
-    transaction(() -&gt; {
-        if (callbacks.exists(body.callbackId())) return;                 // a resend: fine
-        callbacks.store(body.callbackId(), rawBody);                     // unique index on callbackId
-        outbox.add(new DocumentCheckedV1(body.callbackId(), body.documentId(), body.result()));
-    });
-    return 202;                                                          // the work happens from the event
+<pre><code>@RestController
+class DocumentCheckCallbackController {
+    @PostMapping("/document-checks/callback")                            // permitAll in the security config: the signature is the check
+    ResponseEntity&lt;Void&gt; callback(@RequestBody String rawBody, @RequestHeader("X-Signature") String signature) {
+        signatures.require(rawBody, signature);                          // 401 if wrong
+        callbackRecorder.record(parse(rawBody), rawBody);
+        return ResponseEntity.accepted().build();                        // 202: the work happens from the event
+    }
+}
+
+@Service
+class CallbackRecorder {
+    @Transactional
+    public void record(DocumentCheckCallback body, String rawBody) {
+        if (mongo.exists(query(where("_id").is(body.callbackId())), "callbacks")) return;   // a resend: fine
+        mongo.insert(new StoredCallback(body.callbackId(), rawBody), "callbacks");          // unique _id
+        mongo.insert(OutboxEntry.of(new DocumentCheckedV1(body.callbackId(), body.documentId(), body.result())), "outbox");
+    }
 }</code></pre>
+<p><em>Spring: <code>@Transactional</code> with <code>MongoTransactionManager</code> stores the callback and its outbox entry together; <code>ResponseEntity.accepted()</code> is the <code>202</code>.</em></p>
 <p>A listener on <code>DocumentCheckedV1</code> translates their document ID into our evidence ID and calls <code>claimService.verifyEvidence</code>.</p>
 <p>Why: the provider gets a fast, repeatable answer, and the business rule runs where it always runs.</p>
 <h3>41. Export a list as CSV from a <code>GET .../export</code> with the list's filters, a row limit and the personal-data permission; for large exports return <code>202</code> and a status URL</h3>
@@ -844,7 +958,7 @@ claimId,status,claimType,createdAt
 <pre><code>const claim = await claims.get(`/claims/${id}`);                                   // essential
 const claimant = await eligibility.get(`/claimants/${claim.claimantId}`).catch(() =&gt; null);
 res.render('claim', { claim, claimantName: claimant?.fullName ?? 'Name not available' });</code></pre>
-<p>The claim microservice stores the eligibility *decision* (its rules need it) and the claimant *ID*, nothing else about the claimant.</p>
+<p>The claim microservice stores the eligibility <em>decision</em> (its rules need it) and the claimant <em>ID</em>, nothing else about the claimant.</p>
 <p>Why: one owner per fact means one place to correct it.</p>
 <h3>43. Remove a record created by mistake with a <code>cancel</code> action and a reason; keep the record, hide it from lists by default, and still return it on <code>GET</code></h3>
 <p>A caseworker created claim <code>9f1c</code> for the wrong claimant.</p>
@@ -884,7 +998,15 @@ Retry-After: 30
 Content-Type: application/problem+json
 { "status": 503, "title": "A service we depend on is unavailable", "code": "DEPENDENCY_UNAVAILABLE",
   "detail": "Eligibility check is unavailable; nothing was saved", "traceId": "4bf92f35..." }</code></pre>
+<pre><code>// in ApiErrors (rule 26)
+@ExceptionHandler(DependencyUnavailable.class)                   // thrown by an adapter when the other system is down (rule 9)
+ResponseEntity&lt;ProblemDetail&gt; unavailable(DependencyUnavailable e) {
+    ProblemDetail p = problem(503, "A service we depend on is unavailable", "DEPENDENCY_UNAVAILABLE",
+                              e.system() + " is unavailable; nothing was saved");
+    return ResponseEntity.status(503).header("Retry-After", "30").body(p);
+}</code></pre>
 <pre><code>if (e.status === 503) return res.render('try-again-later', { seconds: e.headers['retry-after'] });</code></pre>
+<p><em>Spring: an <code>@ExceptionHandler</code> in the shared advice returns a <code>ResponseEntity</code>, so it can set the <code>Retry-After</code> header.</em></p>
 <p>Express never retries a change on its own (rule 6). For a read, Express shows the page with what loaded (rule 31).</p>
 <p>Why: <code>503</code> tells the user the truth, "nothing was saved, try later", and <code>500</code> tells them nothing.</p>
 <h3>45. Make <code>openapi.yaml</code> the contract: the microservice validates every response against it, and Express's client tests run against its examples</h3>
@@ -898,10 +1020,19 @@ ClaimSummary:
 const opened = formatDate(claim.createdAt);        // undefined → "Invalid Date" on every row</code></pre>
 <p><strong>Good</strong> — two tests, one on each side:</p>
 <pre><code>// claim microservice: every endpoint test validates the real response against openapi.yaml
-void listMatchesContract() {
-    Response r = get("/claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20");
-    contract.assertValid("GET /claims", r);        // fails the build on an unlisted or renamed field
+@SpringBootTest
+@AutoConfigureMockMvc
+class ClaimContractTest {
+    @Autowired MockMvc mvc;
+
+    @Test
+    @WithMockUser(authorities = "claims:read")
+    void listMatchesContract() throws Exception {
+        MvcResult r = mvc.perform(get("/claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20")).andReturn();
+        contract.assertValid("GET /claims", r.getResponse());   // fails the build on an unlisted or renamed field
+    }
 }</code></pre>
+<p><em>Spring: <code>@SpringBootTest</code> with <code>@AutoConfigureMockMvc</code> runs the real endpoint; the check against <code>openapi.yaml</code> is our own code over the response.</em></p>
 <pre><code>// Express: the client is tested against the examples recorded in openapi.yaml
 test('renders a claim summary', async () =&gt; {
   const claim = examples.get('ClaimSummary');     // { claimId: "9f1c", openedAt: "2026-10-01T09:15:00Z", ... }

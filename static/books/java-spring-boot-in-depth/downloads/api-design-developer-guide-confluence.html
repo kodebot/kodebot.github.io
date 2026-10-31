@@ -36,332 +36,879 @@ from the same folder and attach it to the page.</p>
 </div>
 <article id="guide">
 <h1>API Design Developer Guide</h1>
-<p class="byline">Oct 28, 2026 · @kodebot</p>
-<p>This guide explains how to design the HTTP endpoints of our microservices. It also explains how the Express front end calls them. Section 5.5 lists the Spring Boot feature to use for each problem.</p>
-<p>All examples come from <code>manage-claim-service</code>. In this service, a caseworker creates a <strong>claim</strong> for a person. The caseworker adds <strong>evidence</strong> (documents such as payslips) and <strong>notes</strong> to the claim. At the end, the caseworker closes the claim. Each claim and each note is a separate record (a document in the database).</p>
-<p><strong>Terms used in this guide:</strong></p>
-<ul>
-<li><strong>Express:</strong> our front-end server. It is a Node.js app that builds the GOV.UK pages and calls the microservices.</li>
-<li><strong>Record:</strong> one thing that a microservice stores, such as a claim or a note.</li>
-<li><strong>Version:</strong> a number on every record. It goes up by one each time the record is saved. Every response that returns a record includes its <code>version</code>.</li>
-<li><strong>Design group:</strong> the lead engineer, senior engineers and business experts. They approve design decisions.</li>
-<li><strong>Platform library:</strong> our shared <code>service-platform</code> library. Every microservice uses it.</li>
-<li><strong><code>@ClaimsRead</code> and <code>@ClaimsWrite</code>:</strong> annotations from the platform library. They check that the caller has permission to use an endpoint.</li>
-</ul>
-<h2>1. Principles</h2>
+<p class="byline">Oct 31, 2026 · @kodebot</p>
+<p>This guide says how we design the HTTP endpoints of our microservices, and how our Express front end calls them. Each rule starts with a situation you will meet, shows the code that goes wrong, says what happens, and shows the code that works. The examples use the claim microservice, where a <strong>caseworker</strong> creates a <strong>claim</strong> for a <strong>claimant</strong>, adds <strong>evidence</strong> and <strong>notes</strong>, and closes the claim. The <strong>eligibility</strong> microservice says whether a person may claim. The <strong>payment</strong> microservice pays claimants. Express is the only thing the browser talks to.</p>
+<h2>Terms</h2>
+<table>
+<thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Express</td><td>Our front-end server. It builds the GOV.UK pages on the server and calls the microservices</td></tr>
+<tr><td>Gateway</td><td>The server in front of Express. It signs the user in and keeps the session</td></tr>
+<tr><td>Record</td><td>One thing a microservice stores, such as a claim or a note</td></tr>
+<tr><td>Version</td><td>A number on every record that goes up by one on every save. Every response with a record includes it</td></tr>
+<tr><td>Group of details</td><td>Fields the screen shows and saves together, such as contact method, phone and email</td></tr>
+<tr><td>Business action</td><td>A change the business names as its own step, such as "close claim"</td></tr>
+<tr><td>Idempotency key</td><td>A random ID sent with a create. A repeat with the same key returns the first result instead of a second record</td></tr>
+<tr><td>Owner</td><td>The one microservice that starts a process across microservices and records its progress</td></tr>
+<tr><td>Design group</td><td>The lead engineer, senior engineers and business experts, who approve design decisions</td></tr>
+</tbody>
+</table>
+<h2>Closing a claim, end to end</h2>
+<p>A caseworker opens claim <code>9f1c</code> and presses <strong>Close claim</strong>. This is what happens, in order. Later rules point back at these six requests.</p>
 <ol>
-<li><strong>There are three kinds of endpoint that change data:</strong> create a record, save details, and do a business action. Section 2.1 tells you which one to use.</li>
-<li><strong>One save, one request.</strong> When the user presses a button that saves, Express sends one request. The microservice saves everything in that request, or nothing. To show a page, Express can send many <code>GET</code> requests.</li>
-<li><strong>Read endpoints are built around the data,</strong> such as claims, notes and lookup lists. They are not built for one screen. Any screen can use them.</li>
-<li><strong>Each kind of record has two response formats at most:</strong> a short one for lists and a full one for one record.</li>
-<li><strong>The browser never calls a microservice.</strong> Only Express and other microservices call microservices.</li>
-<li><strong>Each save goes to one microservice.</strong> Express can read from several microservices to show one page. But it sends each save to one microservice only. If a process must change data in several microservices, the microservices do it with events (section 4).</li>
-<li><strong>A microservice calls another microservice only to read or check something</strong> (section 4). A business action can also send its single change to the system that stores the data (section 2.5).</li>
-<li><strong>Every microservice checks permissions itself,</strong> even when the call comes from our own Express app.</li>
-<li><strong>Every call has a time limit.</strong> If a microservice is slow or down, the rest of the page still works (section 6).</li>
-<li><strong>The build checks every API change.</strong> The build fails if a change would break Express (section 5.4).</li>
+<li>The browser posts the form to Express. The browser only ever talks to Express, and only carries the gateway's session cookie.</li>
 </ol>
-<h2>2. Endpoints that change data</h2>
-<h3>2.1 Which endpoint for which change</h3>
-<p>Our front end follows the GOV.UK Design System. The user saves in one of two ways:</p>
-<ul>
-<li><strong>After a Check answers page:</strong> the user answers questions on several pages. Then the user checks the answers on a <strong>Check answers</strong> page, where each answer has a "Change" link. Then the user presses one button, such as "Accept and send".</li>
-<li><strong>On a single page:</strong> the user changes something on one page and presses "Save". There is no Check answers page.</li>
-</ul>
-<p>Both ways send one request. The pages do not decide the endpoint. <strong>What the user saves</strong> decides it. Use this test, in order, and stop at the first "yes":</p>
-<ol>
-<li><strong>Does the save create a new record?</strong> Use <strong>create</strong>: <code>POST</code> to the collection. Example: <code>POST /claims</code>.</li>
-<li><p><strong>Is the change a business action?</strong> It is a business action if any of these is true:</p>
-<ul>
-<li>The business process names the change as its own step. Examples: close a claim, verify evidence, change address, change name, report a change of circumstances.</li>
-<li>The change needs more than the new values, such as the date it takes effect, a reason or evidence.</li>
-<li>The change sets a field that only a business rule may change, such as <code>status</code> or <code>closedAt</code>.</li>
-</ul>
-<p>Use a <strong>business action</strong>: <code>POST</code> to a URL that ends with the action name. Examples: <code>POST /claims/{claimId}/close</code>, <code>POST /customers/{customerId}/change-address</code>.</p></li>
-<li><strong>Otherwise, it is a details change.</strong> The user changes one or more details in a group. A <strong>group</strong> is a set of details that the screen shows together, such as the claim's contact preferences (contact method, phone number and email address). Use <strong>save details</strong>: <code>PUT</code> to the group's URL. Example: <code>PUT /claims/{claimId}/contact-preferences</code>. Send every field in the group, changed or not, and the record's <code>version</code>.</li>
-</ol>
-<p>If you are not sure about step 2, ask the business.</p>
-<p>Example of save details: the caseworker changes the contact method to email and adds an email address. Then the caseworker presses "Save". Express sends the whole group, changed or not:</p>
-<pre><code>PUT /claims/9f1c.../contact-preferences
-{ "version": 7, "contactMethod": "EMAIL", "phoneNumber": "", "emailAddress": "jane@example.com" }
+<pre><code>POST /claims/9f1c/close HTTP/1.1
+Host: express.example.gov.uk
+Cookie: session=...
 
-204 No Content</code></pre>
-<p>The microservice then does these things:</p>
-<ol>
-<li>It checks the <code>version</code>. If someone else saved the claim after the screen loaded, it refuses the request with <code>409</code>.</li>
-<li>It compares each new value with the stored value. The <code>version</code> check makes sure that the stored values are the ones the user saw. So every difference is the user's change. Express never sends a list of changed fields.</li>
-<li>It checks the business rules. For example, you cannot change a closed claim.</li>
-<li>It saves all the changes together.</li>
-<li>It writes the names of the changed fields to the audit log. It does not write the values, because they are personal data.</li>
-<li>It publishes one event, <code>ContactPreferencesChanged</code>, that lists the changed fields.</li>
+version=7</code></pre>
+<ol start="2">
+<li>Express reads the claim first, so it can check the version the user saw, and sends the user's token with the call.</li>
 </ol>
-<p><strong>Rules for groups of details:</strong></p>
-<ul>
-<li>Each field belongs to one group only.</li>
-<li>A group never has a field that only a business action may change, such as <code>status</code> or <code>closedAt</code>.</li>
-<li>If the user changes only one field, Express still sends the whole group. Express already has every value, because it loaded the group to show the page.</li>
-<li>Do not use <code>PATCH</code>, because Express always sends the whole group.</li>
-<li>Do not make <code>PUT /claims/{claimId}</code> that replaces the whole claim.</li>
-<li>Make one endpoint for each group. Do not make one for each question page or each field, such as <code>update-phone</code>.</li>
-<li>A details change can still have effects inside the microservice, such as a new calculation. The microservice handles them. Express does not need to know about them.</li>
-</ul>
-<p><strong>Does this create too many endpoints?</strong> No. The business decides the groups and the business actions, not the number of pages. A complex record such as a claim has about 10 to 20 of these endpoints.</p>
-<h3>2.2 One save, one request</h3>
-<p>A new claim is collected over several question pages. These pages can include a first note. Express keeps the answers until the user presses "Accept and send" on the Check answers page. Then Express sends <strong>one</strong> request with the claim and the note:</p>
+<pre><code>GET /v1/claims/9f1c
+Authorization: Bearer eyJ...
+traceparent: 00-4bf92f35...
+
+200 OK
+{ "claimId": "9f1c", "version": 7, "status": "OPEN", "claimType": "STANDARD",
+  "createdAt": "2026-10-01T09:15:00Z", "paymentsStopped": false }</code></pre>
+<ol start="3">
+<li>Express sends the business action to the claim microservice, with the version.</li>
+</ol>
+<pre><code>POST /v1/claims/9f1c/close
+Authorization: Bearer eyJ...
+traceparent: 00-4bf92f35...
+Content-Type: application/json
+
+{ "version": 7 }</code></pre>
+<ol start="4">
+<li>The claim microservice checks permission, loads the claim, checks the version, applies the rules, saves the claim and a <code>ClaimClosedV1</code> event in one transaction, and answers with no body.</li>
+</ol>
+<pre><code>204 No Content</code></pre>
+<p>If a rule refuses, the answer is an error body with a <code>code</code> Express knows:</p>
+<pre><code>422 Unprocessable Content
+Content-Type: application/problem+json
+
+{ "status": 422, "title": "Business rule violated", "code": "CLAIM_HAS_OPEN_ACTIONS",
+  "detail": "Claim 9f1c has 2 notes that need action", "traceId": "4bf92f35..." }</code></pre>
+<ol start="5">
+<li>Express redirects the browser to a confirmation page. A refresh of that page cannot close the claim twice.</li>
+</ol>
+<pre><code>303 See Other
+Location: /claims/9f1c/closed</code></pre>
+<ol start="6">
+<li>Later, the payment microservice receives <code>ClaimClosedV1</code> from the message broker, stops the payments and sends <code>PaymentsStoppedV1</code>. The claim microservice receives that and sets <code>paymentsStopped: true</code>. Express never calls the payment microservice for this.</li>
+</ol>
+<p>Every call from Express to a microservice carries the <code>Authorization: Bearer</code> and <code>traceparent</code> headers of step 2, and every microservice path starts with <code>/v1</code>. The rest of this guide leaves all three out, so each example shows only its point.</p>
+<h2>Part A. Endpoints that change data</h2>
+<h3>1. Pick the endpoint by what the user saves: a new record is a create, a named business step is an action, anything else saves a group of details</h3>
+<p>You are building the <strong>Change contact details</strong> pages, which end with a Check answers page, and the <strong>Close claim</strong> button.</p>
+<p><strong>Bad</strong> — one endpoint shaped like the screens:</p>
+<pre><code>PUT /claims/9f1c
+{ "version": 7, "status": "CLOSED", "contactMethod": "EMAIL", "emailAddress": "jane@example.com",
+  "phoneNumber": "", "claimType": "STANDARD", "fullName": "Jane Doe", ... }</code></pre>
+<p>Any screen can now set <code>status</code> to <code>CLOSED</code> and skip the closing rules, and every change to a screen changes the request body.</p>
+<p><strong>Good</strong> — the endpoint follows what the user saves. Stop at the first yes:</p>
+<ol>
+<li>Does the save create a new record? <strong>Create</strong>: <code>POST /claims</code>.</li>
+<li>Is it a business action? Yes if the business names it as a step (close, verify evidence, change address), if it needs more than new values (an effective date, a reason), or if it sets a field only a rule may set (<code>status</code>, <code>closedAt</code>). <strong>Business action</strong>: <code>POST /claims/9f1c/close</code>.</li>
+<li>Otherwise it changes a group of details. <strong>Save details</strong>: <code>PUT /claims/9f1c/contact-preferences</code>.</li>
+</ol>
+<pre><code>POST /claims/9f1c/close
+{ "version": 7 }
+
+PUT /claims/9f1c/contact-preferences
+{ "version": 7, "contactMethod": "EMAIL", "phoneNumber": "", "emailAddress": "jane@example.com" }</code></pre>
+<p>If you are not sure about step 2, ask the business. A complex record has 10 to 20 such endpoints.</p>
+<p>Why: the business decides the endpoints, so the API stays stable while screens change. Also bad: <code>POST /claims/9f1c/update-phone</code> for one question page; the save is the group, not the page.</p>
+<h3>2. Send one request per save; the microservice saves all of it or nothing</h3>
+<p>You are building <strong>Create claim</strong>: five question pages, then a Check answers page that creates the claim with its first note.</p>
+<p><strong>Bad</strong> — Express sends one request per thing created:</p>
+<pre><code>const { claimId } = await claims.post('/claims', { claimantId, claimType });
+await claims.post(`/claims/${claimId}/notes`, { text, category, actionRequired: true });</code></pre>
+<p>The second call times out. The claim exists without its note, Express cannot undo the first call, and the user sees an error and creates a second claim.</p>
+<p><strong>Good</strong> — one request with everything the user collected; the microservice saves it in one database transaction:</p>
 <pre><code>POST /claims
-{ "claimType": "STANDARD", "fullName": "Jane Doe", "dateOfBirth": "1990-01-01",
+Idempotency-Key: 7d3e...
+{ "claimantId": "c88", "claimType": "STANDARD",
   "notes": [ { "text": "Call back Monday", "category": "CONTACT", "actionRequired": true } ] }
 
 201 Created
-Location: /claims/9f1c...
-{ "claimId": "9f1c...", "noteIds": ["4ab2..."] }</code></pre>
-<p>The microservice saves the claim and the note in one database transaction. Both are saved, or neither is saved.</p>
-<p>Do not send <code>POST /claims</code> and then <code>POST /claims/{claimId}/notes</code> for one save. The second request can fail. Then the claim exists without the note that the user typed. Express has no safe way to undo the first request.</p>
-<p>Sometimes the user does two things at different times. For example, the user creates a claim today and adds a note tomorrow. Then use the two separate endpoints.</p>
-<p><code>POST /claims</code> accepts 10 notes at most. If a request has more, the microservice refuses it with <code>400</code>. This keeps the transaction small.</p>
-<h3>2.3 Retrying safely</h3>
-<p>A request can time out after the microservice has saved the data. If Express sends the request again, it could create a second claim. These rules stop this:</p>
-<ul>
-<li><strong>Do not create a record twice.</strong> <code>POST /claims</code> and <code>POST /claims/{claimId}/notes</code> accept an <code>Idempotency-Key</code> header. Express makes a random ID when it builds the page that has the submit button. It puts the ID in a hidden field, and sends it every time the user submits that page. If the microservice has already processed that ID, it returns the first result. It does not create a second record.</li>
-<li><strong>Do not overwrite another user's change.</strong> Every request that changes an existing record sends the record's <code>version</code> in the body. Express got this <code>version</code> when it loaded the record. If the stored version is different, someone changed the record after the screen loaded. The microservice refuses the request with <code>409</code>. A repeated request also gets <code>409</code>, so the change is not made twice.</li>
-<li><strong>Adding an item inside a record is a change to that record.</strong> For example, evidence is stored inside the claim. So <code>POST /claims/{claimId}/evidence</code> sends the claim's <code>version</code>. It does not use an <code>Idempotency-Key</code>.</li>
-<li><strong>Do not retry changes automatically.</strong> If a change fails or times out, Express shows the error. The user checks the record and then submits again.</li>
-</ul>
-<h3>2.4 What these endpoints return</h3>
-<table>
-<thead><tr><th>Result</th><th>Status</th><th>Body</th></tr></thead>
-<tbody>
-<tr><td>A record was created</td><td><code>201 Created</code>, with a <code>Location</code> header that has the new record's URL</td><td>The new IDs</td></tr>
-<tr><td>Details or an action were saved</td><td><code>204 No Content</code></td><td>Empty. If Express needs the record, it reads it with <code>GET</code></td></tr>
-<tr><td>The record changed after the screen loaded</td><td><code>409</code></td><td>Error code <code>CONCURRENT_UPDATE</code></td></tr>
-<tr><td>A business rule refused the change</td><td><code>422</code></td><td>The error <code>code</code> names the rule</td></tr>
-</tbody>
-</table>
-<p>Section 5.3 lists every status code and what Express does.</p>
-<h3>2.5 Business actions that call another system</h3>
-<p>Some business actions send their change to another system. For example, the central customer service stores the customer's name, date of birth and address. Our business process has one screen for each of these changes, with its own Save button. Each change is one business action, and it makes one call to the other system. So a save can never half-succeed.</p>
-<pre><code>GET /customers/{customerId}/address
-200 OK
-{ "customerId": "...", "version": "\"v7\"", "line1": "2 Low Road", "town": "York", "postcode": "YO1 7HH" }
+Location: /claims/9f1c
+{ "claimId": "9f1c", "noteIds": ["4ab2"] }</code></pre>
+<p><code>POST /claims</code> accepts at most 10 notes, so the transaction stays small. Two things the user does at different times are two requests.</p>
+<h3>3. Save a group of details with <code>PUT</code> and send every field in the group; never use <code>PATCH</code></h3>
+<p>You are saving the <strong>contact preferences</strong> group: contact method, phone number, email address.</p>
+<p><strong>Bad</strong> — Express sends only the field the user typed:</p>
+<pre><code>PATCH /claims/9f1c
+{ "emailAddress": "jane@example.com" }
 
-POST /customers/{customerId}/change-address
-{ "version": "\"v7\"", "line1": "1 High Street", "town": "Leeds", "postcode": "LS1 1AA" }
+200 OK</code></pre>
+<p>A second caseworker cleared the phone number a minute earlier; this request cannot tell, and the microservice cannot tell which fields the user saw. Now <code>contact-preferences</code> also carries <code>status</code> for one screen, and that screen can close a claim without the rules.</p>
+<p><strong>Good</strong> — every field in the group, changed or not, with the record's <code>version</code>:</p>
+<pre><code>PUT /claims/9f1c/contact-preferences
+{ "version": 7, "contactMethod": "EMAIL", "phoneNumber": "", "emailAddress": "jane@example.com" }
+
 204 No Content</code></pre>
-<p>Here the <code>version</code> is the other system's version of the record (its ETag). It is text, not a number. Express keeps it and sends it back with the change.</p>
-<p><strong>Rules:</strong></p>
-<ol>
-<li><strong>Make one business action for each change,</strong> such as <code>change-name</code> or <code>change-address</code>. Do not make one endpoint that calls the other system several times. If the second call fails, the first change is already made, and we cannot undo it.</li>
-<li><strong>Check our own rules first.</strong> Validate the request and check permissions. Then call the other system.</li>
-<li><strong>Call the other system once, and change nothing else in the same request.</strong> If we keep a copy of the data, the copy is only a cache. Update it after the other system confirms the change, or when its event arrives.</li>
-<li><strong>Send the version on.</strong> Our microservice passes the <code>version</code> to the other system, for example in an <code>If-Match</code> header. If the other system has no version, the last save wins. Write this risk in the architecture decision record (ADR).</li>
-<li><p><strong>Turn the other system's answers into ours:</strong></p>
-<ul>
-<li>It refuses the change: return <code>422</code> with our own code, such as <code>ADDRESS_REJECTED</code>.</li>
-<li>Its version has changed (it answers <code>412</code>): return <code>409</code> with the code <code>CONCURRENT_UPDATE</code>.</li>
-<li>We cannot reach it, or it answers <code>503</code>: return <code>503</code>. Nothing was changed.</li>
-<li>It does not answer in time: return <code>504</code> with the code <code>OUTCOME_UNKNOWN</code>. The change may or may not be made. Express asks the user to check the details before trying again.</li>
-</ul></li>
-<li><strong>Never retry the change automatically.</strong> If the first attempt worked, a repeat fails with <code>412</code>. Then the user is told about a conflict that did not happen. Reads can be retried.</li>
-<li><strong>Write our audit record after the other system confirms.</strong> Record who asked for the change and what changed, for example "address".</li>
-</ol>
-<h2>3. Endpoints that read data</h2>
-<p>Reading data does not change anything. So read endpoints are built around the records. Any screen can call the endpoints it needs and combine the results. Every read endpoint is one of these five kinds:</p>
+<p>The microservice compares each field with the stored value, checks the rules, saves all changes together, audits the changed field names (not the values) and publishes one event listing the changed fields. Each field belongs to one group, and a group never holds a field that only a business action may change.</p>
+<p>Why: the <code>version</code> check proves the stored values are the ones the user saw, so every difference is the user's change, and Express never has to send a list of changed fields.</p>
+<h3>4. Send an <code>Idempotency-Key</code> header with every create, so a repeat cannot create a second record</h3>
+<p>You are building the Check answers page that calls <code>POST /claims</code>.</p>
+<p><strong>Bad</strong> — a create with no key:</p>
+<pre><code>POST /claims
+{ "claimantId": "c88", "claimType": "STANDARD" }</code></pre>
+<p>The claim is saved, but the response is lost in a timeout. Express shows an error, the user presses the button again, and claimant <code>c88</code> has two claims.</p>
+<p><strong>Good</strong> — Express makes a random ID when it builds the page, keeps it in a hidden field, and sends it every time that page is submitted:</p>
+<pre><code>&lt;input type="hidden" name="idempotencyKey" value="7d3e..."&gt;</code></pre>
+<pre><code>POST /claims
+Idempotency-Key: 7d3e...
+{ "claimantId": "c88", "claimType": "STANDARD" }
+
+201 Created
+Location: /claims/9f1c
+{ "claimId": "9f1c" }</code></pre>
+<p>The repeat with the same key returns the same <code>201</code> and the same <code>claimId</code>. Adding an item stored inside a record (<code>POST /claims/9f1c/evidence</code>) is a change to that record, so it sends the <code>version</code> instead.</p>
+<p>Why: a request can time out after the record was saved, and only the key lets the microservice recognise the repeat. A new key generated on every submit is the same as no key.</p>
+<h3>5. Send the record's <code>version</code> with every change; the microservice refuses an old version with <code>409</code></h3>
+<p>Two caseworkers open claim <code>9f1c</code> at version 7. One closes it. The other, a minute later, saves new contact details.</p>
+<p><strong>Bad</strong> — the second save carries no version:</p>
+<pre><code>PUT /claims/9f1c/contact-preferences
+{ "contactMethod": "EMAIL", "phoneNumber": "", "emailAddress": "jane@example.com" }
+
+204 No Content</code></pre>
+<p>The microservice cannot know this user saw an old screen. Whatever the second user saw wins, and the first user's change is silently lost.</p>
+<p><strong>Good</strong> — every request that changes an existing record carries the <code>version</code> Express got when it loaded the record:</p>
+<pre><code>PUT /claims/9f1c/contact-preferences
+{ "version": 7, "contactMethod": "EMAIL", "phoneNumber": "", "emailAddress": "jane@example.com" }
+
+409 Conflict
+Content-Type: application/problem+json
+{ "status": 409, "title": "Record changed", "code": "CONCURRENT_UPDATE",
+  "detail": "Claim 9f1c is at version 8; the request was made from version 7", "traceId": "4bf92f35..." }</code></pre>
+<p>Express shows the 409 page (rule 38), with the latest version, and the user makes the change again. A repeated request also gets <code>409</code>, so a change is never made twice.</p>
+<p>Why: the version is the only proof that the user saw the current record. "Last save wins" is a lost change waiting to happen.</p>
+<h3>6. Never retry a change automatically; retry a read once</h3>
+<p>You are writing the shared HTTP client Express uses for every microservice call.</p>
+<p><strong>Bad</strong> — one retry rule for everything:</p>
+<pre><code>async function call(req) {
+  try { return await send(req); }
+  catch (e) { return await send(req); }   // retry everything once
+}</code></pre>
+<p><code>POST /customers/42/change-address</code> times out after the other system saved it. The retry sends it again. For a system without a version check, the address is changed twice, or the second attempt fails on a record that already moved on.</p>
+<p><strong>Good</strong> — the method decides:</p>
+<pre><code>async function call(req) {
+  try { return await send(req); }
+  catch (e) {
+    const isRead = req.method === 'GET' || req.path.endsWith('/search');
+    if (isRead &amp;&amp; (e.timeout || e.status === 503)) return await send(req);
+    throw e;                                      // a change is never retried
+  }
+}</code></pre>
+<p>If a change fails or times out, Express shows the error and the user checks the record before submitting again. A read (<code>GET</code>, or <code>POST /claims/search</code>) is retried once on a timeout or <code>503</code>.</p>
+<p>Why: a repeated change may be made twice, and a repeated read is harmless.</p>
+<h3>7. Return <code>201</code> with a <code>Location</code> header for a create, and <code>204</code> with no body for every other save</h3>
+<p>You are writing the response of <code>PUT /claims/9f1c/contact-preferences</code>.</p>
+<p><strong>Bad</strong> — the whole claim comes back after a save:</p>
+<pre><code>PUT /claims/9f1c/contact-preferences
+{ "version": 7, ... }
+
+200 OK
+{ "claimId": "9f1c", "version": 8, "status": "OPEN", "contactMethod": "EMAIL", ...all fields... }</code></pre>
+<p>Every save now has its own response shape, and Express has one more place to parse a claim, which drifts from <code>GET /claims/9f1c</code>.</p>
+<p><strong>Good</strong> — a create returns <code>201 Created</code>, a <code>Location</code> header with the new record's URL, and the new IDs; every other save returns <code>204 No Content</code> with an empty body:</p>
+<pre><code>POST /claims
+201 Created
+Location: /claims/9f1c
+{ "claimId": "9f1c", "noteIds": ["4ab2"] }
+
+PUT /claims/9f1c/contact-preferences
+204 No Content</code></pre>
+<p>If Express needs the record afterwards, it reads it with <code>GET /claims/9f1c</code>.</p>
+<p>Why: one shape for every save keeps Express's handling the same everywhere.</p>
+<h3>8. When a change goes to another system, make one business action per change and call that system once</h3>
+<p>The claimant's name and address live in the central customer system, not in our database. You are building <strong>Change name and address</strong>.</p>
+<p><strong>Bad</strong> — one endpoint sends both changes:</p>
+<pre><code>public void updateDetails(CustomerId id, UpdateDetails req) {
+    customers.changeName(id, req.fullName());       // call 1: succeeds
+    customers.changeAddress(id, req.address());     // call 2: times out
+    audit.record("details updated", id);
+}</code></pre>
+<p>The name is changed in the other system, the address is not, the endpoint returns an error, and nothing can undo call 1.</p>
+<p><strong>Good</strong> — each change is its own business action. The microservice validates and checks permission first, then makes exactly one call and changes nothing else:</p>
+<pre><code>GET /customers/42/address
+200 OK
+{ "customerId": "42", "version": "v7", "line1": "2 Low Road", "town": "York", "postcode": "YO1 7HH" }
+
+POST /customers/42/change-address
+{ "version": "v7", "line1": "1 High Street", "town": "Leeds", "postcode": "LS1 1AA" }
+204 No Content</code></pre>
+<p>Here <code>version</code> is the other system's ETag, text not a number, passed on in an <code>If-Match</code> header. A copy we keep is a cache, updated after the other system confirms. The audit record is written after the confirmation. If the other system has no version, the last save wins; write that risk in the ADR.</p>
+<p>Why: a single call either happened or did not; two calls can half happen.</p>
+<h3>9. Translate the other system's answer into our own status codes</h3>
+<p>You are writing the adapter that calls the customer system in rule 8.</p>
+<p><strong>Bad</strong> — the other system's answer goes straight through:</p>
+<pre><code>catch (HttpError e) { throw new HttpStatusException(e.status(), e.body()); }   // 412 reaches Express</code></pre>
+<p>Express gets <code>412 Precondition Failed</code>, a code it has never seen, and shows a generic error page instead of the 409 page.</p>
+<p><strong>Good</strong> — one table, applied in the adapter:</p>
 <table>
-<thead><tr><th>Kind</th><th>Example</th><th>What it must do</th></tr></thead>
+<thead><tr><th>The other system</th><th>We return</th></tr></thead>
 <tbody>
-<tr><td>One record</td><td><code>GET /claims/{claimId}</code></td><td>Return the full format. If the record does not exist, return <code>404</code>.</td></tr>
-<tr><td>A list, with filters</td><td><code>GET /claims?status=OPEN&amp;page=0&amp;size=20</code></td><td>Always sort the results. Always return one page at a time. <code>size</code> is 100 at most. Each filter field must have a database index, so the query stays fast when the data grows.</td></tr>
-<tr><td>A record's children</td><td><code>GET /claims/{claimId}/notes?page=0&amp;size=20</code></td><td>If the claim does not exist, return <code>404</code>. Do not return an empty list.</td></tr>
-<tr><td>A lookup list</td><td><code>GET /reference-data/CLAIM_TYPE</code></td><td>Return an object with an <code>items</code> list. Each item has a <code>code</code>, a <code>label</code> and an <code>active</code> flag. Send <code>Cache-Control: max-age=300</code>, so Express can keep the list for 5 minutes.</td></tr>
-<tr><td>A calculated answer</td><td><code>GET /claims/{claimId}/entitlement?from=2026-01-01&amp;to=2026-01-31</code></td><td>Return a result that the microservice works out with business rules. Here, it is the amount owed for those dates. This is the only kind of read endpoint that is built for one question.</td></tr>
+<tr><td>Refuses the change</td><td><code>422</code> with our own code, such as <code>ADDRESS_REJECTED</code></td></tr>
+<tr><td>Says the version changed (<code>412</code>)</td><td><code>409</code> with code <code>CONCURRENT_UPDATE</code></td></tr>
+<tr><td>Is unreachable or answers <code>503</code></td><td><code>503</code>. Nothing was changed</td></tr>
+<tr><td>Does not answer in time</td><td><code>504</code> with code <code>OUTCOME_UNKNOWN</code>. The change may or may not be made. Express tells the user to check before trying again</td></tr>
 </tbody>
 </table>
-<p><strong>Response formats.</strong> Each kind of record has two formats:</p>
-<ul>
-<li><strong>Summary.</strong> Use it in lists. It has the ID and the few fields that a list shows. For a claim: ID, type, status and created date.</li>
-<li><strong>Detail.</strong> Use it for one record. It has every field that the caller is allowed to see.</li>
-</ul>
-<p>Sometimes a list screen needs one more field. Then add the field to the summary format. Do not make a third format for that screen. If you do, the microservice must change every time a screen changes.</p>
-<p><strong>Do not make one call for each row.</strong> A list of 20 claims must not cause 20 more calls for the details of each row. Do one of these things instead:</p>
-<ul>
-<li>Add the field to the summary format.</li>
-<li>Get all the rows in one call: <code>GET /claims?ids=9f1c...,7a2d...</code> (100 IDs at most).</li>
-</ul>
-<p><strong>Lookup lists.</strong> Express shows the <code>label</code> of each value and stores its <code>code</code>. Do not write labels in Express code. Labels can change, but codes never change. A value with <code>active: false</code> still shows on old records. But forms do not offer it.</p>
-<p><strong>Permissions.</strong> Read endpoints also need a permission check (<code>@ClaimsRead</code>), because they return personal data.</p>
-<h2>4. Processes that change data in several microservices</h2>
-<p>A database transaction cannot cover two microservices, because each microservice has its own database. So a process that changes data in several microservices is a series of steps. Each step changes data in one microservice. Then it tells the next microservice with an event.</p>
-<p>Example: when a claim is closed, the payment microservice must stop future payments.</p>
-<ol>
-<li>Express calls <code>POST /claims/{claimId}/close</code> on <code>manage-claim-service</code>. This is the only call that Express makes.</li>
-<li><code>manage-claim-service</code> closes the claim. In the same database transaction, it stores a <code>ClaimClosedV1</code> event. The platform library then sends the event to the other microservices. The claim now shows <code>paymentsStopped: false</code>.</li>
-<li>The payment microservice receives <code>ClaimClosedV1</code>. It stops the payments in its own database transaction.</li>
-<li>When the payments have stopped, the payment microservice sends <code>PaymentsStoppedV1</code>. Then <code>manage-claim-service</code> sets <code>paymentsStopped: true</code>. If the payment microservice cannot stop the payments, it sends <code>PaymentStopFailedV1</code>. Then <code>manage-claim-service</code> creates a task for a caseworker to fix the problem.</li>
-</ol>
-<p>The task for a caseworker in step 4 is a <strong>compensation</strong>. We cannot undo the claim closure in step 2. So a new business action handles the failure. The business decides what this action is.</p>
-<h3>Rules</h3>
-<ol>
-<li><strong>One microservice owns the process.</strong> We call it the <strong>owner</strong>. Express calls only the owner, once. Express never calls a second microservice to finish the job.</li>
-<li><strong>Before the first change, a microservice can call another microservice to read or check something.</strong> Example: before it creates a claim, <code>manage-claim-service</code> asks the eligibility microservice if the person is eligible. Inside a process, a microservice never calls another microservice to change data. It sends an event instead.</li>
-<li><strong>Each step saves its change and its event together.</strong> So an event is never lost. And an event is never sent for a change that was not saved.</li>
-<li><strong>The process design says what happens when a step fails.</strong> For example, cancel a payment, or create a task for a caseworker. The design group agrees this design.</li>
-<li><strong>Every step must be safe to run twice,</strong> because an event can arrive more than once. The platform library records the ID of every event that it processes, in the same transaction as the change. It skips an event if it has already recorded its ID.</li>
-<li><strong>The owner records the progress of the process.</strong> Express shows it to the user, for example "Waiting for payments to stop". An alert is raised if a process is stuck for too long.</li>
-<li><strong>Every process like this needs approval from the design group,</strong> and an architecture decision record (ADR).</li>
-</ol>
-<h3>Two ways to link the steps</h3>
+<pre><code>catch (PreconditionFailed e)  { throw new ConcurrentUpdate(id); }      // -&gt; 409 CONCURRENT_UPDATE
+catch (Rejected e)            { throw new AddressRejected(e.reason()); } // -&gt; 422 ADDRESS_REJECTED
+catch (Unreachable e)         { throw new DependencyUnavailable(); }    // -&gt; 503
+catch (Timeout e)             { throw new OutcomeUnknown(); }           // -&gt; 504 OUTCOME_UNKNOWN</code></pre>
+<p>Why: Express handles one set of codes for every microservice.</p>
+<h2>Part B. Endpoints that read data</h2>
+<h3>10. Build read endpoints around records, not around screens</h3>
+<p>You are building the <strong>claim summary page</strong>: the claim, its latest three notes, and the payment status.</p>
+<p><strong>Bad</strong> — one endpoint for the page:</p>
+<pre><code>GET /claims/9f1c/summary-page
+200 OK
+{ "heading": "Claim 9f1c", "notesPanel": [...], "paymentBadge": "Paid", "showCloseButton": true }</code></pre>
+<p>The design team moves the notes to their own tab. The microservice changes, is retested and is released for a screen change.</p>
+<p><strong>Good</strong> — the page calls the record endpoints it needs and combines the results. Every read endpoint is one of five kinds:</p>
 <table>
-<thead><tr><th></th><th>Each microservice reacts to the last event</th><th>The owner directs every step</th></tr></thead>
+<thead><tr><th>Kind</th><th>Example</th><th>Rule</th></tr></thead>
 <tbody>
-<tr><td>Also called</td><td>Choreography</td><td>Orchestration</td></tr>
-<tr><td>How it works</td><td>Each microservice listens for an event. It does its step. Then it sends its own event.</td><td>The owner keeps a record of the process. It sends each step to the next microservice as a command message, not as an HTTP call. It waits for the reply event. Then it decides the next step.</td></tr>
-<tr><td>Use it when</td><td>There are 2 or 3 steps, and failures are simple</td><td>There are many steps or deadlines. Or the business needs to see the progress of each step.</td></tr>
-<tr><td>Example</td><td>Close a claim, then stop payments</td><td>Award a claim: create the award, then set up payments, then send a letter</td></tr>
+<tr><td>One record</td><td><code>GET /claims/9f1c</code></td><td>Detail format; <code>404</code> if missing</td></tr>
+<tr><td>A list with filters</td><td><code>GET /claims?status=OPEN&amp;page=0&amp;size=20</code></td><td>Rule 13</td></tr>
+<tr><td>A record's children</td><td><code>GET /claims/9f1c/notes?page=0&amp;size=3&amp;sort=createdAt,desc</code></td><td><code>404</code> if the claim is missing, not an empty list</td></tr>
+<tr><td>A lookup list</td><td><code>GET /reference-data/CLAIM_TYPE</code></td><td>Rule 14</td></tr>
+<tr><td>A calculated answer</td><td><code>GET /claims/9f1c/entitlement?from=2026-01-01&amp;to=2026-01-31</code></td><td>The one kind built for a question; the microservice applies the business rules</td></tr>
 </tbody>
 </table>
-<p>Start with the first way. Change to the second way when the chain of events becomes hard to follow.</p>
-<h3>What the owner's endpoint returns</h3>
-<ul>
-<li><strong>The user needs only the first step,</strong> such as closing the claim: return <code>204</code> as usual. Show the progress of later steps as a field on the record, for example <code>paymentsStopped: false</code>.</li>
-<li><strong>The user must wait for the whole process:</strong> return <code>202 Accepted</code> with a <code>Location</code> header. The header points to a status URL, for example <code>/claims/{claimId}/award</code>. A <code>GET</code> on this URL returns <code>IN_PROGRESS</code>, <code>COMPLETED</code>, or <code>FAILED</code> with a reason. Express shows the status, and checks again when the user refreshes the page.</li>
-</ul>
-<h2>5. Conventions</h2>
-<h3>5.1 HTTP methods</h3>
-<table>
-<thead><tr><th>Method</th><th>Use it for</th><th>Example</th></tr></thead>
-<tbody>
-<tr><td><code>GET</code></td><td>Reading data. A <code>GET</code> never changes anything</td><td><code>GET /claims/{claimId}</code></td></tr>
-<tr><td><code>POST</code> to a collection</td><td>Creating a record (2.1, step 1)</td><td><code>POST /claims</code></td></tr>
-<tr><td><code>POST</code> to an action URL</td><td>A business action (2.1, step 2)</td><td><code>POST /claims/{claimId}/close</code></td></tr>
-<tr><td><code>POST</code> to a search URL</td><td>A search by personal details. It only reads data (5.2)</td><td><code>POST /claims/search</code></td></tr>
-<tr><td><code>PUT</code></td><td>Saving details (2.1, step 3). Send every field in the group, and the <code>version</code></td><td><code>PUT /claims/{claimId}/contact-preferences</code></td></tr>
-<tr><td><code>PATCH</code></td><td>Not used. Express always sends the whole group with <code>PUT</code></td><td>—</td></tr>
-<tr><td><code>DELETE</code></td><td>Not used for business records. To end a record, use an action such as <code>close</code> or <code>withdraw</code>, so its history is kept. Use <code>DELETE</code> only if the design group agrees that a record can be removed for ever</td><td>—</td></tr>
-</tbody>
-</table>
-<h3>5.2 URLs and JSON</h3>
-<ul>
-<li>Collections are plural nouns: <code>/claims</code>, <code>/claims/{claimId}/notes</code>.</li>
-<li>An action is a verb, or a verb and a noun, at the end of the URL. Use lower case and hyphens: <code>/close</code>, <code>/resolve-action</code>, <code>/reopen</code>.</li>
-<li>Nest one level at most below the main record. <code>/claims/{claimId}/notes/{noteId}</code> is fine. <code>/claims/{claimId}/notes/{noteId}/attachments/{attachmentId}</code> is too deep. Use <code>/attachments/{attachmentId}</code> instead.</li>
-<li>Filters, sorting and paging are query parameters: <code>?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20</code>.</li>
-<li>IDs are UUID strings. Express sends them back unchanged. Express never builds IDs and never reads meaning from them.</li>
-<li>A response is always a JSON object, never a JSON array. Put a list inside an object, such as <code>{ "items": [...] }</code>.</li>
-<li>We use plain JSON, not JSON:API. The GDS standards suggest JSON:API only when an organisation has no standard of its own. This guide is our standard.</li>
-<li>JSON field names are camelCase, such as <code>claimId</code>. The GDS standards ask for consistent names. camelCase is our choice.</li>
-<li>Dates look like <code>2026-01-31</code>. Date-times are in UTC and end with <code>Z</code>: <code>2026-01-31T09:00:00Z</code>. Money is a number with two decimal places: <code>242.86</code>.</li>
-<li>Never put personal data in a URL, such as names, dates of birth or National Insurance numbers. URLs are written to logs. To search by these details, send them in the body of <code>POST /claims/search</code>.</li>
-</ul>
-<h3>5.3 Status codes and errors</h3>
-<p>Every microservice returns the same status codes in the same situations. The platform library does this for you.</p>
+<pre><code>const [claim, notes] = await Promise.all([
+  claims.get(`/claims/${id}`),
+  claims.get(`/claims/${id}/notes?page=0&amp;size=3&amp;sort=createdAt,desc`),
+]);</code></pre>
+<p>Why: a screen-shaped endpoint changes every time the screen changes; a record-shaped one does not.</p>
+<h3>11. Give each kind of record two response formats only: a summary for lists and a detail for one record</h3>
+<p>The <strong>dashboard</strong> needs the claim type and the caseworker's name in its list of claims.</p>
+<p><strong>Bad</strong> — a third format for that one screen:</p>
+<pre><code>record ClaimForDashboard(String claimId, String claimType, String caseworkerName, boolean overdue) {}</code></pre>
+<p>Six months later there are <code>ClaimForDashboard</code>, <code>ClaimForSearch</code> and <code>ClaimForReport</code>, each parsed in its own place in Express, each drifting.</p>
+<p><strong>Good</strong> — two formats, and the list screen's new field goes in the summary:</p>
+<pre><code>record ClaimSummary(String claimId, long version, String claimType, String status,
+                    Instant createdAt, String caseworkerName) {}          // for lists
+record ClaimDetail(String claimId, long version, String claimType, String status,
+                   Instant createdAt, String caseworkerName, ContactPreferences contactPreferences,
+                   List&lt;EvidenceItem&gt; evidence, boolean paymentsStopped) {} // for one record</code></pre>
+<p><strong>Summary</strong> is the ID and the few fields a list shows. <strong>Detail</strong> is every field the caller may see.</p>
+<p>Why: a third format for one screen ties the microservice to that screen.</p>
+<h3>12. Never make one call per row of a list</h3>
+<p>The list of open claims shows 20 rows, and each row needs the number of notes that need action.</p>
+<p><strong>Bad</strong> — one call per row:</p>
+<pre><code>const list = await claims.get('/claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20');
+for (const row of list.items) {
+  const notes = await claims.get(`/claims/${row.claimId}/notes?needsAction=true&amp;page=0&amp;size=1`);   // 20 more calls
+  row.openActions = notes.totalItems;
+}</code></pre>
+<p>The page makes 21 calls, takes 20 times as long, and fails whenever any one of them fails.</p>
+<p><strong>Good</strong> — add the field to the summary format, or fetch the rows in one call:</p>
+<pre><code>GET /claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20
+200 OK
+{ "items": [ { "claimId": "9f1c", "version": 7, "status": "OPEN", "openActions": 2, ... }, ... ],
+  "page": 0, "size": 20, "totalItems": 48213 }
+
+GET /claims?ids=9f1c,7a2d,...</code></pre>
+<p><code>ids</code> takes 100 IDs at most.</p>
+<p>Why: one call fails once and takes one round trip.</p>
+<h3>13. Page, sort and index every list</h3>
+<p>You are building <code>GET /claims</code> with a filter on status.</p>
+<p><strong>Bad</strong> — the whole table, in whatever order the database returns it:</p>
+<pre><code>GET /claims
+200 OK
+{ "items": [ ...48,000 claims... ] }</code></pre>
+<p>It works on the first day. A year later it times out, and the rows change order between two calls, so the user misses some.</p>
+<p><strong>Good</strong> — one page at a time, always sorted, every filter field indexed:</p>
+<pre><code>GET /claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20
+200 OK
+{ "items": [ ... ], "page": 0, "size": 20, "totalItems": 48213 }</code></pre>
+<p><code>size</code> is 100 at most. Every field a caller may filter on has a database index.</p>
+<p>Why: an unindexed, unpaged list gets slower as the data grows until it times out.</p>
+<h3>14. Return a lookup list as codes and labels, cached for 5 minutes</h3>
+<p>The <strong>claim type</strong> dropdown needs the list of claim types.</p>
+<p><strong>Bad</strong> — the labels live in Express:</p>
+<pre><code>const CLAIM_TYPES = { STANDARD: 'Standard claim', URGENT: 'Urgent claim' };   // in Express</code></pre>
+<p>The business renames "Urgent claim" to "Priority claim". The microservice is updated, Express still shows the old label, and old records with a retired type show a blank.</p>
+<p><strong>Good</strong> — the microservice returns codes and labels, and Express stores the code:</p>
+<pre><code>GET /reference-data/CLAIM_TYPE
+200 OK
+Cache-Control: max-age=300
+{ "items": [ { "code": "STANDARD", "label": "Standard claim", "active": true },
+             { "code": "URGENT",   "label": "Priority claim", "active": true },
+             { "code": "LEGACY",   "label": "Legacy claim",   "active": false } ] }</code></pre>
+<p>Express shows the <code>label</code> and stores the <code>code</code>. A value with <code>active: false</code> still shows on old records but is not offered in forms.</p>
+<p>Why: labels change and codes never do.</p>
+<h3>15. Check permission on every endpoint, reads included, even when the caller is our own Express</h3>
+<p>You are adding <code>GET /claims/9f1c</code>, a read, called only by Express.</p>
+<p><strong>Bad</strong> — the endpoint trusts a header and skips the check because it is "only a read":</p>
+<pre><code>// GET /claims/{id}
+public ClaimDetail get(String id, String userIdHeader) {
+    return service.get(id);          // no permission check; the header is whatever the caller sent
+}</code></pre>
+<p>Anything on the network can send <code>X-User-Id: admin</code> and read every claimant's details.</p>
+<p><strong>Good</strong> — the endpoint declares the permission it needs, takes the user from the access token, and a test proves a user without the permission gets <code>403</code>:</p>
+<pre><code>// GET /claims/{id}
+public ClaimDetail get(String id, AccessToken token) {
+    permissions.require(token, "claims:read");           // the user comes from the token
+    return claimQueries.detail(new ClaimId(id));         // the string becomes our type at the edge
+}
+
+// test
+void refusesUserWithoutPermission() {
+    assertEquals(403, getAs(userWithout("claims:read"), "/claims/9f1c").status());
+}</code></pre>
+<p>The build checks that no endpoint is missing a permission. The microservice refuses even when the call comes from our own Express app. Hiding a button the user cannot use helps the user but is not security.</p>
+<p>Why: reads return personal data, and anything on the network can call the endpoint.</p>
+<h2>Part C. Processes across several microservices</h2>
+<p>A database transaction cannot cover two microservices. Step 6 of the walkthrough is the example for this part: closing a claim must also stop its payments, which live in the payment microservice.</p>
+<h3>16. When a process spans several microservices, one microservice owns it and Express calls only that one</h3>
+<p>You are building <strong>Close claim</strong>, which must also stop payments.</p>
+<p><strong>Bad</strong> — Express runs the process:</p>
+<pre><code>await claims.post(`/claims/${id}/close`, { version });        // succeeds
+await payments.post(`/payments/stop`, { claimId: id });        // times out</code></pre>
+<p>The claim is closed, the payments keep going, Express shows an error, and nobody owns the half-done job.</p>
+<p><strong>Good</strong> — Express makes one call to the owner, and the owner records the progress:</p>
+<pre><code>POST /claims/9f1c/close
+{ "version": 7 }
+204 No Content
+
+GET /claims/9f1c
+200 OK
+{ "claimId": "9f1c", "status": "CLOSED", "paymentsStopped": false, ... }</code></pre>
+<p>Express shows "Waiting for payments to stop" while <code>paymentsStopped</code> is false. An alert is raised when a process is stuck. Every such process needs design group approval and an ADR.</p>
+<h3>17. Change data in another microservice by sending an event, never by calling its API</h3>
+<p>Inside the close-claim process, the claim microservice must make the payment microservice stop paying.</p>
+<p><strong>Bad</strong> — an HTTP call inside the process:</p>
+<pre><code>claim.close(openActions, today);
+claims.save(claim);
+paymentsClient.post("/payments/stop", claim.id());    // times out: stopped or not?</code></pre>
+<p>The call times out. The claim is closed, and nobody knows whether the payments stopped.</p>
+<p><strong>Good</strong> — the change is an event, stored with the claim and delivered until the payment microservice processes it:</p>
+<pre><code>claim.close(openActions, today);        // raises ClaimClosed inside the entity
+claims.save(claim);                     // saves the claim and ClaimClosedV1 together (rule 18)</code></pre>
+<pre><code>{ "eventId": "c1d2...", "type": "ClaimClosedV1", "claimId": "9f1c", "closedOn": "2026-10-31" }</code></pre>
+<p>Before its first change, a microservice may still call another to read or check something, such as asking eligibility before creating a claim.</p>
+<p>Why: an HTTP call that times out leaves you not knowing whether the change happened; an event is delivered until it is processed.</p>
+<h3>18. Save each step's change and its event in one transaction, and skip an event you already processed</h3>
+<p>You are writing the listener in the payment microservice that reacts to <code>ClaimClosedV1</code>.</p>
+<p><strong>Bad</strong> — the event is sent outside the transaction, and the listener trusts it arrives once:</p>
+<pre><code>claims.save(claim);                     // transaction commits
+broker.publish(new ClaimClosedV1(id));  // process crashes here: closed claim, no event
+
+// the broker calls this for each ClaimClosedV1
+void on(ClaimClosedV1 e) { payments.stopFor(e.claimId()); }   // runs twice on redelivery</code></pre>
+<p>Either the event is never sent and the payments never stop, or the broker delivers it twice and the second run creates a second "stopped" record.</p>
+<p><strong>Good</strong> — an outbox on the sending side, an inbox on the receiving side:</p>
+<pre><code>// sender: claim and event in one transaction; a background sender publishes afterwards
+transaction(() -&gt; { claims.save(claim); outbox.add(claim.events()); });   // ClaimClosed becomes ClaimClosedV1
+
+// receiver: event ID and change in one transaction; a repeat is skipped
+void on(ClaimClosedV1 e) {
+    transaction(() -&gt; {
+        if (inbox.contains(e.eventId())) return;
+        paymentService.stopFor(new ClaimId(e.claimId()), e.closedOn());   // their string, our type
+        inbox.record(e.eventId());
+    });
+}</code></pre>
+<p>Why: an event can be delivered more than once, and a crash can happen between any two lines.</p>
+<h3>19. Decide what happens when a step fails before you build the process</h3>
+<p>You are designing the close-claim process, and the payment microservice may be unable to stop a payment that is already with the bank.</p>
+<p><strong>Bad</strong> — the design only names the happy path:</p>
+<pre><code>ClaimClosedV1 -&gt; payments stop -&gt; PaymentsStoppedV1 -&gt; paymentsStopped = true</code></pre>
+<p><code>PaymentStopFailedV1</code> arrives. Nobody wrote what to do, so the listener logs it and the claimant is paid for a closed claim.</p>
+<p><strong>Good</strong> — the failure path is a named business step, agreed with the business and the design group:</p>
+<pre><code>ClaimClosedV1 -&gt; payments stop -&gt; PaymentsStoppedV1    -&gt; paymentsStopped = true
+                              \-&gt; PaymentStopFailedV1  -&gt; create a caseworker task "Recover payment"</code></pre>
+<p>Why: step 2 cannot be undone once step 3 fails, so a new business action, not a rollback, handles the failure.</p>
+<h3>20. Link the steps by events that each microservice reacts to; use one directing microservice only for many steps or deadlines</h3>
+<p>You have two processes: "close claim, then stop payments" (two steps) and "award a claim" (create the award, set up payments, send a letter, each within a deadline).</p>
+<p><strong>Bad</strong> — a directing owner for the two-step process:</p>
+<pre><code>claim microservice: send command StopPayments -&gt; wait for PaymentsStopped -&gt; set paymentsStopped
+                    (plus a timer, a retry policy and a state table, for one step)</code></pre>
+<p>The simple process gets a state machine nobody needed; or the reverse, the five-step award process is a chain of events nobody can follow.</p>
+<p><strong>Good</strong> — start with each microservice listening for an event, doing its step and sending its own event (choreography):</p>
+<pre><code>ClaimClosedV1 -&gt; payment microservice stops -&gt; PaymentsStoppedV1 -&gt; claim microservice updates</code></pre>
+<p>Switch to one directing owner (orchestration) when there are more than three steps, deadlines, or the business must see each step's progress. The owner then sends each step as a command message, not an HTTP call, and waits for the reply event:</p>
+<pre><code>award owner: CreateAward -&gt; AwardCreated; SetUpPayments -&gt; PaymentsSetUp; SendLetter -&gt; LetterSent
+             status: IN_PROGRESS (step 2 of 3), deadline 5 working days</code></pre>
+<p>Why: a short chain of events is simple; a long one becomes impossible to follow.</p>
+<h3>21. Return <code>204</code> and a progress field when the user needs only the first step; return <code>202</code> with a status URL when the user must wait for all steps</h3>
+<p>Close claim: the caseworker only needs the claim closed; payments stop later. Award claim: the caseworker must know when the award is complete.</p>
+<p><strong>Bad</strong> — both answer <code>204</code> and say nothing more:</p>
+<pre><code>POST /claims/9f1c/award
+204 No Content</code></pre>
+<p>The screen says "Awarded" while the letter has not been sent, and the caseworker has no way to see that step 3 failed.</p>
+<p><strong>Good</strong> — <code>204</code> with a progress field when the first step is enough; <code>202</code> with a status URL when the user must wait:</p>
+<pre><code>POST /claims/9f1c/close
+204 No Content
+GET /claims/9f1c  -&gt;  { ..., "paymentsStopped": false }
+
+POST /claims/9f1c/award
+202 Accepted
+Location: /claims/9f1c/award
+
+GET /claims/9f1c/award
+200 OK
+{ "status": "IN_PROGRESS", "step": "SET_UP_PAYMENTS" }       // later COMPLETED, or FAILED with a reason</code></pre>
+<p>Express shows the status and checks again on refresh.</p>
+<p>Why: the user should never wait for work they do not need, and never be told "done" when it is not.</p>
+<h2>Part D. Conventions</h2>
+<h3>22. <code>GET</code> reads, <code>POST</code> creates or acts, <code>PUT</code> saves a group; never <code>PATCH</code>, and no <code>DELETE</code> on business records</h3>
+<p>A caseworker wants to remove a claim that was opened by mistake.</p>
+<p><strong>Bad</strong> — the record is deleted, and a read changes data on the way:</p>
+<pre><code>DELETE /claims/9f1c
+204 No Content
+
+GET /claims/9f1c/mark-as-read       // a GET that writes</code></pre>
+<p>The audit trail for the claim is gone, and a link prefetch by the browser marks claims as read.</p>
+<p><strong>Good</strong> — one meaning per method:</p>
+<pre><code>GET  /claims/9f1c                     reads; never changes anything
+POST /claims                          creates
+POST /claims/9f1c/cancel              acts; the record and its history stay (rule 43)
+PUT  /claims/9f1c/contact-preferences saves a group
+POST /claims/search                   reads by personal details (rule 25)</code></pre>
+<p>To end a record, use an action such as <code>close</code> or <code>cancel</code>. <code>DELETE</code> only when the design group agrees a record may be removed for ever.</p>
+<h3>23. Name collections with plural nouns and actions with lower-case verbs; nest one level at most</h3>
+<p>You are adding attachments to notes.</p>
+<p><strong>Bad</strong> — the path mirrors the whole object tree, and the ID carries meaning:</p>
+<pre><code>GET /claims/9f1c/notes/4ab2/attachments/CLM-2026-000731-A</code></pre>
+<p>Express has to know three IDs to fetch one attachment, and someone parses <code>2026</code> out of the ID.</p>
+<p><strong>Good</strong> — plural nouns, lower-case verbs, one level of nesting, opaque UUIDs:</p>
+<pre><code>GET  /claims/9f1c/notes/4ab2
+POST /claims/9f1c/resolve-action
+GET  /attachments/0c7e...
+GET  /claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20</code></pre>
+<p>Filters, sorting and paging are query parameters. IDs are UUID strings that Express passes back unchanged and never reads meaning from.</p>
+<p>Why: a predictable URL needs no lookup.</p>
+<h3>24. Return a JSON object with camelCase fields, ISO dates, UTC times and two-decimal money</h3>
+<p>You are writing the response of <code>GET /claims/9f1c/payments</code>.</p>
+<p><strong>Bad</strong> — a bare array, mixed field styles, local times and floating-point money:</p>
+<pre><code>[ { "payment_id": "p1", "PaidOn": "31/10/2026 09:15", "amount": 242.8599999 } ]</code></pre>
+<p>Express's generated client cannot add a <code>totalItems</code> field to an array later, the date is ambiguous between UK and US order, and the amount prints as £242.86 on one page and £242.85 on another.</p>
+<p><strong>Good</strong> — an object, camelCase, ISO dates, UTC times ending with <code>Z</code>, money with two decimals:</p>
+<pre><code>{ "items": [ { "paymentId": "p1", "paymentDate": "2026-10-31", "paidAt": "2026-10-31T09:15:00Z",
+               "amount": 242.86 } ] }</code></pre>
+<p>We use plain JSON, not JSON:API; the GDS standards suggest JSON:API only for an organisation with no standard of its own.</p>
+<p>Why: Express's generated client needs one shape.</p>
+<h3>25. Never put personal data in a URL; search by personal details with <code>POST /claims/search</code></h3>
+<p>The caseworker searches for a claimant by National Insurance number.</p>
+<p><strong>Bad</strong> — the number is in the query string:</p>
+<pre><code>GET /claims?nino=QQ123456C</code></pre>
+<p>The gateway, Express, the microservice and the load balancer all write the URL to their access logs, and the number is now in four places the data protection rules do not cover.</p>
+<p><strong>Good</strong> — personal details go in the body of a <code>POST</code> that only reads:</p>
+<pre><code>POST /claims/search
+{ "nino": "QQ123456C" }
+
+200 OK
+{ "items": [ { "claimId": "9f1c", ... } ] }</code></pre>
+<p>Names and dates of birth go the same way, never in a path or query string.</p>
+<p>Why: URLs are written to logs.</p>
+<h3>26. Return the same status codes and the same error body from every microservice</h3>
+<p>You are handling the case where the claim has notes that need action when the user closes it.</p>
+<p><strong>Bad</strong> — the feature writes its own error response:</p>
+<pre><code>catch (ClaimHasOpenActions e) {
+    return response(400, Map.of("error", "Cannot close: " + e.getMessage()));
+}</code></pre>
+<p>Express gets <code>400</code> and looks for field errors to show next to fields, finds none, and shows a blank error summary; the notes microservice answers the same situation with <code>409</code> and a different body.</p>
+<p><strong>Good</strong> — the feature throws a domain error; one shared error handler maps each kind of error to its status and body:</p>
+<pre><code>if (notesNeedingAction &gt; 0) throw new ClaimHasOpenActions(id, notesNeedingAction);</code></pre>
+<pre><code>422 Unprocessable Content
+Content-Type: application/problem+json
+{ "status": 422, "title": "Business rule violated", "code": "CLAIM_HAS_OPEN_ACTIONS",
+  "detail": "Claim 9f1c has 2 notes that need action", "traceId": "4bf92f35..." }</code></pre>
 <table>
 <thead><tr><th>Status</th><th>Meaning</th><th>What Express does</th></tr></thead>
 <tbody>
-<tr><td><code>400</code></td><td>The request is not valid. The <code>errors</code> list in the body names each wrong field</td><td>Shows each error next to its field</td></tr>
-<tr><td><code>401</code></td><td>The user is not signed in, or the session has ended</td><td>Sends the user to sign in again through the gateway</td></tr>
-<tr><td><code>403</code></td><td>The user is signed in but is not allowed to do this</td><td>Shows "You do not have permission"</td></tr>
-<tr><td><code>404</code></td><td>The record does not exist</td><td>Shows a "not found" page</td></tr>
-<tr><td><code>409</code>, code <code>CONCURRENT_UPDATE</code></td><td>Someone changed the record after the screen loaded</td><td>Shows the 409 page (6.1). Never retries automatically</td></tr>
-<tr><td><code>409</code>, code <code>REQUEST_IN_PROGRESS</code></td><td>The first request with this <code>Idempotency-Key</code> has not finished</td><td>Asks the user to wait, and then to check the record</td></tr>
-<tr><td><code>422</code></td><td>A business rule refused the change. The <code>code</code> names the rule, such as <code>CLAIM_HAS_OPEN_ACTIONS</code> or <code>ADDRESS_REJECTED</code></td><td>Shows the message for that <code>code</code></td></tr>
-<tr><td><code>422</code>, code <code>IDEMPOTENCY_KEY_REUSED</code></td><td>The same <code>Idempotency-Key</code> came with a different request. This is a bug in Express</td><td>Shows an error page</td></tr>
-<tr><td><code>500</code></td><td>An unexpected error</td><td>Shows an error page with the <code>traceId</code></td></tr>
-<tr><td><code>503</code></td><td>A system that the microservice needs is not available. Nothing was changed</td><td>Shows "Try again later". A read (<code>GET</code>, or <code>POST /claims/search</code>) can be retried once</td></tr>
-<tr><td><code>504</code>, code <code>OUTCOME_UNKNOWN</code></td><td>Another system did not answer in time. The change may or may not be made (2.5)</td><td>Shows "We could not confirm your change. Check the details before you try again." Never retries automatically</td></tr>
+<tr><td><code>400</code></td><td>Invalid request; <code>errors</code> names each wrong field</td><td>Shows each error next to its field</td></tr>
+<tr><td><code>401</code></td><td>Not signed in or session ended</td><td>Sends the user to sign in through the gateway</td></tr>
+<tr><td><code>403</code></td><td>Signed in but not allowed</td><td>Shows "You do not have permission"</td></tr>
+<tr><td><code>404</code></td><td>Record does not exist</td><td>Shows a not-found page</td></tr>
+<tr><td><code>409</code> <code>CONCURRENT_UPDATE</code></td><td>Record changed after the screen loaded</td><td>Shows the 409 page (rule 38); never retries</td></tr>
+<tr><td><code>409</code> <code>REQUEST_IN_PROGRESS</code></td><td>The first request with this <code>Idempotency-Key</code> is still running</td><td>Asks the user to wait, then check the record</td></tr>
+<tr><td><code>422</code></td><td>A business rule refused the change; <code>code</code> names the rule</td><td>Shows the message for that <code>code</code></td></tr>
+<tr><td><code>422</code> <code>IDEMPOTENCY_KEY_REUSED</code></td><td>Same key, different request: an Express bug</td><td>Shows an error page</td></tr>
+<tr><td><code>500</code></td><td>Unexpected error</td><td>Shows an error page with the <code>traceId</code></td></tr>
+<tr><td><code>503</code> <code>DEPENDENCY_UNAVAILABLE</code></td><td>A needed system is unavailable; nothing changed; <code>Retry-After</code> says when to try (rule 44)</td><td>Shows "Try again later"; retries a read once, never a change</td></tr>
+<tr><td><code>504</code> <code>OUTCOME_UNKNOWN</code></td><td>Another system did not answer in time (rule 9)</td><td>"We could not confirm your change. Check before you try again." Never retries</td></tr>
 </tbody>
 </table>
-<p>All error bodies have the same format. This is the "problem details" standard (RFC 9457):</p>
-<pre><code>{ "status": 422, "title": "Business rule violated", "code": "CLAIM_HAS_OPEN_ACTIONS",
-  "detail": "Claim 9f1c... has 2 notes that need action", "traceId": "4bf92f35..." }</code></pre>
-<ul>
-<li>Express chooses the message for the user from the <code>code</code>. The <code>detail</code> text is for developers. Never show it to users.</li>
-<li><code>traceId</code> identifies the request in the logs of every microservice that it touched. Error pages show it, so support can find the request.</li>
-<li>Error bodies never contain personal data.</li>
-</ul>
-<h3>5.4 Changing an API without breaking Express</h3>
-<p>Microservices and Express are released at different times. So a microservice must never release a change that the current Express cannot handle.</p>
-<ul>
-<li><strong>Safe at any time:</strong> adding an endpoint, adding an optional field to a request, adding a field to a response. Express must ignore response fields that it does not know.</li>
-<li><p><strong>Breaking:</strong> removing or renaming a field, changing a field's type or meaning, making an optional field required, changing a URL. Make these changes in three releases:</p>
-<ol>
-<li>The microservice adds the new field or endpoint. It keeps the old one.</li>
-<li>Express changes to the new one.</li>
-<li>The microservice removes the old one.</li>
-</ol></li>
-<li>Every path starts with the major version, such as <code>/v1</code>. This follows the GDS API technical and data standards. The examples in this guide leave it out. Use the three-release change when you can. If you cannot, add <code>/v2</code> endpoints next to the <code>/v1</code> endpoints. Then add two headers to <code>/v1</code> responses: <code>Deprecation</code>, and <code>Sunset</code> with the date when <code>/v1</code> will be removed.</li>
-<li>Each microservice describes its API in <code>contracts/openapi.yaml</code>. Update this file in the same pull request as the code. The build compares the file with the released version. The build fails if a change is breaking. Express generates its TypeScript client from these files. So if a field is removed, Express does not compile.</li>
-</ul>
-<h3>5.5 Which Spring Boot feature to use</h3>
-<p>Use these features for these problems. Do not build your own version.</p>
-<table>
-<thead><tr><th>Problem</th><th>Use</th><th>Notes</th></tr></thead>
-<tbody>
-<tr><td>Endpoints and JSON bodies</td><td><code>@RestController</code> with <code>@GetMapping</code>, <code>@PostMapping</code> and <code>@PutMapping</code>. One Java <code>record</code> for each request and each response</td><td>Never use the stored entity as a request or response</td></tr>
-<tr><td>Checking a request (<code>400</code>)</td><td>Bean Validation: <code>@Valid</code> on the body, and <code>@NotNull</code>, <code>@NotBlank</code> or <code>@Size</code> on the record's fields</td><td>The platform library turns failures into the <code>errors</code> list</td></tr>
-<tr><td>Permissions (<code>403</code>)</td><td>Spring Security resource server (JWT), with <code>@PreAuthorize</code> through <code>@ClaimsRead</code> and <code>@ClaimsWrite</code></td><td>Put one on every endpoint. The build checks this</td></tr>
-<tr><td>Saving several changes together (2.2)</td><td><code>@Transactional</code> on the application service method. Use <code>TransactionTemplate</code> when part of the method must run outside the transaction, such as a call to another service</td><td>Keep transactions short</td></tr>
-<tr><td>Refusing a change from an old screen (<code>409</code>)</td><td>Spring Data <code>@Version</code> on the stored record, plus the platform's <code>requireVersion</code> check</td><td>Both become <code>409 CONCURRENT_UPDATE</code></td></tr>
-<tr><td><code>Idempotency-Key</code> (2.3)</td><td>The platform library's <code>IdempotentRequests</code></td><td>Spring has nothing built in for this</td></tr>
-<tr><td><code>201</code> and <code>204</code> responses</td><td><code>ResponseEntity.created(location)</code> and <code>ResponseEntity.noContent()</code></td><td></td></tr>
-<tr><td>Error bodies (5.3)</td><td><code>ProblemDetail</code> (RFC 9457), built into Spring, through the platform's <code>GlobalExceptionHandler</code></td><td>Throw a domain exception. Never write an error handler in a feature</td></tr>
-<tr><td>Lists with paging (3)</td><td>Spring Data <code>Pageable</code> and <code>Page</code>, with a query method such as <code>findByStatus(status, pageable)</code></td><td>Add a database index for every filter</td></tr>
-<tr><td>Caching lookup lists (3)</td><td><code>ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)))</code>. On the server: <code>@Cacheable</code> on the read</td><td></td></tr>
-<tr><td>Calling another service (2.5, 4)</td><td>An <code>@HttpExchange</code> interface (<code>@GetExchange</code>, <code>@PostExchange</code>, <code>@PutExchange</code>, <code>@RequestHeader("If-Match")</code>), created by the platform's <code>HttpClientFactory</code></td><td>Gives time limits and tracing</td></tr>
-<tr><td>Retries and circuit breakers</td><td>Resilience4j, through the platform's <code>ResilientCalls</code>. Use <code>callWithRetry</code> for reads and checks. Use <code>callOnce</code> for changes</td><td><code>callOnce</code> never retries. It returns <code>503</code> or <code>504</code> (2.5)</td></tr>
-<tr><td>Sending events (4)</td><td>Spring Data <code>@DomainEvents</code>: events go out when the record is saved. Spring Modulith's event publication registry keeps each event in the database until it is sent (this is called the outbox)</td><td>Never send a message directly from a service method</td></tr>
-<tr><td>Receiving events (4)</td><td>Spring Cloud AWS <code>@SqsListener</code>, through the platform's <code>InboxMessageHandler</code></td><td>It skips events that were already processed</td></tr>
-</tbody>
-</table>
-<h2>6. The Express front end</h2>
-<p>Every request from the browser goes to our gateway first. The gateway signs the user in and keeps the user's session. Then it sends the request to Express, with the user's ID and access token in request headers. Express builds the page on the server and calls the microservices that it needs. So Express is already our backend-for-frontend (BFF). A BFF is a server-side layer built for one front end. We do not add another layer.</p>
-<p><img src="https://kodebot.com/books/java-spring-boot-in-depth/downloads/fig-api-guide-bff.png" alt="Browser → Express → microservices: the browser talks only to Express, and Express calls each microservice. The gateway signs the user in and passes the user&#x27;s ID and token to Express. Express calls each microservice over HTTPS with the user&#x27;s token and traceparent, and each microservice checks permissions itself. The microservices tell each other what happened with SNS and SQS events, and Express is not involved." width="760"></p>
-<p><em>Browser → Express → microservices: the browser talks only to Express, and Express calls each microservice. The gateway signs the user in and passes the user's ID and token to Express. Express calls each microservice over HTTPS with the user's token and traceparent, and each microservice checks permissions itself. The microservices tell each other what happened with SNS and SQS events, and Express is not involved.</em></p>
-<table>
-<thead><tr><th>Rule</th><th>What to do</th></tr></thead>
-<tbody>
-<tr><td>The browser never calls microservices</td><td>The browser holds only the gateway's session cookie. Only Express knows the microservice addresses</td></tr>
-<tr><td>Express trusts only the gateway</td><td>Express accepts requests only from the gateway, and the network enforces this. The gateway removes any identity headers that the browser sends. Express does not sign users in or keep sessions</td></tr>
-<tr><td>Express passes on the access token</td><td>Express gets the user's access token from the gateway in a header. It sends the token with every call to a microservice. It never sends the token to the browser</td></tr>
-<tr><td>Microservices check permissions</td><td>Microservices get the user's identity from the access token, never from a user-ID header. You can hide a button that the user cannot use. This helps the user, but it is not security. The microservice must still refuse the request with <code>403</code></td></tr>
-<tr><td>Read from several, change one</td><td>A page can call several microservices to read data. Make the calls in parallel with <code>Promise.allSettled</code>, so one failed call does not stop the others. Send each save as one request to one microservice (section 4)</td></tr>
-<tr><td>Every call has a time limit</td><td>All calls go through one shared HTTP client module. The time limit is 2 seconds for reads and 5 seconds for changes. If a read (<code>GET</code>, or <code>POST /claims/search</code>) times out or gets <code>503</code>, retry it once. Never retry a change automatically</td></tr>
-<tr><td>Stop calling a failing microservice</td><td>The shared client uses a circuit breaker, for example the <code>opossum</code> package. After several failures, it stops calling that microservice for a short time. It fails at once, so pages do not hang</td></tr>
-<tr><td>Show what you can</td><td>For each page, decide which data is essential. If other data fails, show the rest of the page with a message. Example: if the payment status fails on the claim page, show "Payment details are not available right now". Show an error page only if essential data fails</td></tr>
-<tr><td>Pass on the trace ID</td><td>OpenTelemetry adds the <code>traceparent</code> header to every call. So you can follow one user action through the logs of every microservice</td></tr>
-<tr><td>Cache lookup lists only</td><td>Keep a lookup list for as long as its <code>Cache-Control</code> header says. Never cache claims, notes or other business records. Users must see the latest version</td></tr>
-<tr><td>Handle errors in one place</td><td>One error handler turns the status and the <code>code</code> into what the user sees (section 5.3)</td></tr>
-</tbody>
-</table>
-<h3>6.1 Forms and GOV.UK patterns</h3>
-<ul>
-<li><strong>Pages work without JavaScript.</strong> This is GOV.UK progressive enhancement. Every form is a normal HTML form that posts to Express. Express calls the microservices from the server. JavaScript can improve a page, but nothing can depend on it.</li>
-<li><strong>Express keeps the answers until the user saves.</strong> While the user moves through question pages and "Change" links, Express stores the answers in its own server-side session store. It never stores them in the browser or in a microservice. Only a button that saves sends a request to a microservice. If users must be able to stop and come back later, ask the design group first.</li>
-<li><strong>After a successful save, redirect.</strong> Express answers the form post with a redirect to the confirmation page. This is called post/redirect/get. A page refresh then cannot submit the form twice. The confirmation page shows the reference that the microservice returned, such as the new claim's ID.</li>
-<li><strong>Show validation errors with the GOV.UK error pattern.</strong> Express shows an error summary at the top of the page and a message next to each field. The microservice's <code>400</code> response lists each wrong field in <code>errors</code>, with the same field names as the request. So Express can put each message in the right place. Express writes the message text in GOV.UK style, by field and error type.</li>
-<li><strong>A <code>409</code> has its own page.</strong> The page says that someone else changed the record. It shows the latest version. It asks the user to make their changes again.</li>
-</ul>
-<p>Later, we may add very different front ends, such as a public website or a mobile app. Then the design group will decide if we need a separate BFF layer.</p>
-<h2>7. Common mistakes</h2>
-<table>
-<thead><tr><th>Mistake</th><th>Correct approach</th></tr></thead>
-<tbody>
-<tr><td><code>PATCH</code>, or <code>PUT /claims/{claimId}</code> that replaces the whole claim and its status</td><td>Use the test in 2.1 to choose create, business action or save details.</td></tr>
-<tr><td>An endpoint for each question page or field, such as <code>POST /claims/{claimId}/update-phone</code></td><td>One <code>PUT</code> for the whole group of details, such as <code>PUT /claims/{claimId}/contact-preferences</code> (2.1)</td></tr>
-<tr><td>An endpoint named after a screen</td><td>Name it after the action or the data (2.1, 3)</td></tr>
-<tr><td>Two requests for one save</td><td>One request with everything (2.2)</td></tr>
-<tr><td>A create request without an <code>Idempotency-Key</code>, or a change without a <code>version</code></td><td>Send them as described in 2.3</td></tr>
-<tr><td>Express changes data in two microservices for one action</td><td>Call the owner microservice once. The others react to its events (4).</td></tr>
-<tr><td>A new response format for one screen</td><td>Add the field to the summary or detail format (3)</td></tr>
-<tr><td>One extra call for each row of a list</td><td>Add the field to the summary format, or get the rows by a list of IDs (3)</td></tr>
-<tr><td>A list without paging, sorting or a database index</td><td>Use paging (100 at most), sort, and index every filter (3)</td></tr>
-<tr><td>An endpoint without a permission check</td><td>Add <code>@ClaimsRead</code> or <code>@ClaimsWrite</code>, and a test that expects <code>403</code></td></tr>
-<tr><td>The browser calls a microservice</td><td>Move the call into Express (6)</td></tr>
-<tr><td>A call without a time limit, or a change retried automatically</td><td>Use the shared HTTP client. Never retry changes automatically (6).</td></tr>
-<tr><td>Removing or renaming a field in one release</td><td>Use the three-release change (5.4)</td></tr>
-<tr><td>Personal data in a URL</td><td>Send it in the body of <code>POST /claims/search</code> (5.2)</td></tr>
-<tr><td>One endpoint that sends several changes to another system, such as name and address together</td><td>One business action for each change, with one call each (2.5)</td></tr>
-</tbody>
-</table>
+<p>Every error body is RFC 9457 problem details. Express picks the message from <code>code</code>; <code>detail</code> is for developers and never shown; <code>traceId</code> finds the request in every log. Error bodies never contain personal data.</p>
+<p>Why: Express has one error handler for every microservice, and it only works if every microservice answers the same way.</p>
+<h3>27. Make a breaking API change in three releases, and update <code>openapi.yaml</code> in the same pull request as the code</h3>
+<p>The business wants <code>fullName</code> on the eligibility microservice's <code>GET /claimants/c88</code> split into <code>firstName</code> and <code>lastName</code>.</p>
+<p><strong>Bad</strong> — one release:</p>
+<pre><code>- "fullName": "Jane Doe"
++ "firstName": "Jane", "lastName": "Doe"</code></pre>
+<p>The microservice is released on Tuesday, Express on Thursday. For two days every claim page shows no claimant name.</p>
+<p><strong>Good</strong> — three releases, and the contract file in the same pull request as the code:</p>
+<pre><code>Release 1 (microservice): returns fullName AND firstName, lastName; accepts either on create
+Release 2 (Express):      reads and sends firstName, lastName
+Release 3 (microservice): removes fullName</code></pre>
+<pre><code># contracts/openapi.yaml, same pull request as release 1
+fullName:  { type: string, deprecated: true }
+firstName: { type: string }
+lastName:  { type: string }</code></pre>
+<p>Safe at any time: a new endpoint, an optional request field, a new response field (Express ignores unknown fields). Breaking: removing, renaming or retyping a field, making it required, changing a URL. Every path starts with <code>/v1</code>, as in the walkthrough. If three releases are impossible, add <code>/v2</code> beside <code>/v1</code> with <code>Deprecation</code> and <code>Sunset</code> headers on <code>/v1</code>. The build compares <code>contracts/openapi.yaml</code> with the released version and fails on a breaking change, and Express generates its client from the file, so a removed field does not compile.</p>
+<p>Why: Express and the microservices are released at different times.</p>
+<h2>Part E. The Express front end</h2>
+<p>Every browser request goes to the gateway, which signs the user in and passes the request to Express with the user's ID and access token in headers. Express builds the page on the server and calls the microservices. So Express is already our backend-for-frontend (BFF), a server-side layer built for one front end, and we add no other layer. If a mobile app comes later, the design group decides whether it needs its own BFF.</p>
+<p><img src="https://kodebot.com/books/java-spring-boot-in-depth/downloads/fig-api-guide-bff.png" alt="Browser → Express → microservices: the browser talks only to Express, and Express calls each microservice. The gateway signs the user in and passes the user&#x27;s ID and token to Express. Express calls each microservice over HTTPS with the user&#x27;s token and traceparent, and each microservice checks permissions itself. The microservices tell each other what happened with events, and Express is not involved." width="760"></p>
+<p><em>Browser → Express → microservices: the browser talks only to Express, and Express calls each microservice. The gateway signs the user in and passes the user's ID and token to Express. Express calls each microservice over HTTPS with the user's token and traceparent, and each microservice checks permissions itself. The microservices tell each other what happened with events, and Express is not involved.</em></p>
+<h3>28. The browser never calls a microservice; Express calls it with the user's token</h3>
+<p>A developer wants the notes panel to refresh without reloading the page.</p>
+<p><strong>Bad</strong> — page JavaScript calls the microservice:</p>
+<pre><code>// in the browser
+const notes = await fetch('https://claims.internal/v1/claims/9f1c/notes',
+                          { headers: { Authorization: 'Bearer ' + token } });</code></pre>
+<p>The access token is now in the browser, where any script on the page can read it, and the microservice address is public.</p>
+<p><strong>Good</strong> — the browser calls Express, and Express calls the microservice with the token from the gateway:</p>
+<pre><code>// in Express
+app.get('/claims/:id/notes', async (req, res) =&gt; {
+  const notes = await claims.get(`/claims/${req.params.id}/notes?page=0&amp;size=20`, {
+    headers: { Authorization: `Bearer ${req.gateway.accessToken}`, traceparent: req.traceparent },
+  });
+  res.render('notes', { notes });
+});</code></pre>
+<p>The browser holds only the gateway's session cookie. Express accepts requests only from the gateway, which strips any identity headers the browser sends. Every call carries the standard <code>traceparent</code> header, so one action can be followed through every log.</p>
+<p>Why: only Express knows the microservice addresses, and the token never reaches a place we do not control.</p>
+<h3>29. Read from several microservices in parallel, but send each save to one microservice</h3>
+<p>The claim page shows the claim, its notes and the payment status, from two microservices.</p>
+<p><strong>Bad</strong> — reads one after another, and a form that saves to two microservices:</p>
+<pre><code>const claim = await claims.get(`/claims/${id}`);                 // 400 ms
+const notes = await claims.get(`/claims/${id}/notes`);           // + 300 ms
+const pay   = await payments.get(`/payments?claimId=${id}`);     // + 500 ms, throws if down
+
+await claims.put(`/claims/${id}/contact-preferences`, body);
+await payments.post(`/payments/${id}/change-bank-details`, body); // half saved if this fails</code></pre>
+<p>The page takes 1.2 seconds, and if the payment microservice is down the whole page fails.</p>
+<p><strong>Good</strong> — all reads at once, each allowed to fail on its own; each save one request to one microservice:</p>
+<pre><code>const [claim, notes, pay] = await Promise.allSettled([
+  claims.get(`/claims/${id}`),
+  claims.get(`/claims/${id}/notes`),
+  payments.get(`/payments?claimId=${id}`),
+]);</code></pre>
+<p>Why: parallel reads keep the page fast; a single save keeps the data consistent (rule 16).</p>
+<h3>30. Give every call from Express a time limit and a circuit breaker</h3>
+<p>The payment microservice is slow this morning.</p>
+<p><strong>Bad</strong> — a call with no time limit:</p>
+<pre><code>const pay = await fetch(`${PAYMENTS}/payments?claimId=${id}`);   // waits for ever</code></pre>
+<p>Every claim page waits for the payment call, Express runs out of connections, and the whole site hangs because one microservice is slow.</p>
+<p><strong>Good</strong> — all calls go through one shared HTTP client module with time limits and a circuit breaker:</p>
+<pre><code>const client = httpClient({
+  timeouts: { read: 2000, change: 5000 },   // ms
+  circuitBreaker: { failures: 5, openFor: 30000 },
+});</code></pre>
+<p>Microservices keep a request, with their own retries, under 4 seconds, so they give up first. After several failures the breaker stops calling that microservice for a short time and fails at once.</p>
+<h3>31. Show the page with the data that loaded; show an error page only when essential data failed</h3>
+<p>The payment microservice is down, and a caseworker opens a claim.</p>
+<p><strong>Bad</strong> — any failed call fails the page:</p>
+<pre><code>const [claim, notes, pay] = await Promise.all([...]);   // one rejection throws
+res.render('claim', { claim, notes, pay });              // never reached</code></pre>
+<p>The caseworker sees a blank error page and cannot work on the claim, because a panel they did not need failed.</p>
+<p><strong>Good</strong> — decide which data is essential for the page, and show the rest with a message:</p>
+<pre><code>const [claim, notes, pay] = await Promise.allSettled([...]);
+if (claim.status === 'rejected') return errorPage(res, claim.reason);   // essential
+res.render('claim', {
+  claim: claim.value,
+  notes: notes.status === 'fulfilled' ? notes.value : null,
+  payments: pay.status === 'fulfilled' ? pay.value : { unavailable: true },  // "Payment details are not available right now"
+});</code></pre>
+<p>One error handler turns status and <code>code</code> into what the user sees (rule 26).</p>
+<h3>32. Keep answers in the Express session until the save button, then save once and redirect</h3>
+<p>You are building the five question pages of <strong>Create claim</strong>.</p>
+<p><strong>Bad</strong> — each page saves a draft to the microservice, and the final page renders the result directly:</p>
+<pre><code>app.post('/create-claim/claim-type', async (req, res) =&gt; {
+  await claims.put(`/claims/${req.session.draftId}/claim-type`, req.body);   // a draft claim per page
+  res.render('next-question');
+});</code></pre>
+<p>The microservice fills with half-finished claims; the user presses F5 on the last page and the form posts again.</p>
+<p><strong>Good</strong> — answers stay in the server-side session; the save button sends one request; then redirect:</p>
+<pre><code>app.post('/create-claim/claim-type', (req, res) =&gt; {
+  req.session.claim = { ...req.session.claim, claimType: req.body.claimType };
+  res.redirect(303, '/create-claim/first-note');
+});
+
+app.post('/create-claim/check-answers', async (req, res) =&gt; {
+  const { claimId } = await claims.post('/claims', req.session.claim,
+                                        { headers: { 'Idempotency-Key': req.body.idempotencyKey } });
+  delete req.session.claim;
+  res.redirect(303, `/claims/${claimId}/created`);  // confirmation page shows the reference
+});</code></pre>
+<p>Pages work without JavaScript: every form posts to Express, and the Change links on the Check answers page edit the session. Field errors: rule 35. A <code>409</code>: rule 38. Save and come back later: rule 37.</p>
+<p>Why: a redirect after the save means a refresh cannot submit the form twice.</p>
+<h3>33. Cache lookup lists only; never cache business records</h3>
+<p>Express calls <code>GET /reference-data/CLAIM_TYPE</code> on every page, and someone wants to speed up <code>GET /claims/9f1c</code> the same way.</p>
+<p><strong>Bad</strong> — a cache in front of a business record:</p>
+<pre><code>const claim = await cache.get(`/claims/${id}`, { ttl: 60 });   // 60-second cache</code></pre>
+<p>Another caseworker closes the claim; this user sees it as open for a minute, submits a change with version 7, and gets a <code>409</code> they could not have avoided.</p>
+<p><strong>Good</strong> — keep a lookup list for as long as its <code>Cache-Control</code> header says, and read business records fresh every time:</p>
+<pre><code>const types = await cache.get('/reference-data/CLAIM_TYPE');     // honours Cache-Control: max-age=300
+const claim = await claims.get(`/claims/${id}`);                 // never cached</code></pre>
+<p>Why: users must always see the latest version of a record.</p>
+<h2>Part F. Situations you will meet</h2>
+<h3>34. Send an evidence file as multipart to the claim microservice, store the bytes in an object store, keep only a reference on the record, and stream downloads through Express</h3>
+<p>A caseworker uploads a payslip to claim <code>9f1c</code>.</p>
+<p><strong>Bad</strong> — the file goes into the record as text, and the download is a public link:</p>
+<pre><code>POST /claims/9f1c/evidence
+Content-Type: application/json
+{ "fileName": "payslip.pdf", "content": "JVBERi0xLjQKJ..." }      // 8 MB of base64
+
+200 OK
+{ "downloadUrl": "https://files.example.gov.uk/9f1c/payslip.pdf" }  // anyone with the link</code></pre>
+<p>The claim record is now 8 MB, every <code>GET /claims/9f1c</code> carries it, and a link in someone's browser history opens a claimant's payslip without a sign-in.</p>
+<p><strong>Good</strong> — multipart with a limit and the record's <code>version</code>, bytes to the object store, a reference on the record, and the download goes through Express with the user's token:</p>
+<pre><code>POST /claims/9f1c/evidence
+Content-Type: multipart/form-data; boundary=----x
+------x
+Content-Disposition: form-data; name="version"
+7
+------x
+Content-Disposition: form-data; name="file"; filename="payslip.pdf"
+Content-Type: application/pdf
+(bytes, at most 10 MB)
+
+201 Created
+Location: /claims/9f1c/evidence/e3a1
+{ "evidenceId": "e3a1", "fileName": "payslip.pdf", "size": 812331 }</code></pre>
+<pre><code>// Express: GET /claims/:id/evidence/:evidenceId/file
+app.get('/claims/:id/evidence/:evidenceId/file', async (req, res) =&gt; {
+  const upstream = await claims.stream(`/claims/${req.params.id}/evidence/${req.params.evidenceId}/file`);
+  res.set('Content-Disposition', `attachment; filename="${upstream.fileName}"`);
+  upstream.pipe(res);
+});</code></pre>
+<p>The claim microservice checks <code>claims:read</code> on the file endpoint like any other (rule 15), and the file name in the response comes from the record, never from the URL.</p>
+<p>Why: a record stays small and a file is only ever read by a signed-in user with the permission.</p>
+<h3>35. Return field errors as <code>400</code> with an <code>errors</code> list of field, code and message; keep business-rule refusals as <code>422</code></h3>
+<p>On the contact preferences page the caseworker picks EMAIL, leaves the email address blank and types letters in the phone number.</p>
+<p><strong>Bad</strong> — one message for everything:</p>
+<pre><code>400 Bad Request
+{ "error": "Validation failed: emailAddress, phoneNumber" }</code></pre>
+<p>Express cannot tell which field has which problem, so it shows one vague error at the top and the user hunts for the mistake.</p>
+<p><strong>Good</strong> — one entry per field, with a stable code Express can turn into GOV.UK text:</p>
+<pre><code>PUT /claims/9f1c/contact-preferences
+{ "version": 7, "contactMethod": "EMAIL", "phoneNumber": "abc", "emailAddress": "" }
+
+400 Bad Request
+Content-Type: application/problem+json
+{ "status": 400, "title": "Request is invalid", "code": "INVALID_REQUEST",
+  "detail": "2 fields are invalid", "traceId": "4bf92f35...",
+  "errors": [
+    { "field": "emailAddress", "code": "REQUIRED", "message": "Enter an email address" },
+    { "field": "phoneNumber", "code": "FORMAT", "message": "Enter a phone number, like 01632 960 001" }
+  ] }</code></pre>
+<pre><code>// Express: one summary at the top, and the same message next to each field
+const errorList = body.errors.map(e =&gt; ({ text: e.message, href: `#${e.field}` }));</code></pre>
+<p>Why: a field error is something the user can fix on the page; a business-rule refusal (<code>422</code>, rule 26) is not, and Express shows the two differently.</p>
+<h3>36. Run a bulk action as one request per record from Express; add a batch endpoint only when the business names the batch as one action, and then return a result per item</h3>
+<p>A team lead ticks 40 claims and presses <strong>Close selected</strong>.</p>
+<p><strong>Bad</strong> — one request, one transaction, all or nothing:</p>
+<pre><code>POST /claims/close-many
+{ "claimIds": ["9f1c", "a201", ...38 more] }
+
+422 Unprocessable Content
+{ "code": "CLAIM_HAS_OPEN_ACTIONS", "detail": "Claim a201 has 1 note that needs action" }</code></pre>
+<p>One claim with an open note stops all 40, nobody can tell which 39 were fine, and the 40 version checks are gone.</p>
+<p><strong>Good</strong> — Express sends one close per claim, with that claim's version, in small batches, and shows a result per row:</p>
+<pre><code>const results = [];
+for (const batch of chunk(selected, 5)) {
+  await Promise.all(batch.map(async ({ id, version }) =&gt; {
+    try { await claims.post(`/claims/${id}/close`, { version }); results.push({ id, ok: true }); }
+    catch (e) { results.push({ id, ok: false, code: e.body?.code }); }
+  }));
+}</code></pre>
+<p>If the business names "close the month's batch" as one action of its own, the batch becomes a record: <code>POST /claim-batches/b7/close</code> with the batch's <code>version</code> answers <code>202</code> with <code>Location: /claim-batches/b7</code> (rule 21), the microservice still closes one claim per transaction, and <code>GET /claim-batches/b7</code> returns <code>status</code> and a list of <code>{ claimId, status, code }</code>.</p>
+<p>Why: each record keeps its own rules and its own version check, and the user sees exactly which ones did not close.</p>
+<h3>37. Store a "save and return later" draft as a record of its own, with no business rules until the final create</h3>
+<p>A claimant fills in five pages of a new claim and presses <strong>Save and come back later</strong>.</p>
+<p><strong>Bad</strong> — the answers stay in the Express session:</p>
+<pre><code>req.session.newClaim = { ...req.session.newClaim, ...req.body };   // gone when the session ends</code></pre>
+<p>The session expires overnight, the claimant comes back, and every answer is lost. The Express session (rule 32) is for one sitting only.</p>
+<p><strong>Good</strong> — a draft record in the claim microservice, saved with <code>PUT</code> like any group of details, and no rule checked until the real create:</p>
+<pre><code>POST /claim-drafts
+Idempotency-Key: 7d1e...
+{ "claimantId": "c88" }
+
+201 Created
+Location: /claim-drafts/d42
+{ "draftId": "d42" }
+
+PUT /claim-drafts/d42/contact-preferences
+{ "version": 2, "contactMethod": "EMAIL", "phoneNumber": "", "emailAddress": "jane@example.com" }
+
+204 No Content
+
+POST /claims
+Idempotency-Key: 9ab0...
+{ "fromDraftId": "d42" }                       // the rules run here, once
+
+201 Created
+Location: /claims/9f1c
+{ "claimId": "9f1c" }</code></pre>
+<p>Why: a draft is allowed to be incomplete and wrong; a claim is not, and the one place that turns one into the other is where the rules live.</p>
+<h3>38. On <code>409</code>, show the user the fresh record and a way to start again; never retry with the new version</h3>
+<p>Two caseworkers edit the contact details of claim <code>9f1c</code>. The second save gets <code>409</code>.</p>
+<p><strong>Bad</strong> — Express fixes it quietly:</p>
+<pre><code>catch (e) {
+  if (e.status === 409) {
+    const fresh = await claims.get(`/claims/${id}`);
+    await claims.put(`/claims/${id}/contact-preferences`, { ...body, version: fresh.version });  // overwrites
+  }
+}</code></pre>
+<p>The first caseworker's new phone number is overwritten and nobody knows.</p>
+<p><strong>Good</strong> — a conflict page that says what happened and shows the current values:</p>
+<pre><code>catch (e) {
+  if (e.status === 409) {
+    const fresh = await claims.get(`/claims/${id}`);
+    return res.render('conflict', {
+      message: 'Someone else changed this claim while you were editing it.',
+      current: fresh, yours: body,
+      startAgain: `/claims/${id}/contact-details`,
+    });
+  }
+  throw e;
+}</code></pre>
+<p>Why: only the user can decide whose change should win, and <code>409</code> exists to ask them.</p>
+<h3>39. When a microservice calls another with no user present, use its own client-credentials token with its own permission; never a shared key or a stored user token</h3>
+<p>The payment microservice's listener for <code>ClaimClosedV1</code> needs the claim's payment schedule from <code>GET /claims/9f1c/payment-schedule</code>.</p>
+<p><strong>Bad</strong>:</p>
+<pre><code>await httpClient.get(`/claims/${claimId}/payment-schedule`, {
+  headers: { 'X-Api-Key': 'shared-secret-2019' },          // one key for every service, since 2019
+});</code></pre>
+<p>The key is in three repositories and a chat message, cannot be rotated without a coordinated release, and gives the holder every endpoint.</p>
+<p><strong>Good</strong> — the microservice signs in as itself and gets a short-lived token with only the permission it needs:</p>
+<pre><code>const token = await auth.clientCredentials({ clientId: 'payment-service', scope: 'claims:read-schedule' });
+await httpClient.get(`/claims/${claimId}/payment-schedule`, {
+  headers: { Authorization: `Bearer ${token}`, traceparent: event.traceparent },   // the trace continues from the event
+});</code></pre>
+<p>The claim microservice checks <code>claims:read-schedule</code> on that endpoint like any other permission (rule 15). A user's token is never stored for later use: it belongs to that user's request.</p>
+<p>Why: every caller is named, every call is limited to what that caller needs, and a leaked token dies on its own.</p>
+<h3>40. Receive an outside system's callback on its own endpoint: check the signature, store it with its ID, answer <code>202</code>, and raise our own event; no business logic in the handler</h3>
+<p>The document-check provider posts the result of a payslip check.</p>
+<p><strong>Bad</strong> — the callback handler does the work:</p>
+<pre><code>// POST /document-checks/callback
+public void callback(DocumentCheckCallback body) {
+    Claim claim = claims.get(body.claimReference());
+    claim.verifyEvidence(body.documentId(), body.result());   // their IDs and words, straight in
+    claims.save(claim);
+}</code></pre>
+<p>Anyone who finds the URL can verify evidence; a slow save makes the provider time out and resend, and the second call fails on the already-verified item.</p>
+<p><strong>Good</strong>:</p>
+<pre><code>// POST /document-checks/callback
+public int callback(String rawBody, String signatureHeader) {
+    signatures.require(rawBody, signatureHeader);                        // 401 if wrong
+    DocumentCheckCallback body = parse(rawBody);
+    transaction(() -&gt; {
+        if (callbacks.exists(body.callbackId())) return;                 // a resend: fine
+        callbacks.store(body.callbackId(), rawBody);                     // unique index on callbackId
+        outbox.add(new DocumentCheckedV1(body.callbackId(), body.documentId(), body.result()));
+    });
+    return 202;                                                          // the work happens from the event
+}</code></pre>
+<p>A listener on <code>DocumentCheckedV1</code> translates their document ID into our evidence ID and calls <code>claimService.verifyEvidence</code>.</p>
+<p>Why: the provider gets a fast, repeatable answer, and the business rule runs where it always runs.</p>
+<h3>41. Export a list as CSV from a <code>GET .../export</code> with the list's filters, a row limit and the personal-data permission; for large exports return <code>202</code> and a status URL</h3>
+<p>A team lead wants the open claims list as a spreadsheet.</p>
+<p><strong>Bad</strong> — Express builds the CSV from the list pages:</p>
+<pre><code>let rows = [];
+for (let page = 1; page &lt; 500; page++) rows.push(...(await claims.get(`/claims?status=OPEN&amp;page=${page}`)).items);
+res.send(toCsv(rows));          // 500 calls, every column, no limit</code></pre>
+<p>The export takes minutes, pulls every field including the National Insurance number, and times out at the gateway.</p>
+<p><strong>Good</strong> — one endpoint next to the list, same filters, streamed, limited:</p>
+<pre><code>GET /claims/export?status=OPEN&amp;sort=createdAt,desc
+Accept: text/csv
+
+200 OK
+Content-Type: text/csv
+Content-Disposition: attachment; filename="claims-open-2026-10-31.csv"
+claimId,status,claimType,createdAt
+9f1c,OPEN,STANDARD,2026-10-01T09:15:00Z
+...                                       (at most 10,000 rows; 422 EXPORT_TOO_LARGE above that)</code></pre>
+<p>Columns with personal data appear only when the token has <code>claims:export-personal</code>. An export the user cannot wait for answers <code>202</code> with a status URL (rule 21), and the file arrives at a download link later.</p>
+<p>Why: an export is a read with the same rules as the list it comes from, plus a size the server can promise.</p>
+<h3>42. Show another microservice's data by reading it from that microservice in Express; store a copy only when a rule needs it</h3>
+<p>The claim page shows the claimant's name, which the eligibility microservice owns.</p>
+<p><strong>Bad</strong> — the claim microservice keeps a copy for display:</p>
+<pre><code>GET /claims/9f1c
+{ "claimId": "9f1c", "claimantName": "Jane Doe", ... }   // copied when the claim was created</code></pre>
+<p>The claimant changes their name in eligibility; the claim page shows the old one for years, and two teams argue about which is right.</p>
+<p><strong>Good</strong> — Express reads the claim, then the claimant from its owner, and composes; the name is not essential, so the page still shows without it (rule 31):</p>
+<pre><code>const claim = await claims.get(`/claims/${id}`);                                   // essential
+const claimant = await eligibility.get(`/claimants/${claim.claimantId}`).catch(() =&gt; null);
+res.render('claim', { claim, claimantName: claimant?.fullName ?? 'Name not available' });</code></pre>
+<p>The claim microservice stores the eligibility *decision* (its rules need it) and the claimant *ID*, nothing else about the claimant.</p>
+<p>Why: one owner per fact means one place to correct it.</p>
+<h3>43. Remove a record created by mistake with a <code>cancel</code> action and a reason; keep the record, hide it from lists by default, and still return it on <code>GET</code></h3>
+<p>A caseworker created claim <code>9f1c</code> for the wrong claimant.</p>
+<p><strong>Bad</strong>:</p>
+<pre><code>DELETE /claims/9f1c
+
+204 No Content</code></pre>
+<p>The audit trail now points at a claim that does not exist, the <code>ClaimOpenedV1</code> event the payment microservice received has no matching close, and nobody can answer "why was this created?".</p>
+<p><strong>Good</strong>:</p>
+<pre><code>POST /claims/9f1c/cancel
+{ "version": 3, "reason": "WRONG_CLAIMANT", "note": "Created against the wrong record" }
+
+204 No Content
+
+GET /claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20     // cancelled claims are not in the default list
+GET /claims?status=CANCELLED&amp;sort=createdAt,desc&amp;page=0&amp;size=20 // but can be listed
+GET /claims/9f1c                                                // and still read
+{ "claimId": "9f1c", "version": 4, "status": "CANCELLED", "cancelledOn": "2026-10-31", "cancellationReason": "WRONG_CLAIMANT" }</code></pre>
+<p>Why: business records are history; <code>cancel</code> records the mistake, <code>DELETE</code> erases it (rule 22).</p>
+<h3>44. When a system the save depends on is down, answer <code>503</code> with <code>Retry-After</code>; Express says "try again later" and does not retry the change</h3>
+<p>Creating a claim needs the eligibility microservice, and it is down.</p>
+<p><strong>Bad</strong> — the microservice hides it:</p>
+<pre><code>POST /claims
+Idempotency-Key: 7d3e...
+{ "claimantId": "c88", "claimType": "STANDARD" }
+
+500 Internal Server Error
+{ "error": "Connection refused" }</code></pre>
+<p>Express shows a generic error page, the caseworker presses the button again three times, and the circuit to eligibility never gets a chance to recover.</p>
+<p><strong>Good</strong>:</p>
+<pre><code>POST /claims
+Idempotency-Key: 7d3e...
+{ "claimantId": "c88", "claimType": "STANDARD" }
+
+503 Service Unavailable
+Retry-After: 30
+Content-Type: application/problem+json
+{ "status": 503, "title": "A service we depend on is unavailable", "code": "DEPENDENCY_UNAVAILABLE",
+  "detail": "Eligibility check is unavailable; nothing was saved", "traceId": "4bf92f35..." }</code></pre>
+<pre><code>if (e.status === 503) return res.render('try-again-later', { seconds: e.headers['retry-after'] });</code></pre>
+<p>Express never retries a change on its own (rule 6). For a read, Express shows the page with what loaded (rule 31).</p>
+<p>Why: <code>503</code> tells the user the truth, "nothing was saved, try later", and <code>500</code> tells them nothing.</p>
+<h3>45. Make <code>openapi.yaml</code> the contract: the microservice validates every response against it, and Express's client tests run against its examples</h3>
+<p>The claim team renames <code>createdAt</code> to <code>openedAt</code> and updates <code>openapi.yaml</code>.</p>
+<p><strong>Bad</strong> — the contract is documentation nobody runs:</p>
+<pre><code># openapi.yaml, updated by hand, checked by nobody
+ClaimSummary:
+  properties:
+    openedAt: { type: string, format: date-time }</code></pre>
+<pre><code>// Express, a month later, in production
+const opened = formatDate(claim.createdAt);        // undefined → "Invalid Date" on every row</code></pre>
+<p><strong>Good</strong> — two tests, one on each side:</p>
+<pre><code>// claim microservice: every endpoint test validates the real response against openapi.yaml
+void listMatchesContract() {
+    Response r = get("/claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20");
+    contract.assertValid("GET /claims", r);        // fails the build on an unlisted or renamed field
+}</code></pre>
+<pre><code>// Express: the client is tested against the examples recorded in openapi.yaml
+test('renders a claim summary', async () =&gt; {
+  const claim = examples.get('ClaimSummary');     // { claimId: "9f1c", openedAt: "2026-10-01T09:15:00Z", ... }
+  expect(renderRow(claim)).toContain('1 October 2026');
+});</code></pre>
+<p>A rename now fails the Express build on the day the contract changes, and rule 27's three-release path becomes the fix.</p>
+<p>Why: a contract that is tested on both sides breaks a build, not a page.</p>
 <p>Sources: <a href="https://design-system.service.gov.uk/patterns/check-answers/">GOV.UK Design System: Check answers</a>, <a href="https://www.gov.uk/guidance/gds-api-technical-and-data-standards">GDS API technical and data standards</a>, <a href="https://www.gov.uk/service-manual/making-software/progressive-enhancement">GOV.UK Service Manual: progressive enhancement</a>.</p>
 </article>
 <script>

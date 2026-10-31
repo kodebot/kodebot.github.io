@@ -6,7 +6,7 @@ This guide says how we design the inside of a microservice. We use a light form 
 
 The guide has two aims. Every business rule lives in exactly one place. A design mistake can be fixed inside one feature of one microservice, without changing the others.
 
-Our stack is Spring Boot with Spring Data MongoDB on Amazon DocumentDB. The examples use it, and under each one a line in italics names the Spring feature doing the work, so you know what to look up. No other library appears. Every rule has the same shape: the situation you are in, the code most people write first, what goes wrong with it, the code we want, and why. Read the walkthrough and the rules in order once. After that, use the headings as a checklist.
+Our stack is Spring Boot 4 (Spring Framework 7, Spring Data MongoDB 5, Spring Security 7) on Amazon DocumentDB. The examples use it, with Boot 4's property names, and under each one a line in italics names the Spring feature doing the work, so you know what to look up. No other library appears. Every rule has the same shape: the situation you are in, the code most people write first, what goes wrong with it, the code we want, and why. Read the walkthrough and the rules in order once. After that, use the headings as a checklist.
 
 **Your first two days.** Day 1, morning: the walkthrough and Parts A and B (rules 1 to 13), about two hours; then open the claim microservice and find each class of the walkthrough in it. Day 1, afternoon: the API Design Developer Guide's walkthrough and Parts A and B. Day 2: Parts C and D of both guides, then your first ticket with a senior engineer. Parts E and F are not for reading through: they are the answers for the situations you will meet, one at a time, when you meet them.
 

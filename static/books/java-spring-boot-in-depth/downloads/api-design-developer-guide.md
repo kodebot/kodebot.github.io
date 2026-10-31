@@ -570,7 +570,7 @@ class ClaimControllerTest {
 }
 ```
 
-*Spring: `@PreAuthorize` with `@EnableMethodSecurity` checks the authority before the method runs; `@WebMvcTest` and `@WithMockUser` prove it.*
+*Spring: `@PreAuthorize` with `@EnableMethodSecurity` checks the authority before the method runs; `@WebMvcTest` and `@WithMockUser` prove it. The authorities exist only because a `JwtAuthenticationConverter` bean maps the token's `permissions` claim (Pragmatic DDD Guide, "One-time setup"); by default Spring maps only `scope`, as `SCOPE_...`.*
 
 The build checks that no endpoint is missing a `@PreAuthorize`. The microservice refuses even when the call comes from our own Express app. Hiding a button the user cannot use helps the user but is not security.
 

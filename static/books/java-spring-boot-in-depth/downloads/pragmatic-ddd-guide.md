@@ -1,456 +1,1278 @@
 # Pragmatic DDD Guide
 
-Oct 28, 2026 · @kodebot
+Oct 31, 2026 · @kodebot
 
-This guide explains how we write code inside our Spring Boot microservices. We use a light form of Domain-Driven Design (DDD). The guide has two aims:
+This guide says how we design the inside of a microservice. We use a light form of Domain-Driven Design (DDD). DDD means two things here. Write the code in the business's own words. Put each business rule inside the object it is about.
 
-- **Every business rule is written in exactly one place.** No code can change data without going through that rule.
-- **A design mistake can be fixed inside one part of one microservice.** Other microservices do not need to change.
+The guide has two aims. Every business rule lives in exactly one place. A design mistake can be fixed inside one feature of one microservice, without changing the others.
 
-The reference code is the `manage-claim-service` repository. If this guide does not answer your question, copy what the reference code does.
+The guide is about design, not about any framework or library. The code examples are plain Java and stand on their own. Every rule has the same shape: the situation you are in, the code most people write first, what goes wrong with it, the code we want, and why. Read the walkthrough and the rules in order once. After that, use the headings as a checklist.
 
-**Technology:** Java 21, Spring Boot 4, Spring Data MongoDB and Amazon DocumentDB. DocumentDB is a database that accepts MongoDB commands, but it behaves differently from MongoDB (see section 6). We also use our shared `service-platform` library, and Amazon SNS and SQS to send and receive events.
-
-### Terms used throughout
+## Terms
 
 | Term | Meaning |
 | --- | --- |
-| Microservice | An application that is deployed on its own and has its own database. Example: `manage-claim-service` |
-| Feature | One business area inside a microservice. Each feature has its own folder. Example: `claim/` or `note/` |
-| Business action | One change that the user asks for with one button. Examples: "close claim", "change address". Each business action is one application service method |
-| Platform library | Our shared `service-platform` library. Every microservice uses it. It provides `AggregateRoot`, `Guard`, `ResilientCalls`, the outbox and the inbox |
-| Design group | The lead engineer, two or three senior engineers and the business experts. They approve the design decisions in section 4 |
-| Design note | A one-page description of a feature. The design group approves it before coding starts. The template is in section 4.4 |
-| Migration | A Java class that changes the database. For example, it creates an index, loads lookup data or fixes data. Each migration runs once, automatically, when the microservice starts |
+| Microservice | An application deployed on its own, with its own database |
+| Feature | One business area inside a microservice, in its own folder. Example: claims, notes |
+| Business action | One change the user asks for with one button, such as "close claim" |
+| Entity | A business object with its own ID. Its details change; its identity does not. Example: `Claim` |
+| Value object | A value with no ID, defined by its contents, never changed after it is created. Example: `Money` |
+| Aggregate | A group of objects always loaded and saved together, as one unit. The top object is the aggregate root. Example: a `Claim` with its `EvidenceItem`s |
+| Repository | The one class that loads and saves one kind of aggregate. Example: `ClaimRepository` |
+| Application service | A class with one method per business action. Each method runs that action's steps: load, check the version, get facts, call the entity, save, audit. Example: `ClaimService` with `open`, `addEvidence`, `close`. A class per action (`CloseClaim` with one method) is also fine; pick one shape per microservice |
+| Domain service | A rare class for a calculation that belongs to no single entity. Example: `EntitlementCalculator` |
+| Adapter | The one class that talks to another microservice or system. Example: `EligibilityClient` |
+| Domain event | A record that something happened inside our microservice, named in the past tense. Example: `ClaimClosed` |
+| Integration event | A versioned event that other microservices receive. Example: `ClaimClosedV1` |
+| Audit record | A line kept for ever after every change: who changed which record, how, and when. Written by the application service as its last step, never by the entity |
+| Design group | The lead engineer, two or three senior engineers and the business experts |
+| Design note | A one-page description of a feature that the design group approves before coding starts |
 
-Other terms are explained where they first appear. They are also listed in the glossary (section 11).
+## The example
 
-## 1. The example used in this guide
+A **caseworker** records a **claim** for a **claimant**, adds **evidence** (documents such as payslips) and marks each item verified. The caseworker writes **notes**; a note can be marked "needs action". At the end, the caseworker closes the claim. The **eligibility** microservice says whether a person may claim. The **payment** microservice pays claimants and tells us when it has paid.
 
-A **caseworker** records a **claim** for a person. This person is the **claimant**. The caseworker adds **evidence** to the claim. Evidence is a document, such as a payslip. Later, the caseworker marks each evidence item as verified.
+The business rules: a claim is created only if the claimant is eligible and the claim type is active. A claim has at most 10 evidence items, each verified once. A claim is closed only when all evidence is verified and no note needs action. A closed claim cannot be changed. A payment replaces the claim's last payment only if its payment date is later.
 
-The caseworker also writes **notes** about the claim. A note can be marked "needs action", for example "call back on Monday". It stays like this until someone marks the action as done. At the end, the caseworker closes the claim.
+A claim and its evidence are one aggregate. Each note is its own aggregate that holds the claim's ID. Rule 7 explains why.
 
-Two microservices from other teams are involved:
+## Closing a claim, end to end
 
-- The **eligibility** microservice says whether a person may claim.
-- The **payment** microservice pays claimants. It tells us when it has paid.
+This is the whole path of one business action. Every rule in the guide points back at one of these five classes.
 
-**The business rules:**
-
-1. A claim can be created only if the eligibility microservice says the claimant is eligible. The claim type must also be active (Standard or Urgent).
-2. A claim has at most 10 evidence items. Each item can be verified only once.
-3. A claim can be closed only when all its evidence is verified and no note on it still needs action.
-4. A closed claim cannot be changed.
-5. Messages can arrive late or twice. So the claim's last payment is replaced only by a payment with a later payment date.
-6. Entitlement is the amount owed for a period. Entitlement = weekly rate for the claim type × days the claim was open in the period ÷ 7. Count both the first day and the last day. Count days as dates in UK time. Round half-even to the penny. Example: the rate is £100 a week. The claim opened on 15 January. The period is 1–31 January. The claim was open for 17 days. So £100 × 17 ÷ 7 = £242.86.
-
-**How this is stored:** each claim is one document in the `claims` collection. Its evidence items are stored inside that document. Each note is a separate document in the `notes` collection. A note holds the ID of its claim. Section 4.3 explains why evidence is inside the claim but notes are not.
-
-## 2. The building blocks
-
-DDD means two things. Write code in the business's own words. Put each business rule inside the object it is about. Compare two ways to close a claim:
+The controller receives the request and checks the permission. It does nothing else.
 
 ```java
-// Without DDD: the rule sits in a service class, and any code can change the status
-if (claim.getEvidence().stream().anyMatch(e -> !e.isVerified())) {
-    throw new RuntimeException("Unverified evidence");
+// POST /claims/{id}/close
+public void close(ClaimId id, CloseRequest body, User user) {
+    permissions.require(user, CLOSE_CLAIM);
+    claimService.close(id, body.version());
+    // reply 204, no body
 }
-claim.setStatus("CLOSED");
-
-// With DDD: there is one way to close a claim, and it checks every rule itself
-claim.close(notesNeedingAction, clock);
 ```
 
-In the first version, other code that closes a claim must remember to copy the check. A nightly job is one example. In the second version, other code cannot skip the check.
+The application service runs the steps. It holds no business rule.
 
-**Use the business's words** for classes, methods and exceptions. Use `close`, `verifyEvidence` and `ClaimHasOpenActionsException`. Do not use `updateStatus` or `ValidationException`.
+```java
+public class ClaimService {
+    public void close(ClaimId id, long expectedVersion) {
+        Claim claim = claims.get(id);                        // 1. load, or "not found"
+        claim.requireVersion(expectedVersion);               // 2. the version the user saw
+        int open = notes.countNeedingAction(id);             // 3. a fact the claim does not hold
+        claim.close(open, clock.today());                    // 4. the entity decides
+        claims.save(claim);                                  // 5. save; events go out with it
+        audit.record("claim closed", id);                    // 6. audit
+    }
+}
+```
 
-These are the building blocks. Do not use any other building block without design group approval.
+The entity decides. All the rules for closing are in this one method.
 
-| Building block | What it is | How we write it | Example |
+```java
+public class Claim {
+    private final ClaimId id;
+    private ClaimStatus status;
+    private final List<EvidenceItem> evidence = new ArrayList<>();
+    private LocalDate closedOn;
+    private long version;
+    private final List<DomainEvent> events = new ArrayList<>();
+
+    public void close(int notesNeedingAction, LocalDate today) {
+        if (status == CLOSED) throw new ClaimAlreadyClosed(id);
+        if (evidence.stream().anyMatch(e -> !e.isVerified())) throw new EvidenceNotVerified(id);
+        if (notesNeedingAction > 0) throw new ClaimHasOpenActions(id);
+        status = CLOSED;
+        closedOn = today;
+        events.add(new ClaimClosed(id, today));
+    }
+}
+```
+
+The repository saves the whole aggregate and its events in one transaction. The events are stored in an outbox table; a background sender publishes them after the commit.
+
+```java
+public class ClaimRepository {
+    // one transaction
+    public void save(Claim claim) {
+        int rows = db.save(claim);                           // writes version + 1 WHERE version = the loaded one
+        if (rows == 0) throw new ClaimChangedSinceYouLoadedIt(claim.id());   // two saves raced; the second loses
+        outbox.add(claim.pullEvents());                      // same transaction; pullEvents() also empties the list
+    }
+}
+```
+
+The event tells other microservices what happened. The outbox sender turns the domain event `ClaimClosed` into the published `ClaimClosedV1`. It carries IDs, not personal data.
+
+```java
+public record ClaimClosedV1(String eventId, String claimId, LocalDate closedOn) {}
+```
+
+## Part A. Where a rule lives
+
+### 1. Put a business rule in the entity method that makes the change, not in a service
+
+You are adding "close claim". The rule: a claim closes only when every evidence item is verified and no note needs action.
+
+**Bad** — the rule sits in the service:
+
+```java
+public class ClaimService {
+    public void close(ClaimId id) {
+        Claim claim = claims.get(id);
+        if (claim.getStatus() == CLOSED) throw new IllegalStateException();
+        if (!claim.getEvidence().stream().allMatch(EvidenceItem::isVerified)) throw new IllegalStateException();
+        if (notes.countNeedingAction(id) > 0) throw new IllegalStateException();
+        claim.setStatus(CLOSED);
+        claims.save(claim);
+    }
+}
+```
+
+Next month someone adds "close claims from the nightly job" and copies these three `if`s. Then one copy changes and the other does not.
+
+**Good** — the rule sits in `Claim.close`. The service fetches the one fact the claim does not hold (the note count) and passes it in:
+
+```java
+public class Claim {
+    public void close(int notesNeedingAction, LocalDate today) {
+        if (status == CLOSED) throw new ClaimAlreadyClosed(id);
+        if (evidence.stream().anyMatch(e -> !e.isVerified())) throw new EvidenceNotVerified(id);
+        if (notesNeedingAction > 0) throw new ClaimHasOpenActions(id);
+        status = CLOSED;
+        closedOn = today;
+        events.add(new ClaimClosed(id, today));
+    }
+}
+
+public class ClaimService {
+    public void close(ClaimId id, long expectedVersion) {
+        Claim claim = claims.get(id);
+        claim.requireVersion(expectedVersion);
+        int open = notes.countNeedingAction(id);
+        claim.close(open, clock.today());
+        claims.save(claim);
+        audit.record("claim closed", id);
+    }
+}
+```
+
+Nobody can call `close` without supplying the note count, so the check cannot be forgotten. The nightly job calls the same `Claim.close`.
+
+### 2. Change an entity's fields only through its own methods; no setters
+
+You need to mark an evidence item verified.
+
+**Bad** — a setter:
+
+```java
+item.setVerified(true);
+item.setVerifiedOn(today);
+```
+
+Nothing checks that the item was not verified already, and no `EvidenceVerified` event is recorded. Any class anywhere can do this.
+
+**Good** — a method with the business name, on the entity:
+
+```java
+public class Claim {
+    public void verifyEvidence(EvidenceId evidenceId, LocalDate today) {
+        if (status == CLOSED) throw new ClaimAlreadyClosed(id);
+        EvidenceItem item = find(evidenceId);
+        item.markVerified(today);                            // refuses a second time
+        events.add(new EvidenceVerified(id, evidenceId));
+    }
+}
+```
+
+All fields are private, and a build check fails on any public setter in an entity. A method checks the rules and records the event; a setter skips both.
+
+### 3. A service method only runs the steps: load, check the version, get facts, call the entity, save, audit
+
+You are writing `ClaimService.addEvidence`.
+
+**Bad** — the service makes decisions:
+
+```java
+public void addEvidence(ClaimId id, EvidenceRequest request) {
+    Claim claim = claims.get(id);
+    if (claim.getEvidence().size() >= 10) throw new TooMuchEvidence(id);
+    if (request.fileName() == null) throw new IllegalArgumentException();
+    claim.getEvidence().add(new EvidenceItem(request.fileName()));
+    claims.save(claim);
+}
+```
+
+The limit of 10 is now in the service. The next service that adds evidence (an import job, say) does not know about it.
+
+**Good** — the same six steps as `close`, and nothing else:
+
+```java
+public void addEvidence(ClaimId id, long expectedVersion, FileName fileName) {
+    Claim claim = claims.get(id);                            // 1
+    claim.requireVersion(expectedVersion);                   // 2
+                                                             // 3: no outside facts needed
+    claim.addEvidence(fileName, clock.today());              // 4: the entity checks the limit
+    claims.save(claim);                                      // 5
+    audit.record("evidence added", id);                      // 6
+}
+```
+
+A service method contains no `if` about status, amounts, dates or counts. If you want to write one, it belongs in the entity (rule 1) or in a value object (rule 6). The database transaction covers steps 1 to 6; anything that calls another microservice happens before it opens (rule 17). Take the time from one injected `clock`, so tests can set the date.
+
+### 4. Name classes, methods and errors with the business's own words
+
+The business says "close a claim" and "a claim has open actions".
+
+**Bad**:
+
+```java
+claim.updateStatus(3);
+throw new ValidationException("invalid state");
+```
+
+A caseworker reading the log cannot tell what happened, and a developer must look up what 3 means.
+
+**Good**:
+
+```java
+claim.close(openActions, today);
+throw new ClaimHasOpenActions(id);
+```
+
+The design note, the code, the error message and the conversation with the business then use the same words. One shared error handler turns `ClaimHasOpenActions` into the HTTP answer `422` with the code `CLAIM_HAS_OPEN_ACTIONS`; the API Design Developer Guide, rule 26, shows it. The entity never knows about HTTP.
+
+### 5. Put a calculation that spans several objects in a domain service, and only when it has worked examples
+
+You must calculate a claimant's weekly entitlement from the claim type, the rate table and the number of children.
+
+**Bad** — a "policy" class that holds one `if`:
+
+```java
+public class ClaimClosurePolicy {
+    public boolean canClose(Claim claim) {
+        return claim.evidenceAllVerified();
+    }
+}
+```
+
+This is a rule about closing a claim. Hidden in a helper class, it is one more place to look, and it will be bypassed.
+
+**Good** — a stateless calculation with a table of worked examples in the design note:
+
+```java
+public class EntitlementCalculator {
+    public Money weeklyEntitlement(ClaimType type, RateTable rates, int children) {
+        Money base = rates.baseFor(type);
+        return base.plus(rates.perChild().times(children));
+    }
+}
+```
+
+| Claim type | Children | Weekly entitlement |
+| --- | --- | --- |
+| Standard | 0 | £84.80 |
+| Standard | 2 | £146.20 |
+
+A domain service never loads or saves. If you cannot write a table like this, the logic is one or two `if`s and belongs in the entity (rule 1).
+
+### 6. Give every ID and every business value its own type, and check its format once, where the value is created
+
+An amount must not be negative. A file name must not be blank. A claimant ID must never be passed where a claim ID is expected.
+
+**Bad** — checks sprinkled along the way:
+
+```java
+// in the controller
+if (body.amount() < 0) return badRequest();
+// in the service
+if (amount < 0) throw new IllegalArgumentException();
+// in the entity
+if (amount < 0) throw new IllegalArgumentException();
+
+public void close(String claimId, String claimantId, BigDecimal amount) { ... }   // three bare values
+```
+
+Three copies of the check, and the import job has none. And `close(claimantId, claimId, ...)` compiles, with the two IDs swapped.
+
+**Good** — every ID and every business value is its own small type, and it refuses to exist with a bad value:
+
+```java
+public record ClaimId(String value) {
+    public ClaimId { if (!value.matches("[0-9a-f]{4,}")) throw new InvalidClaimId(value); }
+}
+
+public record Money(BigDecimal amount) {
+    public Money {
+        if (amount.signum() < 0) throw new NegativeAmount(amount);
+        if (amount.scale() > 2) throw new TooManyDecimalPlaces(amount);
+        amount = amount.setScale(2);
+    }
+}
+
+public void close(ClaimId id, int notesNeedingAction, LocalDate today) { ... }    // the compiler checks the types
+```
+
+`ClaimId`, `ClaimantId`, `NoteId`, `Money`, `NoteText`, `FileName`, `Nino`: never a bare `String` or `BigDecimal` inside the microservice. A bare string arrives only at the edges (a request body, a message, a database row) and becomes a type there. Once a `Money` exists, it is valid, everywhere, and two IDs cannot be swapped by mistake. A check that a code exists in another feature, such as a valid claim type, is not a format check: ask that feature's application service (rule 14).
+
+### Where does this code go? Stop at the first yes
+
+1. Does it decide whether the entity may change, from its current state? Entity method (rule 1).
+2. Is it a calculation across several things, with worked examples? Domain service (rule 5).
+3. Does it load, save, call another microservice, start a transaction or write audit? Application service (rule 3).
+4. Does it check the format of one value? Value object or `create` (rule 6).
+5. Does it check a code from another feature? That feature's application service (rule 14).
+
+![How the building blocks handle one request: the application service runs the steps, and the aggregate decides. A controller or a message listener calls the application service. It asks other microservices through an adapter, loads and saves through the repository, and uses a domain service for a calculation. The Claim root checks the rules and raises events. The repository saves the whole aggregate, with its outbox entry, in one transaction, and the outbox sends the events to the message broker after the commit.](https://kodebot.com/books/java-spring-boot-in-depth/downloads/fig-ddd-guide-flow.png)
+
+## Part B. Aggregates
+
+### 7. Keep a child inside the aggregate only when the parent's rules need its details, it has a maximum count, and it changes with the parent; otherwise give it its own aggregate
+
+You are deciding where evidence items and notes live.
+
+**Bad** — everything a claim has, inside the claim:
+
+```java
+public class Claim {
+    private final List<EvidenceItem> evidence = new ArrayList<>();
+    private final List<Note> notes = new ArrayList<>();          // grows for years
+    private final List<Payment> payments = new ArrayList<>();    // grows for years
+}
+```
+
+Two caseworkers add a note to the same claim at the same time. The whole claim is one record, so the second save is refused as a conflict (rule 11). After three years the claim record holds 4,000 notes and the save fails on size.
+
+**Good** — ask the four questions in the table about each child. Four times yes: inside. Any no: its own aggregate, holding the parent's ID.
+
+| Child | Rule needs details? | Maximum? | Changes with parent? | Meaningless alone? | Decision |
+| --- | --- | --- | --- | --- | --- |
+| Evidence item | Yes: closing needs every item verified | 10 | Yes | Yes | Inside the claim |
+| Note | No: closing needs only a count | None | No: two caseworkers at once | No | Own aggregate |
+| Payment | No: only the latest | None | No: the payment microservice sends them | No | Own aggregate |
+
+```java
+public class Claim {
+    private final List<EvidenceItem> evidence = new ArrayList<>();   // inside
+}
+
+public class Note {
+    private final NoteId id;
+    private final ClaimId claimId;                                   // points at the parent
+    private final NoteText text;
+    private boolean needsAction;
+    private long version;
+}
+```
+
+Inside one aggregate a rule is always true, because the whole aggregate is saved in one transaction. Between aggregates a rule is true only at the moment it is checked, which is why `close` asks for the note count at that moment. Copying the old system's tables one to one as aggregates is the most common way to get this wrong.
+
+### 8. Store another aggregate's ID, never the object itself
+
+A note belongs to a claim.
+
+**Bad**:
+
+```java
+public class Note {
+    private Claim claim;
+}
+```
+
+Loading a note now loads the claim and its evidence. Saving a note saves the claim. You have one large aggregate again, by accident.
+
+**Good**:
+
+```java
+public class Note {
+    private final ClaimId claimId;
+}
+```
+
+When the note feature needs something about the claim, it asks `ClaimService` with the ID (rule 14).
+
+### 9. Save one aggregate per transaction
+
+A nightly job must mark 10,000 claims as "review due".
+
+**Bad**:
+
+```java
+// one transaction
+public void markReviewDue(LocalDate today) {
+    for (Claim claim : claims.findReviewDue(today)) {
+        claim.markReviewDue(today);
+        claims.save(claim);
+    }
+}
+```
+
+One transaction for 10,000 records holds locks for minutes, blocks caseworkers, and if record 9,999 fails, nothing is saved.
+
+**Good** — one transaction per record, and skip records already done:
+
+```java
+public void markReviewDue(LocalDate today) {
+    for (ClaimId id : claims.findIdsReviewDue(today)) {
+        markOne(id, today);                                  // its own transaction
+    }
+}
+
+// one transaction
+void markOne(ClaimId id, LocalDate today) {
+    Claim claim = claims.get(id);
+    if (claim.isReviewDue()) return;                         // already done; safe to rerun
+    claim.markReviewDue(today);
+    claims.save(claim);
+    audit.record("review due", id);
+}
+```
+
+Saving two aggregates in one transaction needs an approved exception in the design note. Example: creating a claim together with its first note.
+
+### 10. Give every list inside an aggregate a maximum size
+
+A claim holds evidence items.
+
+**Bad**:
+
+```java
+public void addEvidence(FileName fileName, LocalDate today) {
+    evidence.add(new EvidenceItem(fileName, today));
+}
+```
+
+A stored record has a size limit. One day a claim with 600 scanned pages fails to save, in production, for one user.
+
+**Good** — the design note says "at most 10", and the entity refuses the eleventh:
+
+```java
+private static final int MAX_EVIDENCE = 10;
+
+public void addEvidence(FileName fileName, LocalDate today) {
+    if (status == CLOSED) throw new ClaimAlreadyClosed(id);
+    if (evidence.size() >= MAX_EVIDENCE) throw new TooMuchEvidence(id, MAX_EVIDENCE);
+    EvidenceItem item = EvidenceItem.create(fileName, today);
+    evidence.add(item);
+    events.add(new EvidenceAdded(id, item.id()));             // the ID, not the file name (rule 26)
+}
+```
+
+A list that cannot have a maximum is not a child; it is its own aggregate (rule 7).
+
+### 11. Refuse a save that was made from an old version of the record
+
+Two caseworkers open the same claim. One adds evidence and saves. The other, still looking at the old screen, closes the claim.
+
+**Bad** — the second save wins:
+
+```java
+Claim claim = claims.get(id);
+claim.close(open, today);
+claims.save(claim);                                          // overwrites the new evidence
+```
+
+The first caseworker's evidence is gone and nobody is told.
+
+**Good** — every change carries the version the user saw, and the entity refuses an old one:
+
+```java
+public class Claim {
+    public void requireVersion(long expected) {
+        if (version != expected) throw new ClaimChangedSinceYouLoadedIt(id, expected, version);
+    }
+}
+```
+
+The screen shows "this claim was changed by someone else; reload". `requireVersion` is step 2 of every change (rule 3) and gives the friendly error. The repository repeats the check in the database (`WHERE version = ?`, see the walkthrough), because two saves in the same millisecond can both pass the entity's check. Never remove either check or write to one field directly to get around them.
+
+### 12. Make every change safe to repeat: a repeated request must not add or count anything twice
+
+The payment microservice sends `PaymentMadeV1`. The broker delivers it twice.
+
+**Bad**:
+
+```java
+public void recordPayment(Money amount) {
+    totalPaid = totalPaid.plus(amount);                      // twice is wrong
+}
+```
+
+**Good** — the entity keeps what it already has, and ignores a repeat:
+
+```java
+public void recordPayment(PaymentId paymentId, Money amount, LocalDate paidOn) {
+    if (lastPayment != null && !paidOn.isAfter(lastPayment.paidOn())) return;   // older or same: ignore
+    lastPayment = new Payment(paymentId, amount, paidOn);
+    events.add(new PaymentRecorded(id, paymentId));
+}
+```
+
+A request is repeated after a timeout, because the caller cannot tell whether the first one landed. Three things together make a repeat harmless: the version check for changes from a screen (rule 11), an idempotency key for create requests (a repeat with the same key returns the first result), and a record of processed message IDs for messages (rule 21).
+
+### 13. Store money as an exact decimal and time in UTC, and count days in UK dates
+
+A claim closed on 1 March can be reopened within 28 days.
+
+**Bad**:
+
+```java
+double amount = 0.1 + 0.2;                                   // 0.30000000000000004
+Instant deadline = closedAt.plus(28 * 24, ChronoUnit.HOURS); // an hour out after the clocks change
+```
+
+**Good**:
+
+```java
+public record Money(BigDecimal amount) { ... }               // two decimal places, exact (rule 6)
+
+static final ZoneId UK = ZoneId.of("Europe/London");         // one constant, used everywhere
+
+Instant closedAt = clock.instant();                          // stored in UTC
+LocalDate closedOn = closedAt.atZone(UK).toLocalDate();
+LocalDate deadline = closedOn.plusDays(28);                  // a date, in UK time
+```
+
+Floating point gives penny errors. Local timestamps are an hour wrong twice a year. A rule that counts days works in dates, not hours.
+
+## Part C. Features, microservices and events
+
+### 14. Use another feature only through its application service, passing IDs and simple values
+
+The claim feature needs to know how many notes need action.
+
+**Bad** — reaching into the other feature's storage:
+
+```java
+public class ClaimService {
+    private final NoteRepository notes;                      // another feature's repository
+    ...
+    long open = notes.findByClaimId(id).stream().filter(Note::needsAction).count();
+}
+```
+
+When the notes team changes how notes are stored, the claim feature breaks. The "needs action" rule now lives in two features.
+
+**Good** — ask the other feature's application service for the answer:
+
+```java
+public class ClaimService {
+    private final NoteService notes;                         // the other feature's front door
+    ...
+    int open = notes.countNeedingAction(id);
+}
+```
+
+Pass IDs, numbers and small records, never entities or repositories. Calls go one way: claims may call notes, so notes must not call claims; notes use events for the other direction (rule 19). A build check enforces this.
+
+### 15. Check permissions in the controller, never in the service or the entity
+
+Only a caseworker with `CLOSE_CLAIM` may close a claim.
+
+**Bad**:
+
+```java
+public class Claim {
+    public void close(User user, int open, LocalDate today) {
+        if (!user.hasRole("CASEWORKER")) throw new Forbidden();
+        ...
+    }
+}
+```
+
+A message listener also closes claims (when the payment microservice says the last payment was made). There is no user there, so someone passes a fake system user, and the check means nothing.
+
+**Good** — the controller knows the user, so the controller checks:
+
+```java
+// POST /claims/{id}/close
+public void close(ClaimId id, CloseRequest body, User user) {
+    permissions.require(user, CLOSE_CLAIM);
+    claimService.close(id, body.version());
+    // reply 204, no body
+}
+```
+
+A test proves that a user without the permission gets a refusal. Application services and entities never see a user.
+
+### 16. Talk to another system only through one adapter class that translates its data into our types
+
+Creating a claim needs the eligibility microservice's answer.
+
+**Bad** — their data leaks into our entity:
+
+```java
+Map<String, Object> response = httpClient.get("/eligibility/" + nino);
+if ("ELIGIBLE".equals(response.get("status"))) { ... }       // their word, inside our code
+```
+
+When the eligibility team renames `status` to `outcome`, we hunt through our whole codebase.
+
+**Good** — one adapter class, returning our own type and our own errors:
+
+```java
+public class EligibilityClient {
+    public Eligibility check(ClaimantId claimantId) {
+        EligibilityResponse theirs = http.get("/eligibility/" + claimantId.value(), EligibilityResponse.class);
+        return switch (theirs.status()) {
+            case "ELIGIBLE" -> Eligibility.ELIGIBLE;
+            case "NOT_ELIGIBLE" -> Eligibility.NOT_ELIGIBLE;
+            default -> throw new EligibilityUnknown(claimantId);
+        };
+    }
+}
+```
+
+Nothing from the other system appears outside its adapter. Nobody reads another microservice's database.
+
+### 17. Call another microservice before you open the transaction, never inside it
+
+Creating a claim asks eligibility, then saves.
+
+**Bad**:
+
+```java
+// one transaction
+public ClaimId open(ClaimantId claimantId, ClaimType type) {
+    Eligibility eligibility = eligibilityClient.check(claimantId);   // a network call, inside the transaction
+    Claim claim = Claim.open(claimantId, type, eligibility, clock.today());
+    claims.save(claim);
+    return claim.id();
+}
+```
+
+Eligibility takes four seconds today. For four seconds the transaction holds its locks, other caseworkers wait, and the database's transaction time limit is close.
+
+**Good** — the call first, then the transaction:
+
+```java
+public ClaimId open(ClaimantId claimantId, ClaimType type) {
+    Eligibility eligibility = eligibilityClient.check(claimantId);   // outside
+    return saveNew(claimantId, type, eligibility);
+}
+
+// one transaction
+ClaimId saveNew(ClaimantId claimantId, ClaimType type, Eligibility eligibility) {
+    Claim claim = Claim.open(claimantId, type, eligibility, clock.today());
+    claims.save(claim);
+    audit.record("claim opened", claim.id());
+    return claim.id();
+}
+```
+
+Get every outside fact first (step 3 in rule 3), then open the transaction and save.
+
+### 18. Retry a read; never retry a change
+
+The eligibility check timed out.
+
+**Bad** — retry everything the same way:
+
+```java
+retry(3, () -> addressClient.changeAddress(claimantId, newAddress));
+```
+
+The first call reached the other system and changed the address; only the reply was lost. The retry changes it again, and the audit trail there now shows two changes we cannot undo.
+
+**Good** — reads may retry; a change is sent once:
+
+```java
+Eligibility eligibility = retry(3, () -> eligibilityClient.check(claimantId));   // a read: safe
+
+try {
+    addressClient.changeAddress(claimantId, newAddress);                          // a change: once
+} catch (Unreachable e) {
+    throw new AddressNotChanged(claimantId);              // nothing happened; tell the user
+} catch (TimedOut e) {
+    throw new AddressChangeUnknown(claimantId);           // maybe it happened; the user checks first
+}
+```
+
+Stop calling a system that keeps failing, for a short time (a circuit breaker). A business action that sends a change to another system makes exactly one call and saves nothing else of its own.
+
+### 19. Save an event in the same transaction as the change it reports, and send it afterwards
+
+Closing a claim must tell the payment microservice.
+
+**Bad** — publish from the service:
+
+```java
+claims.save(claim);
+broker.publish(new ClaimClosedV1(id));                   // the broker is down: saved, never sent
+```
+
+Or the other way round: published first, then the save fails. Payments stop for a claim that is still open.
+
+**Good** — the entity records the event; the repository stores it in the same transaction (an outbox); a background sender publishes it:
+
+```java
+// in Claim.close
+events.add(new ClaimClosed(id, today));
+
+// in ClaimRepository.save, one transaction (see the walkthrough)
+db.save(claim);
+outbox.add(claim.pullEvents());
+
+// a background sender, every second
+for (OutboxEntry entry : outbox.unsent()) {
+    broker.publish(entry.toIntegrationEvent());          // ClaimClosedV1
+    outbox.markSent(entry);                              // retried next time if the broker is down
+}
+```
+
+A saved change always sends its event, and an unsaved change never does. Nobody publishes any other way.
+
+### 20. Only add fields to a published event; to remove or rename one, publish a new version
+
+The payment team reads `ClaimClosedV1.closedOn`. You want to call it `closureDate`.
+
+**Bad**:
+
+```java
+public record ClaimClosedV1(String eventId, String claimId, LocalDate closureDate) {}   // renamed in place
+```
+
+The payment microservice's listener reads `closedOn`, gets null, and stops payments on the wrong date.
+
+**Good** — add freely; for a rename, add a version and send both until every receiver has moved:
+
+```java
+public record ClaimClosedV1(String eventId, String claimId, LocalDate closedOn, String closedByUserId) {}   // a new field: fine
+public record ClaimClosedV2(String eventId, String claimId, LocalDate closureDate, String closedByUserId) {} // sent beside V1
+```
+
+Every integration event has a written schema. Tell the receiving teams before the release. A domain event, used only inside our microservice, can change at any time.
+
+### 21. Write every message listener so a message that arrives late, twice or out of order does no harm
+
+The payment microservice sends `PaymentMadeV1`. The broker may deliver it twice, or deliver March's payment after April's.
+
+**Bad**:
+
+```java
+// called by the broker for each PaymentMadeV1
+public void on(PaymentMadeV1 event) {
+    Claim claim = claims.get(event.claimId());
+    claim.setLastPayment(event.amount(), event.paidOn());    // the last one to arrive wins
+    claims.save(claim);
+}
+```
+
+**Good** — an inbox skips repeats, and the entity ignores anything older than what it holds:
+
+```java
+// called by the broker for each PaymentMadeV1
+// one transaction
+public void on(PaymentMadeV1 event) {
+    if (inbox.alreadyProcessed(event.eventId())) return;    // seen it: skip
+    claimService.recordPayment(                              // translate their strings into our types
+        new ClaimId(event.claimId()), new PaymentId(event.paymentId()),
+        new Money(event.amount()), event.paidOn());
+    inbox.record(event.eventId());                           // same transaction as the change
+}
+
+// in Claim.recordPayment (rule 12)
+if (lastPayment != null && !paidOn.isAfter(lastPayment.paidOn())) return;
+```
+
+The listener only translates the message and calls an application service. A message that fails repeatedly goes to a dead-letter queue, where someone finds the cause before it is re-sent. No message broker delivers exactly once and in order.
+
+### 22. Change several microservices as a chain of steps joined by events, with a named step for failure
+
+Closing a claim must also stop its payments, which live in the payment microservice.
+
+**Bad** — one transaction across two microservices:
+
+```java
+// one transaction
+public void close(ClaimId id, long version) {
+    ...
+    claims.save(claim);
+    paymentClient.stopPayments(id);                          // another microservice, inside our transaction
+}
+```
+
+A transaction cannot cover two databases. If `stopPayments` succeeds and our commit fails, payments are stopped for an open claim.
+
+**Good** — each step changes one microservice and sends an event that starts the next:
+
+```
+1. Claim microservice:   Claim.close  → saves → sends ClaimClosedV1
+2. Payment microservice: on ClaimClosedV1 → stops payments → sends PaymentsStoppedV1
+3. Claim microservice:   on PaymentsStoppedV1 → Claim.markPaymentsStopped
+   If step 2 fails for good: payment microservice sends PaymentsStopFailedV1,
+   and we create a task for a caseworker.
+```
+
+A failed step cannot be rolled back, so the design names what happens instead, and that is a new business action. Each such process needs design group approval and an architecture decision record (ADR). Do not use events to keep a rule true across two aggregates; that is a sign the two should be one (rule 7).
+
+## Part D. Process
+
+### 23. Get the design note approved before you code a feature with business rules
+
+You are about to build the notes feature.
+
+**Bad**: start coding, and discover in review that notes should have been inside the claim, or the other way round. Moving children across an aggregate boundary means a data migration.
+
+**Good**: a one-page design note, approved by the design group first:
+
+```
+Purpose:     caseworkers record notes against a claim; a note can need action
+Aggregates:  Note (own aggregate, holds claimId); no maximum
+States:      OPEN -> ACTIONED (markActioned)
+Rules:       a claim cannot close while any note needs action
+             enforced in Claim.close, with the count passed in
+             example: claim C-1 has 2 notes needing action -> close refused
+Events:      NoteNeedsActionV1, NoteActionedV1; used by the claim feature
+Talks to:    nothing outside the microservice
+Exceptions:  none
+Open questions: can a closed claim get a note?
+```
+
+The design group decides what each aggregate contains, the rules with worked examples, and any transaction that saves two aggregates. Engineers decide endpoints, classes and tests. Which microservices exist is an ADR. A wrong aggregate boundary is the most expensive mistake to fix later.
+
+### 24. Mark a feature Simple (data with no rules) or Rich (states and rules) in its design note
+
+You are adding a list of claim types that the business maintains.
+
+**Bad**: a `ClaimType` aggregate with version checks, events and an outbox, for a list of 12 codes that changes twice a year.
+
+**Good**: mark it **Simple** in the design note. A Simple feature is data with no business rules: lookup lists, user preferences. Its entity has fields and getters, and checks may sit in the application service.
+
+```java
+public record ClaimType(String code, String label, boolean active) {}
+```
+
+Claims, payments and awards are **Rich**: states and rules. Everything in this guide applies to them. The moment a Simple feature gains a rule ("a claim type cannot be deactivated while claims use it"), it becomes Rich and gets an entity method for that rule.
+
+### 25. Fix a mistake with a safe step today and the proper fix by a date
+
+You find that `ClaimService` holds an `if` on status that should be in `Claim`.
+
+Do the safe step now. Tell the design group the same day. Create a ticket with a date. Then do the proper fix and add a test, so the same mistake fails the build next time. Rules 14 and 20 are what make this possible: a feature can change inside without the others noticing.
+
+| You find | Today | Proper fix | Never |
 | --- | --- | --- | --- |
-| **Entity** | A business object with its own ID. It keeps the same identity when its details change | A class with a `String` UUID as its ID. It has private fields and no setters. Its fields change only inside its own business methods | `Claim`, `Note` |
-| **Value object** | A value with no ID. Its contents define it. Two `Money` objects of £100.00 are equal. (`Money` always keeps two decimal places, so £100.0 is stored as £100.00) | A Java `record`. It cannot change after it is created. Its constructor checks its values. Use a value object only when a value has rules (money cannot be negative), or when several fields belong together (name and date of birth) | `Money`, `ClaimantDetails` |
-| **Invariant** | A business rule that must be true at all times, not only when someone checks it | Write it in the design note with an example. Enforce it in an entity method | "A claim has at most 10 evidence items" |
-| **Aggregate** and **aggregate root** | A group of objects that are always loaded and saved together, as one document. The root is the top object. All changes go through the root | The root extends `AggregateRoot` from the platform library and has `@Document`. Code outside the aggregate never changes the inner objects directly | `Claim` (root) with its `EvidenceItem`s |
-| **Factory method** | The only way to create a new entity. It makes sure the entity is valid from the start | A `static create(...)` method on the entity. It checks the rules for creating the entity | `Claim.create(type, claimant, eligibility, clock)` |
-| **Repository** | The interface that loads and saves whole aggregates | One Spring Data interface for each aggregate root. Only its own feature uses it | `ClaimRepository` |
-| **Domain event** | A record that something happened. Its name is in the past tense | The root's method creates it with `raise(new ClaimClosed(...))`. When the root is saved, the feature's event mapper can turn it into an integration event for other microservices (section 7) | `ClaimClosed` |
-| **Domain exception** | An error that names the business rule that was broken | It extends one of three platform classes. The class sets the HTTP status: `NotFoundException` (404), `BusinessRuleViolationException` (422) or `InvalidValueException` (400) | `ClaimClosedException` |
-| **Domain service** | A business calculation that needs several objects and does not belong to any one of them. It is rare | A plain class that stores no data. It takes its inputs and returns a result. It does not load or save anything | `EntitlementCalculator` |
-| **Application service** | The class that runs each use case, step by step | One for each feature. It loads data, calls the entity, saves, and writes the audit record. It contains no business rules and no permission checks | `ClaimService` |
-| **Client adapter** | The only class that talks to another microservice or another system. It translates their data into our types, and their errors into our exceptions. (DDD calls this an anti-corruption layer) | It lives in `client/`. It returns our own types | `EligibilityClient` |
+| Two aggregates share a rule that must always be true | Save both in one transaction; add the exception to the design note | Merge them; a migration moves the children inside the parent | Keep the rule true with events |
+| An aggregate gives frequent conflicts or keeps growing | Keep the version check; make the screen say "reload" | Move the part that changes often into its own aggregate | Turn off the version check |
+| A rule sits in a service, controller or listener | Ticket for this sprint | Move it into the entity method; add a test | Copy the `if` elsewhere |
+| A feature uses another feature's repository | Record today's violations so only new ones fail the build | Add a method on the other feature's application service | Turn the build check off |
+| A change sent no event | Add the missing event to the entity method | A one-off job sends the missed events, agreed with receivers | Let other teams read our database |
+| Messages are in the dead-letter queue | Find the cause with the trace ID and fix it | Re-send them; the inbox skips duplicates | Delete them before you understand them |
+| Our data and another microservice's disagree | Use both audit logs to find which side is right | A job that reports differences; fix through entity methods | A job that silently overwrites one side |
+| Data was repaired by writing to the database | Find the affected records | Repair through entity methods or a reviewed migration | Repair by hand again |
 
-### Which rules are always true, and which are checked at a moment
+### 26. Keep personal data out of logs, error messages and events
 
-- **Inside one aggregate, rules are always true.** The whole document is saved in one transaction. Each document has a version number. If someone else saved the document after you loaded it, your save is refused with `409 Conflict`.
-- **Between two aggregates, a rule is true only at the moment it is checked.** For example, when a claim is closed, the application service counts the notes at that moment. It does not see a note that is added one second later. Other microservices learn about changes a little later, through events.
+A claim is refused because the National Insurance number is wrong.
 
-So, if a rule must be true at all times, everything the rule needs must be inside one aggregate. If it is enough to check the rule at one moment, separate aggregates are fine. The design note says which one applies.
-
-![How the building blocks handle one request: the application service runs the steps, and the aggregate decides. A controller or a listener calls the application service. It asks other microservices through a client adapter, loads and saves through the repository, and uses a domain service for a calculation. The Claim root checks the rules and raises events. The repository saves the whole document, with its outbox entry, to DocumentDB in one transaction, and the platform outbox sends the events to SNS after the commit.](https://kodebot.com/books/java-spring-boot-in-depth/downloads/fig-ddd-guide-flow.png)
-
-How a change flows through the code:
-
-1. A request arrives at a controller, or a message arrives at a listener.
-2. The controller or listener calls the application service.
-3. If the change needs an answer from another microservice, the application service asks for it through a client adapter. It does this first, before the transaction starts.
-4. The application service loads the aggregate through its repository.
-5. It calls a method on the aggregate root. The method checks the rules and makes the change.
-6. The application service saves the aggregate. In the same transaction, the platform stores the integration events in the outbox. The outbox is a collection that holds events until they are sent (section 7.2).
-7. After the transaction, the platform sends the events.
-
-## 3. The ten golden rules
-
-Rules 1, 3 and 4 apply to Rich features (section 4.2). All other rules apply to every feature. In the "Checked by" column, "Build" means an architecture test fails the build if the rule is broken. "Review" means the reviewer checks the rule.
-
-| # | Rule | Example | Why | Checked by |
-| --- | --- | --- | --- | --- |
-| 1 | An entity's fields change only inside its own methods. Entities have no public setters | `claim.close(...)`, never `claim.setStatus(CLOSED)` | The method checks the rules and records the event. A setter skips both | Build |
-| 2 | The aggregate root class is also the stored document. It has `@Document` and extends `AggregateRoot`. Do not write a second class for the database | `@Document("claims") class Claim extends AggregateRoot` | A second class and a mapper double the code. DocumentDB does not need them | Build |
-| 3 | A rule that decides if a change is allowed goes in the entity method that makes the change. If the rule needs information that the entity does not hold, the application service gets the information and passes it in as a method parameter | The claim does not hold its notes. So the application service counts them: `claim.close(notesNeedingAction, clock)` | All the rules for one change are in one method. The parameter is required, so nobody can forget the check | Review |
-| 4 | Application service methods contain only steps, never business decisions. Section 5.3 lists the steps | No `if (claim.status() == CLOSED)` in `ClaimService` | Rules in services get copied to several places. Then the copies become different | Review |
-| 5 | A transaction saves one aggregate. To save more than one aggregate in one transaction, you need approval in the design note | Creating a claim with its first notes is approved. Nothing else is approved | Small transactions have fewer conflicts and stay within DocumentDB's limits | Review |
-| 6 | An aggregate refers to another aggregate only by its ID, as a `String` | `Note` has `String claimId`, not a `Claim` field | If it holds the object, both are loaded and saved together. This silently makes one large aggregate | Review |
-| 7 | A feature uses another feature only by calling its application service. It passes and receives simple values (IDs, numbers, small records), never entities | `ClaimService` calls `notes.countNeedingAction(claimId)`, never `NoteRepository` | Each feature can then change how it stores its data without breaking the others | Build |
-| 8 | Feature code saves only with the repository's `save`, `saveAll` or `delete`. It never updates documents with `MongoTemplate`. Migrations are the only exception | `claims.save(claim)` | Saving through the repository sends the entity's events. A `MongoTemplate` update changes data and sends no events | Build |
-| 9 | Check permissions on the controller. Every endpoint has `@ClaimsRead` or `@ClaimsWrite`. Application services do not check permissions | `@PostMapping("/{claimId}/close") @ClaimsWrite` | The controller knows the user, because the request arrives there. Message listeners also call application services, and there is no user there | Build, plus a test that expects `403` |
-| 10 | Reach other microservices and systems only through a client adapter, or through versioned events. Wrap every call in `ResilientCalls` (section 7.4) | `EligibilityClient`, `CustomerRecordClient` | When another team changes its API, only the adapter changes | Build and review |
-
-## 4. Designing a feature
-
-### 4.1 Who decides
-
-Do not write code for a feature with business rules until its design note is approved.
-
-| Decision | Who decides | Where it is written |
-| --- | --- | --- |
-| Which microservices exist, and what each one owns | The design group, with the business | An architecture decision record (ADR) in Confluence |
-| What each aggregate contains, the business rules with examples, and any transaction that saves two aggregates | The design group | The feature's design note |
-| Endpoints, classes and tests | The engineers who build the feature | The code |
-
-### 4.2 Simple or Rich
-
-Each design note says which level the feature uses:
-
-- **Simple** is for data with no business rules, such as lookup lists or user preferences. The entity has fields and getters. Checks can go in the application service. Copy the `reference/` feature. A Simple feature can also have no entity at all, when another system stores the data (the `customer` feature).
-- **Rich** is for data with states and rules, such as claims, payments and awards. Everything in this guide applies. Copy the `claim/` feature.
-
-Core business areas are Rich. If a Simple feature gets business rules, it becomes Rich.
-
-### 4.3 Inside the aggregate, or a separate aggregate?
-
-Some objects belong to another object. For example, evidence and notes both belong to a claim. For each one, answer four questions:
-
-1. Does a rule on the parent need its full details, not only a count?
-2. Is there a fixed maximum number of them, written in the design note? (A DocumentDB document cannot be bigger than 16 MB. So a list with no maximum will fail one day.)
-3. Is it changed at the same time as the parent, by the same people?
-4. Is it meaningless without the parent?
-
-If all four answers are yes, put it **inside** the aggregate. If any answer is no, make it a **separate aggregate**. The separate aggregate stores the parent's ID.
-
-**Example:** evidence is inside the claim. Closing a claim needs all the evidence, and a claim has at most 10 items. Notes are a separate aggregate. There is no limit on notes. Closing needs only a count. Caseworkers add notes all the time. If notes were inside the claim, two caseworkers could add notes at the same time. Then one of them would get a `409` error.
-
-Do not design aggregates by copying mainframe tables. The tables were built for a different system.
-
-### 4.4 Design note template
-
-```markdown
-# Feature: <name>            Level: Rich | Simple
-Owner: <name>      Approved by: <design group member>      Date: <date>
-
-## Purpose
-One or two sentences in the business's words.
-
-## Aggregates
-| Aggregate | What is inside it | Maximum size | Collection |
-Separate aggregates and the ID they hold: ...
-
-## States
-Example: OPEN -> CLOSED (close). CLOSED is final.
-
-## Rules
-| Rule | Where it is enforced | Example with real values |
-
-## Events
-| Event | Sent to other microservices as | Who uses it |
-
-## Talks to
-| Feature or microservice | Why | How |
-
-## Approved exceptions to this guide
-## Open questions for the business
-```
-
-## 5. Building a feature
-
-Start by copying `claim/` (Rich) or `reference/` (Simple) from the reference code. Rename it. Delete what you do not need.
-
-### 5.1 Folders
-
-| Folder | What goes in it |
-| --- | --- |
-| `domain/model` | Entities (the classes with `@Document`), the objects stored inside them, and value objects |
-| `domain/service` | Domain services, if there are any. Domain services have no Spring annotations. So register each one as a bean in the feature's `...Config` class |
-| `domain/event` | Domain events |
-| `domain/exception` | Domain exceptions |
-| `application` | The application service |
-| `persistence` | The Spring Data repository |
-| `api` | The controller, the request and response classes (DTOs), and the code that turns an entity into a response |
-| `client` | Client adapters for other microservices, and their request and response classes |
-| `messaging` | The event mapper, the published event classes, and the listeners for other microservices' events. The event mapper decides which events other microservices receive |
-
-Use only the folders that the feature needs. For example, the `customer` feature has no `persistence` folder, because the central customer service stores its data.
-
-### 5.2 Where does this code go?
-
-Answer these questions in order. Stop at the first "yes".
-
-1. **Does the code decide if the entity is allowed to change, based on its current state?** Put it in that entity's method. (Format checks are question 4. Codes from another feature are question 5.) If the code needs information that the entity does not hold, add a method parameter. The application service then passes the information in.
-2. **Is it a business calculation that combines several things, belongs to no single entity, and changes nothing?** Put it in a domain service, such as `EntitlementCalculator`. Do this only if you can write a table of worked examples with real numbers. If the logic is one or two `if` statements, put it in the entity (question 1).
-3. **Does it load, save, call another microservice, start a transaction or write an audit record?** Put it in the application service.
-4. **Does it check the format of a single value?** For example: not blank, a valid date, not negative. Put it in the value object's constructor. Or use `Guard` in the entity's `create` method. `Guard` is the platform's one-line check helper.
-5. **Does it check that a code exists in another feature, such as a valid claim type?** Call that feature's application service: `referenceData.requireActive(...)`.
-
-### 5.3 The six steps of an application service method
-
-Every application service method that changes data follows these steps, in this order:
+**Bad**:
 
 ```java
-@Transactional
-public void close(String claimId, Long expectedVersion) {
-    Claim claim = claims.get(claimId);                          // 1. Load the aggregate (404 if it doesn't exist)
-    claim.requireVersion(expectedVersion);                      // 2. Check the user saw the latest version (409 if not)
-    long notesNeedingAction = notes.countNeedingAction(claimId); // 3. Fetch any information the rule needs from elsewhere
-    claim.close(notesNeedingAction, clock);                     // 4. Call the entity method; it checks the rules and changes
-    claims.save(claim);                                         // 5. Save; this also sends the entity's events
-    audit.record(AuditActions.CLAIM_CLOSED, AuditActions.CLAIM, claimId); // 6. Write the audit record
+throw new IllegalArgumentException("Invalid NINO: " + nino);     // lands in the logs
+public record ClaimOpenedV1(String claimId, String nino, String fullName) {}
+```
+
+Logs and events are copied to monitoring tools and other teams' systems, which the data protection rules for our database do not cover.
+
+**Good**:
+
+```java
+public record Nino(String value) {
+    @Override public String toString() { return "Nino(****" + value.substring(5) + ")"; }
+}
+throw new InvalidNino(claimantId);                        // the ID, not the number
+public record ClaimOpenedV1(String eventId, String claimId, String claimantId) {}
+```
+
+Value objects hide personal data when printed. Events carry IDs, not personal details. If personal data reached production logs, report it through the data protection process.
+
+## Part E. Situations you will meet
+
+### 27. When one button must save two aggregates, first ask whether they are one; then react to an event; only then save both in one approved transaction
+
+The Create claim screen ends with a Check answers page that creates the claim and its first note.
+
+**Bad** — two saves in a service method, with no decision made:
+
+```java
+public ClaimId open(ClaimantId claimantId, ClaimType type, NoteText firstNote) {
+    Claim claim = Claim.open(claimantId, type, eligibility, clock.today());
+    claims.save(claim);                                      // transaction 1
+    Note note = Note.create(claim.id(), firstNote, clock.today());
+    notes.save(note);                                        // transaction 2; the process dies here: claim, no note
+    return claim.id();
 }
 ```
 
-- If the method needs an answer from another microservice, get it **before** the transaction starts. A slow call must never keep a database transaction open. `ClaimService.create` shows how: it calls the eligibility microservice first, and then saves inside a `TransactionTemplate`.
-- Get the current time from the injected `Clock`. Never use `Instant.now()`. Then tests can set the time.
-- Some business actions only send a change to another system, such as "change address". They have no load, no save and no transaction. They make one call, and then write the audit record (section 7.4).
+Half the user's work is saved and the screen shows an error, so the user creates the claim again.
 
-### 5.4 Tests
-
-| What you wrote | Test it with | What the test proves |
-| --- | --- | --- |
-| Entity, value object, domain service | Plain JUnit, with no Spring and no mocks | Each business rule works, using the examples from the design note |
-| Application service | JUnit, with Mockito mocks for the repository and other features | The steps happen in order. Nothing is saved when a rule fails. The saved entity has the right events (read them with `pullEvents()`) |
-| Controller | `@PlatformWebMvcTest` | Status codes, validation errors, and `403` when the user has no permission |
-| Client adapter | JUnit with a local fake HTTP server | Their answers become our types and our exceptions. For a read, a `503` is retried and a `4xx` is not. For a change, nothing is retried, and a timeout gives `504` |
-| Repository, and the whole microservice | Tests named `*IT`, with a real database in Docker | Saving and loading keep every field. Saving with an old version throws `OptimisticLockingFailureException`. Queries work. The expected events and audit records are stored |
-
-### 5.5 Worked example: "a closed claim can be reopened within 28 days"
-
-1. **Design note:** add the state change `CLOSED -> OPEN (reopen)`. Add the rules with examples. For example, a claim closed on 1 March can be reopened on 29 March, but not on 30 March. Add the event `ClaimReopened`, which is sent to other microservices as `ClaimReopenedV1`. Change business rule 4 to "A closed claim cannot be changed, except by reopening it within 28 days". Count days as dates in UK time. Get the design note approved.
-2. **Domain:** create the exceptions `ClaimNotClosedException` and `ReopenWindowPassedException`. Both extend `BusinessRuleViolationException`. Create the event record `ClaimReopened`. Write the entity method:
+**Good** — three answers, in this order. First, is the second thing really a child? If yes, it goes inside (rule 7) and there is one save. Second, can the second thing follow a moment later? Then the first aggregate raises a domain event and a listener in our own microservice creates the second:
 
 ```java
-private static final ZoneId UK = ZoneId.of("Europe/London");
+// in Claim.open, when a first note was given
+events.add(new ClaimOpened(id));
+events.add(new FirstNoteRequested(id, firstNote));           // firstNote is a NoteText value object
 
-public void reopen(String reason, Clock clock) {
-    Guard.notBlank(reason, "reason");                                  // 400 if blank
-    if (status != ClaimStatus.CLOSED) throw new ClaimNotClosedException(id());
-    Instant now = clock.instant();
-    LocalDate closedOn = LocalDate.ofInstant(closedAt, UK);            // count days as UK dates
-    LocalDate today = LocalDate.ofInstant(now, UK);
-    if (today.isAfter(closedOn.plusDays(28))) throw new ReopenWindowPassedException(id());
-    status = ClaimStatus.OPEN;
-    closedAt = null;
-    raise(new ClaimReopened(id(), reason, now));
+// a listener inside the claim microservice, its own transaction
+void on(FirstNoteRequested e) {
+    if (inbox.alreadyProcessed(e.eventId())) return;
+    noteService.add(e.claimId(), e.firstNote());             // the note feature's front door (rule 14)
+    inbox.record(e.eventId());
 }
 ```
 
-3. **Domain tests:** write one test for each example in the design note. Make them pass before you do anything else.
-4. **Application service:** add `reopen(claimId, reason, expectedVersion)`. It loads the claim and checks the version with `claim.requireVersion(expectedVersion)`. Then it calls `claim.reopen(reason, clock)`, saves the claim, and records the audit action `CLAIM_REOPENED`. Add an application service test.
-5. **API:** add `POST /claims/{claimId}/reopen` with `@ClaimsWrite`. Its request class is `ReopenClaimRequest(@NotNull Long version, @NotBlank String reason)`. Test `204`, `403`, `409`, `422`, `400` and `404`. Update `contracts/openapi.yaml`.
-6. **Messaging:** add the `ClaimReopenedV1` record. Add a line in the event mapper that turns `ClaimReopened` into `ClaimReopenedV1`. Add its JSON schema and a mapper test. Do not write any code to send the event. Saving the claim sends it.
-7. **Database:** there is no new query. So you do not need a new index or migration.
-8. **Pull request:** the reviewer checks the change against the golden rules (section 3) and the DocumentDB rules (section 6).
+Third, when the user must see both at once and neither answer fits, save both in one transaction, with the exception written in the design note:
 
-## 6. DocumentDB rules
+```java
+// one transaction; approved exception "create claim with first note" in the design note
+public ClaimId open(ClaimantId claimantId, ClaimType type, NoteText firstNote) {
+    Eligibility eligibility = eligibilityClient.check(claimantId);        // before the transaction (rule 17)
+    return transaction(() -> {
+        Claim claim = Claim.open(claimantId, type, eligibility, clock.today());
+        Note note = Note.create(claim.id(), firstNote, clock.today());
+        claims.save(claim);
+        notes.save(note);
+        audit.record("claim opened with first note", claim.id());
+        return claim.id();
+    });
+}
+```
 
-Amazon DocumentDB accepts MongoDB commands, but it has its own limits. These rules come from the AWS documentation: [transactions](https://docs.aws.amazon.com/documentdb/latest/developerguide/transactions.html), [retryable writes](https://docs.aws.amazon.com/documentdb/latest/developerguide/retryable-writes.html), [differences from MongoDB](https://docs.aws.amazon.com/documentdb/latest/developerguide/functional-differences.html).
+The event answer is the normal one. The two-save answer is allowed because both aggregates are in our database; it is never allowed across microservices (rule 22).
 
-| Rule | Why |
-| --- | --- |
-| A transaction must finish well within one minute. Never call another microservice inside a transaction. Never loop over many records inside a transaction | DocumentDB cancels any transaction that runs for more than one minute. You cannot change this limit |
-| A transaction saves one aggregate, or the few aggregates that the design note approves. A job that updates many records runs one transaction for each record | One transaction cannot change more than 32 MB of data |
-| A migration creates every collection before any code uses it | DocumentDB cannot create a collection inside a transaction |
-| Inside a transaction, keep reads small. Load documents by ID, or run a count. Never read a long list | DocumentDB does not support cursors inside a transaction. A cursor is how a large, paged result is read |
-| Start transactions only with `@Transactional` or `TransactionTemplate` | The platform library sets up transactions correctly for DocumentDB |
-| Do not write your own retry loops around saves | DocumentDB versions before 8.0.2 do not support retryable writes, so the platform sets `retryWrites=false`. The database never retries a failed write. The caller retries instead: the user tries again, or SQS delivers the message again |
-| Never remove the version check, and never work around it. A save with an old version is refused with `409` | Without the check, a second user's save silently overwrites the first user's change |
-| Every change must be safe to repeat. A repeated request or message must never add a list item, a document or an amount a second time (for example, `count = count + 1`) | After a timeout or a database restart, a saved change can be reported as failed. Then it is sent again. Three things stop the repeat from having an extra effect: the version check, the `Idempotency-Key` header on create requests (the platform returns the first result for a repeated key), and the inbox for messages (section 7.3) |
-| Always read from the primary database instance (`readPreference=primary` in the connection string) | Copies on other instances can be slightly behind. You might not see a change you just made |
-| Every query that can return more than one document must sort explicitly. Every query must use an index that a migration created, or the built-in `_id` index | Without a sort, DocumentDB returns results in no fixed order. DocumentDB does not create indexes automatically |
-| Do not use `$regex` (pattern matching), `$lookup` (joining collections) or unusual aggregation operators without design group approval | DocumentDB supports them only partly. They often cannot use indexes |
-| Never edit a migration that has already run in any environment. To change something, add a new migration. Write every migration so that it is safe to run twice | If you do not, environments end up with different data |
-| Before you add an index to a large collection, test how long it takes on production-sized data. Agree the release time with the platform team | DocumentDB builds only one index per collection at a time, and building takes time |
-| Store money with the `Money` value object, which is stored as an exact decimal. Store times as `Instant`, in UTC. When a rule counts days, convert the times to UK dates (`Europe/London`) first. Give every list inside a document a maximum size | This avoids rounding errors and daylight-saving mistakes. It also keeps documents under the 16 MB limit |
+### 28. Keep a rule that spans all records of a kind true with a unique database index, and turn the index error into a business error
 
-Open question for the platform team: AWS says that DocumentDB does not support "causally consistent" sessions. The pilot must confirm that Spring transactions work with our DocumentDB version.
+The rule: a claimant has at most one open claim.
 
-## 7. Events and other microservices
+**Bad** — check, then save:
 
-### 7.1 Two kinds of event
+```java
+if (claims.hasOpenClaimFor(claimantId)) throw new ClaimantAlreadyHasOpenClaim(claimantId);
+claims.save(Claim.open(claimantId, ...));                    // two caseworkers do this at the same second
+```
 
-- A **domain event** (such as `ClaimClosed`) is used only inside our microservice. We can change it at any time.
-- An **integration event** (such as `ClaimClosedV1`) is the message that other microservices receive. It has a JSON schema in `contracts/events/`. Other teams depend on it, so we can only add fields to it. To remove or rename a field, create a new version (`ClaimClosedV2`). Send the new version together with V1 until every receiving team has moved to V2.
+Both checks pass, both saves succeed, and the claimant has two open claims.
 
-Each feature has an **event mapper**. It decides which domain events become integration events. Most domain events are never sent outside the microservice.
+**Good** — the database holds the rule; the repository translates its error:
 
-### 7.2 How we send events (the outbox)
+```sql
+CREATE UNIQUE INDEX one_open_claim_per_claimant ON claim (claimant_id) WHERE status = 'OPEN';
+```
 
-1. The entity method records a domain event with `raise(...)`.
-2. The application service saves the entity with the repository.
-3. The platform library asks the feature's event mapper which integration event to send for each domain event. Most domain events have none. The platform stores each integration event in the `event_publication` collection, **in the same transaction** as the entity. This collection is called the **outbox**.
-4. After the transaction commits, the platform sends the event to SNS. If SNS is not available, the platform tries again later.
+```java
+public void save(Claim claim) {
+    try {
+        int rows = db.save(claim);                           // as in the walkthrough
+        if (rows == 0) throw new ClaimChangedSinceYouLoadedIt(claim.id());
+        outbox.add(claim.pullEvents());
+    } catch (UniqueIndexViolation e) {
+        if (e.index().equals("one_open_claim_per_claimant")) throw new ClaimantAlreadyHasOpenClaim(claim.claimantId());
+        throw e;
+    }
+}
+```
 
-So a saved change always sends its integration events. A change that was not saved never sends them. Never send to SNS in any other way.
+An aggregate can only guarantee rules about itself. A rule about all claims is a database rule, and the index is the only check that two users cannot race past. Keep the `if` as well, for a friendly error in the common case.
 
-### 7.3 How we receive events (the inbox)
+### 29. Create an entity through a named factory method that checks the creation rules and raises the event; keep the constructor private
 
-- Each listener extends the platform's `InboxMessageHandler`. The **inbox** is a list of event IDs that were already processed. Before the listener handles a message, it checks the inbox and skips duplicates. It uses the `eventId` field inside the event, not the SQS message ID. This is because a resent event arrives as a new SQS message. The listener records the event ID in the same transaction as the change.
-- A listener only translates the message into our types and calls an application service. It contains no business rules.
-- If handling fails, SQS delivers the message again. After 5 failed attempts, the message moves to a **dead-letter queue**. Someone must investigate it there.
-- Messages can arrive late or in the wrong order. So entity methods must handle this. For example, `Claim.recordPayment` ignores a payment that is older than the one it already has.
-- Our copies of other teams' events ignore fields that we do not know. So when other teams add fields, our code does not break.
+You are writing the code that creates a claim.
 
-### 7.4 Calling another microservice or system
+**Bad**:
 
-- Call another microservice only when you need its answer before you can continue. For example, you need eligibility before you create a claim. In other cases, use events.
-- Make every call through a client adapter. Create its HTTP client with the platform's `HttpClientFactory`, which adds time limits. Wrap each call in `ResilientCalls`:
-  - **Reads and checks** use `callWithRetry`. It retries timeouts and server errors. If they keep failing, our endpoint returns `503`.
-  - **Changes** use `callOnce`. It never retries. If we could not reach the other system, it returns `503`, and nothing changed. If the call timed out after it was sent, it returns `504`. Then we do not know if the change was made, so the user must check before trying again.
-  - Both use a **circuit breaker**. After repeated failures, a circuit breaker stops calling for a short time. So we do not keep waiting for a failing microservice.
-- Keep the total time for one request, with all retries, under 4 seconds. The front end waits at most 5 seconds, so our calls must give up first.
-- Make the call before the database transaction starts.
-- A business action can send its change to another system. For example, "change address" sends the new address to the central customer service. Make exactly one call for the business action. Do not save anything else in the same request. If we keep a copy of the data, update the copy only after the other system confirms the change.
-- Every adapter has a client test. It also has a WireMock stub in the `local-environment` repository, for local development. A WireMock stub is a fake version of the other microservice.
+```java
+Claim claim = new Claim();
+claim.setClaimantId(claimantId);
+claim.setStatus(OPEN);
+claims.save(claim);
+```
 
-### 7.5 Changes that span several microservices
+Nothing checks eligibility or the claim type, and no `ClaimOpened` event is sent.
 
-A database transaction cannot cover two microservices. Some business processes must change data in several microservices. Design such a process as a series of steps. Each step changes one microservice. Then it sends an event that starts the next step. If a step fails, a step that was agreed in advance deals with it. For example, the action can be "create a task for a caseworker". Every process like this needs design group approval and an ADR.
+**Good**:
 
-## 8. Fixing mistakes
+```java
+public class Claim {
+    private Claim(ClaimId id, ClaimantId claimantId, ClaimType type, LocalDate openedOn) { ... }
 
-Mistakes will happen. You can fix them safely, for two reasons. First, each feature's data is reached only through its application service (golden rule 7). Second, other microservices see only our versioned events. So you can correct a wrong design inside one feature. You change that feature's code and add a migration.
+    public static Claim open(ClaimantId claimantId, ClaimType type, Eligibility eligibility, LocalDate today) {
+        if (eligibility != ELIGIBLE) throw new ClaimantNotEligible(claimantId);
+        if (!type.active()) throw new ClaimTypeNotActive(type);
+        Claim claim = new Claim(ClaimId.next(), claimantId, type, today);
+        claim.events.add(new ClaimOpened(claim.id));
+        return claim;
+    }
+}
+```
 
-**For every mistake:**
+Creation is a business action like any other, so it has a business name and its rules live in one place. The only `new Claim(...)` is inside `Claim` and inside the repository when it loads.
 
-1. Do the step in the "Do now" column. It is small and safe to release quickly.
-2. Tell the design group on the same day.
-3. Create a ticket for the proper fix, with a date. Note the mistake in the feature's design note.
-4. Do the step in the "Fix properly" column by that date.
-5. Add an architecture test or a unit test. Then the same mistake fails the build next time.
+### 30. Read for a screen through a query class that reads the tables directly; never build a screen out of aggregates
 
-### Design mistakes
+The claim list shows the claim ID, status, claimant name, number of open notes and last payment date, for 50 claims a page.
 
-| Mistake | How you notice | Do now | Fix properly | Never |
-| --- | --- | --- | --- | --- |
-| Two separate aggregates share a rule that must always be true | Data breaks the rule. Or code keeps saving both aggregates together | Save both in one transaction, in one application service method. Add this to the design note as an exception, for the design group to approve | Merge them into one aggregate. A migration moves the child documents into the parent document | Try to keep the rule true by sending events between them. Events arrive later, so the rule is broken in between |
-| An aggregate is too big | Users often get `409 Conflict`. Documents keep growing | Keep the version check. Make sure the screen tells the user to reload | Move the part that changes often, or that has no maximum, into its own aggregate. The new aggregate holds the parent's ID. If a parent rule needs information about it, the application service passes the information in as a parameter | Turn off the version check. Or update single fields with `MongoTemplate` to avoid the conflict |
-| A list inside a document has no maximum | Some documents are much larger than others | Add a maximum in the entity method that adds items. Refuse more items with a `BusinessRuleViolationException` (`422`). Add an alert on document size | Move the list into its own aggregate | Wait until a document reaches DocumentDB's 16 MB limit and writes start to fail |
-| A business rule is in an application service, a controller or a listener | There is an `if` about status, amounts, dates or counts outside `domain/` | Create a ticket for this sprint | Move the rule into the entity method. Add a parameter if the rule needs outside information. Add a unit test | Copy the same `if` to another place |
-| The same rule is written in several places | Two places check the same thing in slightly different ways | Agree with the business which version is correct | Keep one copy, in the entity method. Delete the others | Keep both copies "to be safe" |
-| A class exists only to hold one or two `if` statements (such as `ClaimClosurePolicy`) | A tiny "policy", "validator" or "helper" class | Nothing urgent | Move the check into the entity method that it protects. Delete the class | Add more classes like it |
-| An entity is changed without its methods. For example, someone added a setter, or a script writes fields directly | The architecture test fails. Or data appears that the rules do not allow. Or other microservices miss changes | Remove the setter or stop the script. Find the affected documents | Make scripts load each entity and call its method. Repair wrong data in the same way, so that rules, events and audit all apply | Repair data by writing directly to the database, except in a reviewed migration |
-| A feature uses another feature's repository or entity | The architecture test `featuresUseEachOtherOnlyThroughApplication` fails | If the release cannot wait, record today's violations with ArchUnit's `FreezingArchRule`. Then only new violations fail the build. Create a ticket | Add a method to the other feature's application service that returns a simple value. Call that method | Turn the architecture test off |
-| Two features call each other, so Spring needs `@Lazy` to start | `@Lazy` appears in more than one place | One `@Lazy` is acceptable if the design group approves it | Make the calls go in one direction only. Use events for the other direction. Or merge the two features | Add `@Lazy` without asking |
+**Bad** — load aggregates and pick fields out:
 
-### Data and DocumentDB mistakes
+```java
+List<ClaimRow> rows = new ArrayList<>();
+for (Claim claim : claims.findOpen(page)) {                  // 50 full aggregates with evidence
+    int open = notes.countNeedingAction(claim.id());         // 50 more queries
+    rows.add(new ClaimRow(claim.id(), claim.status(), open, claim.lastPayment()));
+}
+```
 
-| Mistake | How you notice | Do now | Fix properly | Never |
-| --- | --- | --- | --- | --- |
-| A query has no index | The endpoint gets slower as data grows. `explain()` shows that the whole collection is read | Add the index in a new migration. If the collection is large, agree the release time | During review, check that every new query has an index | Edit an old migration. Or create an index by hand in production |
-| A migration was wrong, or someone edited it after it ran | Environments have different data or indexes. Or startup fails | Stop deploying. Put any edited migration back exactly as it was | Write a new migration that corrects the data. Make it safe to run twice | Edit or delete rows in the `schema_migrations` collection by hand |
-| A transaction times out, or it contains a call to another microservice | Errors say that the transaction was aborted, mostly under load | Move the call to before the transaction | Make each transaction save one aggregate, with no loops | Try to raise DocumentDB's one-minute limit. It cannot be changed |
-| A job updates many records in one transaction | The job fails part of the way through, and nothing is saved | Stop the job | Process one record per transaction, by calling the application service for each record. Make the job skip records that it has already done | Update many records at once with `MongoTemplate` |
-| Money is stored as a floating-point number, or times are stored in local time | Amounts are a penny wrong. Times are an hour wrong after the clocks change | Use `Money` and `Instant` for all new data | A migration converts the stored values. The business agrees the rounding | Correct the values only when you display them |
+Fifty-one database round trips for one page, and the aggregate code now has getters that exist only for screens.
 
-### Event and integration mistakes
+**Good** — a query class, one SQL statement, a flat record:
 
-| Mistake | How you notice | Do now | Fix properly | Never |
-| --- | --- | --- | --- | --- |
-| A change did not send an event | Another team never heard about the change. The audit log shows the change, but `event_publication` has no event | Add the missing `raise(...)` to the entity method. Add the line to the event mapper | Agree with the receiving teams how to send the events they missed. Usually a one-off job sends a correction event for each affected record | Let other teams read our database to catch up |
-| A published event was changed in a way that breaks receivers | Another team's listener fails after our release | Roll back, or put the field back | Send both `V1` and `V2` until every receiving team has moved to `V2`. Then stop sending `V1` | Change a published event without telling the receiving teams |
-| There are messages in the dead-letter queue, or events are not leaving the outbox | An alarm goes off | Find the cause in the logs, using the message's trace ID. Fix it | Move the messages from the dead-letter queue back to the main queue ("redrive"). The inbox skips any that were already processed | Delete dead-letter messages before you understand them. Each one is a change that we have not applied |
-| Our data and another microservice's data do not match | Two microservices show different answers, for example about a payment | Use both audit logs to find which side is right | Add a scheduled job that compares the two and **reports** differences. Make corrections through entity methods, so that they are checked and audited | Add a job that silently overwrites one side with the other side's data |
-| A listener handles repeated or late messages wrongly | The same payment is recorded twice. Or an older payment replaces a newer one | Make sure the listener extends `InboxMessageHandler` | Add a check in the entity method that ignores anything older than what it already has | Assume that each message arrives exactly once and in order |
-| Another microservice's data classes or terms appear in our domain code | Their class names or values (such as `"ELIGIBLE"`) appear outside `client/` | Nothing urgent | Translate them into our own types in the client adapter. Remove their types from everywhere else | Add our own fields to their classes |
-| A call to another microservice has no time limit or circuit breaker | When the other microservice is slow, our requests pile up and our microservice slows down too | Wrap the call in `ResilientCalls` | Add client tests for timeouts and `503` | Retry with no limit. Or retry `4xx` errors |
-| Two microservices always have to change and be released together | Most features need changes in both | Tell the design group | The design group redraws the boundary and records it in an ADR. The feature folder and its data move to the other microservice | Let the two microservices share a database |
-| Code reads another microservice's database | There is a connection string or collection name that belongs to another team | Remove it before release | Use their API or their events | Allow a "temporary" read |
+```java
+public class ClaimListQuery {
+    public Page<ClaimRow> openClaims(int page) {
+        return db.query("""
+            SELECT c.id, c.status, c.claimant_name, c.last_paid_on,
+                   (SELECT COUNT(*) FROM note n WHERE n.claim_id = c.id AND n.needs_action) AS open_notes
+            FROM claim c WHERE c.status = 'OPEN'
+            ORDER BY c.opened_on DESC LIMIT 50 OFFSET ?""", page * 50, ClaimRow::from);
+    }
+}
+```
 
-### Security mistakes
+Aggregates and repositories exist to change data safely. Reads have no rules to protect, so they go straight to the tables, join across aggregates freely, and return exactly what the screen needs. A query class never changes anything, and a rule never lives in a query.
 
-| Mistake | How you notice | Do now | Fix properly | Never |
-| --- | --- | --- | --- | --- |
-| An endpoint has no permission check | The architecture test fails. Or a test finds an endpoint that any signed-in user can call | If it is live, follow the security incident process. Add the annotation and release | Add a test that expects `403`. Check the controller's other endpoints | Add the check in the application service instead of the controller |
-| Personal data is in logs, error messages or events | A name, date of birth, National Insurance number or address appears where it is not needed | Remove it and release. If it reached production logs, report it through the data protection process | Use value objects that hide personal data in `toString()`, as `ClaimantDetails` does. Send IDs, not personal details, in events | Decide on your own that it does not matter |
+### 31. Search and reports are queries too; give a slow one its own read table filled by events
 
-## 9. Never do these
+The business wants a report of claims closed per month with total payments.
 
-- Write an entity's fields from outside the entity.
-- Turn off the version check, or work around it.
-- Edit a migration that has run in any environment.
-- Call another microservice inside a database transaction.
-- Retry a call that changes data in another system.
-- Read or write another microservice's database.
-- Send to SNS without the outbox.
-- Remove or rename a field in a published event version. Publish a new version instead.
-- Delete dead-letter messages without investigating them.
-- Repair data by writing directly to the database, except in a reviewed migration.
-- Release an endpoint without a permission annotation.
-- Log personal data.
-- Turn off an architecture test.
-- Add any of these without design group approval: CQRS (separate models for reading and writing), event sourcing (storing a record as its list of events, not its current state), generic repositories (one repository class shared by all aggregates), or a domain library shared between microservices.
+**Bad** — compute it from aggregates at request time:
 
-## 10. Who to ask
+```java
+for (Claim claim : claims.findAll()) { ... }                 // 2 million claims
+```
 
-| You need | Ask | When |
-| --- | --- | --- |
-| To know where some code belongs | A senior engineer, or the weekly design session | On the same day |
-| A new aggregate, a change to what an aggregate contains, a transaction that saves more than one aggregate, or a new link between microservices | The design group, through the design note or an ADR | Before you write code |
-| A change to a published event | The teams that receive it | Before release |
-| Help with a mistake from section 8 | The design group | On the same day |
-| A security or personal data problem | The incident process | Immediately |
+**Good** — a query over the tables (rule 30). When that is too slow, keep a separate read table that the domain events fill:
 
-Still to be filled in: design group members, the team channel, the design session time, the platform team contact, and the incident process link.
+```java
+// a listener in our own microservice
+void on(ClaimClosed e) {
+    monthlyClosures.increment(YearMonth.from(e.closedOn()));
+}
+```
 
-## 11. Glossary
+```sql
+SELECT month, closed_count, total_paid FROM monthly_closure_report ORDER BY month;
+```
 
-| Term | Meaning |
-| --- | --- |
-| Aggregate | A group of objects that are always loaded and saved together, as one document |
-| Aggregate root | The top object of an aggregate. All changes go through it (`Claim`) |
-| Anaemic model | A design where entities only hold data, and all logic is in services. Do not use it for Rich features |
-| Application service | The class that runs each use case, step by step (`ClaimService`) |
-| Bounded context | A business area with its own words and its own model. Usually it is one microservice |
-| Business action | One change that the user asks for with one button, such as "close claim". It is one application service method |
-| Circuit breaker | It stops calls to a failing microservice for a short time, after repeated failures |
-| Client adapter | The only class that talks to another microservice or system. It translates their data into our types (`EligibilityClient`) |
-| Dead-letter queue | Where a message goes after it fails 5 times. Someone must investigate it |
-| Domain event | A record that something happened. It is used only inside our microservice (`ClaimClosed`) |
-| Domain service | A rare class for a business calculation that belongs to no single entity (`EntitlementCalculator`) |
-| Entity | A business object with its own ID (`Claim`, `Note`) |
-| Eventual consistency | Other microservices learn about a change a little later, through events |
-| Inbox | The platform's list of processed event IDs. It is used to skip duplicates |
-| Integration event | A versioned event that other microservices receive (`ClaimClosedV1`) |
-| Invariant | A business rule that must be true at all times |
-| Optimistic locking | The version check. A save is refused with `409` if the document changed after it was loaded |
-| Outbox | The `event_publication` collection. Events are stored here with the change, before they are sent |
-| Ubiquitous language | The business's own words. Use them in the same way in conversation, design notes, code and tests |
-| Value object | A value with no ID that cannot change. Its contents define it (`Money`) |
+The read table is a copy, built from events, and can be rebuilt by replaying them. Nothing is ever changed through it.
 
-## 12. Your first week
+### 32. Do not store on a parent what a child aggregate knows; ask for it when reading, or copy it through an event and accept a short delay
 
-1. Read sections 1 to 3. Then explain two things to a colleague: the difference between an entity and a value object, and the difference between an application service and a domain service.
-2. Read `Claim`, `Money`, `ClaimTest` and `EntitlementCalculator` in the reference code. On a practice branch, add a rule to `Claim`. Write its test first.
-3. Read `ClaimService`, `ClaimController` and `EligibilityClient`, and their tests.
-4. Read sections 6 and 7. Run the microservice on your computer. Create a claim and close it. Then look at the `claims`, `notes` and `event_publication` collections.
-5. Build the "reopen a claim" example from section 5.5 on a practice branch. Ask a senior engineer to review it against sections 3 and 6.
+The claim page shows "has notes needing action".
+
+**Bad** — a flag on the claim, set by the note feature:
+
+```java
+// in NoteService.markNeedsAction
+Claim claim = claims.get(note.claimId());
+claim.setHasOpenNotes(true);                                 // another feature changes our aggregate
+claims.save(claim);
+```
+
+Two aggregates are saved in one action, the flag drifts when a note is actioned on another path, and the note feature now depends on the claim's internals.
+
+**Good** — the normal answer: ask when reading (rule 30, the `open_notes` column). When the flag must be on the claim itself, for a rule or for speed, copy it through an event:
+
+```java
+void on(NoteNeedsAction e) {
+    Claim claim = claims.get(e.claimId());
+    claim.noteNeedsAction(e.noteId());                       // a method, not a setter; records the note ID
+    claims.save(claim);
+}
+```
+
+The copy is a second behind, and the design note says so. For the real rule, `close` still asks for the count at the moment of closing (rule 1), because a copy is never the truth.
+
+### 33. Never delete a business record; add a business action that marks it, with a reason
+
+A caseworker created a claim for the wrong claimant.
+
+**Bad**:
+
+```java
+claims.delete(claimId);
+```
+
+The audit trail, the notes that point at the claim and the events already sent now point at nothing, and the payment microservice may still act on it.
+
+**Good**:
+
+```java
+public void cancel(CancellationReason reason, LocalDate today) {
+    if (status == CLOSED) throw new ClaimAlreadyClosed(id);
+    status = CANCELLED;
+    cancelledOn = today;
+    events.add(new ClaimCancelled(id, reason, today));
+}
+```
+
+Lists hide cancelled claims by default. A deletion required by the data protection rules is a separate, approved process that removes personal data and keeps the record's skeleton.
+
+### 34. Run a rule that depends on time from a scheduled job that calls the same entity method, one record per transaction
+
+A claim with no activity for 90 days is closed automatically.
+
+**Bad** — a job that updates the table:
+
+```sql
+UPDATE claim SET status = 'CLOSED' WHERE last_activity_on < now() - interval '90 days';
+```
+
+No rule check, no event, no audit; the payment microservice never hears about it.
+
+**Good**:
+
+```java
+public void closeInactiveClaims(LocalDate today) {
+    for (ClaimId id : claims.findIdsInactiveSince(today.minusDays(90))) {
+        closeOne(id, today);                                 // one transaction each (rule 9)
+    }
+}
+
+void closeOne(ClaimId id, LocalDate today) {
+    Claim claim = claims.get(id);
+    int open = notes.countNeedingAction(id);
+    claim.closeForInactivity(open, today);                   // the entity decides; refuses if notes are open
+    claims.save(claim);
+    audit.record("claim closed for inactivity", id);
+}
+```
+
+The job is just another caller of the entity, like the controller and the message listener. The time comes from the injected clock, so a test can set today to any date.
+
+### 35. When a process has its own steps and deadlines, give it its own aggregate
+
+Closing a claim with payments takes three steps across two microservices (rule 22), and the business wants to see which step each claim is at, and chase one that is stuck for two days.
+
+**Bad** — flags on the claim:
+
+```java
+private boolean closeRequested, paymentsStopped, paymentsStopFailed, letterSent;
+```
+
+The claim's methods fill up with process `if`s, and nobody can see the whole process in one place.
+
+**Good** — a `ClaimClosure` aggregate that holds the state of the process and reacts to the events:
+
+```java
+public class ClaimClosure {
+    private final ClaimId claimId;
+    private ClosureStep step;                                // REQUESTED, PAYMENTS_STOPPED, LETTER_SENT, DONE, STUCK
+    private LocalDate stepStartedOn;                         // a UK date (rule 13)
+
+    public void paymentsStopped(LocalDate today) {
+        if (step != REQUESTED) return;                       // late or repeated event: ignore (rule 21)
+        step = PAYMENTS_STOPPED;
+        stepStartedOn = today;
+        events.add(new ClosureLetterRequested(claimId));
+    }
+
+    public void checkDeadline(LocalDate today) {
+        if (step == DONE || step == STUCK) return;
+        if (today.isAfter(stepStartedOn.plusDays(2))) {
+            step = STUCK;
+            events.add(new ClosureStuck(claimId, step));
+        }
+    }
+}
+```
+
+The claim keeps its own rules; the process keeps its steps. This is the "directing microservice" of the API guide, at the scale of one aggregate.
+
+### 36. Change an aggregate's shape behind a flag, with a migration that uses the entity's own methods
+
+Notes were inside the claim; the design group decided they are their own aggregate (rule 7).
+
+**Bad** — a SQL script on release night:
+
+```sql
+INSERT INTO note (id, claim_id, text) SELECT ... FROM claim_notes;
+```
+
+Half the claims are migrated when the script fails, the old code reads the rest, and the two sets drift.
+
+**Good**:
+
+1. Release 1: the new `Note` aggregate and repository exist; new notes go there; reads check both places behind a feature flag.
+2. A migration job, one claim per transaction (rule 9), creates the `Note` aggregates through `Note.create` and marks the claim as migrated; it can be rerun.
+3. Release 2: the flag is on for everyone; the old list is read by nobody.
+4. Release 3: the old column and the flag are removed.
+
+The migration goes through the entity's methods so that every rule and event still holds. Rule 25's "proper fix" column is this list.
+
+### 37. Test an entity with no database, a service with a fake repository, and the repository alone against a real database
+
+You are writing the tests for "close claim".
+
+**Bad** — every test starts the whole microservice and a database:
+
+```java
+void closeRefusedWhenNotesOpen() {
+    db.insert(claimRow, noteRow);                            // 40 lines of setup
+    http.post("/claims/9f1c/close");
+    assertEquals(422, response.status());
+}
+```
+
+Ten seconds per test, and the rule being tested is buried under HTTP and SQL.
+
+**Good** — three layers, each tested for what it owns:
+
+```java
+// the entity: the rule, in memory, in milliseconds
+void closeRefusedWhenNotesOpen() {
+    Claim claim = Claim.open(claimantId, ClaimTypes.standard(), ELIGIBLE, date("2026-10-01"));
+    assertThrows(ClaimHasOpenActions.class, () -> claim.close(2, date("2026-10-31")));
+}
+
+// the service: the steps, with a fake repository and a fixed clock
+void closeSavesAndAudits() {
+    service.close(claimId, 7);
+    assertTrue(fakeClaims.saved(claimId));
+    assertEquals("claim closed", fakeAudit.last());
+}
+
+// the repository: the mapping, against a real database, one test class
+void saveAndLoadRoundTrip() { ... }
+```
+
+Most tests are entity tests, because that is where the rules are. One test per endpoint proves the permission check (rule 15). A test that sets the clock to 29 March proves the date rule (rule 13).
+
+### 38. Show two aggregates on one screen and save them with two buttons; one button that saves two things is a design smell to raise
+
+The claim page shows the claim and lets the caseworker edit contact details and add a note.
+
+**Bad** — one Save button that sends both:
+
+```java
+public void saveClaimPage(ClaimId id, long version, ContactDetails contact, NoteText noteText) {
+    Claim claim = claims.get(id);
+    claim.requireVersion(version);
+    claim.changeContact(contact);
+    claims.save(claim);
+    notes.save(Note.create(id, noteText, clock.today()));    // two aggregates, one button (rule 27)
+}
+```
+
+**Good** — each part of the screen saves its own aggregate with its own button and its own version:
+
+```
+[Contact details]   Save contact details  -> ClaimService.changeContact(claimId, version, contact)
+[Add a note]        Add note              -> NoteService.add(claimId, noteText)
+```
+
+When a screen keeps needing one button for two aggregates, say so to the design group: either the boundary is wrong (rule 7) or the action deserves a name of its own (rule 27).
+
+## Who to ask
+
+Ask a senior engineer the same day when you do not know where code belongs. Ask the design group, before you code, for a new or changed aggregate, a two-aggregate transaction or a new link between microservices. Tell the receiving teams before you change a published event. Report a security or personal data problem through the incident process at once.
+
+Still to fill in: design group members, team channel, design session time, incident process link.

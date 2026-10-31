@@ -2,7 +2,7 @@
 
 Oct 31, 2026 · @kodebot
 
-This guide says how we design the HTTP endpoints of our microservices, and how our Express front end calls them. Each rule starts with a situation you will meet, shows the code that goes wrong, says what happens, and shows the code that works. The examples use the claim microservice, where a **caseworker** creates a **claim** for a **claimant**, adds **evidence** and **notes**, and closes the claim. The **eligibility** microservice says whether a person may claim. The **payment** microservice pays claimants. Express is the only thing the browser talks to.
+This guide says how we design the HTTP endpoints of our microservices, and how our Express front end calls them. The microservice examples are Spring Boot 4 (Spring MVC and Spring Security 7), with the Spring feature named under each one. Each rule starts with a situation you will meet, shows the code that goes wrong, says what happens, and shows the code that works. The examples use the claim microservice, where a **caseworker** creates a **claim** for a **claimant**, adds **evidence** and **notes**, and closes the claim. The **eligibility** microservice says whether a person may claim. The **payment** microservice pays claimants. Express is the only thing the browser talks to.
 
 **Your first two days.** Read the walkthrough and Parts A and B (rules 1 to 15) on your first afternoon, after the Pragmatic DDD Guide's Parts A and B; Parts C, D and E on day 2. Part F is not for reading through: it is the answers for the situations you will meet, one at a time, when you meet them.
 

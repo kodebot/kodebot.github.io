@@ -184,10 +184,19 @@ public class PersistenceConfig {
     @Bean MongoCustomConversions conversions() {
         return new MongoCustomConversions(List.of(new ClaimIdToString(), new StringToClaimId(), /* one pair per ID type */));
     }
+
+    @Bean JwtAuthenticationConverter jwtAuthorities() {     // the gateway's token carries "permissions": ["CLOSE_CLAIM", ...]
+        JwtGrantedAuthoritiesConverter claims = new JwtGrantedAuthoritiesConverter();
+        claims.setAuthoritiesClaimName("permissions");
+        claims.setAuthorityPrefix("");                       // so hasAuthority('CLOSE_CLAIM') matches as written
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(claims);
+        return converter;
+    }
 }</code></pre>
 <pre><code>spring.mongodb.uri=mongodb://...docdb.amazonaws.com:27017/claims?tls=true&amp;replicaSet=rs0&amp;retryWrites=false
 spring.data.mongodb.auto-index-creation=false        # indexes are created by a migration, never at startup</code></pre>
-<p><em>Spring: <code>MongoTransactionManager</code> turns <code>@Transactional</code> on; <code>MongoCustomConversions</code> stores each ID value object as a plain string. DocumentDB before engine 8.0.2 rejects retryable writes, hence <code>retryWrites=false</code>. Automatic index creation is off by default and stays off: a foreground index build on DocumentDB blocks the collection.</em></p>
+<p><em>Spring: <code>MongoTransactionManager</code> turns <code>@Transactional</code> on; <code>MongoCustomConversions</code> stores each ID value object as a plain string. <code>JwtAuthenticationConverter</code> is what makes <code>@PreAuthorize("hasAuthority('CLOSE_CLAIM')")</code> see the token's <code>permissions</code> claim: without it Spring reads only the <code>scope</code> claim, as <code>SCOPE_...</code> authorities, and every check fails. DocumentDB before engine 8.0.2 rejects retryable writes, hence <code>retryWrites=false</code>. Automatic index creation is off by default and stays off: a foreground index build on DocumentDB blocks the collection.</em></p>
 <h2>Part A. Where a rule lives</h2>
 <h3>1. Put a business rule in the entity method that makes the change, not in a service</h3>
 <p>You are adding "close claim". The rule: a claim closes only when every evidence item is verified and no note needs action.</p>

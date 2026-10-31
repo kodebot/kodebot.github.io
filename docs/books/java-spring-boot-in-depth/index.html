@@ -33608,12 +33608,21 @@ public class PersistenceConfig {
     @Bean MongoCustomConversions conversions() {
         return new MongoCustomConversions(List.of(new ClaimIdToString(), new StringToClaimId(), /* one pair per ID type */));
     }
+
+    @Bean JwtAuthenticationConverter jwtAuthorities() {     // the gateway's token carries "permissions": ["CLOSE_CLAIM", ...]
+        JwtGrantedAuthoritiesConverter claims = new JwtGrantedAuthoritiesConverter();
+        claims.setAuthoritiesClaimName("permissions");
+        claims.setAuthorityPrefix("");                       // so hasAuthority('CLOSE_CLAIM') matches as written
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(claims);
+        return converter;
+    }
 }</code></pre></div>
 
 <div class="codewrap"><pre><code class="lang-text">spring.mongodb.uri=mongodb://...docdb.amazonaws.com:27017/claims?tls=true&amp;replicaSet=rs0&amp;retryWrites=false
 spring.data.mongodb.auto-index-creation=false        # indexes are created by a migration, never at startup</code></pre></div>
 
-<p><em>Spring: <code>MongoTransactionManager</code> turns <code>@Transactional</code> on; <code>MongoCustomConversions</code> stores each ID value object as a plain string. DocumentDB before engine 8.0.2 rejects retryable writes, hence <code>retryWrites=false</code>. Automatic index creation is off by default and stays off: a foreground index build on DocumentDB blocks the collection.</em></p>
+<p><em>Spring: <code>MongoTransactionManager</code> turns <code>@Transactional</code> on; <code>MongoCustomConversions</code> stores each ID value object as a plain string. <code>JwtAuthenticationConverter</code> is what makes <code>@PreAuthorize("hasAuthority('CLOSE_CLAIM')")</code> see the token's <code>permissions</code> claim: without it Spring reads only the <code>scope</code> claim, as <code>SCOPE_...</code> authorities, and every check fails. DocumentDB before engine 8.0.2 rejects retryable writes, hence <code>retryWrites=false</code>. Automatic index creation is off by default and stays off: a foreground index build on DocumentDB blocks the collection.</em></p>
 
 <h3 id="ddg-part-a-where-a" data-plain="Part A. Where a rule lives">Part A. Where a rule lives<a class="hlink" href="#ddg-part-a-where-a" aria-label="Link to this section">#</a></h3>
 
@@ -35329,7 +35338,7 @@ class ClaimControllerTest {
     }
 }</code></pre></div>
 
-<p><em>Spring: <code>@PreAuthorize</code> with <code>@EnableMethodSecurity</code> checks the authority before the method runs; <code>@WebMvcTest</code> and <code>@WithMockUser</code> prove it.</em></p>
+<p><em>Spring: <code>@PreAuthorize</code> with <code>@EnableMethodSecurity</code> checks the authority before the method runs; <code>@WebMvcTest</code> and <code>@WithMockUser</code> prove it. The authorities exist only because a <code>JwtAuthenticationConverter</code> bean maps the token's <code>permissions</code> claim (Pragmatic DDD Guide, "One-time setup"); by default Spring maps only <code>scope</code>, as <code>SCOPE_...</code>.</em></p>
 
 <p>The build checks that no endpoint is missing a <code>@PreAuthorize</code>. The microservice refuses even when the call comes from our own Express app. Hiding a button the user cannot use helps the user but is not security.</p>
 

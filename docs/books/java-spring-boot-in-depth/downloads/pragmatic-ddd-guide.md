@@ -199,6 +199,15 @@ public class PersistenceConfig {
     @Bean MongoCustomConversions conversions() {
         return new MongoCustomConversions(List.of(new ClaimIdToString(), new StringToClaimId(), /* one pair per ID type */));
     }
+
+    @Bean JwtAuthenticationConverter jwtAuthorities() {     // the gateway's token carries "permissions": ["CLOSE_CLAIM", ...]
+        JwtGrantedAuthoritiesConverter claims = new JwtGrantedAuthoritiesConverter();
+        claims.setAuthoritiesClaimName("permissions");
+        claims.setAuthorityPrefix("");                       // so hasAuthority('CLOSE_CLAIM') matches as written
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(claims);
+        return converter;
+    }
 }
 ```
 
@@ -207,7 +216,7 @@ spring.mongodb.uri=mongodb://...docdb.amazonaws.com:27017/claims?tls=true&replic
 spring.data.mongodb.auto-index-creation=false        # indexes are created by a migration, never at startup
 ```
 
-*Spring: `MongoTransactionManager` turns `@Transactional` on; `MongoCustomConversions` stores each ID value object as a plain string. DocumentDB before engine 8.0.2 rejects retryable writes, hence `retryWrites=false`. Automatic index creation is off by default and stays off: a foreground index build on DocumentDB blocks the collection.*
+*Spring: `MongoTransactionManager` turns `@Transactional` on; `MongoCustomConversions` stores each ID value object as a plain string. `JwtAuthenticationConverter` is what makes `@PreAuthorize("hasAuthority('CLOSE_CLAIM')")` see the token's `permissions` claim: without it Spring reads only the `scope` claim, as `SCOPE_...` authorities, and every check fails. DocumentDB before engine 8.0.2 rejects retryable writes, hence `retryWrites=false`. Automatic index creation is off by default and stays off: a foreground index build on DocumentDB blocks the collection.*
 
 ## Part A. Where a rule lives
 

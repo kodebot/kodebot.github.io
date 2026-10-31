@@ -39,18 +39,18 @@ from the same folder and attach it to the page.</p>
 <p class="byline">Oct 31, 2026 · @kodebot</p>
 <p>This guide says how we design the inside of a microservice. We use a light form of Domain-Driven Design (DDD). DDD means two things here. Write the code in the business's own words. Put each business rule inside the object it is about.</p>
 <p>The guide has two aims. Every business rule lives in exactly one place. A design mistake can be fixed inside one feature of one microservice, without changing the others.</p>
-<p>The guide is about design, not about any framework or library. The code examples are plain Java and stand on their own. Every rule has the same shape: the situation you are in, the code most people write first, what goes wrong with it, the code we want, and why. Read the walkthrough and the rules in order once. After that, use the headings as a checklist.</p>
+<p>Our stack is Spring Boot with Spring Data MongoDB on Amazon DocumentDB. The examples use it, and under each one a line in italics names the Spring feature doing the work, so you know what to look up. No other library appears. Every rule has the same shape: the situation you are in, the code most people write first, what goes wrong with it, the code we want, and why. Read the walkthrough and the rules in order once. After that, use the headings as a checklist.</p>
 <h2>Terms</h2>
 <table>
 <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
 <tbody>
-<tr><td>Microservice</td><td>An application deployed on its own, with its own database</td></tr>
-<tr><td>Feature</td><td>One business area inside a microservice, in its own folder. Example: claims, notes</td></tr>
+<tr><td>Microservice</td><td>A Spring Boot application deployed on its own, with its own DocumentDB database</td></tr>
+<tr><td>Feature</td><td>One business area inside a microservice, in its own package. Example: <code>claims</code>, <code>notes</code></td></tr>
 <tr><td>Business action</td><td>One change the user asks for with one button, such as "close claim"</td></tr>
 <tr><td>Entity</td><td>A business object with its own ID. Its details change; its identity does not. Example: <code>Claim</code></td></tr>
 <tr><td>Value object</td><td>A value with no ID, defined by its contents, never changed after it is created. Example: <code>Money</code></td></tr>
-<tr><td>Aggregate</td><td>A group of objects always loaded and saved together, as one unit. The top object is the aggregate root. Example: a <code>Claim</code> with its <code>EvidenceItem</code>s</td></tr>
-<tr><td>Repository</td><td>The one class that loads and saves one kind of aggregate. Example: <code>ClaimRepository</code></td></tr>
+<tr><td>Aggregate</td><td>A group of objects always loaded and saved together, as one unit. The top object is the aggregate root. In DocumentDB an aggregate is one document in one collection. Example: a <code>Claim</code> with its <code>EvidenceItem</code>s</td></tr>
+<tr><td>Repository</td><td>The one class that loads and saves one kind of aggregate. Example: <code>ClaimRepository</code>, a Spring Data <code>MongoRepository</code></td></tr>
 <tr><td>Application service</td><td>A class with one method per business action. Each method runs that action's steps: load, check the version, get facts, call the entity, save, audit. Example: <code>ClaimService</code> with <code>open</code>, <code>addEvidence</code>, <code>close</code>. A class per action (<code>CloseClaim</code> with one method) is also fine; pick one shape per microservice</td></tr>
 <tr><td>Domain service</td><td>A rare class for a calculation that belongs to no single entity. Example: <code>EntitlementCalculator</code></td></tr>
 <tr><td>Adapter</td><td>The one class that talks to another microservice or system. Example: <code>EligibilityClient</code></td></tr>
@@ -64,35 +64,44 @@ from the same folder and attach it to the page.</p>
 <h2>The example</h2>
 <p>A <strong>caseworker</strong> records a <strong>claim</strong> for a <strong>claimant</strong>, adds <strong>evidence</strong> (documents such as payslips) and marks each item verified. The caseworker writes <strong>notes</strong>; a note can be marked "needs action". At the end, the caseworker closes the claim. The <strong>eligibility</strong> microservice says whether a person may claim. The <strong>payment</strong> microservice pays claimants and tells us when it has paid.</p>
 <p>The business rules: a claim is created only if the claimant is eligible and the claim type is active. A claim has at most 10 evidence items, each verified once. A claim is closed only when all evidence is verified and no note needs action. A closed claim cannot be changed. A payment replaces the claim's last payment only if its payment date is later.</p>
-<p>A claim and its evidence are one aggregate. Each note is its own aggregate that holds the claim's ID. Rule 7 explains why.</p>
+<p>A claim and its evidence are one aggregate, so one document in the <code>claims</code> collection. Each note is its own aggregate in the <code>notes</code> collection and holds the claim's ID. Rule 7 explains why.</p>
 <h2>Closing a claim, end to end</h2>
-<p>This is the whole path of one business action. Every rule in the guide points back at one of these five classes.</p>
+<p>This is the whole path of one business action, first when it succeeds and then when a rule refuses it. Every rule in the guide points back at one of these classes.</p>
 <p>The controller receives the request and checks the permission. It does nothing else.</p>
-<pre><code>// POST /claims/{id}/close
-public void close(ClaimId id, CloseRequest body, User user) {
-    permissions.require(user, CLOSE_CLAIM);
-    claimService.close(id, body.version());
-    // reply 204, no body
+<pre><code>@RestController
+public class ClaimController {
+    @PostMapping("/v1/claims/{id}/close")
+    @PreAuthorize("hasAuthority('CLOSE_CLAIM')")
+    public ResponseEntity&lt;Void&gt; close(@PathVariable ClaimId id, @RequestBody @Valid CloseRequest body) {
+        claimService.close(id, body.version());
+        return ResponseEntity.noContent().build();            // 204
+    }
 }</code></pre>
+<p><em>Spring: <code>@PreAuthorize</code> with <code>@EnableMethodSecurity</code> refuses the call with <code>403</code> before the method body runs. <code>@PathVariable ClaimId</code> works because a converter for <code>ClaimId</code> is registered (rule 6).</em></p>
 <p>The application service runs the steps. It holds no business rule.</p>
-<pre><code>public class ClaimService {
+<pre><code>@Service
+public class ClaimService {
+    @Transactional
     public void close(ClaimId id, long expectedVersion) {
-        Claim claim = claims.get(id);                        // 1. load, or "not found"
+        Claim claim = claims.findById(id).orElseThrow(() -&gt; new ClaimNotFound(id));   // 1. load
         claim.requireVersion(expectedVersion);               // 2. the version the user saw
-        int open = notes.countNeedingAction(id);             // 3. a fact the claim does not hold
-        claim.close(open, clock.today());                    // 4. the entity decides
+        int open = noteService.countNeedingAction(id);       // 3. a fact the claim does not hold
+        claim.close(open, LocalDate.now(clock));             // 4. the entity decides
         claims.save(claim);                                  // 5. save; events go out with it
         audit.record("claim closed", id);                    // 6. audit
     }
 }</code></pre>
+<p><em>Spring: <code>@Transactional</code> opens one DocumentDB transaction for the method, through the <code>MongoTransactionManager</code> bean in the setup below; without that bean the annotation does nothing.</em></p>
 <p>The entity decides. All the rules for closing are in this one method.</p>
-<pre><code>public class Claim {
-    private final ClaimId id;
+<pre><code>@Document("claims")
+public class Claim {
+    @Id private ClaimId id;
+    @Version private long version;
+    private ClaimantId claimantId;
     private ClaimStatus status;
-    private final List&lt;EvidenceItem&gt; evidence = new ArrayList&lt;&gt;();
+    private List&lt;EvidenceItem&gt; evidence = new ArrayList&lt;&gt;();   // stored inside the claim document
     private LocalDate closedOn;
-    private long version;
-    private final List&lt;DomainEvent&gt; events = new ArrayList&lt;&gt;();
+    @Transient private final List&lt;DomainEvent&gt; events = new ArrayList&lt;&gt;();
 
     public void close(int notesNeedingAction, LocalDate today) {
         if (status == CLOSED) throw new ClaimAlreadyClosed(id);
@@ -102,28 +111,94 @@ public void close(ClaimId id, CloseRequest body, User user) {
         closedOn = today;
         events.add(new ClaimClosed(id, today));
     }
+
+    @DomainEvents Collection&lt;DomainEvent&gt; events() { return List.copyOf(events); }
+    @AfterDomainEventPublication void clearEvents() { events.clear(); }
 }</code></pre>
-<p>The repository saves the whole aggregate and its events in one transaction. The events are stored in an outbox table; a background sender publishes them after the commit.</p>
-<pre><code>public class ClaimRepository {
-    // one transaction
-    public void save(Claim claim) {
-        int rows = db.save(claim);                           // writes version + 1 WHERE version = the loaded one
-        if (rows == 0) throw new ClaimChangedSinceYouLoadedIt(claim.id());   // two saves raced; the second loses
-        outbox.add(claim.pullEvents());                      // same transaction; pullEvents() also empties the list
+<p><em>Spring: <code>@Document</code> names the collection; <code>@Version</code> makes <code>save</code> fail with <code>OptimisticLockingFailureException</code> when the stored version is not the loaded one; <code>@DomainEvents</code> publishes the entity's events when the repository saves it; <code>@Transient</code> keeps the event list out of the document.</em></p>
+<p>The repository loads and saves the whole aggregate. It is an interface; Spring Data writes the implementation.</p>
+<pre><code>public interface ClaimRepository extends MongoRepository&lt;Claim, ClaimId&gt; {}</code></pre>
+<p>The outbox listener stores each event beside the claim, in the same transaction. A sender publishes the stored events after the commit.</p>
+<pre><code>@Component
+public class Outbox {
+    @EventListener                                           // same thread, same transaction as the save
+    public void store(DomainEvent event) {
+        if (!event.hasPublishedShape()) return;              // internal-only events stay inside
+        mongo.insert(OutboxEntry.of(event), "outbox");       // ClaimClosed becomes a ClaimClosedV1 entry
+    }
+
+    @Scheduled(fixedDelay = 1000)
+    public void send() {
+        for (OutboxEntry entry : mongo.find(query(where("sentAt").isNull()), OutboxEntry.class, "outbox")) {
+            broker.publish(entry.topic(), entry.payload());
+            mongo.updateFirst(query(where("id").is(entry.id())), update("sentAt", Instant.now(clock)), "outbox");
+        }
     }
 }</code></pre>
-<p>The event tells other microservices what happened. The outbox sender turns the domain event <code>ClaimClosed</code> into the published <code>ClaimClosedV1</code>. It carries IDs, not personal data.</p>
+<p><em>Spring: <code>@EventListener</code> receives the events <code>@DomainEvents</code> published, synchronously, so the <code>insert</code> runs inside the service's transaction; <code>@Scheduled</code> with <code>@EnableScheduling</code> runs the sender; <code>MongoTemplate</code> does the writes.</em></p>
+<p>The published event carries IDs, not personal data.</p>
 <pre><code>public record ClaimClosedV1(String eventId, String claimId, LocalDate closedOn) {}</code></pre>
+<h3>When a rule refuses</h3>
+<p>Now the claim has two notes that need action. <code>Claim.close</code> throws <code>ClaimHasOpenActions</code> at its third line. Nothing catches it on the way out: not the service, not the controller. <code>@Transactional</code> rolls the transaction back on the unchecked exception, so nothing is saved, no outbox entry is stored and no audit record is written. The exception reaches one shared error handler at the HTTP edge, which turns it into the answer:</p>
+<pre><code>public sealed interface DomainError permits NotFound, VersionConflict, RuleRefused {}
+public abstract class RuleRefused extends RuntimeException implements DomainError { public abstract String code(); }
+public final class ClaimHasOpenActions extends RuleRefused { ... code() returns "CLAIM_HAS_OPEN_ACTIONS" ... }
+
+@RestControllerAdvice
+public class DomainErrorHandler {
+    @ExceptionHandler(RuleRefused.class)
+    ProblemDetail ruleRefused(RuleRefused e) {
+        return problem(HttpStatus.UNPROCESSABLE_CONTENT, "Business rule violated", e.code(), e.getMessage());
+    }
+    @ExceptionHandler({VersionConflict.class, OptimisticLockingFailureException.class})
+    ProblemDetail conflict(Exception e) {
+        return problem(HttpStatus.CONFLICT, "Record changed", "CONCURRENT_UPDATE", e.getMessage());
+    }
+    @ExceptionHandler(NotFound.class)
+    ProblemDetail notFound(NotFound e) {
+        return problem(HttpStatus.NOT_FOUND, "Not found", "NOT_FOUND", e.getMessage());
+    }
+
+    private ProblemDetail problem(HttpStatus status, String title, String code, String detail) {
+        ProblemDetail p = ProblemDetail.forStatusAndDetail(status, detail);
+        p.setTitle(title);
+        p.setProperty("code", code);
+        p.setProperty("traceId", Trace.current());      // the trace ID a filter took from the traceparent header
+        return p;
+    }
+}</code></pre>
+<pre><code>422 Unprocessable Content
+Content-Type: application/problem+json
+{ "status": 422, "title": "Business rule violated", "code": "CLAIM_HAS_OPEN_ACTIONS",
+  "detail": "Claim 9f1c has 2 notes that need action", "traceId": "4bf92f35..." }</code></pre>
+<p><em>Spring: <code>@RestControllerAdvice</code> with <code>@ExceptionHandler</code> runs for every controller; <code>ProblemDetail</code> is Spring MVC's RFC 9457 body and <code>setProperty</code> adds our <code>code</code> and <code>traceId</code>. A <code>@Transactional</code> method rolls back on any <code>RuntimeException</code>; make every domain error one.</em></p>
+<p>Every business error is one of three kinds: the record does not exist, the version is old, or a rule refused. The entity throws the third kind with a code the front end knows; the API Design Developer Guide, rule 26, shows what the front end does with it. Any other exception is a bug: the handler answers <code>500</code> with the trace ID and never the stack trace.</p>
+<p>When the same exception happens in a message listener, there is no HTTP answer. The transaction rolls back, the message is not marked processed, and the broker delivers it again. A rule that keeps refusing sends the message to the dead-letter queue (rule 21).</p>
+<h3>One-time setup for the stack</h3>
+<pre><code>@Configuration
+@EnableTransactionManagement @EnableScheduling @EnableMethodSecurity
+public class PersistenceConfig {
+    @Bean MongoTransactionManager transactionManager(MongoDatabaseFactory db) { return new MongoTransactionManager(db); }
+    @Bean Clock clock() { return Clock.systemUTC(); }
+    @Bean MongoCustomConversions conversions() {
+        return new MongoCustomConversions(List.of(new ClaimIdToString(), new StringToClaimId(), /* one pair per ID type */));
+    }
+}</code></pre>
+<pre><code>spring.mongodb.uri=mongodb://...docdb.amazonaws.com:27017/claims?tls=true&amp;replicaSet=rs0&amp;retryWrites=false
+spring.data.mongodb.auto-index-creation=false        # indexes are created by a migration, never at startup</code></pre>
+<p><em>Spring: <code>MongoTransactionManager</code> turns <code>@Transactional</code> on; <code>MongoCustomConversions</code> stores each ID value object as a plain string. DocumentDB before engine 8.0.2 rejects retryable writes, hence <code>retryWrites=false</code>. Automatic index creation is off by default and stays off: a foreground index build on DocumentDB blocks the collection.</em></p>
 <h2>Part A. Where a rule lives</h2>
 <h3>1. Put a business rule in the entity method that makes the change, not in a service</h3>
 <p>You are adding "close claim". The rule: a claim closes only when every evidence item is verified and no note needs action.</p>
 <p><strong>Bad</strong> — the rule sits in the service:</p>
-<pre><code>public class ClaimService {
+<pre><code>@Service
+public class ClaimService {
+    @Transactional
     public void close(ClaimId id) {
-        Claim claim = claims.get(id);
+        Claim claim = claims.findById(id).orElseThrow();
         if (claim.getStatus() == CLOSED) throw new IllegalStateException();
         if (!claim.getEvidence().stream().allMatch(EvidenceItem::isVerified)) throw new IllegalStateException();
-        if (notes.countNeedingAction(id) &gt; 0) throw new IllegalStateException();
+        if (noteService.countNeedingAction(id) &gt; 0) throw new IllegalStateException();
         claim.setStatus(CLOSED);
         claims.save(claim);
     }
@@ -141,17 +216,19 @@ public void close(ClaimId id, CloseRequest body, User user) {
     }
 }
 
+@Service
 public class ClaimService {
+    @Transactional
     public void close(ClaimId id, long expectedVersion) {
-        Claim claim = claims.get(id);
+        Claim claim = claims.findById(id).orElseThrow(() -&gt; new ClaimNotFound(id));
         claim.requireVersion(expectedVersion);
-        int open = notes.countNeedingAction(id);
-        claim.close(open, clock.today());
+        int open = noteService.countNeedingAction(id);
+        claim.close(open, LocalDate.now(clock));
         claims.save(claim);
         audit.record("claim closed", id);
     }
 }</code></pre>
-<p>Nobody can call <code>close</code> without supplying the note count, so the check cannot be forgotten. The nightly job calls the same <code>Claim.close</code>.</p>
+<p>Nobody can call <code>close</code> without supplying the note count, so the check cannot be forgotten. The nightly job calls the same <code>Claim.close</code>. The entity is a plain class: Spring Data maps it to a document, but no annotation is needed for the rule itself.</p>
 <h3>2. Change an entity's fields only through its own methods; no setters</h3>
 <p>You need to mark an evidence item verified.</p>
 <p><strong>Bad</strong> — a setter:</p>
@@ -168,11 +245,13 @@ item.setVerifiedOn(today);</code></pre>
     }
 }</code></pre>
 <p>All fields are private, and a build check fails on any public setter in an entity. A method checks the rules and records the event; a setter skips both.</p>
+<p><em>Spring: Spring Data MongoDB reads and writes private fields directly, so an entity needs no getters or setters for persistence.</em></p>
 <h3>3. A service method only runs the steps: load, check the version, get facts, call the entity, save, audit</h3>
 <p>You are writing <code>ClaimService.addEvidence</code>.</p>
 <p><strong>Bad</strong> — the service makes decisions:</p>
-<pre><code>public void addEvidence(ClaimId id, EvidenceRequest request) {
-    Claim claim = claims.get(id);
+<pre><code>@Transactional
+public void addEvidence(ClaimId id, EvidenceRequest request) {
+    Claim claim = claims.findById(id).orElseThrow();
     if (claim.getEvidence().size() &gt;= 10) throw new TooMuchEvidence(id);
     if (request.fileName() == null) throw new IllegalArgumentException();
     claim.getEvidence().add(new EvidenceItem(request.fileName()));
@@ -180,15 +259,17 @@ item.setVerifiedOn(today);</code></pre>
 }</code></pre>
 <p>The limit of 10 is now in the service. The next service that adds evidence (an import job, say) does not know about it.</p>
 <p><strong>Good</strong> — the same six steps as <code>close</code>, and nothing else:</p>
-<pre><code>public void addEvidence(ClaimId id, long expectedVersion, FileName fileName) {
-    Claim claim = claims.get(id);                            // 1
+<pre><code>@Transactional
+public void addEvidence(ClaimId id, long expectedVersion, FileName fileName) {
+    Claim claim = claims.findById(id).orElseThrow(() -&gt; new ClaimNotFound(id));   // 1
     claim.requireVersion(expectedVersion);                   // 2
                                                              // 3: no outside facts needed
-    claim.addEvidence(fileName, clock.today());              // 4: the entity checks the limit
+    claim.addEvidence(fileName, LocalDate.now(clock));       // 4: the entity checks the limit
     claims.save(claim);                                      // 5
     audit.record("evidence added", id);                      // 6
 }</code></pre>
-<p>A service method contains no <code>if</code> about status, amounts, dates or counts. If you want to write one, it belongs in the entity (rule 1) or in a value object (rule 6). The database transaction covers steps 1 to 6; anything that calls another microservice happens before it opens (rule 17). Take the time from one injected <code>clock</code>, so tests can set the date.</p>
+<p>A service method contains no <code>if</code> about status, amounts, dates or counts. If you want to write one, it belongs in the entity (rule 1) or in a value object (rule 6). The transaction covers steps 1 to 6; anything that calls another microservice happens before it opens (rule 17). Take the time from the <code>Clock</code> bean, so tests can set the date.</p>
+<p><em>Spring: <code>@Transactional</code> on a public method of a <code>@Service</code> bean; a call from another method of the same class bypasses it, so keep each business action in its own public method.</em></p>
 <h3>4. Name classes, methods and errors with the business's own words</h3>
 <p>The business says "close a claim" and "a claim has open actions".</p>
 <p><strong>Bad</strong>:</p>
@@ -198,18 +279,19 @@ throw new ValidationException("invalid state");</code></pre>
 <p><strong>Good</strong>:</p>
 <pre><code>claim.close(openActions, today);
 throw new ClaimHasOpenActions(id);</code></pre>
-<p>The design note, the code, the error message and the conversation with the business then use the same words. One shared error handler turns <code>ClaimHasOpenActions</code> into the HTTP answer <code>422</code> with the code <code>CLAIM_HAS_OPEN_ACTIONS</code>; the API Design Developer Guide, rule 26, shows it. The entity never knows about HTTP.</p>
+<p>The design note, the code, the error message and the conversation with the business then use the same words. The shared <code>@RestControllerAdvice</code> turns <code>ClaimHasOpenActions</code> into <code>422</code> with the code <code>CLAIM_HAS_OPEN_ACTIONS</code> ("When a rule refuses", in the walkthrough). The entity never knows about HTTP.</p>
 <h3>5. Put a calculation that spans several objects in a domain service, and only when it has worked examples</h3>
 <p>You must calculate a claimant's weekly entitlement from the claim type, the rate table and the number of children.</p>
 <p><strong>Bad</strong> — a "policy" class that holds one <code>if</code>:</p>
-<pre><code>public class ClaimClosurePolicy {
+<pre><code>@Component
+public class ClaimClosurePolicy {
     public boolean canClose(Claim claim) {
         return claim.evidenceAllVerified();
     }
 }</code></pre>
-<p>This is a rule about closing a claim. Hidden in a helper class, it is one more place to look, and it will be bypassed.</p>
+<p>This is a rule about closing a claim. Hidden in a helper bean, it is one more place to look, and it will be bypassed.</p>
 <p><strong>Good</strong> — a stateless calculation with a table of worked examples in the design note:</p>
-<pre><code>public class EntitlementCalculator {
+<pre><code>public class EntitlementCalculator {                          // a plain class; not a bean, nothing injected
     public Money weeklyEntitlement(ClaimType type, RateTable rates, int children) {
         Money base = rates.baseFor(type);
         return base.plus(rates.perChild().times(children));
@@ -225,9 +307,9 @@ throw new ClaimHasOpenActions(id);</code></pre>
 <p>A domain service never loads or saves. If you cannot write a table like this, the logic is one or two <code>if</code>s and belongs in the entity (rule 1).</p>
 <h3>6. Give every ID and every business value its own type, and check its format once, where the value is created</h3>
 <p>An amount must not be negative. A file name must not be blank. A claimant ID must never be passed where a claim ID is expected.</p>
-<p><strong>Bad</strong> — checks sprinkled along the way:</p>
+<p><strong>Bad</strong> — checks sprinkled along the way, and bare values:</p>
 <pre><code>// in the controller
-if (body.amount() &lt; 0) return badRequest();
+if (body.amount() &lt; 0) return ResponseEntity.badRequest().build();
 // in the service
 if (amount &lt; 0) throw new IllegalArgumentException();
 // in the entity
@@ -249,7 +331,10 @@ public record Money(BigDecimal amount) {
 }
 
 public void close(ClaimId id, int notesNeedingAction, LocalDate today) { ... }    // the compiler checks the types</code></pre>
-<p><code>ClaimId</code>, <code>ClaimantId</code>, <code>NoteId</code>, <code>Money</code>, <code>NoteText</code>, <code>FileName</code>, <code>Nino</code>: never a bare <code>String</code> or <code>BigDecimal</code> inside the microservice. A bare string arrives only at the edges (a request body, a message, a database row) and becomes a type there. Once a <code>Money</code> exists, it is valid, everywhere, and two IDs cannot be swapped by mistake. A check that a code exists in another feature, such as a valid claim type, is not a format check: ask that feature's application service (rule 14).</p>
+<pre><code>@WritingConverter public class ClaimIdToString implements Converter&lt;ClaimId, String&gt; { public String convert(ClaimId id) { return id.value(); } }
+@ReadingConverter public class StringToClaimId implements Converter&lt;String, ClaimId&gt; { public ClaimId convert(String s) { return new ClaimId(s); } }</code></pre>
+<p><code>ClaimId</code>, <code>ClaimantId</code>, <code>NoteId</code>, <code>Money</code>, <code>NoteText</code>, <code>FileName</code>, <code>Nino</code>: never a bare <code>String</code> or <code>BigDecimal</code> inside the microservice. A bare string arrives only at the edges (a request body, a message, a document) and becomes a type there. Once a <code>Money</code> exists, it is valid, everywhere, and two IDs cannot be swapped by mistake.</p>
+<p><em>Spring: a <code>@WritingConverter</code>/<code>@ReadingConverter</code> pair, registered in <code>MongoCustomConversions</code>, stores an ID as a plain string in the document; the same converters let Spring MVC bind <code>@PathVariable ClaimId</code>. <code>Money</code> needs none: a record with a <code>BigDecimal</code> is stored as a nested object with a <code>Decimal128</code>, exact.</em></p>
 <h3>Where does this code go? Stop at the first yes</h3>
 <ol>
 <li>Does it decide whether the entity may change, from its current state? Entity method (rule 1).</li>
@@ -263,80 +348,88 @@ public void close(ClaimId id, int notesNeedingAction, LocalDate today) { ... }  
 <h2>Part B. Aggregates</h2>
 <h3>7. Keep a child inside the aggregate only when the parent's rules need its details, it has a maximum count, and it changes with the parent; otherwise give it its own aggregate</h3>
 <p>You are deciding where evidence items and notes live.</p>
-<p><strong>Bad</strong> — everything a claim has, inside the claim:</p>
-<pre><code>public class Claim {
-    private final List&lt;EvidenceItem&gt; evidence = new ArrayList&lt;&gt;();
-    private final List&lt;Note&gt; notes = new ArrayList&lt;&gt;();          // grows for years
-    private final List&lt;Payment&gt; payments = new ArrayList&lt;&gt;();    // grows for years
+<p><strong>Bad</strong> — everything a claim has, inside the claim document:</p>
+<pre><code>@Document("claims")
+public class Claim {
+    private List&lt;EvidenceItem&gt; evidence = new ArrayList&lt;&gt;();
+    private List&lt;Note&gt; notes = new ArrayList&lt;&gt;();                // grows for years
+    private List&lt;Payment&gt; payments = new ArrayList&lt;&gt;();          // grows for years
 }</code></pre>
-<p>Two caseworkers add a note to the same claim at the same time. The whole claim is one record, so the second save is refused as a conflict (rule 11). After three years the claim record holds 4,000 notes and the save fails on size.</p>
-<p><strong>Good</strong> — ask the four questions in the table about each child. Four times yes: inside. Any no: its own aggregate, holding the parent's ID.</p>
+<p>Two caseworkers add a note to the same claim at the same time. The whole claim is one document, so the second save fails on the version (rule 11). After three years the document holds 4,000 notes and the save fails on DocumentDB's 16 MiB document limit.</p>
+<p><strong>Good</strong> — ask the four questions in the table about each child. Four times yes: inside the document. Any no: its own collection, holding the parent's ID.</p>
 <table>
 <thead><tr><th>Child</th><th>Rule needs details?</th><th>Maximum?</th><th>Changes with parent?</th><th>Meaningless alone?</th><th>Decision</th></tr></thead>
 <tbody>
-<tr><td>Evidence item</td><td>Yes: closing needs every item verified</td><td>10</td><td>Yes</td><td>Yes</td><td>Inside the claim</td></tr>
-<tr><td>Note</td><td>No: closing needs only a count</td><td>None</td><td>No: two caseworkers at once</td><td>No</td><td>Own aggregate</td></tr>
-<tr><td>Payment</td><td>No: only the latest</td><td>None</td><td>No: the payment microservice sends them</td><td>No</td><td>Own aggregate</td></tr>
+<tr><td>Evidence item</td><td>Yes: closing needs every item verified</td><td>10</td><td>Yes</td><td>Yes</td><td>Inside the claim document</td></tr>
+<tr><td>Note</td><td>No: closing needs only a count</td><td>None</td><td>No: two caseworkers at once</td><td>No</td><td>Own collection <code>notes</code></td></tr>
+<tr><td>Payment</td><td>No: only the latest</td><td>None</td><td>No: the payment microservice sends them</td><td>No</td><td>Own collection <code>payments</code></td></tr>
 </tbody>
 </table>
-<pre><code>public class Claim {
-    private final List&lt;EvidenceItem&gt; evidence = new ArrayList&lt;&gt;();   // inside
+<pre><code>@Document("claims")
+public class Claim {
+    private List&lt;EvidenceItem&gt; evidence = new ArrayList&lt;&gt;();   // inside: an array in the claim document
 }
 
+@Document("notes")
 public class Note {
-    private final NoteId id;
-    private final ClaimId claimId;                                   // points at the parent
-    private final NoteText text;
+    @Id private NoteId id;
+    @Version private long version;
+    @Indexed private ClaimId claimId;                        // points at the parent
+    private NoteText text;
     private boolean needsAction;
-    private long version;
 }</code></pre>
-<p>Inside one aggregate a rule is always true, because the whole aggregate is saved in one transaction. Between aggregates a rule is true only at the moment it is checked, which is why <code>close</code> asks for the note count at that moment. Copying the old system's tables one to one as aggregates is the most common way to get this wrong.</p>
+<p>Inside one document a rule is always true, because the document is written atomically. Between collections a rule is true only at the moment it is checked, which is why <code>close</code> asks for the note count at that moment. Copying the old system's tables one to one as aggregates is the most common way to get this wrong.</p>
+<p><em>Spring: a nested object or list in an entity is stored inside the same document; a separate <code>@Document</code> class is a separate collection. <code>@Indexed</code> on <code>claimId</code> names the index the migration creates.</em></p>
 <h3>8. Store another aggregate's ID, never the object itself</h3>
 <p>A note belongs to a claim.</p>
 <p><strong>Bad</strong>:</p>
-<pre><code>public class Note {
-    private Claim claim;
+<pre><code>@Document("notes")
+public class Note {
+    @DocumentReference private Claim claim;                  // or @DBRef
 }</code></pre>
-<p>Loading a note now loads the claim and its evidence. Saving a note saves the claim. You have one large aggregate again, by accident.</p>
+<p>Loading a note now runs a second query for the claim and its evidence; a list of 20 notes runs 21 queries. <code>@DBRef</code> is worse: DocumentDB does not support DBRefs at all.</p>
 <p><strong>Good</strong>:</p>
-<pre><code>public class Note {
+<pre><code>@Document("notes")
+public class Note {
     private final ClaimId claimId;
 }</code></pre>
 <p>When the note feature needs something about the claim, it asks <code>ClaimService</code> with the ID (rule 14).</p>
+<p><em>Spring: <code>@DocumentReference</code> stores the ID but loads the object on read, one query per note; a plain <code>ClaimId</code> field stores the ID and loads nothing.</em></p>
 <h3>9. Save one aggregate per transaction</h3>
 <p>A nightly job must mark 10,000 claims as "review due".</p>
 <p><strong>Bad</strong>:</p>
-<pre><code>// one transaction
+<pre><code>@Transactional
 public void markReviewDue(LocalDate today) {
-    for (Claim claim : claims.findReviewDue(today)) {
+    for (Claim claim : claims.findByReviewDueOnBefore(today)) {
         claim.markReviewDue(today);
         claims.save(claim);
     }
 }</code></pre>
-<p>One transaction for 10,000 records holds locks for minutes, blocks caseworkers, and if record 9,999 fails, nothing is saved.</p>
-<p><strong>Good</strong> — one transaction per record, and skip records already done:</p>
+<p>One DocumentDB transaction has a one-minute limit and a 32 MB log; this one hits both, and if claim 9,999 fails nothing is saved.</p>
+<p><strong>Good</strong> — one save per claim, each atomic on its own, and skip claims already done:</p>
 <pre><code>public void markReviewDue(LocalDate today) {
-    for (ClaimId id : claims.findIdsReviewDue(today)) {
-        markOne(id, today);                                  // its own transaction
+    for (ClaimId id : claims.findIdsByReviewDueOnBefore(today)) {
+        markOne(id, today);
     }
 }
 
-// one transaction
-void markOne(ClaimId id, LocalDate today) {
-    Claim claim = claims.get(id);
+@Transactional
+public void markOne(ClaimId id, LocalDate today) {          // public, called through the bean, so the annotation applies
+    Claim claim = claims.findById(id).orElseThrow(() -&gt; new ClaimNotFound(id));
     if (claim.isReviewDue()) return;                         // already done; safe to rerun
     claim.markReviewDue(today);
     claims.save(claim);
     audit.record("review due", id);
 }</code></pre>
-<p>Saving two aggregates in one transaction needs an approved exception in the design note. Example: creating a claim together with its first note.</p>
+<p>Saving two aggregates in one transaction needs an approved exception in the design note. Example: creating a claim together with its first note (rule 27).</p>
+<p><em>Spring: a single-document <code>save</code> is atomic in DocumentDB without any transaction; <code>@Transactional</code> here exists for the outbox entry saved beside the claim. The loop calls <code>markOne</code> on another bean (or through <code>self</code>), because a call inside the same class does not go through the transaction proxy.</em></p>
 <h3>10. Give every list inside an aggregate a maximum size</h3>
 <p>A claim holds evidence items.</p>
 <p><strong>Bad</strong>:</p>
 <pre><code>public void addEvidence(FileName fileName, LocalDate today) {
     evidence.add(new EvidenceItem(fileName, today));
 }</code></pre>
-<p>A stored record has a size limit. One day a claim with 600 scanned pages fails to save, in production, for one user.</p>
+<p>A DocumentDB document is 16 MiB at most. One day a claim with 600 scanned pages fails to save, in production, for one user.</p>
 <p><strong>Good</strong> — the design note says "at most 10", and the entity refuses the eleventh:</p>
 <pre><code>private static final int MAX_EVIDENCE = 10;
 
@@ -347,21 +440,25 @@ public void addEvidence(FileName fileName, LocalDate today) {
     evidence.add(item);
     events.add(new EvidenceAdded(id, item.id()));             // the ID, not the file name (rule 26)
 }</code></pre>
-<p>A list that cannot have a maximum is not a child; it is its own aggregate (rule 7).</p>
+<p>A list that cannot have a maximum is not a child; it is its own collection (rule 7). The file itself is never in the document: it goes to the object store, and the evidence item holds its reference.</p>
 <h3>11. Refuse a save that was made from an old version of the record</h3>
 <p>Two caseworkers open the same claim. One adds evidence and saves. The other, still looking at the old screen, closes the claim.</p>
 <p><strong>Bad</strong> — the second save wins:</p>
-<pre><code>Claim claim = claims.get(id);
+<pre><code>Claim claim = claims.findById(id).orElseThrow();
 claim.close(open, today);
-claims.save(claim);                                          // overwrites the new evidence</code></pre>
+mongo.save(claim);                                           // no version field: overwrites the new evidence</code></pre>
 <p>The first caseworker's evidence is gone and nobody is told.</p>
-<p><strong>Good</strong> — every change carries the version the user saw, and the entity refuses an old one:</p>
-<pre><code>public class Claim {
+<p><strong>Good</strong> — every change carries the version the user saw, the entity refuses an old one, and the document's <code>@Version</code> refuses it again in the database:</p>
+<pre><code>@Document("claims")
+public class Claim {
+    @Version private long version;
+
     public void requireVersion(long expected) {
-        if (version != expected) throw new ClaimChangedSinceYouLoadedIt(id, expected, version);
+        if (version != expected) throw new VersionConflict(id, expected, version);
     }
 }</code></pre>
-<p>The screen shows "this claim was changed by someone else; reload". <code>requireVersion</code> is step 2 of every change (rule 3) and gives the friendly error. The repository repeats the check in the database (<code>WHERE version = ?</code>, see the walkthrough), because two saves in the same millisecond can both pass the entity's check. Never remove either check or write to one field directly to get around them.</p>
+<p>The screen shows "this claim was changed by someone else; reload". <code>requireVersion</code> is step 2 of every change (rule 3) and gives the friendly error. Spring Data repeats the check in the database, because two saves in the same millisecond can both pass the entity's check. The walkthrough's error handler maps both to <code>409</code>. Never remove either check or update one field with <code>MongoTemplate</code> to get around them.</p>
+<p><em>Spring: <code>@Version</code> makes <code>save</code> send <code>{_id, version: 7}</code> as the filter and <code>version: 8</code> in the update; no match means <code>OptimisticLockingFailureException</code>.</em></p>
 <h3>12. Make every change safe to repeat: a repeated request must not add or count anything twice</h3>
 <p>The payment microservice sends <code>PaymentMadeV1</code>. The broker delivers it twice.</p>
 <p><strong>Bad</strong>:</p>
@@ -374,66 +471,87 @@ claims.save(claim);                                          // overwrites the n
     lastPayment = new Payment(paymentId, amount, paidOn);
     events.add(new PaymentRecorded(id, paymentId));
 }</code></pre>
-<p>A request is repeated after a timeout, because the caller cannot tell whether the first one landed. Three things together make a repeat harmless: the version check for changes from a screen (rule 11), an idempotency key for create requests (a repeat with the same key returns the first result), and a record of processed message IDs for messages (rule 21).</p>
+<p>A request is repeated after a timeout, because the caller cannot tell whether the first one landed. Three things together make a repeat harmless: the version check for changes from a screen (rule 11), an idempotency key for create requests (a repeat with the same key returns the first result), and a record of processed message IDs for messages (rule 21). The database does not help here: DocumentDB has no retryable writes before engine 8.0.2, so the driver must not retry either (<code>retryWrites=false</code>).</p>
 <h3>13. Store money as an exact decimal and time in UTC, and count days in UK dates</h3>
 <p>A claim closed on 1 March can be reopened within 28 days.</p>
 <p><strong>Bad</strong>:</p>
-<pre><code>double amount = 0.1 + 0.2;                                   // 0.30000000000000004
+<pre><code>private double amount;                                       // 0.1 + 0.2 = 0.30000000000000004
+private LocalDate closedOn;                                  // Spring Data stores it as a Date at local midnight
 Instant deadline = closedAt.plus(28 * 24, ChronoUnit.HOURS); // an hour out after the clocks change</code></pre>
+<p>A <code>LocalDate</code> of 1 March written from a machine in British Summer Time is stored as <code>2026-02-28T23:00:00Z</code> and reads back as 28 February on a server set to UTC.</p>
 <p><strong>Good</strong>:</p>
-<pre><code>public record Money(BigDecimal amount) { ... }               // two decimal places, exact (rule 6)
+<pre><code>public record Money(BigDecimal amount) { ... }               // stored as Decimal128, exact (rule 6)
 
-static final ZoneId UK = ZoneId.of("Europe/London");         // one constant, used everywhere
+private Instant closedAt;                                    // stored as a UTC date
+@Field(targetType = FieldType.STRING) private LocalDate closedOn;   // stored as "2026-03-01"
 
-Instant closedAt = clock.instant();                          // stored in UTC
+static final ZoneId UK = ZoneId.of("Europe/London");
 LocalDate closedOn = closedAt.atZone(UK).toLocalDate();
 LocalDate deadline = closedOn.plusDays(28);                  // a date, in UK time</code></pre>
 <p>Floating point gives penny errors. Local timestamps are an hour wrong twice a year. A rule that counts days works in dates, not hours.</p>
+<p><em>Spring: on Boot 4 a <code>BigDecimal</code> is stored as <code>Decimal128</code> by default (<code>spring.data.mongodb.representation.big-decimal</code>); <code>@Field(targetType = FieldType.STRING)</code> stores a <code>LocalDate</code> as an ISO string instead of a shifted <code>Date</code>; <code>Instant</code> is always UTC.</em></p>
 <h2>Part C. Features, microservices and events</h2>
 <h3>14. Use another feature only through its application service, passing IDs and simple values</h3>
 <p>The claim feature needs to know how many notes need action.</p>
 <p><strong>Bad</strong> — reaching into the other feature's storage:</p>
-<pre><code>public class ClaimService {
-    private final NoteRepository notes;                      // another feature's repository
+<pre><code>@Service
+public class ClaimService {
+    private final NoteRepository noteRepository;             // another feature's repository
     ...
-    long open = notes.findByClaimId(id).stream().filter(Note::needsAction).count();
+    long open = noteRepository.findByClaimId(id).stream().filter(Note::needsAction).count();
 }</code></pre>
 <p>When the notes team changes how notes are stored, the claim feature breaks. The "needs action" rule now lives in two features.</p>
 <p><strong>Good</strong> — ask the other feature's application service for the answer:</p>
-<pre><code>public class ClaimService {
-    private final NoteService notes;                         // the other feature's front door
+<pre><code>@Service
+public class ClaimService {
+    private final NoteService noteService;                   // the other feature's front door
     ...
-    int open = notes.countNeedingAction(id);
+    int open = noteService.countNeedingAction(id);
 }</code></pre>
 <p>Pass IDs, numbers and small records, never entities or repositories. Calls go one way: claims may call notes, so notes must not call claims; notes use events for the other direction (rule 19). A build check enforces this.</p>
+<p><em>Spring: both are <code>@Service</code> beans injected by constructor; a repository bean is package-private to its feature, so the other feature cannot inject it.</em></p>
 <h3>15. Check permissions in the controller, never in the service or the entity</h3>
 <p>Only a caseworker with <code>CLOSE_CLAIM</code> may close a claim.</p>
 <p><strong>Bad</strong>:</p>
 <pre><code>public class Claim {
-    public void close(User user, int open, LocalDate today) {
-        if (!user.hasRole("CASEWORKER")) throw new Forbidden();
+    public void close(Authentication user, int open, LocalDate today) {
+        if (!user.getAuthorities().contains("CASEWORKER")) throw new AccessDeniedException("no");
         ...
     }
 }</code></pre>
 <p>A message listener also closes claims (when the payment microservice says the last payment was made). There is no user there, so someone passes a fake system user, and the check means nothing.</p>
 <p><strong>Good</strong> — the controller knows the user, so the controller checks:</p>
-<pre><code>// POST /claims/{id}/close
-public void close(ClaimId id, CloseRequest body, User user) {
-    permissions.require(user, CLOSE_CLAIM);
+<pre><code>@PostMapping("/v1/claims/{id}/close")
+@PreAuthorize("hasAuthority('CLOSE_CLAIM')")
+public ResponseEntity&lt;Void&gt; close(@PathVariable ClaimId id, @RequestBody @Valid CloseRequest body) {
     claimService.close(id, body.version());
-    // reply 204, no body
+    return ResponseEntity.noContent().build();
+}
+
+@WebMvcTest(ClaimController.class)
+class ClaimControllerTest {
+    @Test @WithMockUser(authorities = "VIEW_CLAIM")
+    void refusesWithoutPermission() throws Exception {
+        mvc.perform(post("/v1/claims/9f1c/close").with(csrf()).contentType(APPLICATION_JSON).content("{\"version\":7}"))
+           .andExpect(status().isForbidden());
+    }
 }</code></pre>
-<p>A test proves that a user without the permission gets a refusal. Application services and entities never see a user.</p>
+<p>A test proves that a user without the permission gets <code>403</code>. Application services and entities never see a user.</p>
+<p><em>Spring: <code>@PreAuthorize</code> on the controller method, enabled by <code>@EnableMethodSecurity</code>; the authority comes from the JWT the gateway sends. <code>@WebMvcTest</code> with <code>@WithMockUser</code> tests the check without a server.</em></p>
 <h3>16. Talk to another system only through one adapter class that translates its data into our types</h3>
 <p>Creating a claim needs the eligibility microservice's answer.</p>
 <p><strong>Bad</strong> — their data leaks into our entity:</p>
-<pre><code>Map&lt;String, Object&gt; response = httpClient.get("/eligibility/" + nino);
+<pre><code>Map&lt;String, Object&gt; response = restClient.get().uri("/eligibility/" + nino).retrieve().body(Map.class);
 if ("ELIGIBLE".equals(response.get("status"))) { ... }       // their word, inside our code</code></pre>
 <p>When the eligibility team renames <code>status</code> to <code>outcome</code>, we hunt through our whole codebase.</p>
 <p><strong>Good</strong> — one adapter class, returning our own type and our own errors:</p>
-<pre><code>public class EligibilityClient {
+<pre><code>@Component
+public class EligibilityClient {
+    private final RestClient http;                           // built once, with time limits, in a @Configuration
+
     public Eligibility check(ClaimantId claimantId) {
-        EligibilityResponse theirs = http.get("/eligibility/" + claimantId.value(), EligibilityResponse.class);
+        EligibilityResponse theirs = http.get().uri("/v1/eligibility/{id}", claimantId.value())
+                                         .retrieve().body(EligibilityResponse.class);
         return switch (theirs.status()) {
             case "ELIGIBLE" -&gt; Eligibility.ELIGIBLE;
             case "NOT_ELIGIBLE" -&gt; Eligibility.NOT_ELIGIBLE;
@@ -442,31 +560,33 @@ if ("ELIGIBLE".equals(response.get("status"))) { ... }       // their word, insi
     }
 }</code></pre>
 <p>Nothing from the other system appears outside its adapter. Nobody reads another microservice's database.</p>
+<p><em>Spring: <code>RestClient</code> is Spring's HTTP client; <code>EligibilityResponse</code> is a record Spring deserialises from their JSON and that only this class sees.</em></p>
 <h3>17. Call another microservice before you open the transaction, never inside it</h3>
 <p>Creating a claim asks eligibility, then saves.</p>
 <p><strong>Bad</strong>:</p>
-<pre><code>// one transaction
+<pre><code>@Transactional
 public ClaimId open(ClaimantId claimantId, ClaimType type) {
     Eligibility eligibility = eligibilityClient.check(claimantId);   // a network call, inside the transaction
-    Claim claim = Claim.open(claimantId, type, eligibility, clock.today());
+    Claim claim = Claim.open(claimantId, type, eligibility, LocalDate.now(clock));
     claims.save(claim);
     return claim.id();
 }</code></pre>
-<p>Eligibility takes four seconds today. For four seconds the transaction holds its locks, other caseworkers wait, and the database's transaction time limit is close.</p>
+<p>Eligibility takes four seconds today. For four seconds the transaction holds its session open, and DocumentDB's one-minute transaction limit is a few slow calls away.</p>
 <p><strong>Good</strong> — the call first, then the transaction:</p>
 <pre><code>public ClaimId open(ClaimantId claimantId, ClaimType type) {
     Eligibility eligibility = eligibilityClient.check(claimantId);   // outside
-    return saveNew(claimantId, type, eligibility);
+    return self.saveNew(claimantId, type, eligibility);              // through the proxy, so @Transactional applies
 }
 
-// one transaction
-ClaimId saveNew(ClaimantId claimantId, ClaimType type, Eligibility eligibility) {
-    Claim claim = Claim.open(claimantId, type, eligibility, clock.today());
+@Transactional
+public ClaimId saveNew(ClaimantId claimantId, ClaimType type, Eligibility eligibility) {
+    Claim claim = Claim.open(claimantId, type, eligibility, LocalDate.now(clock));
     claims.save(claim);
     audit.record("claim opened", claim.id());
     return claim.id();
 }</code></pre>
 <p>Get every outside fact first (step 3 in rule 3), then open the transaction and save.</p>
+<p><em>Spring: <code>@Transactional</code> begins when the proxied method is entered, so putting the network call in a non-transactional method keeps it outside. Alternatively, split the two methods over two beans.</em></p>
 <h3>18. Retry a read; never retry a change</h3>
 <p>The eligibility check timed out.</p>
 <p><strong>Bad</strong> — retry everything the same way:</p>
@@ -477,32 +597,35 @@ ClaimId saveNew(ClaimantId claimantId, ClaimType type, Eligibility eligibility) 
 
 try {
     addressClient.changeAddress(claimantId, newAddress);                          // a change: once
-} catch (Unreachable e) {
+} catch (ResourceAccessException e) {                     // Spring's exception for "could not connect"
+    if (e.getCause() instanceof SocketTimeoutException) throw new AddressChangeUnknown(claimantId);   // maybe it happened
     throw new AddressNotChanged(claimantId);              // nothing happened; tell the user
-} catch (TimedOut e) {
-    throw new AddressChangeUnknown(claimantId);           // maybe it happened; the user checks first
 }</code></pre>
 <p>Stop calling a system that keeps failing, for a short time (a circuit breaker). A business action that sends a change to another system makes exactly one call and saves nothing else of its own.</p>
+<p><em>Spring: <code>RestClient</code> throws <code>ResourceAccessException</code> when the connection fails or times out; the cause says which. The time limits are set once on the client's request factory.</em></p>
 <h3>19. Save an event in the same transaction as the change it reports, and send it afterwards</h3>
 <p>Closing a claim must tell the payment microservice.</p>
 <p><strong>Bad</strong> — publish from the service:</p>
 <pre><code>claims.save(claim);
-broker.publish(new ClaimClosedV1(id));                   // the broker is down: saved, never sent</code></pre>
+broker.publish("claims", new ClaimClosedV1(...));         // the broker is down: saved, never sent</code></pre>
 <p>Or the other way round: published first, then the save fails. Payments stop for a claim that is still open.</p>
-<p><strong>Good</strong> — the entity records the event; the repository stores it in the same transaction (an outbox); a background sender publishes it:</p>
+<p><strong>Good</strong> — the entity records the event; an outbox entry is stored in the same transaction; a scheduled sender publishes it (the <code>Outbox</code> class in the walkthrough):</p>
 <pre><code>// in Claim.close
 events.add(new ClaimClosed(id, today));
 
-// in ClaimRepository.save, one transaction (see the walkthrough)
-db.save(claim);
-outbox.add(claim.pullEvents());
+// Claim: Spring Data publishes these when claims.save(claim) runs
+@DomainEvents Collection&lt;DomainEvent&gt; events() { return List.copyOf(events); }
+@AfterDomainEventPublication void clearEvents() { events.clear(); }
 
-// a background sender, every second
-for (OutboxEntry entry : outbox.unsent()) {
-    broker.publish(entry.toIntegrationEvent());          // ClaimClosedV1
-    outbox.markSent(entry);                              // retried next time if the broker is down
-}</code></pre>
+// Outbox: same thread, same transaction
+@EventListener
+public void store(DomainEvent event) { mongo.insert(OutboxEntry.of(event), "outbox"); }
+
+// Outbox: after the commit, every second, retried until the broker takes it
+@Scheduled(fixedDelay = 1000)
+public void send() { ... }</code></pre>
 <p>A saved change always sends its event, and an unsaved change never does. Nobody publishes any other way.</p>
+<p><em>Spring: <code>@DomainEvents</code> and <code>@AfterDomainEventPublication</code> on the aggregate root, <code>@EventListener</code> on the outbox (synchronous, so inside the transaction), <code>@Scheduled</code> for the sender. Do not use <code>@TransactionalEventListener(AFTER_COMMIT)</code> to publish to the broker directly: a crash between the commit and the publish loses the event.</em></p>
 <h3>20. Only add fields to a published event; to remove or rename one, publish a new version</h3>
 <p>The payment team reads <code>ClaimClosedV1.closedOn</code>. You want to call it <code>closureDate</code>.</p>
 <p><strong>Bad</strong>:</p>
@@ -515,30 +638,34 @@ public record ClaimClosedV2(String eventId, String claimId, LocalDate closureDat
 <h3>21. Write every message listener so a message that arrives late, twice or out of order does no harm</h3>
 <p>The payment microservice sends <code>PaymentMadeV1</code>. The broker may deliver it twice, or deliver March's payment after April's.</p>
 <p><strong>Bad</strong>:</p>
-<pre><code>// called by the broker for each PaymentMadeV1
+<pre><code>// called by the message listener for each PaymentMadeV1
 public void on(PaymentMadeV1 event) {
-    Claim claim = claims.get(event.claimId());
+    Claim claim = claims.findById(new ClaimId(event.claimId())).orElseThrow();
     claim.setLastPayment(event.amount(), event.paidOn());    // the last one to arrive wins
     claims.save(claim);
 }</code></pre>
 <p><strong>Good</strong> — an inbox skips repeats, and the entity ignores anything older than what it holds:</p>
-<pre><code>// called by the broker for each PaymentMadeV1
-// one transaction
+<pre><code>@Document("inbox")
+public class InboxEntry { @Id private String eventId; private Instant processedAt; }
+
+// called by the message listener for each PaymentMadeV1
+@Transactional
 public void on(PaymentMadeV1 event) {
-    if (inbox.alreadyProcessed(event.eventId())) return;    // seen it: skip
+    if (mongo.exists(query(where("id").is(event.eventId())), InboxEntry.class)) return;   // already processed: skip
+    mongo.insert(new InboxEntry(event.eventId(), Instant.now(clock)));   // _id is unique: a race loses here
     claimService.recordPayment(                              // translate their strings into our types
         new ClaimId(event.claimId()), new PaymentId(event.paymentId()),
         new Money(event.amount()), event.paidOn());
-    inbox.record(event.eventId());                           // same transaction as the change
-}
+}                                                            // the inbox entry and the change commit together
 
 // in Claim.recordPayment (rule 12)
 if (lastPayment != null &amp;&amp; !paidOn.isAfter(lastPayment.paidOn())) return;</code></pre>
 <p>The listener only translates the message and calls an application service. A message that fails repeatedly goes to a dead-letter queue, where someone finds the cause before it is re-sent. No message broker delivers exactly once and in order.</p>
+<p><em>Spring: <code>@Transactional</code> makes the inbox entry and the claim change one commit, so a crash in between leaves neither. The inbox's <code>@Id</code> is the event ID: if two copies of the message run at once, the second insert fails, which aborts its whole transaction (a write error inside a MongoDB transaction always does), the message comes back, and the <code>exists</code> check then skips it. That is why the check is a find first, not a caught <code>DuplicateKeyException</code>.</em></p>
 <h3>22. Change several microservices as a chain of steps joined by events, with a named step for failure</h3>
 <p>Closing a claim must also stop its payments, which live in the payment microservice.</p>
 <p><strong>Bad</strong> — one transaction across two microservices:</p>
-<pre><code>// one transaction
+<pre><code>@Transactional
 public void close(ClaimId id, long version) {
     ...
     claims.save(claim);
@@ -558,12 +685,13 @@ public void close(ClaimId id, long version) {
 <p><strong>Bad</strong>: start coding, and discover in review that notes should have been inside the claim, or the other way round. Moving children across an aggregate boundary means a data migration.</p>
 <p><strong>Good</strong>: a one-page design note, approved by the design group first:</p>
 <pre><code>Purpose:     caseworkers record notes against a claim; a note can need action
-Aggregates:  Note (own aggregate, holds claimId); no maximum
+Aggregates:  Note (collection "notes", holds claimId); no maximum
 States:      OPEN -&gt; ACTIONED (markActioned)
 Rules:       a claim cannot close while any note needs action
              enforced in Claim.close, with the count passed in
              example: claim C-1 has 2 notes needing action -&gt; close refused
 Events:      NoteNeedsActionV1, NoteActionedV1; used by the claim feature
+Indexes:     notes.claimId; notes.(claimId, needsAction)
 Talks to:    nothing outside the microservice
 Exceptions:  none
 Open questions: can a closed claim get a note?</code></pre>
@@ -572,8 +700,12 @@ Open questions: can a closed claim get a note?</code></pre>
 <p>You are adding a list of claim types that the business maintains.</p>
 <p><strong>Bad</strong>: a <code>ClaimType</code> aggregate with version checks, events and an outbox, for a list of 12 codes that changes twice a year.</p>
 <p><strong>Good</strong>: mark it <strong>Simple</strong> in the design note. A Simple feature is data with no business rules: lookup lists, user preferences. Its entity has fields and getters, and checks may sit in the application service.</p>
-<pre><code>public record ClaimType(String code, String label, boolean active) {}</code></pre>
+<pre><code>@Document("claim_types")
+public record ClaimType(@Id String code, String label, boolean active) {}
+
+public interface ClaimTypeRepository extends MongoRepository&lt;ClaimType, String&gt; {}</code></pre>
 <p>Claims, payments and awards are <strong>Rich</strong>: states and rules. Everything in this guide applies to them. The moment a Simple feature gains a rule ("a claim type cannot be deactivated while claims use it"), it becomes Rich and gets an entity method for that rule.</p>
+<p><em>Spring: a record with <code>@Document</code> and <code>@Id</code> is enough for a lookup list; Spring Data uses the canonical constructor.</em></p>
 <h3>25. Fix a mistake with a safe step today and the proper fix by a date</h3>
 <p>You find that <code>ClaimService</code> holds an <code>if</code> on status that should be in <code>Claim</code>.</p>
 <p>Do the safe step now. Tell the design group the same day. Create a ticket with a date. Then do the proper fix and add a test, so the same mistake fails the build next time. Rules 14 and 20 are what make this possible: a feature can change inside without the others noticing.</p>
@@ -581,7 +713,7 @@ Open questions: can a closed claim get a note?</code></pre>
 <thead><tr><th>You find</th><th>Today</th><th>Proper fix</th><th>Never</th></tr></thead>
 <tbody>
 <tr><td>Two aggregates share a rule that must always be true</td><td>Save both in one transaction; add the exception to the design note</td><td>Merge them; a migration moves the children inside the parent</td><td>Keep the rule true with events</td></tr>
-<tr><td>An aggregate gives frequent conflicts or keeps growing</td><td>Keep the version check; make the screen say "reload"</td><td>Move the part that changes often into its own aggregate</td><td>Turn off the version check</td></tr>
+<tr><td>An aggregate gives frequent conflicts or keeps growing</td><td>Keep the version check; make the screen say "reload"</td><td>Move the part that changes often into its own collection</td><td>Turn off the version check</td></tr>
 <tr><td>A rule sits in a service, controller or listener</td><td>Ticket for this sprint</td><td>Move it into the entity method; add a test</td><td>Copy the <code>if</code> elsewhere</td></tr>
 <tr><td>A feature uses another feature's repository</td><td>Record today's violations so only new ones fail the build</td><td>Add a method on the other feature's application service</td><td>Turn the build check off</td></tr>
 <tr><td>A change sent no event</td><td>Add the missing event to the entity method</td><td>A one-off job sends the missed events, agreed with receivers</td><td>Let other teams read our database</td></tr>
@@ -594,7 +726,7 @@ Open questions: can a closed claim get a note?</code></pre>
 <p>A claim is refused because the National Insurance number is wrong.</p>
 <p><strong>Bad</strong>:</p>
 <pre><code>throw new IllegalArgumentException("Invalid NINO: " + nino);     // lands in the logs
-public record ClaimOpenedV1(String claimId, String nino, String fullName) {}</code></pre>
+public record ClaimOpenedV1(String eventId, String claimId, String nino, String fullName) {}</code></pre>
 <p>Logs and events are copied to monitoring tools and other teams' systems, which the data protection rules for our database do not cover.</p>
 <p><strong>Good</strong>:</p>
 <pre><code>public record Nino(String value) {
@@ -608,57 +740,62 @@ public record ClaimOpenedV1(String eventId, String claimId, String claimantId) {
 <p>The Create claim screen ends with a Check answers page that creates the claim and its first note.</p>
 <p><strong>Bad</strong> — two saves in a service method, with no decision made:</p>
 <pre><code>public ClaimId open(ClaimantId claimantId, ClaimType type, NoteText firstNote) {
-    Claim claim = Claim.open(claimantId, type, eligibility, clock.today());
-    claims.save(claim);                                      // transaction 1
-    Note note = Note.create(claim.id(), firstNote, clock.today());
-    notes.save(note);                                        // transaction 2; the process dies here: claim, no note
+    Claim claim = Claim.open(claimantId, type, eligibility, LocalDate.now(clock));
+    claims.save(claim);                                      // write 1, atomic on its own
+    Note note = Note.create(claim.id(), firstNote, LocalDate.now(clock));
+    noteRepository.save(note);                               // write 2; the process dies here: claim, no note
     return claim.id();
 }</code></pre>
 <p>Half the user's work is saved and the screen shows an error, so the user creates the claim again.</p>
-<p><strong>Good</strong> — three answers, in this order. First, is the second thing really a child? If yes, it goes inside (rule 7) and there is one save. Second, can the second thing follow a moment later? Then the first aggregate raises a domain event and a listener in our own microservice creates the second:</p>
+<p><strong>Good</strong> — three answers, in this order. First, is the second thing really a child? If yes, it goes inside the document (rule 7) and there is one write. Second, can the second thing follow a moment later? Then the first aggregate raises a domain event and a listener in our own microservice creates the second:</p>
 <pre><code>// in Claim.open, when a first note was given
 events.add(new ClaimOpened(id));
 events.add(new FirstNoteRequested(id, firstNote));           // firstNote is a NoteText value object
 
-// a listener inside the claim microservice, its own transaction
-void on(FirstNoteRequested e) {
-    if (inbox.alreadyProcessed(e.eventId())) return;
+// a listener inside the claim microservice, its own transaction, after the claim's commit
+@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+@Transactional(propagation = Propagation.REQUIRES_NEW)
+public void on(FirstNoteRequested e) {
     noteService.add(e.claimId(), e.firstNote());             // the note feature's front door (rule 14)
-    inbox.record(e.eventId());
 }</code></pre>
-<p>Third, when the user must see both at once and neither answer fits, save both in one transaction, with the exception written in the design note:</p>
-<pre><code>// one transaction; approved exception "create claim with first note" in the design note
+<p>Third, when the user must see both at once and neither answer fits, save both in one DocumentDB transaction, with the exception written in the design note:</p>
+<pre><code>// approved exception "create claim with first note" in the design note
 public ClaimId open(ClaimantId claimantId, ClaimType type, NoteText firstNote) {
     Eligibility eligibility = eligibilityClient.check(claimantId);        // before the transaction (rule 17)
-    return transaction(() -&gt; {
-        Claim claim = Claim.open(claimantId, type, eligibility, clock.today());
-        Note note = Note.create(claim.id(), firstNote, clock.today());
-        claims.save(claim);
-        notes.save(note);
-        audit.record("claim opened with first note", claim.id());
-        return claim.id();
-    });
+    return self.saveNew(claimantId, type, eligibility, firstNote);
+}
+
+@Transactional
+public ClaimId saveNew(ClaimantId claimantId, ClaimType type, Eligibility eligibility, NoteText firstNote) {
+    Claim claim = Claim.open(claimantId, type, eligibility, LocalDate.now(clock));
+    Note note = Note.create(claim.id(), firstNote, LocalDate.now(clock));
+    claims.save(claim);
+    noteRepository.save(note);                               // both collections, one commit
+    audit.record("claim opened with first note", claim.id());
+    return claim.id();
 }</code></pre>
-<p>The event answer is the normal one. The two-save answer is allowed because both aggregates are in our database; it is never allowed across microservices (rule 22).</p>
+<p>The event answer is the normal one. The two-save answer is allowed because both collections are in our database; it is never allowed across microservices (rule 22).</p>
+<p><em>Spring: <code>@TransactionalEventListener(AFTER_COMMIT)</code> runs only once the claim is committed, and <code>REQUIRES_NEW</code> gives the note its own transaction; the outbox entry for <code>FirstNoteRequested</code> (rule 19) replays it if the listener fails. DocumentDB runs a multi-document transaction on engine 4.0 and later, through the <code>MongoTransactionManager</code> bean.</em></p>
 <h3>28. Keep a rule that spans all records of a kind true with a unique database index, and turn the index error into a business error</h3>
 <p>The rule: a claimant has at most one open claim.</p>
 <p><strong>Bad</strong> — check, then save:</p>
-<pre><code>if (claims.hasOpenClaimFor(claimantId)) throw new ClaimantAlreadyHasOpenClaim(claimantId);
+<pre><code>if (claims.existsByClaimantIdAndStatus(claimantId, OPEN)) throw new ClaimantAlreadyHasOpenClaim(claimantId);
 claims.save(Claim.open(claimantId, ...));                    // two caseworkers do this at the same second</code></pre>
 <p>Both checks pass, both saves succeed, and the claimant has two open claims.</p>
-<p><strong>Good</strong> — the database holds the rule; the repository translates its error:</p>
-<pre><code>CREATE UNIQUE INDEX one_open_claim_per_claimant ON claim (claimant_id) WHERE status = 'OPEN';</code></pre>
-<pre><code>public void save(Claim claim) {
-    try {
-        int rows = db.save(claim);                           // as in the walkthrough
-        if (rows == 0) throw new ClaimChangedSinceYouLoadedIt(claim.id());
-        outbox.add(claim.pullEvents());
-    } catch (UniqueIndexViolation e) {
-        if (e.index().equals("one_open_claim_per_claimant")) throw new ClaimantAlreadyHasOpenClaim(claim.claimantId());
-        throw e;
-    }
+<p><strong>Good</strong> — the database holds the rule; the service translates its error:</p>
+<pre><code>@Document("claims")
+@CompoundIndex(name = "one_open_claim_per_claimant", def = "{'claimantId': 1}", unique = true,
+               partialFilter = "{'status': 'OPEN'}")
+public class Claim { ... }</code></pre>
+<pre><code>// in the walkthrough's DomainErrorHandler
+@ExceptionHandler(DuplicateKeyException.class)
+ProblemDetail duplicate(DuplicateKeyException e) {
+    if (e.getMessage().contains("one_open_claim_per_claimant"))
+        return problem(HttpStatus.UNPROCESSABLE_CONTENT, "Business rule violated", "CLAIMANT_HAS_OPEN_CLAIM", "...");
+    throw e;
 }</code></pre>
-<p>An aggregate can only guarantee rules about itself. A rule about all claims is a database rule, and the index is the only check that two users cannot race past. Keep the <code>if</code> as well, for a friendly error in the common case.</p>
+<p>An aggregate can only guarantee rules about itself. A rule about all claims is a database rule, and the index is the only check that two users cannot race past. Keep the <code>exists</code> check as well, for a friendly error in the common case. The index error is translated at the edge, not inside the service: a write error aborts the DocumentDB transaction, so there is nothing left to do in the service but let it roll back.</p>
+<p><em>Spring: <code>@CompoundIndex</code> with <code>partialFilter</code> describes a partial unique index, which DocumentDB supports on engine 5.0 and later; the migration creates it (automatic index creation stays off). A violation surfaces as Spring's <code>DuplicateKeyException</code>, which the shared <code>@RestControllerAdvice</code> maps.</em></p>
 <h3>29. Create an entity through a named factory method that checks the creation rules and raises the event; keep the constructor private</h3>
 <p>You are writing the code that creates a claim.</p>
 <p><strong>Bad</strong>:</p>
@@ -668,7 +805,9 @@ claim.setStatus(OPEN);
 claims.save(claim);</code></pre>
 <p>Nothing checks eligibility or the claim type, and no <code>ClaimOpened</code> event is sent.</p>
 <p><strong>Good</strong>:</p>
-<pre><code>public class Claim {
+<pre><code>@Document("claims")
+public class Claim {
+    @PersistenceCreator
     private Claim(ClaimId id, ClaimantId claimantId, ClaimType type, LocalDate openedOn) { ... }
 
     public static Claim open(ClaimantId claimantId, ClaimType type, Eligibility eligibility, LocalDate today) {
@@ -679,57 +818,72 @@ claims.save(claim);</code></pre>
         return claim;
     }
 }</code></pre>
-<p>Creation is a business action like any other, so it has a business name and its rules live in one place. The only <code>new Claim(...)</code> is inside <code>Claim</code> and inside the repository when it loads.</p>
-<h3>30. Read for a screen through a query class that reads the tables directly; never build a screen out of aggregates</h3>
+<p>Creation is a business action like any other, so it has a business name and its rules live in one place. The only <code>new Claim(...)</code> is inside <code>Claim</code> and inside Spring Data when it loads a document. We make our own IDs (<code>ClaimId.next()</code>), so the document's <code>_id</code> is never left to the database.</p>
+<p><em>Spring: <code>@PersistenceCreator</code> marks the constructor Spring Data uses when reading a document, so it can stay private and skip the creation rules; the public factory keeps them.</em></p>
+<h3>30. Read for a screen through a query class that reads the collections directly; never build a screen out of aggregates</h3>
 <p>The claim list shows the claim ID, status, claimant name, number of open notes and last payment date, for 50 claims a page.</p>
 <p><strong>Bad</strong> — load aggregates and pick fields out:</p>
 <pre><code>List&lt;ClaimRow&gt; rows = new ArrayList&lt;&gt;();
-for (Claim claim : claims.findOpen(page)) {                  // 50 full aggregates with evidence
-    int open = notes.countNeedingAction(claim.id());         // 50 more queries
+for (Claim claim : claims.findByStatus(OPEN, page)) {         // 50 full documents with evidence
+    int open = noteService.countNeedingAction(claim.id());   // 50 more queries
     rows.add(new ClaimRow(claim.id(), claim.status(), open, claim.lastPayment()));
 }</code></pre>
 <p>Fifty-one database round trips for one page, and the aggregate code now has getters that exist only for screens.</p>
-<p><strong>Good</strong> — a query class, one SQL statement, a flat record:</p>
-<pre><code>public class ClaimListQuery {
-    public Page&lt;ClaimRow&gt; openClaims(int page) {
-        return db.query("""
-            SELECT c.id, c.status, c.claimant_name, c.last_paid_on,
-                   (SELECT COUNT(*) FROM note n WHERE n.claim_id = c.id AND n.needs_action) AS open_notes
-            FROM claim c WHERE c.status = 'OPEN'
-            ORDER BY c.opened_on DESC LIMIT 50 OFFSET ?""", page * 50, ClaimRow::from);
+<p><strong>Good</strong> — a query class, two queries, a flat record:</p>
+<pre><code>@Component
+public class ClaimListQuery {
+    public List&lt;ClaimRow&gt; openClaims(int page) {
+        Query q = query(where("status").is("OPEN")).with(Sort.by(DESC, "openedOn")).skip(page * 50L).limit(50);
+        q.fields().include("status", "claimantName", "lastPayment.paidOn");
+        List&lt;ClaimRow&gt; rows = mongo.find(q, ClaimRow.class, "claims");          // query 1: the page
+
+        Map&lt;String, Integer&gt; openNotes = mongo.aggregate(newAggregation(          // query 2: counts for those 50
+                match(where("claimId").in(ids(rows)).and("needsAction").is(true)),
+                group("claimId").count().as("open")),
+            "notes", OpenNoteCount.class).getMappedResults().stream()
+            .collect(toMap(OpenNoteCount::claimId, OpenNoteCount::open));
+
+        return rows.stream().map(r -&gt; r.withOpenNotes(openNotes.getOrDefault(r.claimId(), 0))).toList();
     }
-}</code></pre>
-<p>Aggregates and repositories exist to change data safely. Reads have no rules to protect, so they go straight to the tables, join across aggregates freely, and return exactly what the screen needs. A query class never changes anything, and a rule never lives in a query.</p>
-<h3>31. Search and reports are queries too; give a slow one its own read table filled by events</h3>
+}
+
+public record ClaimRow(String claimId, String status, String claimantName, LocalDate lastPaidOn, int openNotes) {}</code></pre>
+<p>Aggregates and repositories exist to change data safely. Reads have no rules to protect, so they go straight to the collections, read across aggregates freely, and return exactly what the screen needs. A query class never changes anything, and a rule never lives in a query.</p>
+<p><em>Spring: <code>MongoTemplate.find</code> with <code>fields().include(...)</code> reads only the fields the row needs into a record that is not the entity; <code>mongo.aggregate</code> runs a <code>$match</code> and <code>$group</code> pipeline. A list query may use <code>secondaryPreferred</code> reads; an application service never does, because DocumentDB replicas are eventually consistent.</em></p>
+<h3>31. Search and reports are queries too; give a slow one its own read collection filled by events</h3>
 <p>The business wants a report of claims closed per month with total payments.</p>
 <p><strong>Bad</strong> — compute it from aggregates at request time:</p>
-<pre><code>for (Claim claim : claims.findAll()) { ... }                 // 2 million claims</code></pre>
-<p><strong>Good</strong> — a query over the tables (rule 30). When that is too slow, keep a separate read table that the domain events fill:</p>
-<pre><code>// a listener in our own microservice
-void on(ClaimClosed e) {
-    monthlyClosures.increment(YearMonth.from(e.closedOn()));
+<pre><code>for (Claim claim : claims.findAll()) { ... }                 // 2 million documents</code></pre>
+<p><strong>Good</strong> — a query over the collections (rule 30). When that is too slow, keep a separate read collection that the domain events fill:</p>
+<pre><code>@EventListener
+public void on(ClaimClosed e) {
+    mongo.upsert(query(where("month").is(YearMonth.from(e.closedOn()).toString())),
+                 new Update().inc("closedCount", 1), "monthly_closure_report");
 }</code></pre>
-<pre><code>SELECT month, closed_count, total_paid FROM monthly_closure_report ORDER BY month;</code></pre>
-<p>The read table is a copy, built from events, and can be rebuilt by replaying them. Nothing is ever changed through it.</p>
+<pre><code>mongo.find(new Query().with(Sort.by("month")), MonthlyClosure.class, "monthly_closure_report");</code></pre>
+<p>The read collection is a copy, built from events, and can be rebuilt by replaying the outbox. Nothing is ever changed through it.</p>
+<p><em>Spring: <code>MongoTemplate.upsert</code> with <code>Update.inc</code> adds to the month's counter in one atomic write.</em></p>
 <h3>32. Do not store on a parent what a child aggregate knows; ask for it when reading, or copy it through an event and accept a short delay</h3>
 <p>The claim page shows "has notes needing action".</p>
 <p><strong>Bad</strong> — a flag on the claim, set by the note feature:</p>
 <pre><code>// in NoteService.markNeedsAction
-Claim claim = claims.get(note.claimId());
+Claim claim = claims.findById(note.claimId()).orElseThrow();
 claim.setHasOpenNotes(true);                                 // another feature changes our aggregate
 claims.save(claim);</code></pre>
 <p>Two aggregates are saved in one action, the flag drifts when a note is actioned on another path, and the note feature now depends on the claim's internals.</p>
-<p><strong>Good</strong> — the normal answer: ask when reading (rule 30, the <code>open_notes</code> column). When the flag must be on the claim itself, for a rule or for speed, copy it through an event:</p>
-<pre><code>void on(NoteNeedsAction e) {
-    Claim claim = claims.get(e.claimId());
+<p><strong>Good</strong> — the normal answer: ask when reading (rule 30, query 2). When the flag must be on the claim itself, for a rule or for speed, copy it through an event:</p>
+<pre><code>@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+@Transactional(propagation = Propagation.REQUIRES_NEW)
+public void on(NoteNeedsAction e) {
+    Claim claim = claims.findById(e.claimId()).orElseThrow(() -&gt; new ClaimNotFound(e.claimId()));
     claim.noteNeedsAction(e.noteId());                       // a method, not a setter; records the note ID
     claims.save(claim);
 }</code></pre>
-<p>The copy is a second behind, and the design note says so. For the real rule, <code>close</code> still asks for the count at the moment of closing (rule 1), because a copy is never the truth.</p>
+<p>The copy is a moment behind, and the design note says so. For the real rule, <code>close</code> still asks for the count at the moment of closing (rule 1), because a copy is never the truth.</p>
 <h3>33. Never delete a business record; add a business action that marks it, with a reason</h3>
 <p>A caseworker created a claim for the wrong claimant.</p>
 <p><strong>Bad</strong>:</p>
-<pre><code>claims.delete(claimId);</code></pre>
+<pre><code>claims.deleteById(claimId);</code></pre>
 <p>The audit trail, the notes that point at the claim and the events already sent now point at nothing, and the payment microservice may still act on it.</p>
 <p><strong>Good</strong>:</p>
 <pre><code>public void cancel(CancellationReason reason, LocalDate today) {
@@ -738,37 +892,43 @@ claims.save(claim);</code></pre>
     cancelledOn = today;
     events.add(new ClaimCancelled(id, reason, today));
 }</code></pre>
-<p>Lists hide cancelled claims by default. A deletion required by the data protection rules is a separate, approved process that removes personal data and keeps the record's skeleton.</p>
+<p>Lists hide cancelled claims by default. A deletion required by the data protection rules is a separate, approved process that removes personal data and keeps the document's skeleton. A build check fails on any call to <code>deleteById</code>, <code>delete</code> or <code>remove</code> outside that process.</p>
 <h3>34. Run a rule that depends on time from a scheduled job that calls the same entity method, one record per transaction</h3>
 <p>A claim with no activity for 90 days is closed automatically.</p>
-<p><strong>Bad</strong> — a job that updates the table:</p>
-<pre><code>UPDATE claim SET status = 'CLOSED' WHERE last_activity_on &lt; now() - interval '90 days';</code></pre>
-<p>No rule check, no event, no audit; the payment microservice never hears about it.</p>
+<p><strong>Bad</strong> — a job that updates the collection:</p>
+<pre><code>mongo.updateMulti(query(where("lastActivityOn").lt(cutoff)), update("status", "CLOSED"), "claims");</code></pre>
+<p>No rule check, no event, no audit, no version bump; the payment microservice never hears about it.</p>
 <p><strong>Good</strong>:</p>
-<pre><code>public void closeInactiveClaims(LocalDate today) {
+<pre><code>@Scheduled(cron = "0 0 2 * * *")                             // 02:00 every day
+public void closeInactiveClaims() {
+    LocalDate today = LocalDate.now(clock);
     for (ClaimId id : claims.findIdsInactiveSince(today.minusDays(90))) {
-        closeOne(id, today);                                 // one transaction each (rule 9)
+        self.closeOne(id, today);                            // one transaction each (rule 9)
     }
 }
 
-void closeOne(ClaimId id, LocalDate today) {
-    Claim claim = claims.get(id);
-    int open = notes.countNeedingAction(id);
+@Transactional
+public void closeOne(ClaimId id, LocalDate today) {
+    Claim claim = claims.findById(id).orElseThrow(() -&gt; new ClaimNotFound(id));
+    int open = noteService.countNeedingAction(id);
     claim.closeForInactivity(open, today);                   // the entity decides; refuses if notes are open
     claims.save(claim);
     audit.record("claim closed for inactivity", id);
 }</code></pre>
-<p>The job is just another caller of the entity, like the controller and the message listener. The time comes from the injected clock, so a test can set today to any date.</p>
+<p>The job is just another caller of the entity, like the controller and the message listener. The time comes from the <code>Clock</code> bean, so a test can set today to any date.</p>
+<p><em>Spring: <code>@Scheduled(cron = ...)</code> with <code>@EnableScheduling</code>; on more than one instance, a lock in the database makes sure only one runs the job.</em></p>
 <h3>35. When a process has its own steps and deadlines, give it its own aggregate</h3>
 <p>Closing a claim with payments takes three steps across two microservices (rule 22), and the business wants to see which step each claim is at, and chase one that is stuck for two days.</p>
 <p><strong>Bad</strong> — flags on the claim:</p>
 <pre><code>private boolean closeRequested, paymentsStopped, paymentsStopFailed, letterSent;</code></pre>
 <p>The claim's methods fill up with process <code>if</code>s, and nobody can see the whole process in one place.</p>
-<p><strong>Good</strong> — a <code>ClaimClosure</code> aggregate that holds the state of the process and reacts to the events:</p>
-<pre><code>public class ClaimClosure {
-    private final ClaimId claimId;
+<p><strong>Good</strong> — a <code>ClaimClosure</code> aggregate, its own collection, that holds the state of the process and reacts to the events:</p>
+<pre><code>@Document("claim_closures")
+public class ClaimClosure {
+    @Id private ClaimId claimId;                             // one closure per claim
+    @Version private long version;
     private ClosureStep step;                                // REQUESTED, PAYMENTS_STOPPED, LETTER_SENT, DONE, STUCK
-    private LocalDate stepStartedOn;                         // a UK date (rule 13)
+    @Field(targetType = FieldType.STRING) private LocalDate stepStartedOn;   // a UK date (rule 13)
 
     public void paymentsStopped(LocalDate today) {
         if (step != REQUESTED) return;                       // late or repeated event: ignore (rule 21)
@@ -788,52 +948,61 @@ void closeOne(ClaimId id, LocalDate today) {
 <p>The claim keeps its own rules; the process keeps its steps. This is the "directing microservice" of the API guide, at the scale of one aggregate.</p>
 <h3>36. Change an aggregate's shape behind a flag, with a migration that uses the entity's own methods</h3>
 <p>Notes were inside the claim; the design group decided they are their own aggregate (rule 7).</p>
-<p><strong>Bad</strong> — a SQL script on release night:</p>
-<pre><code>INSERT INTO note (id, claim_id, text) SELECT ... FROM claim_notes;</code></pre>
+<p><strong>Bad</strong> — a script on release night:</p>
+<pre><code>db.claims.find().forEach(c =&gt; c.notes.forEach(n =&gt; db.notes.insertOne({ ...n, claimId: c._id })));</code></pre>
 <p>Half the claims are migrated when the script fails, the old code reads the rest, and the two sets drift.</p>
 <p><strong>Good</strong>:</p>
 <ol>
-<li>Release 1: the new <code>Note</code> aggregate and repository exist; new notes go there; reads check both places behind a feature flag.</li>
+<li>Release 1: the new <code>Note</code> document and repository exist; new notes go to <code>notes</code>; reads check both places behind a feature flag.</li>
 <li>A migration job, one claim per transaction (rule 9), creates the <code>Note</code> aggregates through <code>Note.create</code> and marks the claim as migrated; it can be rerun.</li>
-<li>Release 2: the flag is on for everyone; the old list is read by nobody.</li>
-<li>Release 3: the old column and the flag are removed.</li>
+<li>Release 2: the flag is on for everyone; the old array is read by nobody.</li>
+<li>Release 3: a final job unsets the old array (<code>Update.unset("notes")</code>), and the flag is removed.</li>
 </ol>
 <p>The migration goes through the entity's methods so that every rule and event still holds. Rule 25's "proper fix" column is this list.</p>
+<p><em>Spring: a field that no longer exists in the class is simply ignored when a document is read, so release 2 can ship before the array is removed. Create any new index in the migration, not with <code>auto-index-creation</code>.</em></p>
 <h3>37. Test an entity with no database, a service with a fake repository, and the repository alone against a real database</h3>
 <p>You are writing the tests for "close claim".</p>
 <p><strong>Bad</strong> — every test starts the whole microservice and a database:</p>
-<pre><code>void closeRefusedWhenNotesOpen() {
-    db.insert(claimRow, noteRow);                            // 40 lines of setup
-    http.post("/claims/9f1c/close");
-    assertEquals(422, response.status());
-}</code></pre>
-<p>Ten seconds per test, and the rule being tested is buried under HTTP and SQL.</p>
-<p><strong>Good</strong> — three layers, each tested for what it owns:</p>
-<pre><code>// the entity: the rule, in memory, in milliseconds
+<pre><code>@SpringBootTest
 void closeRefusedWhenNotesOpen() {
+    mongo.insert(claimDocument); mongo.insert(noteDocument);  // 40 lines of setup
+    mvc.perform(post("/v1/claims/9f1c/close")...);
+    ... status().isUnprocessableEntity()
+}</code></pre>
+<p>Ten seconds per test, and the rule being tested is buried under HTTP and documents.</p>
+<p><strong>Good</strong> — three layers, each tested for what it owns:</p>
+<pre><code>// the entity: the rule, in memory, in milliseconds; plain JUnit, no Spring
+@Test void closeRefusedWhenNotesOpen() {
     Claim claim = Claim.open(claimantId, ClaimTypes.standard(), ELIGIBLE, date("2026-10-01"));
     assertThrows(ClaimHasOpenActions.class, () -&gt; claim.close(2, date("2026-10-31")));
 }
 
-// the service: the steps, with a fake repository and a fixed clock
-void closeSavesAndAudits() {
+// the service: the steps, with a hand-written fake repository and a fixed Clock; no Spring
+@Test void closeSavesAndAudits() {
+    ClaimService service = new ClaimService(fakeClaims, fakeNotes, fakeAudit, Clock.fixed(...));
     service.close(claimId, 7);
     assertTrue(fakeClaims.saved(claimId));
     assertEquals("claim closed", fakeAudit.last());
 }
 
-// the repository: the mapping, against a real database, one test class
-void saveAndLoadRoundTrip() { ... }</code></pre>
-<p>Most tests are entity tests, because that is where the rules are. One test per endpoint proves the permission check (rule 15). A test that sets the clock to 29 March proves the date rule (rule 13).</p>
+// the repository: the mapping, against a real MongoDB in a container; one test class
+@DataMongoTest @Testcontainers
+class ClaimRepositoryTest {
+    @Container @ServiceConnection static MongoDBContainer mongo = new MongoDBContainer("mongo:8.0").withReplicaSet();
+    @Test void saveAndLoadRoundTrip() { ... }
+}</code></pre>
+<p>Most tests are entity tests, because that is where the rules are. One <code>@WebMvcTest</code> per endpoint proves the permission check (rule 15). A test that sets the clock to 29 March proves the date rule (rule 13). DocumentDB has no local edition, so the repository test runs against MongoDB; a smoke test against a real DocumentDB cluster runs in the pipeline.</p>
+<p><em>Spring: <code>@DataMongoTest</code> loads only the Mongo slice; <code>@ServiceConnection</code> on the Testcontainers container sets the connection for it; <code>withReplicaSet()</code> is needed for transactions.</em></p>
 <h3>38. Show two aggregates on one screen and save them with two buttons; one button that saves two things is a design smell to raise</h3>
 <p>The claim page shows the claim and lets the caseworker edit contact details and add a note.</p>
 <p><strong>Bad</strong> — one Save button that sends both:</p>
-<pre><code>public void saveClaimPage(ClaimId id, long version, ContactDetails contact, NoteText noteText) {
-    Claim claim = claims.get(id);
+<pre><code>@Transactional
+public void saveClaimPage(ClaimId id, long version, ContactDetails contact, NoteText noteText) {
+    Claim claim = claims.findById(id).orElseThrow(() -&gt; new ClaimNotFound(id));
     claim.requireVersion(version);
     claim.changeContact(contact);
     claims.save(claim);
-    notes.save(Note.create(id, noteText, clock.today()));    // two aggregates, one button (rule 27)
+    noteRepository.save(Note.create(id, noteText, LocalDate.now(clock)));    // two aggregates, one button (rule 27)
 }</code></pre>
 <p><strong>Good</strong> — each part of the screen saves its own aggregate with its own button and its own version:</p>
 <pre><code>[Contact details]   Save contact details  -&gt; ClaimService.changeContact(claimId, version, contact)

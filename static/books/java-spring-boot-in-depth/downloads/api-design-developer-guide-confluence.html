@@ -50,6 +50,8 @@ from the same folder and attach it to the page.</p>
 <tr><td>Group of details</td><td>Fields the screen shows and saves together, such as contact method, phone and email</td></tr>
 <tr><td>Business action</td><td>A change the business names as its own step, such as "close claim"</td></tr>
 <tr><td>Idempotency key</td><td>A random ID sent with a create. A repeat with the same key returns the first result instead of a second record</td></tr>
+<tr><td>Access token</td><td>The gateway's signed token (a JWT) for the user; its <code>permissions</code> claim lists what they may do</td></tr>
+<tr><td><code>traceparent</code></td><td>The header that carries the trace ID through every call, so one action can be followed through every log</td></tr>
 <tr><td>Owner</td><td>The one microservice that starts a process across microservices and records its progress</td></tr>
 <tr><td>Design group</td><td>The lead engineer, senior engineers and business experts, who approve design decisions</td></tr>
 </tbody>
@@ -57,15 +59,7 @@ from the same folder and attach it to the page.</p>
 <h2>Closing a claim, end to end</h2>
 <p>A caseworker opens claim <code>9f1c</code> and presses <strong>Close claim</strong>. This is what happens, in order. Later rules point back at these six requests.</p>
 <ol>
-<li>The browser posts the form to Express. The browser only ever talks to Express, and only carries the gateway's session cookie.</li>
-</ol>
-<pre><code>POST /claims/9f1c/close HTTP/1.1
-Host: express.example.gov.uk
-Cookie: session=...
-
-version=7</code></pre>
-<ol start="2">
-<li>Express reads the claim first, so it can check the version the user saw, and sends the user's token with the call.</li>
+<li>When Express built the claim page, it read the claim with the user's token and put the <code>version</code> in a hidden field of the form.</li>
 </ol>
 <pre><code>GET /v1/claims/9f1c
 Authorization: Bearer eyJ...
@@ -74,8 +68,16 @@ traceparent: 00-4bf92f35...
 200 OK
 { "claimId": "9f1c", "version": 7, "status": "OPEN", "claimType": "STANDARD",
   "createdAt": "2026-10-01T09:15:00Z", "paymentsStopped": false }</code></pre>
+<ol start="2">
+<li>The browser posts the form to Express. The browser only ever talks to Express, and only carries the gateway's session cookie.</li>
+</ol>
+<pre><code>POST /claims/9f1c/close HTTP/1.1
+Host: express.example.gov.uk
+Cookie: session=...
+
+version=7</code></pre>
 <ol start="3">
-<li>Express sends the business action to the claim microservice, with the version.</li>
+<li>Express sends the business action to the claim microservice, with the version the user saw. It does not read the claim again: a fresh version would defeat the check.</li>
 </ol>
 <pre><code>POST /v1/claims/9f1c/close
 Authorization: Bearer eyJ...
@@ -101,7 +103,7 @@ Location: /claims/9f1c/closed</code></pre>
 <ol start="6">
 <li>Later, the payment microservice receives <code>ClaimClosedV1</code> from the message broker, stops the payments and sends <code>PaymentsStoppedV1</code>. The claim microservice receives that and sets <code>paymentsStopped: true</code>. Express never calls the payment microservice for this.</li>
 </ol>
-<p>Every call from Express to a microservice carries the <code>Authorization: Bearer</code> and <code>traceparent</code> headers of step 2, and every microservice path starts with <code>/v1</code>. The rest of this guide leaves all three out, so each example shows only its point.</p>
+<p>Every call from Express to a microservice carries the <code>Authorization: Bearer</code> and <code>traceparent</code> headers of step 1, and every microservice path starts with <code>/v1</code>. The rest of this guide leaves all three out, so each example shows only its point.</p>
 <h2>Part A. Endpoints that change data</h2>
 <h3>1. Pick the endpoint by what the user saves: a new record is a create, a named business step is an action, anything else saves a group of details</h3>
 <p>You are building the <strong>Change contact details</strong> pages, which end with a Check answers page, and the <strong>Close claim</strong> button.</p>
@@ -127,13 +129,13 @@ PUT /claims/9f1c/contact-preferences
 <p>You are building <strong>Create claim</strong>: five question pages, then a Check answers page that creates the claim with its first note.</p>
 <p><strong>Bad</strong> — Express sends one request per thing created:</p>
 <pre><code>const { claimId } = await claims.post('/claims', { claimantId, claimType });
-await claims.post(`/claims/${claimId}/notes`, { text, category, actionRequired: true });</code></pre>
+await claims.post(`/claims/${claimId}/notes`, { text, category, needsAction: true });</code></pre>
 <p>The second call times out. The claim exists without its note, Express cannot undo the first call, and the user sees an error and creates a second claim.</p>
-<p><strong>Good</strong> — one request with everything the user collected; the microservice saves it in one database transaction:</p>
+<p><strong>Good</strong> — one request with everything the user collected; the microservice saves it in one database transaction (an approved exception in its design note: Pragmatic DDD Guide, rule 27):</p>
 <pre><code>POST /claims
 Idempotency-Key: 7d3e...
 { "claimantId": "c88", "claimType": "STANDARD",
-  "notes": [ { "text": "Call back Monday", "category": "CONTACT", "actionRequired": true } ] }
+  "notes": [ { "text": "Call back Monday", "category": "CONTACT", "needsAction": true } ] }
 
 201 Created
 Location: /claims/9f1c
@@ -279,8 +281,8 @@ class CustomerClient {
         } catch (HttpServerErrorException e) {
             throw new DependencyUnavailable("customers");                              // -&gt; 503; nothing was changed
         } catch (ResourceAccessException e) {                                          // no connection, or no answer in time
-            if (e.getCause() instanceof SocketTimeoutException) throw new OutcomeUnknown(id);   // -&gt; 504 OUTCOME_UNKNOWN
-            throw new DependencyUnavailable("customers");                              // -&gt; 503
+            if (e.getCause() instanceof ConnectException) throw new DependencyUnavailable("customers");   // never reached them -&gt; 503
+            throw new OutcomeUnknown(id);                                               // reached them, reply lost -&gt; 504 OUTCOME_UNKNOWN
         }
     }
 }</code></pre>
@@ -381,8 +383,8 @@ public ClaimDetail get(@PathVariable String id, @RequestHeader("X-User-Id") Stri
 @RequestMapping("/claims")
 class ClaimController {
     @GetMapping("/{id}")
-    @PreAuthorize("hasAuthority('claims:read')")         // the authorities come from the access token
-    ClaimDetail get(@PathVariable ClaimId id) {          // the string becomes our type at the edge (a registered converter)
+    @PreAuthorize("hasAuthority('VIEW_CLAIM')")         // the authorities come from the access token
+    ClaimDetail get(@PathVariable ClaimId id) {          // the string becomes our type at the edge (DDD guide, rule 6)
         return claimQueries.detail(id);
     }
 }
@@ -392,7 +394,7 @@ class ClaimControllerTest {
     @Autowired MockMvc mvc;
 
     @Test
-    @WithMockUser(authorities = "claims:write")          // signed in, but without this permission
+    @WithMockUser(authorities = "EDIT_CLAIM")          // signed in, but without this permission
     void refusesUserWithoutPermission() throws Exception {
         mvc.perform(get("/claims/9f1c")).andExpect(status().isForbidden());
     }
@@ -454,11 +456,11 @@ public void close(ClaimId id, long expectedVersion) {
 // receiver, in the payment microservice: called by the message listener for each ClaimClosedV1
 @Transactional
 public void on(ClaimClosedV1 e) {
-    if (mongo.exists(query(where("_id").is(e.eventId())), "inbox")) return;   // seen it: skip
+    if (inbox.seen(e.eventId())) return;                                       // seen it: skip (the Inbox class: DDD guide, rule 21)
+    inbox.record(e.eventId());                                                 // same transaction; its unique _id catches a race
     paymentService.stopFor(new ClaimId(e.claimId()), e.closedOn());           // their string, our type
-    mongo.insert(new InboxEntry(e.eventId()), "inbox");                        // same transaction; unique _id catches a race
 }</code></pre>
-<p><em>Spring: <code>@Transactional</code> with a <code>MongoTransactionManager</code> bean wraps both writes (DocumentDB 4.0 or later); <code>@DomainEvents</code> on the aggregate and an <code>@EventListener</code> write the outbox entry; <code>MongoTemplate.insert</code> adds the inbox entry.</em></p>
+<p><em>Spring: <code>@Transactional</code> with a <code>MongoTransactionManager</code> bean wraps both writes (DocumentDB 4.0 or later); <code>@DomainEvents</code> on the aggregate and an <code>@EventListener</code> write the outbox entry; the <code>Inbox</code> class wraps <code>MongoTemplate</code>.</em></p>
 <p>Why: an event can be delivered more than once, and a crash can happen between any two lines.</p>
 <h3>19. Decide what happens when a step fails before you build the process</h3>
 <p>You are designing the close-claim process, and the payment microservice may be unable to stop a payment that is already with the bank.</p>
@@ -527,7 +529,7 @@ POST /claims/search                   reads by personal details (rule 25)</code>
 POST /claims/9f1c/resolve-action
 GET  /attachments/0c7e...
 GET  /claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20</code></pre>
-<p>Filters, sorting and paging are query parameters. IDs are UUID strings that Express passes back unchanged and never reads meaning from.</p>
+<p>Filters, sorting and paging are query parameters. IDs are opaque strings, UUIDs without dashes (shortened in these examples), that Express passes back unchanged and never reads meaning from.</p>
 <p>Why: a predictable URL needs no lookup.</p>
 <h3>24. Return a JSON object with camelCase fields, ISO dates, UTC times and two-decimal money</h3>
 <p>You are writing the response of <code>GET /claims/9f1c/payments</code>.</p>
@@ -563,20 +565,34 @@ GET  /claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20</code></
 <pre><code>if (notesNeedingAction &gt; 0) throw new ClaimHasOpenActions(id, notesNeedingAction);   // in Claim.close
 
 @RestControllerAdvice
-class ApiErrors extends ResponseEntityExceptionHandler {         // the one error handler of the microservice
-
+class ApiErrors extends ResponseEntityExceptionHandler {         // the one error handler of the microservice; rules 44 and 9 add 503 and 504
     @ExceptionHandler(RuleRefused.class)                         // every business rule error extends RuleRefused
-    ProblemDetail ruleRefused(RuleRefused e) {
-        return problem(422, "Business rule violated", e.code(), e.getMessage());   // CLAIM_HAS_OPEN_ACTIONS
+    ProblemDetail ruleRefused(RuleRefused e) { return problem(UNPROCESSABLE_CONTENT, "Business rule violated", e.code(), e.getMessage()); }
+
+    @ExceptionHandler({VersionConflict.class, OptimisticLockingFailureException.class})   // the entity's check, and @Version's
+    ProblemDetail conflict(Exception e) { return problem(CONFLICT, "Record changed", "CONCURRENT_UPDATE", e.getMessage()); }
+
+    @ExceptionHandler(NotFound.class)
+    ProblemDetail notFound(NotFound e) { return problem(NOT_FOUND, "Not found", e.code(), e.getMessage()); }
+
+    @ExceptionHandler(AccessDeniedException.class)               // @PreAuthorize said no: 403 here, so the catch-all cannot make it a 500
+    ProblemDetail forbidden(AccessDeniedException e) { return problem(FORBIDDEN, "Forbidden", "FORBIDDEN", "You do not have permission for this action"); }
+
+    @ExceptionHandler(Exception.class)                           // anything else is a bug
+    ProblemDetail bug(Exception e) {
+        log.error("unhandled", e);                               // the stack trace goes to the log, never to the caller
+        return problem(INTERNAL_SERVER_ERROR, "Unexpected error", "INTERNAL_ERROR", "Quote the traceId to the team");
     }
 
-    @ExceptionHandler(OptimisticLockingFailureException.class)   // thrown by save() when @Version is old
-    ProblemDetail conflict(OptimisticLockingFailureException e) {
-        return problem(409, "Record changed", "CONCURRENT_UPDATE", e.getMessage());
+    @Override                                                    // Spring MVC's own errors (bad JSON, unknown URL, wrong method) get the same two fields
+    protected ResponseEntity&lt;Object&gt; handleExceptionInternal(Exception e, Object body, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        ResponseEntity&lt;Object&gt; r = super.handleExceptionInternal(e, body, headers, status, request);
+        if (r != null &amp;&amp; r.getBody() instanceof ProblemDetail p) { p.setProperty("code", HttpStatus.valueOf(status.value()).name()); p.setProperty("traceId", Trace.current()); }
+        return r;
     }
 
-    private ProblemDetail problem(int status, String title, String code, String detail) {
-        ProblemDetail p = ProblemDetail.forStatusAndDetail(HttpStatusCode.valueOf(status), detail);
+    private ProblemDetail problem(HttpStatus status, String title, String code, String detail) {
+        ProblemDetail p = ProblemDetail.forStatusAndDetail(status, detail);
         p.setTitle(title);
         p.setProperty("code", code);
         p.setProperty("traceId", Trace.current());
@@ -587,7 +603,7 @@ class ApiErrors extends ResponseEntityExceptionHandler {         // the one erro
 Content-Type: application/problem+json
 { "status": 422, "title": "Business rule violated", "code": "CLAIM_HAS_OPEN_ACTIONS",
   "detail": "Claim 9f1c has 2 notes that need action", "traceId": "4bf92f35..." }</code></pre>
-<p><em>Spring: a <code>@RestControllerAdvice</code> returning <code>ProblemDetail</code> is written as <code>application/problem+json</code>; extending <code>ResponseEntityExceptionHandler</code> lets it shape the <code>400</code>s too (rule 35).</em></p>
+<p><em>Spring: a <code>@RestControllerAdvice</code> returning <code>ProblemDetail</code> is written as <code>application/problem+json</code>. Extending <code>ResponseEntityExceptionHandler</code> brings Spring MVC's own errors through the same class: <code>handleExceptionInternal</code> is their last stop, and rule 35 overrides the <code>400</code> for field errors. The status names are static imports of <code>HttpStatus</code>.</em></p>
 <table>
 <thead><tr><th>Status</th><th>Meaning</th><th>What Express does</th></tr></thead>
 <tbody>
@@ -743,7 +759,7 @@ Content-Type: application/pdf
 Location: /claims/9f1c/evidence/e3a1
 { "evidenceId": "e3a1", "fileName": "payslip.pdf", "size": 812331 }</code></pre>
 <pre><code>@PostMapping(path = "/{id}/evidence", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-@PreAuthorize("hasAuthority('claims:write')")
+@PreAuthorize("hasAuthority('EDIT_CLAIM')")
 ResponseEntity&lt;EvidenceCreated&gt; upload(@PathVariable ClaimId id,
                                        @RequestParam long version,
                                        @RequestParam MultipartFile file) throws IOException {
@@ -756,7 +772,7 @@ ResponseEntity&lt;EvidenceCreated&gt; upload(@PathVariable ClaimId id,
 // application.properties
 // spring.servlet.multipart.max-file-size=10MB
 // spring.servlet.multipart.max-request-size=11MB</code></pre>
-<p><code>claimService.addEvidence</code> sends the bytes to the object store through one adapter and keeps only a <code>FileReference</code> on the evidence item; a DocumentDB document holds 16 MiB at most, so the bytes never go into the record. The adapter is tested against Floci, which plays the object store locally.</p>
+<p><code>claimService.addEvidence</code> sends the bytes to the object store through one adapter, before it opens the transaction (DDD guide, rule 17), and keeps only a <code>FileReference</code> on the evidence item (DDD guide, rule 10); a DocumentDB document holds 16 MiB at most, so the bytes never go into the record. The adapter is tested against Floci, which plays the object store locally.</p>
 <p><em>Spring: <code>MultipartFile</code> receives the part, and <code>spring.servlet.multipart.max-file-size</code> refuses a bigger one before the controller runs.</em></p>
 <pre><code>// Express: GET /claims/:id/evidence/:evidenceId/file
 app.get('/claims/:id/evidence/:evidenceId/file', async (req, res) =&gt; {
@@ -764,7 +780,7 @@ app.get('/claims/:id/evidence/:evidenceId/file', async (req, res) =&gt; {
   res.set('Content-Disposition', `attachment; filename="${upstream.fileName}"`);
   upstream.pipe(res);
 });</code></pre>
-<p>The claim microservice checks <code>claims:read</code> on the file endpoint like any other (rule 15), and the file name in the response comes from the record, never from the URL.</p>
+<p>The claim microservice checks <code>VIEW_CLAIM</code> on the file endpoint like any other (rule 15), and the file name in the response comes from the record, never from the URL.</p>
 <p>Why: a record stays small and a file is only ever read by a signed-in user with the permission.</p>
 <h3>35. Return field errors as <code>400</code> with an <code>errors</code> list of field, code and message; keep business-rule refusals as <code>422</code></h3>
 <p>On the contact preferences page the caseworker picks EMAIL, leaves the email address blank and types letters in the phone number.</p>
@@ -780,7 +796,7 @@ app.get('/claims/:id/evidence/:evidenceId/file', async (req, res) =&gt; {
     @NotBlank(message = "REQUIRED") String emailAddress) {}
 
 @PutMapping("/{id}/contact-preferences")
-@PreAuthorize("hasAuthority('claims:write')")
+@PreAuthorize("hasAuthority('EDIT_CLAIM')")
 ResponseEntity&lt;Void&gt; saveContactPreferences(@PathVariable ClaimId id, @Valid @RequestBody ContactPreferencesRequest body) {
     claimService.saveContactPreferences(id, body.version(), body.toContactPreferences());
     return ResponseEntity.noContent().build();
@@ -831,7 +847,7 @@ for (const batch of chunk(selected, 5)) {
     catch (e) { results.push({ id, ok: false, code: e.body?.code }); }
   }));
 }</code></pre>
-<p>If the business names "close the month's batch" as one action of its own, the batch becomes a record: <code>POST /claim-batches/b7/close</code> with the batch's <code>version</code> answers <code>202</code> with <code>Location: /claim-batches/b7</code> (rule 21), the microservice still closes one claim per transaction, and <code>GET /claim-batches/b7</code> returns <code>status</code> and a list of <code>{ claimId, status, code }</code>.</p>
+<p>If the business names "close the month's batch" as one action of its own, the batch becomes a record: <code>POST /claim-batches/b7e2/close</code> with the batch's <code>version</code> answers <code>202</code> with <code>Location: /claim-batches/b7e2</code> (rule 21), the microservice still closes one claim per transaction, and <code>GET /claim-batches/b7e2</code> returns <code>status</code> and a list of <code>{ claimId, status, code }</code>.</p>
 <p>Why: each record keeps its own rules and its own version check, and the user sees exactly which ones did not close.</p>
 <h3>37. Store a "save and return later" draft as a record of its own, with no business rules until the final create</h3>
 <p>A claimant fills in five pages of a new claim and presses <strong>Save and come back later</strong>.</p>
@@ -844,17 +860,17 @@ Idempotency-Key: 7d1e...
 { "claimantId": "c88" }
 
 201 Created
-Location: /claim-drafts/d42
-{ "draftId": "d42" }
+Location: /claim-drafts/d420
+{ "draftId": "d420" }
 
-PUT /claim-drafts/d42/contact-preferences
+PUT /claim-drafts/d420/contact-preferences
 { "version": 2, "contactMethod": "EMAIL", "phoneNumber": "", "emailAddress": "jane@example.com" }
 
 204 No Content
 
 POST /claims
 Idempotency-Key: 9ab0...
-{ "fromDraftId": "d42" }                       // the rules run here, once
+{ "fromDraftId": "d420" }                       // the rules run here, once
 
 201 Created
 Location: /claims/9f1c
@@ -886,16 +902,24 @@ Location: /claims/9f1c
 <h3>39. When a microservice calls another with no user present, use its own client-credentials token with its own permission; never a shared key or a stored user token</h3>
 <p>The payment microservice's listener for <code>ClaimClosedV1</code> needs the claim's payment schedule from <code>GET /claims/9f1c/payment-schedule</code>.</p>
 <p><strong>Bad</strong>:</p>
-<pre><code>await httpClient.get(`/claims/${claimId}/payment-schedule`, {
-  headers: { 'X-Api-Key': 'shared-secret-2019' },          // one key for every service, since 2019
-});</code></pre>
+<pre><code>http.get().uri("/claims/{id}/payment-schedule", claimId.value())
+    .header("X-Api-Key", "shared-secret-2019")               // one key for every service, since 2019
+    .retrieve().body(PaymentSchedule.class);</code></pre>
 <p>The key is in three repositories and a chat message, cannot be rotated without a coordinated release, and gives the holder every endpoint.</p>
 <p><strong>Good</strong> — the microservice signs in as itself and gets a short-lived token with only the permission it needs:</p>
-<pre><code>const token = await auth.clientCredentials({ clientId: 'payment-service', scope: 'claims:read-schedule' });
-await httpClient.get(`/claims/${claimId}/payment-schedule`, {
-  headers: { Authorization: `Bearer ${token}`, traceparent: event.traceparent },   // the trace continues from the event
-});</code></pre>
-<p>The claim microservice checks <code>claims:read-schedule</code> on that endpoint like any other permission (rule 15). A user's token is never stored for later use: it belongs to that user's request.</p>
+<pre><code>@Bean RestClient claimsClient(RestClient.Builder builder, ClientRegistrationRepository registrations, OAuth2AuthorizedClientService clients) {
+    var oauth = new OAuth2ClientHttpRequestInterceptor(new AuthorizedClientServiceOAuth2AuthorizedClientManager(registrations, clients));
+    oauth.setClientRegistrationIdResolver(request -&gt; "claims");          // fetches, caches and renews the token
+    return builder.baseUrl(claimsUrl).requestInterceptor(oauth).build();
+}
+
+// application.properties: the service's own credentials
+// spring.security.oauth2.client.registration.claims.client-id=payment-service
+// spring.security.oauth2.client.registration.claims.client-secret=${CLAIMS_CLIENT_SECRET}
+// spring.security.oauth2.client.registration.claims.authorization-grant-type=client_credentials
+// spring.security.oauth2.client.provider.claims.token-uri=https://gateway.example.gov.uk/oauth2/token</code></pre>
+<p>The gateway gives <code>payment-service</code> a token whose <code>permissions</code> holds only <code>VIEW_PAYMENT_SCHEDULE</code>, and the claim microservice checks it on that endpoint like any other permission (rule 15). A user's token is never stored for later use: it belongs to that user's request.</p>
+<p><em>Spring: <code>OAuth2ClientHttpRequestInterceptor</code> with <code>AuthorizedClientServiceOAuth2AuthorizedClientManager</code> adds <code>Authorization: Bearer</code> to every request from any thread, a listener's included; Boot creates no manager bean, so the <code>@Bean</code> makes one. Only a <code>RestClient</code> from Boot's injected <code>RestClient.Builder</code> sends <code>traceparent</code> on.</em></p>
 <p>Why: every caller is named, every call is limited to what that caller needs, and a leaked token dies on its own.</p>
 <h3>40. Receive an outside system's callback on its own endpoint: check the signature, store it with its ID, answer <code>202</code>, and raise our own event; no business logic in the handler</h3>
 <p>The document-check provider posts the result of a payslip check.</p>
@@ -927,7 +951,7 @@ class CallbackRecorder {
         mongo.insert(OutboxEntry.of(new DocumentCheckedV1(body.callbackId(), body.documentId(), body.result())), "outbox");
     }
 }</code></pre>
-<p><em>Spring: <code>@Transactional</code> with <code>MongoTransactionManager</code> stores the callback and its outbox entry together; <code>ResponseEntity.accepted()</code> is the <code>202</code>.</em></p>
+<p><em>Spring: <code>@Transactional</code> with <code>MongoTransactionManager</code> stores the callback and its outbox entry together; <code>ResponseEntity.accepted()</code> is the <code>202</code>. A <code>SecurityFilterChain</code> bean with <code>requestMatchers("/document-checks/callback").permitAll()</code> opens this one path; every other path keeps Boot's default, a valid token.</em></p>
 <p>A listener on <code>DocumentCheckedV1</code> translates their document ID into our evidence ID and calls <code>claimService.verifyEvidence</code>.</p>
 <p>Why: the provider gets a fast, repeatable answer, and the business rule runs where it always runs.</p>
 <h3>41. Export a list as CSV from a <code>GET .../export</code> with the list's filters, a row limit and the personal-data permission; for large exports return <code>202</code> and a status URL</h3>
@@ -947,7 +971,7 @@ Content-Disposition: attachment; filename="claims-open-2026-10-31.csv"
 claimId,status,claimType,createdAt
 9f1c,OPEN,STANDARD,2026-10-01T09:15:00Z
 ...                                       (at most 10,000 rows; 422 EXPORT_TOO_LARGE above that)</code></pre>
-<p>Columns with personal data appear only when the token has <code>claims:export-personal</code>. An export the user cannot wait for answers <code>202</code> with a status URL (rule 21), and the file arrives at a download link later.</p>
+<p>Columns with personal data appear only when the token has <code>EXPORT_CLAIM_PERSONAL_DATA</code>. An export the user cannot wait for answers <code>202</code> with a status URL (rule 21), and the file arrives at a download link later.</p>
 <p>Why: an export is a read with the same rules as the list it comes from, plus a size the server can promise.</p>
 <h3>42. Show another microservice's data by reading it from that microservice in Express; store a copy only when a rule needs it</h3>
 <p>The claim page shows the claimant's name, which the eligibility microservice owns.</p>
@@ -1027,7 +1051,7 @@ class ClaimContractTest {
     @Autowired MockMvc mvc;
 
     @Test
-    @WithMockUser(authorities = "claims:read")
+    @WithMockUser(authorities = "VIEW_CLAIM")
     void listMatchesContract() throws Exception {
         MvcResult r = mvc.perform(get("/claims?status=OPEN&amp;sort=createdAt,desc&amp;page=0&amp;size=20")).andReturn();
         contract.assertValid("GET /claims", r.getResponse());   // fails the build on an unlisted or renamed field

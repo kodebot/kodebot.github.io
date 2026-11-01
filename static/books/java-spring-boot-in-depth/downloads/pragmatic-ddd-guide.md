@@ -395,7 +395,7 @@ public void verifyEvidence(ClaimId id, EvidenceId evidenceId) {
 }
 ```
 
-"Verified once" is now a rule in the service. The next caller that verifies evidence (a bulk job, say) does not know about it.
+"Verified once" sits in the service, which is rule 1's problem. The shape is the second problem: this method has no version check and no audit, and nobody notices, because every service method in the codebase looks different.
 
 **Good** — the same six steps as `close`, and nothing else:
 
@@ -411,7 +411,7 @@ public void verifyEvidence(ClaimId id, long expectedVersion, EvidenceId evidence
 }
 ```
 
-A service method contains no `if` about status, amounts, dates or counts; such an `if` belongs in the entity (rule 1) or a value object (rule 6). The transaction covers steps 1 to 6; a call to another system happens before it opens (rule 17). Take the time from the `Clock` bean, so tests can set the date.
+A service method contains no `if` about status, amounts, dates or counts; such an `if` belongs in the entity (rule 1) or a value object (rule 6). The transaction covers steps 1 to 6; a call to another system happens before it opens (rule 17). Take the time from the `Clock` bean, so tests can set the date. The fixed order is a convention we chose: when every action has the same six steps in the same order, a missing version check or audit stands out in review.
 
 *Spring: `@Transactional` on a public method of a `@Service` bean. A call from another method of the same class bypasses it, so keep each business action in its own public method, or start the transaction with `TransactionTemplate` (rule 9).*
 
@@ -452,7 +452,7 @@ public class ClaimClosurePolicy {
 }
 ```
 
-This is a rule about closing a claim. Hidden in a helper bean, it is one more place to look, and it will be bypassed.
+This is one `if` about closing, so it belongs in `Claim.close` (rule 1); a helper bean is one more place to look. A domain service is for the opposite case: a calculation over several objects that would swamp the entity.
 
 **Good** — a stateless calculation with a table of worked examples in the design note:
 
@@ -717,6 +717,8 @@ public void recordPayment(Money amount) {
 }
 ```
 
+The broker delivers the event twice and the total is doubled. The inbox (rule 21) stops the second delivery; this rule adds the entity's own guard, for the day a replay or a migration bypasses the inbox.
+
 **Good** — the entity keeps what it already has, and ignores a repeat:
 
 ```java
@@ -727,7 +729,7 @@ public void recordPayment(PaymentId paymentId, Money amount, LocalDate paidOn) {
 }
 ```
 
-A request is repeated after a timeout, because the caller cannot tell whether the first one landed. Three things together make a repeat harmless: the version check for changes from a screen (rule 11), an idempotency key for create requests (API guide, rule 4), and the inbox for messages (rule 21).
+A request is repeated after a timeout, because the caller cannot tell whether the first one landed. Three things together make a repeat harmless: the version check for changes from a screen (rule 11), an idempotency key for create requests (API guide, rule 4), and the inbox for messages (rule 21). The entity's own check is the fourth, and the only one that holds on every path.
 
 ### 13. Store money as an exact decimal and time in UTC, and count days in UK dates
 
@@ -891,7 +893,7 @@ public ClaimId open(ClaimantId claimantId, ClaimType type) {
 }
 ```
 
-Eligibility takes four seconds today. For four seconds the transaction holds its session open, and DocumentDB's one-minute transaction limit is a few slow calls away.
+Eligibility takes four seconds today. For four seconds the transaction holds its session and its locks, and it now fails whenever the network does. Had the outside call made a change, a failed commit could not undo it.
 
 **Good** — the call first, then the transaction:
 
@@ -1013,6 +1015,8 @@ public void on(PaymentMadeV1 event) {
     claims.save(claim);
 }
 ```
+
+The second copy of March's payment is saved again, and when April's arrives first, March's overwrites it.
 
 **Good** — an inbox skips repeats, and the entity ignores anything older than what it holds:
 
@@ -1176,7 +1180,7 @@ public ClaimId open(ClaimantId claimantId, ClaimType type, NoteText firstNote) {
 }
 ```
 
-Half the user's work is saved and the screen shows an error, so the user creates the claim again.
+Half the user's work is saved and the screen shows an error.
 
 **Good** — three answers, in this order. First, is the second thing really a child? If yes, it goes inside the document (rule 7) and there is one write. Second, can the second thing follow a moment later? The review task can: the claim's own event goes through the outbox, and a listener in our own microservice receives it from the broker like any other message (rule 21) and creates the task:
 
@@ -1209,7 +1213,7 @@ public ClaimId open(ClaimantId claimantId, ClaimType type, NoteText firstNote) {
 }
 ```
 
-The event answer is the normal one. The two-save answer is allowed because both collections are in our database; it is never allowed across microservices (rule 22).
+Any of the three answers prevents the half-saved claim; the order is our choice. The boundary question comes first because it is the only answer with no delay and no exception. The event is the normal answer. The transaction comes last because each one is an exception to rule 9 that the design note must carry; it is allowed only because both collections are in our database, and never across microservices (rule 22).
 
 *Spring: the listener is a message listener like rule 21's. Not `@TransactionalEventListener(AFTER_COMMIT)`: a crash between the commit and such a listener loses the event, and the outbox never does. DocumentDB runs a multi-document transaction on engine 4.0 and later, through the `MongoTransactionManager` bean.*
 
@@ -1342,6 +1346,8 @@ The business wants a report of claims closed per month with total payments.
 for (Claim claim : claims.findAll()) { ... }                 // 2 million documents
 ```
 
+The report reads two million documents on every request and takes minutes.
+
 **Good** — a query over the collections (rule 30). When that is too slow, keep a separate read collection that the domain events fill:
 
 ```java
@@ -1356,7 +1362,7 @@ public void on(ClaimClosed e) {
 mongo.find(new Query().with(Sort.by("month")), MonthlyClosure.class, "monthly_closure_report");
 ```
 
-The read collection is a copy, built from events, and can be rebuilt by replaying the outbox. Nothing is ever changed through it.
+The read collection is the second step, taken only when the query has been measured too slow, because it is one more thing to keep right. It is a copy, built from events, and can be rebuilt by replaying the outbox. Nothing is ever changed through it.
 
 *Spring: `MongoTemplate.upsert` with `Update.inc` adds to the month's counter in one atomic write.*
 
@@ -1593,6 +1599,8 @@ public void saveClaimPage(ClaimId id, long version, ContactDetails contact, Note
     noteRepository.save(Note.create(id, noteText, LocalDate.now(clock)));    // two aggregates, one button (rule 27)
 }
 ```
+
+One button is one request that saves two aggregates, so every claim page becomes an exception to rule 9 that nobody approved, and the note has no version of its own.
 
 **Good** — each part of the screen saves its own aggregate with its own button and its own version:
 

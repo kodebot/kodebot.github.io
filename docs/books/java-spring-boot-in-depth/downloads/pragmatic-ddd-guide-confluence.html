@@ -340,7 +340,7 @@ public void verifyEvidence(ClaimId id, EvidenceId evidenceId) {
     item.setVerified(true);
     claims.save(claim);
 }</code></pre>
-<p>"Verified once" is now a rule in the service. The next caller that verifies evidence (a bulk job, say) does not know about it.</p>
+<p>"Verified once" sits in the service, which is rule 1's problem. The shape is the second problem: this method has no version check and no audit, and nobody notices, because every service method in the codebase looks different.</p>
 <p><strong>Good</strong> — the same six steps as <code>close</code>, and nothing else:</p>
 <pre><code>@Transactional
 public void verifyEvidence(ClaimId id, long expectedVersion, EvidenceId evidenceId) {
@@ -351,7 +351,7 @@ public void verifyEvidence(ClaimId id, long expectedVersion, EvidenceId evidence
     claims.save(claim);                                      // 5
     audit.record("evidence verified", id);                   // 6
 }</code></pre>
-<p>A service method contains no <code>if</code> about status, amounts, dates or counts; such an <code>if</code> belongs in the entity (rule 1) or a value object (rule 6). The transaction covers steps 1 to 6; a call to another system happens before it opens (rule 17). Take the time from the <code>Clock</code> bean, so tests can set the date.</p>
+<p>A service method contains no <code>if</code> about status, amounts, dates or counts; such an <code>if</code> belongs in the entity (rule 1) or a value object (rule 6). The transaction covers steps 1 to 6; a call to another system happens before it opens (rule 17). Take the time from the <code>Clock</code> bean, so tests can set the date. The fixed order is a convention we chose: when every action has the same six steps in the same order, a missing version check or audit stands out in review.</p>
 <p><em>Spring: <code>@Transactional</code> on a public method of a <code>@Service</code> bean. A call from another method of the same class bypasses it, so keep each business action in its own public method, or start the transaction with <code>TransactionTemplate</code> (rule 9).</em></p>
 <h3>4. Name classes, methods and errors with the business's own words</h3>
 <p>The business says "close a claim" and "a claim has open actions".</p>
@@ -372,7 +372,7 @@ public class ClaimClosurePolicy {
         return claim.evidenceAllVerified();
     }
 }</code></pre>
-<p>This is a rule about closing a claim. Hidden in a helper bean, it is one more place to look, and it will be bypassed.</p>
+<p>This is one <code>if</code> about closing, so it belongs in <code>Claim.close</code> (rule 1); a helper bean is one more place to look. A domain service is for the opposite case: a calculation over several objects that would swamp the entity.</p>
 <p><strong>Good</strong> — a stateless calculation with a table of worked examples in the design note:</p>
 <pre><code>public class EntitlementCalculator {                          // a plain class; not a bean, nothing injected
     public Money weeklyEntitlement(ClaimType type, RateTable rates, int children) {
@@ -548,13 +548,14 @@ public class Claim {
 <pre><code>public void recordPayment(Money amount) {
     totalPaid = totalPaid.plus(amount);                      // twice is wrong
 }</code></pre>
+<p>The broker delivers the event twice and the total is doubled. The inbox (rule 21) stops the second delivery; this rule adds the entity's own guard, for the day a replay or a migration bypasses the inbox.</p>
 <p><strong>Good</strong> — the entity keeps what it already has, and ignores a repeat:</p>
 <pre><code>public void recordPayment(PaymentId paymentId, Money amount, LocalDate paidOn) {
     if (lastPayment != null &amp;&amp; !paidOn.isAfter(lastPayment.paidOn())) return;   // older or same: ignore
     lastPayment = new Payment(paymentId, amount, paidOn);
     events.add(new PaymentRecorded(id, paymentId));
 }</code></pre>
-<p>A request is repeated after a timeout, because the caller cannot tell whether the first one landed. Three things together make a repeat harmless: the version check for changes from a screen (rule 11), an idempotency key for create requests (API guide, rule 4), and the inbox for messages (rule 21).</p>
+<p>A request is repeated after a timeout, because the caller cannot tell whether the first one landed. Three things together make a repeat harmless: the version check for changes from a screen (rule 11), an idempotency key for create requests (API guide, rule 4), and the inbox for messages (rule 21). The entity's own check is the fourth, and the only one that holds on every path.</p>
 <h3>13. Store money as an exact decimal and time in UTC, and count days in UK dates</h3>
 <p>A claim can be reopened within 28 days of closing.</p>
 <p><strong>Bad</strong>:</p>
@@ -658,7 +659,7 @@ public ClaimId open(ClaimantId claimantId, ClaimType type) {
     claims.save(claim);
     return claim.id();
 }</code></pre>
-<p>Eligibility takes four seconds today. For four seconds the transaction holds its session open, and DocumentDB's one-minute transaction limit is a few slow calls away.</p>
+<p>Eligibility takes four seconds today. For four seconds the transaction holds its session and its locks, and it now fails whenever the network does. Had the outside call made a change, a failed commit could not undo it.</p>
 <p><strong>Good</strong> — the call first, then the transaction:</p>
 <pre><code>public ClaimId open(ClaimantId claimantId, ClaimType type) {
     Eligibility eligibility = eligibilityClient.check(claimantId);   // outside
@@ -730,6 +731,7 @@ public void on(PaymentMadeV1 event) {
     claim.setLastPayment(event.amount(), event.paidOn());    // the last one to arrive wins
     claims.save(claim);
 }</code></pre>
+<p>The second copy of March's payment is saved again, and when April's arrives first, March's overwrites it.</p>
 <p><strong>Good</strong> — an inbox skips repeats, and the entity ignores anything older than what it holds:</p>
 <pre><code>@Component
 public class Inbox {                                         // one per microservice
@@ -836,7 +838,7 @@ public record ClaimOpenedV1(String eventId, String claimId, String claimantId, L
     noteRepository.save(note);                               // write 2; the process dies here: claim, no note
     return claim.id();
 }</code></pre>
-<p>Half the user's work is saved and the screen shows an error, so the user creates the claim again.</p>
+<p>Half the user's work is saved and the screen shows an error.</p>
 <p><strong>Good</strong> — three answers, in this order. First, is the second thing really a child? If yes, it goes inside the document (rule 7) and there is one write. Second, can the second thing follow a moment later? The review task can: the claim's own event goes through the outbox, and a listener in our own microservice receives it from the broker like any other message (rule 21) and creates the task:</p>
 <pre><code>// in Claim.open
 events.add(new ClaimOpened(id, today));                      // stored in the outbox with the claim (rule 19)
@@ -860,7 +862,7 @@ public ClaimId open(ClaimantId claimantId, ClaimType type, NoteText firstNote) {
         return claim.id();
     });
 }</code></pre>
-<p>The event answer is the normal one. The two-save answer is allowed because both collections are in our database; it is never allowed across microservices (rule 22).</p>
+<p>Any of the three answers prevents the half-saved claim; the order is our choice. The boundary question comes first because it is the only answer with no delay and no exception. The event is the normal answer. The transaction comes last because each one is an exception to rule 9 that the design note must carry; it is allowed only because both collections are in our database, and never across microservices (rule 22).</p>
 <p><em>Spring: the listener is a message listener like rule 21's. Not <code>@TransactionalEventListener(AFTER_COMMIT)</code>: a crash between the commit and such a listener loses the event, and the outbox never does. DocumentDB runs a multi-document transaction on engine 4.0 and later, through the <code>MongoTransactionManager</code> bean.</em></p>
 <h3>28. Keep a rule that spans all records of a kind true with a unique database index, and turn the index error into a business error</h3>
 <p>The rule: a claimant has at most one open claim.</p>
@@ -943,6 +945,7 @@ public record OpenNoteCount(@Id String claimId, int open) {}      // $group puts
 <p>The business wants a report of claims closed per month with total payments.</p>
 <p><strong>Bad</strong> — compute it from aggregates at request time:</p>
 <pre><code>for (Claim claim : claims.findAll()) { ... }                 // 2 million documents</code></pre>
+<p>The report reads two million documents on every request and takes minutes.</p>
 <p><strong>Good</strong> — a query over the collections (rule 30). When that is too slow, keep a separate read collection that the domain events fill:</p>
 <pre><code>@EventListener
 public void on(ClaimClosed e) {
@@ -950,7 +953,7 @@ public void on(ClaimClosed e) {
                  new Update().inc("closedCount", 1), "monthly_closure_report");
 }</code></pre>
 <pre><code>mongo.find(new Query().with(Sort.by("month")), MonthlyClosure.class, "monthly_closure_report");</code></pre>
-<p>The read collection is a copy, built from events, and can be rebuilt by replaying the outbox. Nothing is ever changed through it.</p>
+<p>The read collection is the second step, taken only when the query has been measured too slow, because it is one more thing to keep right. It is a copy, built from events, and can be rebuilt by replaying the outbox. Nothing is ever changed through it.</p>
 <p><em>Spring: <code>MongoTemplate.upsert</code> with <code>Update.inc</code> adds to the month's counter in one atomic write.</em></p>
 <h3>32. Do not store on a parent what a child aggregate knows; ask for it when reading, or copy it through an event and accept a short delay</h3>
 <p>The claim page shows "has notes needing action".</p>
@@ -1109,6 +1112,7 @@ public void saveClaimPage(ClaimId id, long version, ContactDetails contact, Note
     claims.save(claim);
     noteRepository.save(Note.create(id, noteText, LocalDate.now(clock)));    // two aggregates, one button (rule 27)
 }</code></pre>
+<p>One button is one request that saves two aggregates, so every claim page becomes an exception to rule 9 that nobody approved, and the note has no version of its own.</p>
 <p><strong>Good</strong> — each part of the screen saves its own aggregate with its own button and its own version:</p>
 <pre><code>[Contact details]   Save contact details  -&gt; ClaimService.changeContact(claimId, version, contact)
 [Add a note]        Add note              -&gt; NoteService.add(claimId, noteText)</code></pre>

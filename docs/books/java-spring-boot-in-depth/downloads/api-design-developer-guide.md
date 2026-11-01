@@ -198,7 +198,7 @@ const { claimId } = await claims.post('/claims', { claimantId, claimType });
 await claims.post(`/claims/${claimId}/notes`, { text, category, needsAction: true });
 ```
 
-The second call times out. The claim exists without its note, Express cannot undo the first call, and the user sees an error and creates a second claim.
+The second call times out. The claim exists without its note, Express cannot undo the first call, and the user sees an error for work that was half saved.
 
 **Good** — one request with everything the user collected; the microservice saves it in one database transaction (an approved exception in its design note: Pragmatic DDD Guide, rule 27):
 
@@ -228,7 +228,7 @@ PATCH /claims/9f1c
 200 OK
 ```
 
-A second caseworker cleared the phone number a minute earlier; this request cannot tell, and the microservice cannot tell which fields the user saw. Now `contact-preferences` also carries `status` for one screen, and that screen can close a claim without the rules.
+Express must work out which fields changed, so it keeps the old values in the form or the session and compares. An empty phone field now means either "cleared" or "not sent", and each microservice decides that for itself. And because the request patches the whole claim, a later screen patches `status` and closes a claim without the rules (rule 1).
 
 **Good** — every field in the group, changed or not, with the record's `version`:
 
@@ -241,7 +241,7 @@ PUT /claims/9f1c/contact-preferences
 
 The microservice compares each field with the stored value, checks the rules, saves all changes together, audits the changed field names (not the values) and publishes one event listing the changed fields. Each field belongs to one group, and a group never holds a field that only a business action may change.
 
-Why: the `version` check proves the stored values are the ones the user saw, so every difference is the user's change, and Express never has to send a list of changed fields.
+Why: this is a convention. The `version` check (rule 5) stops a lost update either way. Sending the whole group gives one way to save, "empty means cleared" everywhere, rules checked on the whole group, and no comparing in Express: a server-rendered form posts every field anyway. Once chosen, no microservice accepts a partial body.
 
 ### 4. Send an `Idempotency-Key` header with every create, so a repeat cannot create a second record
 
@@ -337,7 +337,7 @@ async function call(req) {
 
 If a change fails or times out, Express shows the error and the user checks the record before submitting again. A read (`GET`, or `POST /claims/search`) is retried once on a timeout or `503`.
 
-Why: a repeated change may be made twice, and a repeated read is harmless.
+Why: a repeated change may be made twice, and a repeated read is harmless. Against our own microservices a repeat would be refused by the version check or answered by the idempotency key, so this is also a convention: one behaviour in the shared client, whatever the target.
 
 ### 7. Return `201` with a `Location` header for a create, and `204` with no body for every other save
 
@@ -369,7 +369,7 @@ PUT /claims/9f1c/contact-preferences
 
 If Express needs the record afterwards, it reads it with `GET /claims/9f1c`.
 
-Why: one shape for every save keeps Express's handling the same everywhere.
+Why: a convention. After a save Express redirects, and the next page reads the record again (rule 32), so a body in the save response would be parsed in a second place and read by nobody. Once chosen, no save returns a body.
 
 ### 8. When a change goes to another system, make one business action per change and call that system once
 
@@ -513,7 +513,7 @@ record ClaimDetail(String claimId, long version, String claimType, String status
 
 **Summary** is the ID and the few fields a list shows. **Detail** is every field the caller may see.
 
-Why: a third format for one screen ties the microservice to that screen.
+Why: a convention. Two formats have a price, the summary grows with every list screen's needs, and we accept it. A third format for one screen ties the microservice to that screen.
 
 ### 12. Never make one call per row of a list
 
@@ -597,7 +597,7 @@ Cache-Control: max-age=300
 
 Express shows the `label` and stores the `code`. A value with `active: false` still shows on old records but is not offered in forms.
 
-Why: labels change and codes never do.
+Why: labels change and codes never do. Five minutes is a choice, made once: long enough to take the load off the microservice, short enough that a renamed label shows within minutes.
 
 ### 15. Check permission on every endpoint, reads included, even when the caller is our own Express
 
@@ -795,7 +795,7 @@ award owner: CreateAward -> AwardCreated; SetUpPayments -> PaymentsSetUp; SendLe
              status: IN_PROGRESS (step 2 of 3), deadline 5 working days
 ```
 
-Why: a short chain of events is simple; a long one becomes impossible to follow.
+Why: a short chain of events is simple; a long one becomes impossible to follow. Where the line sits is a judgement we made once: more than three steps, a deadline, or progress the business must see. Do not move it per process.
 
 ### 21. Return `204` and a progress field when the user needs only the first step; return `202` with a status URL when the user must wait for all steps
 
@@ -828,7 +828,7 @@ GET /claims/9f1c/award
 
 Express shows the status and checks again on refresh.
 
-Why: the user should never wait for work they do not need, and never be told "done" when it is not.
+Why: the user should never wait for work they do not need, and never be told "done" when it is not. Which answer a process gives is decided once, in its design note.
 
 ## Part D. Conventions
 
@@ -857,7 +857,7 @@ PUT  /claims/9f1c/contact-preferences saves a group
 POST /claims/search                   reads by personal details (rule 25)
 ```
 
-To end a record, use an action such as `close` or `cancel`. `DELETE` only when the design group agrees a record may be removed for ever.
+To end a record, use an action such as `close` or `cancel`. `DELETE` only when the design group agrees a record may be removed for ever. "Never `PATCH`" is rule 3's convention, a group is saved whole, not a failure of its own.
 
 ### 23. Name collections with plural nouns and actions with lower-case verbs; nest one level at most
 
@@ -882,7 +882,7 @@ GET  /claims?status=OPEN&sort=createdAt,desc&page=0&size=20
 
 Filters, sorting and paging are query parameters. IDs are opaque strings, UUIDs without dashes (shortened in these examples), that Express passes back unchanged and never reads meaning from.
 
-Why: a predictable URL needs no lookup.
+Why: a predictable URL needs no lookup. Opaque IDs prevent a real failure; plural nouns, lower-case verbs and one level of nesting are our naming choice, made once.
 
 ### 24. Return a JSON object with camelCase fields, ISO dates, UTC times and two-decimal money
 
@@ -905,7 +905,7 @@ Express's generated client cannot add a `totalItems` field to an array later, th
 
 We use plain JSON, not JSON:API; the GDS standards suggest JSON:API only for an organisation with no standard of its own.
 
-Why: Express's generated client needs one shape.
+Why: Express's generated client needs one shape. Objects, ISO dates and decimal money prevent real errors; camelCase is a choice, made once.
 
 ### 25. Never put personal data in a URL; search by personal details with `POST /claims/search`
 
@@ -1099,7 +1099,7 @@ await claims.put(`/claims/${id}/contact-preferences`, body);
 await payments.post(`/payments/${id}/change-bank-details`, body); // half saved if this fails
 ```
 
-The page takes 1.2 seconds, and if the payment microservice is down the whole page fails.
+The page takes 1.2 seconds, three calls one after another, and the form writes to two microservices with nobody owning the half-saved result (rule 16).
 
 **Good** — all reads at once, each allowed to fail on its own; each save one request to one microservice:
 
@@ -1355,7 +1355,7 @@ const errorList = body.errors.map(e => ({ text: e.message, href: `#${e.field}` }
 
 *Spring: `@Valid` runs Bean Validation on the request record; overriding `handleMethodArgumentNotValid` in the `ResponseEntityExceptionHandler` subclass shapes every `400`.*
 
-Why: a field error is something the user can fix on the page; a business-rule refusal (`422`, rule 26) is not, and Express shows the two differently.
+Why: a field error is something the user can fix on the page; a business-rule refusal (`422`, rule 26) is not, and Express shows the two differently. Using two status codes for that is a choice, made once; Express relies on it.
 
 ### 36. Run a bulk action as one request per record from Express; add a batch endpoint only when the business names the batch as one action, and then return a result per item
 
@@ -1387,7 +1387,7 @@ for (const batch of chunk(selected, 5)) {
 
 If the business names "close the month's batch" as one action of its own, the batch becomes a record: `POST /claim-batches/b7e2/close` with the batch's `version` answers `202` with `Location: /claim-batches/b7e2` (rule 21), the microservice still closes one claim per transaction, and `GET /claim-batches/b7e2` returns `status` and a list of `{ claimId, status, code }`.
 
-Why: each record keeps its own rules and its own version check, and the user sees exactly which ones did not close.
+Why: each record keeps its own rules and its own version check, and the user sees exactly which ones did not close. A batch endpoint with a result per item would do the same; starting from Express is our choice, because it needs no new endpoint.
 
 ### 37. Store a "save and return later" draft as a record of its own, with no business rules until the final create
 
@@ -1648,7 +1648,7 @@ Idempotency-Key: 7d3e...
 { "error": "Connection refused" }
 ```
 
-Express shows a generic error page, the caseworker presses the button again three times, and the circuit to eligibility never gets a chance to recover.
+Express shows a generic error page, the alert counts a bug, and nobody can tell the caseworker that nothing was saved.
 
 **Good**:
 
@@ -1682,7 +1682,7 @@ if (e.status === 503) return res.render('try-again-later', { seconds: e.headers[
 
 Express never retries a change on its own (rule 6). For a read, Express shows the page with what loaded (rule 31).
 
-Why: `503` tells the user the truth, "nothing was saved, try later", and `500` tells them nothing.
+Why: a convention. `503` tells the user the truth, "nothing was saved, try later", `500` tells them nothing, and alerts can tell an outage next door from a bug of ours. The circuit breaker (rule 30) is what protects eligibility, whichever code we return.
 
 ### 45. Make `openapi.yaml` the contract: the microservice validates every response against it, and Express's client tests run against its examples
 
@@ -1701,6 +1701,8 @@ ClaimSummary:
 // Express, a month later, in production
 const opened = formatDate(claim.createdAt);        // undefined → "Invalid Date" on every row
 ```
+
+The file says `openedAt`, the microservice still sends `createdAt`, and nobody finds out until every row shows "Invalid Date".
 
 **Good** — two tests, one on each side:
 

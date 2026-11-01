@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>API Design Developer Guide, short version, for Confluence</title>
+<style>
+body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #231f1c;
+  font-size: 10.5pt; line-height: 1.5; max-width: 860px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 22pt; margin: 0 0 4px; }
+h2 { font-size: 15pt; margin: 28px 0 8px; border-bottom: 1px solid #e6dfd5; padding-bottom: 4px; }
+h3 { font-size: 12pt; margin: 20px 0 6px; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0 16px; font-size: 9pt; }
+th, td { border: 1px solid #cbc1b4; padding: 5px 7px; text-align: left; vertical-align: top; }
+th { background: #f6f2ec; }
+code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.92em; background: #f4f1ec;
+  padding: 0 3px; border-radius: 3px; }
+pre { background: #f4f1ec; border: 1px solid #e6dfd5; border-radius: 4px; padding: 10px 12px;
+  white-space: pre-wrap; font-size: 8.5pt; line-height: 1.45; }
+pre code { background: none; padding: 0; font-size: inherit; }
+a { color: #0f5f66; }
+figure { margin: 14px 0 18px; padding: 12px; border: 1px solid #e6dfd5; border-radius: 4px; }
+figure svg, figure img { display: block; width: 100%; height: auto; max-width: 760px; margin: 0 auto; }
+figcaption { font-size: 9pt; color: #7a7169; text-align: center; margin-top: 8px; }
+.byline { color: #7a7169; margin: 0 0 18px; }
+
+.paste-help { background: #e2f0f1; border: 1px solid #0f5f66; border-radius: 4px; padding: 12px 16px;
+  margin: 0 0 24px; font-size: 10pt; }
+.paste-help button { font: inherit; padding: 6px 14px; margin-top: 6px; cursor: pointer; }
+@media print { .paste-help { display: none; } }
+</style></head>
+<body>
+<div class="paste-help">
+<p><strong>To put this guide on a Confluence page:</strong> press <em>Copy the guide</em>, then
+paste into the Confluence editor. Headings, tables, lists and code come across as Confluence
+formatting. The diagrams are images on kodebot.com. If one does not appear, download its PNG file
+from the same folder and attach it to the page.</p>
+<button type="button" id="copy">Copy the guide</button> <span id="copied"></span>
+</div>
+<article id="guide">
+<h1>API Design Developer Guide, short version</h1>
+<p class="byline">Nov 1, 2026 · @kodebot</p>
+<p>This is the short version of the API Design Developer Guide for the team: every rule, what goes wrong without it and what we do instead, with no request examples. The long guide has the same rules with the same numbers, each with the requests that go wrong, the requests that work and the Spring feature used. Read Parts A and B on your first afternoon, after the DDD guide's Parts A and B; C, D and E on day 2; Part F when the situation comes up.</p>
+<p>It covers the HTTP endpoints of our Spring Boot microservices and how our Express front end calls them. The examples are the claim microservice and its neighbours, eligibility and payment. Express is the only thing the browser talks to.</p>
+<h2>Terms</h2>
+<table>
+<thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Express</td><td>Our front-end server. It builds the GOV.UK pages and calls the microservices</td></tr>
+<tr><td>Gateway</td><td>The server in front of Express. It signs the user in and issues the access token</td></tr>
+<tr><td>Version</td><td>A number on every record (a claim, a note) that goes up by one on every save; every response with a record includes it</td></tr>
+<tr><td>Group of details</td><td>Fields the screen shows and saves together, such as contact method, phone and email</td></tr>
+<tr><td>Business action</td><td>A change the business names as its own step, such as "close claim"</td></tr>
+<tr><td>Idempotency key</td><td>A random ID sent with a create; a repeat with the same key returns the first result</td></tr>
+<tr><td>Access token</td><td>The gateway's signed token for the user; its <code>permissions</code> claim lists what they may do</td></tr>
+</tbody>
+</table>
+<h2>Closing a claim, end to end</h2>
+<p>A caseworker presses Close claim on claim <code>9f1c</code>. When Express built the page, it read the claim with the user's token and put the <code>version</code> in a hidden field. The browser posts the form to Express, which sends the close action to the claim microservice with that version, the user's token and the trace header. It does not read the claim again: a fresh version would defeat the check. The microservice checks the permission, the version and the rules, and answers <code>204</code>; or <code>409</code> if the claim changed; or <code>422</code> with a code if a rule refuses. Express redirects to the claim page, which reads the claim again. The payment microservice learns of the closure from the <code>ClaimClosedV1</code> event, never from Express.</p>
+<h2>Part A. Endpoints that change data</h2>
+<h3>1. A new record is a create, a named business step is an action, anything else saves a group of details.</h3>
+<p>An endpoint shaped like a screen lets any screen set the status and skip the closing rules, and changes whenever the screen does. Stop at the first yes: a new record is a <code>POST</code> on the collection; a step the business names, or one that needs more than new values, or that sets a field only a rule may set, is a <code>POST</code> action; the rest is a <code>PUT</code> on a named group of details. Ask the business when unsure.</p>
+<h3>2. Send one request per save; the microservice saves all of it or nothing.</h3>
+<p>Two requests for one Check answers page leave the claim without its note when the second times out, and Express cannot undo the first. One request with everything the user collected, saved in one transaction as an approved exception in the design note. Two things the user does at different times are two requests.</p>
+<h3>3. Save a group of details with <code>PUT</code> and send every field in the group; never use <code>PATCH</code>.</h3>
+<p>This is a convention. With partial bodies Express must work out what changed, an empty field means either cleared or not sent, and each microservice decides that for itself. Sending the whole group, with the version, gives one way to save, "empty means cleared" everywhere, rules checked on the whole group, and no comparing in Express: a server-rendered form posts every field anyway. The version check, not the body, prevents a lost update. No group holds a field that only a business action may change.</p>
+<h3>4. Send an <code>Idempotency-Key</code> header with every create, so a repeat cannot create a second record.</h3>
+<p>A create whose response is lost in a timeout is submitted again, and the claimant has two claims. Express makes a random key when it builds the page, keeps it in a hidden field and sends it with every submit of that page; the repeat returns the first result. A new key on every submit is the same as no key.</p>
+<h3>5. Send the record's <code>version</code> with every change; the microservice refuses an old version with <code>409</code>.</h3>
+<p>Without it, whoever saved last wins and the other change is silently lost. Every change carries the version Express got when it loaded the record, and on <code>409</code> Express shows the conflict page. A repeated request also gets <code>409</code>, so a change is never made twice.</p>
+<h3>6. Never retry a change automatically; retry a read once.</h3>
+<p>A retried change reaches a system without a version check twice. The shared client retries a read once on a timeout or <code>503</code> and never retries a change. Against our own microservices a repeat would be refused anyway, so this is also a convention: one behaviour, whatever the target.</p>
+<h3>7. Return <code>201</code> with a <code>Location</code> header for a create, and <code>204</code> with no body for every other save.</h3>
+<p>A convention. A body in the save response is a second place to parse the record, which drifts from the <code>GET</code>, and after a save Express redirects and the next page reads the record anyway. A create returns <code>201</code>, a <code>Location</code> header and the new IDs; every other save returns <code>204</code>.</p>
+<h3>8. A change that goes to another system is one business action, and it calls that system once.</h3>
+<p>Two calls can half happen: the name is changed, the address is not, and nothing undoes the first call. Validate and check permission first, then make one call and change nothing else of our own. Our copy is a cache, and the audit record is written after they confirm.</p>
+<h3>9. Translate the other system's answer into our own status codes.</h3>
+<p>Their <code>412</code> reaches Express, which has never seen it and shows a generic error. One table in the adapter maps their answers to our codes, and the adapter test proves each row.</p>
+<h2>Part B. Endpoints that read data</h2>
+<h3>10. Build read endpoints around records, not around screens.</h3>
+<p>A screen-shaped endpoint is changed, retested and released every time the design moves a panel. The page calls the record endpoints it needs and combines the results.</p>
+<h3>11. Each kind of record has two response formats only: a summary for lists and a detail for one record.</h3>
+<p>A convention. A third format for one screen becomes six in six months, each drifting in its own place. The summary is the ID and the few fields a list shows; the detail is every field the caller may see. A list screen's new field goes in the summary, and we accept that the summary grows.</p>
+<h3>12. Never make one call per row of a list.</h3>
+<p>Twenty rows become 21 calls, 20 times the time, and the page fails if any one fails. Put the field in the summary, or fetch the rows in one call with a list of IDs, 100 at most.</p>
+<h3>13. Page, sort and index every list.</h3>
+<p>An unpaged, unsorted list works on day one and times out a year later, and rows change order between two calls. One page at a time, 100 rows at most, always sorted, and every field a caller may filter on has a database index.</p>
+<h3>14. Return a lookup list as codes and labels, cached for 5 minutes.</h3>
+<p>Labels kept in Express go stale when the business renames one, and a retired code shows blank. The microservice returns codes and labels; Express shows the label and stores the code; an inactive value still shows on old records. Five minutes is a choice, made once.</p>
+<h3>15. Check permission on every endpoint, reads included, even when the caller is our own Express.</h3>
+<p>Anything on the network can send a header claiming to be anyone and read every claimant's details. Each endpoint declares the permission it needs, takes the user from the access token, and a test proves a user without it gets <code>403</code>. The build fails on an endpoint with no permission. Hiding a button is not security.</p>
+<h2>Part C. Processes across several microservices</h2>
+<h3>16. A process across microservices has one owning microservice, and Express calls only that one.</h3>
+<p>When Express runs the steps, a failure after the first leaves the claim closed and the payments running, and nobody owns the half-done job. Express makes one call to the owner, which records the progress and raises an alert when a process is stuck. Each such process needs design group approval and an architecture decision record.</p>
+<h3>17. Change data in another microservice by sending an event, never by calling its API.</h3>
+<p>An HTTP call that times out leaves us not knowing whether the change happened. An event, stored with our change, is delivered until the other microservice processes it. Before its first change, a microservice may still call another to read or check something.</p>
+<h3>18. Save each step's change and its event in one transaction, and skip an event you already processed.</h3>
+<p>An event sent outside the transaction may never be sent, and a broker may deliver it twice. The outbox on the sending side and the inbox of processed event IDs on the receiving side cover both, because a crash can happen between any two lines.</p>
+<h3>19. Decide what happens when a step fails before you build the process.</h3>
+<p>When only the happy path is designed, the failure event arrives, the listener logs it, and the claimant is paid for a closed claim. The failure path is a named business step agreed with the business, because a done step cannot be rolled back.</p>
+<h3>20. Link the steps by events each microservice reacts to; a directing microservice only for many steps or deadlines.</h3>
+<p>A two-step process does not need a state machine, and a five-step chain of events cannot be followed. Start with each microservice reacting to an event and sending its own. Switch to one directing owner, sending command messages and waiting for reply events, past the line we chose once: more than three steps, a deadline, or progress the business must see.</p>
+<h3>21. Return <code>204</code> and a progress field when the user needs only the first step; <code>202</code> with a status URL when they must wait for all steps.</h3>
+<p>A plain <code>204</code> says "Awarded" while the letter is unsent and hides a failed step. Close claim needs only the first step, so <code>204</code> with a progress field; award claim must be complete, so <code>202</code> with a status URL that Express checks on refresh. Which answer a process gives is decided once, in its design note.</p>
+<h2>Part D. Conventions</h2>
+<h3>22. <code>GET</code> reads, <code>POST</code> creates or acts, <code>PUT</code> saves a group; never <code>PATCH</code>, and no <code>DELETE</code> on business records.</h3>
+<p>A <code>GET</code> that writes is triggered by a browser prefetch, and a <code>DELETE</code> erases the audit trail. One meaning per method: a record ends with an action such as close or cancel; <code>DELETE</code> only when the design group agrees a record may be removed for ever; no <code>PATCH</code> because a group is saved whole (rule 3).</p>
+<h3>23. Name collections with plural nouns and actions with lower-case verbs; nest one level at most.</h3>
+<p>A path that mirrors the object tree needs three IDs to fetch one attachment, and someone parses a year out of an ID. IDs are opaque UUIDs that Express passes back unchanged; filters, sorting and paging are query parameters. The naming is our choice, made once.</p>
+<h3>24. Return a JSON object with camelCase fields, ISO dates, UTC times and two-decimal money.</h3>
+<p>A bare array cannot grow a <code>totalItems</code> field, a day-month date is ambiguous, and floating-point money prints two different totals. An object, ISO dates, UTC times ending in <code>Z</code>, money with two decimals; camelCase is a choice, made once.</p>
+<h3>25. Never put personal data in a URL; search by personal details with <code>POST /claims/search</code>.</h3>
+<p>The gateway, Express, the microservice and the load balancer all log URLs, so a National Insurance number in a query string lands in four places our data protection rules do not cover. Personal details go in the body of a <code>POST</code> that only reads.</p>
+<h3>26. Return the same status codes and the same error body from every microservice.</h3>
+<p>Express has one error handler, and it only works if every microservice answers the same way; a feature that writes its own <code>400</code> shows a blank error summary. A domain error goes through one shared handler to an RFC 9457 problem details body: a status, a <code>code</code> Express turns into text, a developer <code>detail</code> never shown, a <code>traceId</code>, and never personal data.</p>
+<h3>27. Make a breaking API change in three releases, and update <code>openapi.yaml</code> in the same pull request as the code.</h3>
+<p>Express and the microservices release on different days, so a one-release rename shows blank names for two days. Add the new field, move the callers, then remove the old field; or add <code>/v2</code> beside <code>/v1</code> with <code>Deprecation</code> and <code>Sunset</code> headers. The build compares the contract with the released version and fails on a breaking change, and Express generates its client from it.</p>
+<h2>Part E. The Express front end</h2>
+<h3>28. The browser never calls a microservice; Express calls it with the user's token.</h3>
+<p>Page JavaScript calling a microservice puts the token in the browser, where any script can read it, and makes the address public. The browser holds only the gateway's session cookie; Express accepts requests only from the gateway and forwards the token and the <code>traceparent</code> header.</p>
+<h3>29. Read from several microservices in parallel, but send each save to one microservice.</h3>
+<p>Three reads one after another make a 1.2-second page, and a form that writes to two microservices has nobody owning the half-saved result. Start all reads at once, each allowed to fail on its own, and send each save as one request to one microservice.</p>
+<h3>30. Give every call from Express a time limit and a circuit breaker.</h3>
+<p>One slow microservice with no time limit uses up Express's connections and hangs the whole site. All calls go through one shared client with time limits; microservices keep a request under four seconds so they give up first; after several failures the breaker fails fast for a short time.</p>
+<h3>31. Show the page with the data that loaded; show an error page only when essential data failed.</h3>
+<p>Failing the page because a panel the caseworker did not need failed stops their work. Decide which data is essential for each page and show the rest with a message; one error handler turns status and code into what the user sees.</p>
+<h3>32. Keep answers in the Express session until the save button, then save once and redirect.</h3>
+<p>Saving a draft on every page fills the microservice with half-finished claims that passed no rules, and rendering the result directly lets a refresh submit the form again. Answers stay in the server-side session, the save button sends one request, then Express redirects.</p>
+<h3>33. Cache lookup lists only; never cache business records.</h3>
+<p>A cached claim shows as open after another caseworker closed it, and the user gets a <code>409</code> they could not avoid. Keep a lookup list for as long as its <code>Cache-Control</code> header says, and read business records fresh every time.</p>
+<h2>Part F. Situations you will meet</h2>
+<h3>34. Upload a file as multipart, store the bytes in an object store, keep only a reference on the record, and stream downloads through Express.</h3>
+<p>A file inside the record makes every read carry 8 MB, and a public download link in a browser history opens a payslip without a sign-in. Multipart with a size limit and the record's version; the bytes go to the object store before the transaction opens; a reference stays on the record; downloads go through Express with the user's token and permission.</p>
+<h3>35. Return field errors as <code>400</code> with an <code>errors</code> list of field, code and message; keep business-rule refusals as <code>422</code>.</h3>
+<p>One message for everything leaves the user hunting for the mistake. One entry per field, with a stable code Express turns into GOV.UK text. A rule refusal is <code>422</code> and shown differently, because the user cannot fix it on the page. Two status codes for that is a choice, made once.</p>
+<h3>36. A bulk action is one request per record; add a batch endpoint only when the business names the batch as one action, with a result per item.</h3>
+<p>One all-or-nothing request lets one claim with an open note stop all 40, and nobody can tell which 39 were fine. Express sends one close per claim with its version and shows a result per row. When the business names the batch, it becomes a record with its own action answering <code>202</code> and a status URL, still one claim per transaction. Starting from Express is our choice: it needs no new endpoint.</p>
+<h3>37. Store a "save and return later" draft as a record of its own, with no business rules until the final create.</h3>
+<p>The Express session is for one sitting, so a claimant who returns tomorrow finds every answer gone. A draft record in the microservice, saved like a group of details, may be incomplete and wrong until the real create, which is where the rules live.</p>
+<h3>38. On <code>409</code>, show the user the fresh record and a way to start again; never retry with the new version.</h3>
+<p>Express quietly retrying with the new version overwrites the other caseworker's change, and nobody knows. A conflict page says what happened and shows the current values; only the user can decide whose change wins.</p>
+<h3>39. A microservice with no user present calls another with its own client-credentials token and permission, never a shared key or a stored user token.</h3>
+<p>A shared key lives in three repositories and a chat message, cannot be rotated without a coordinated release, and opens every endpoint. The microservice signs in as itself and gets a short-lived token with only the permission it needs, which the receiving endpoint checks like any other. A user's token belongs to that user's request.</p>
+<h3>40. An outside callback gets its own endpoint, which checks the signature, stores it with its ID, answers <code>202</code> and raises our own event; no business logic there.</h3>
+<p>A handler that does the work lets anyone who finds the URL verify evidence, and a slow save makes the provider time out and resend. Check the signature, store the callback with its ID and its outbox entry in one transaction, answer <code>202</code>, and let a listener on our own event translate their IDs and call the business action.</p>
+<h3>41. Export CSV from <code>GET .../export</code> with the list's filters, a row limit and the personal-data permission; a large export returns <code>202</code> and a status URL.</h3>
+<p>An export built from list pages takes minutes, pulls every field including National Insurance numbers, and times out at the gateway. One endpoint beside the list, same filters, streamed, with a row limit; personal-data columns only with the export permission; an export the user cannot wait for answers <code>202</code> with a status URL.</p>
+<h3>42. Show another microservice's data by reading it in Express; store a copy only when a rule needs it.</h3>
+<p>A copy of the claimant's name kept for display is wrong for years after they change it. Express reads the claim, then the claimant from its owner, and composes the page. The claim microservice stores only the eligibility decision its rules need and the claimant's ID.</p>
+<h3>43. Remove a record created by mistake with a <code>cancel</code> action and a reason; keep it, hide it from lists by default, still return it on <code>GET</code>.</h3>
+<p>A deleted claim leaves the audit trail pointing at nothing, and an event other microservices received with no matching close. Cancel records the mistake with a reason; lists hide cancelled records by default; <code>GET</code> still returns them.</p>
+<h3>44. When a system the save depends on is down, answer <code>503</code> with <code>Retry-After</code>; Express says "try again later" and does not retry the change.</h3>
+<p>A convention. A <code>500</code> counts as a bug in alerts and tells the user nothing; <code>503</code> says "nothing was saved, try later", and alerts can tell an outage next door from a bug of ours. Express never retries a change; for a read it shows the page with what loaded. The circuit breaker (rule 30) protects the other system, whichever code we return.</p>
+<h3>45. Make <code>openapi.yaml</code> the contract: the microservice validates every response against it, and Express's client tests run against its examples.</h3>
+<p>A contract nobody runs says <code>openedAt</code> while the microservice still sends <code>createdAt</code>, and nobody finds out until every row shows "Invalid Date". A microservice test checks every response against the file, and Express's client tests run against the file's examples. A rename then fails a build, not a page.</p>
+</article>
+<script>
+document.getElementById("copy").addEventListener("click", function () {
+  var range = document.createRange();
+  range.selectNodeContents(document.getElementById("guide"));
+  var sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  var ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) {}
+  document.getElementById("copied").textContent = ok
+    ? "Copied. Now paste into Confluence."
+    : "Press Cmd+C or Ctrl+C to copy the selected guide.";
+});
+</script>
+</body></html>

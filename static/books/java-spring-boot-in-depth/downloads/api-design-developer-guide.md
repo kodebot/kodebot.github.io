@@ -6,6 +6,73 @@ This guide says how we design the HTTP endpoints of our microservices, and how o
 
 **Your first two days.** Read the walkthrough and Parts A and B (rules 1 to 15) on your first afternoon, after the Pragmatic DDD Guide's Parts A and B; Parts C, D and E on day 2. Part F is not for reading through: it is the answers for the situations you will meet, one at a time, when you meet them.
 
+## The rules
+
+One line per rule. The section with the same number has the situation, the requests and the reasons.
+
+**Part A. Endpoints that change data**
+
+1. A new record is a create, a named business step is an action, anything else saves a group of details.
+2. Send one request per save; the microservice saves all of it or nothing.
+3. Save a group of details with `PUT` and send every field in the group; never use `PATCH`.
+4. Send an `Idempotency-Key` header with every create, so a repeat cannot create a second record.
+5. Send the record's `version` with every change; the microservice refuses an old version with `409`.
+6. Never retry a change automatically; retry a read once.
+7. Return `201` with a `Location` header for a create, and `204` with no body for every other save.
+8. A change that goes to another system is one business action, and it calls that system once.
+9. Translate the other system's answer into our own status codes.
+
+**Part B. Endpoints that read data**
+
+10. Build read endpoints around records, not around screens.
+11. Each kind of record has two response formats only: a summary for lists and a detail for one record.
+12. Never make one call per row of a list.
+13. Page, sort and index every list.
+14. Return a lookup list as codes and labels, cached for 5 minutes.
+15. Check permission on every endpoint, reads included, even when the caller is our own Express.
+
+**Part C. Processes across several microservices**
+
+16. A process across microservices has one owning microservice, and Express calls only that one.
+17. Change data in another microservice by sending an event, never by calling its API.
+18. Save each step's change and its event in one transaction, and skip an event you already processed.
+19. Decide what happens when a step fails before you build the process.
+20. Link the steps by events each microservice reacts to; a directing microservice only for many steps or deadlines.
+21. Return `204` and a progress field when the user needs only the first step; `202` with a status URL when they must wait for all steps.
+
+**Part D. Conventions**
+
+22. `GET` reads, `POST` creates or acts, `PUT` saves a group; never `PATCH`, and no `DELETE` on business records.
+23. Name collections with plural nouns and actions with lower-case verbs; nest one level at most.
+24. Return a JSON object with camelCase fields, ISO dates, UTC times and two-decimal money.
+25. Never put personal data in a URL; search by personal details with `POST /claims/search`.
+26. Return the same status codes and the same error body from every microservice.
+27. Make a breaking API change in three releases, and update `openapi.yaml` in the same pull request as the code.
+
+**Part E. The Express front end**
+
+28. The browser never calls a microservice; Express calls it with the user's token.
+29. Read from several microservices in parallel, but send each save to one microservice.
+30. Give every call from Express a time limit and a circuit breaker.
+31. Show the page with the data that loaded; show an error page only when essential data failed.
+32. Keep answers in the Express session until the save button, then save once and redirect.
+33. Cache lookup lists only; never cache business records.
+
+**Part F. Situations you will meet**
+
+34. Upload a file as multipart, store the bytes in an object store, keep only a reference on the record, and stream downloads through Express.
+35. Return field errors as `400` with an `errors` list of field, code and message; keep business-rule refusals as `422`.
+36. A bulk action is one request per record; add a batch endpoint only when the business names the batch as one action, with a result per item.
+37. Store a "save and return later" draft as a record of its own, with no business rules until the final create.
+38. On `409`, show the user the fresh record and a way to start again; never retry with the new version.
+39. A microservice with no user present calls another with its own client-credentials token and permission, never a shared key or a stored user token.
+40. An outside callback gets its own endpoint, which checks the signature, stores it with its ID, answers `202` and raises our own event; no business logic there.
+41. Export CSV from `GET .../export` with the list's filters, a row limit and the personal-data permission; a large export returns `202` and a status URL.
+42. Show another microservice's data by reading it in Express; store a copy only when a rule needs it.
+43. Remove a record created by mistake with a `cancel` action and a reason; keep it, hide it from lists by default, still return it on `GET`.
+44. When a system the save depends on is down, answer `503` with `Retry-After`; Express says "try again later" and does not retry the change.
+45. Make `openapi.yaml` the contract: the microservice validates every response against it, and Express's client tests run against its examples.
+
 ## Terms
 
 | Term | Meaning |

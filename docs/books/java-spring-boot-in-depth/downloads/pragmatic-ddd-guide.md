@@ -6,9 +6,66 @@ This guide says how we design the inside of a microservice. We use a light form 
 
 The guide has two aims. Every business rule lives in exactly one place. A design mistake can be fixed inside one feature of one microservice, without changing the others.
 
-Our stack is Spring Boot 4 (Spring Framework 7, Spring Data MongoDB 5, Spring Security 7) on Amazon DocumentDB. Every example uses it, and an italic line under each names the Spring feature doing the work. Besides Spring, only our test tools are named: Testcontainers, WireMock and Floci. Every rule has the same shape: the situation, the code most people write first, what goes wrong, the code we want, and why. Read the walkthrough and the rules in order once. After that, the headings are your checklist.
+Our stack is Spring Boot 4 (Spring Framework 7, Spring Data MongoDB 5, Spring Security 7) on Amazon DocumentDB. Every example uses it, and an italic line under each names the Spring feature doing the work. Besides Spring, only our test tools are named: Testcontainers, WireMock and Floci. Every rule has the same shape: the situation, the code most people write first, what goes wrong, the code we want, and why. Read the walkthrough and the rules in order once. After that, the list below is your checklist.
 
 **Your first two days.** Day 1, morning: the walkthrough and Parts A and B (rules 1 to 13), about two hours; then open the claim microservice and find each class of the walkthrough in it. Day 1, afternoon: the API Design Developer Guide's walkthrough and Parts A and B. Day 2: Parts C and D of both guides, then your first ticket with a senior engineer. Parts E and F are not for reading through: they are the answers for the situations you will meet, one at a time, when you meet them.
+
+## The rules
+
+One line per rule. The section with the same number has the situation, the code and the reasons.
+
+**Part A. Where a rule lives**
+
+1. Put a business rule in the entity method that makes the change, not in a service.
+2. Change an entity's fields only through its own methods; no setters.
+3. A service method only runs the steps: load, check the version, get facts, call the entity, save, audit.
+4. Name classes, methods and errors with the business's own words.
+5. Put a calculation that spans several objects in a domain service, and only when it has worked examples.
+6. Give every ID and business value its own type; check its format once, where the value is created.
+
+**Part B. Aggregates**
+
+7. Keep a child inside the aggregate only if the parent's rules need it, it has a maximum count, it changes with the parent and it means nothing alone.
+8. Store another aggregate's ID, never the object itself.
+9. Save one aggregate per transaction.
+10. Give every list inside an aggregate a maximum size.
+11. Refuse a save that was made from an old version of the record.
+12. Make every change safe to repeat: a repeated request adds or counts nothing twice.
+13. Store money as an exact decimal and time in UTC, and count days in UK dates.
+
+**Part C. Features, microservices and events**
+
+14. Use another feature only through its application service, passing IDs and simple values.
+15. Check permissions in the controller, never in the service or the entity.
+16. Talk to another system only through one adapter class that translates its data into our types.
+17. Call another microservice before you open the transaction, never inside it.
+18. Retry a read; never retry a change.
+19. Save an event in the same transaction as the change it reports, and send it afterwards.
+20. Only add fields to a published event; to remove or rename one, publish a new version.
+21. Write every listener so a message that arrives late, twice or out of order does no harm.
+22. Change several microservices as a chain of steps joined by events, with a named step for failure.
+
+**Part D. Process**
+
+23. Get the design note approved before you code a feature with business rules.
+24. Mark a feature Simple (data with no rules) or Rich (states and rules) in its design note.
+25. Fix a mistake with a safe step today and the proper fix by a date.
+26. Keep personal data out of logs, error messages and events.
+
+**Part E. Situations you will meet**
+
+27. When one button must save two aggregates, ask whether they are one; else react to an event; only then save both in one approved transaction.
+28. Keep a rule across all records of a kind true with a unique index, and turn the index error into a business error.
+29. Create an entity through a named factory method that checks the rules and raises the event; keep the constructor private.
+30. Read for a screen through a query class on the collections; never build a screen out of aggregates.
+31. Search and reports are queries too; give a slow one its own read collection filled by events.
+32. Do not store on a parent what a child aggregate knows; read it when needed, or copy it by event and accept a short delay.
+33. Never delete a business record; add a business action that marks it, with a reason.
+34. Run a time-based rule from a scheduled job that calls the same entity method, one record per transaction.
+35. When a process has its own steps and deadlines, give it its own aggregate.
+36. Change an aggregate's shape behind a flag, with a migration that uses the entity's own methods.
+37. Test the entity with no database, the service with a fake repository, and the repository alone against a real database.
+38. Show two aggregates on one screen with two save buttons; one button that saves two things is a design smell to raise.
 
 ## Terms
 

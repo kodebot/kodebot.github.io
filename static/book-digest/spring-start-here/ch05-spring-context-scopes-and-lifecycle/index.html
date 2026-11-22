@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Ch 5: The Spring context, bean scopes and life cycle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/spring-start-here/">Spring Start Here</a></div>
+<main>
+<h1 id="ch-5-the-spring-context-bean-scopes-and-life-cycle">Ch 5: The Spring context, bean scopes and life cycle</h1>
+<p>Source: Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 5. Previous: <a href="/book-digest/spring-start-here/ch04-spring-context-using-abstractions/">Ch 4: The Spring context, using abstractions</a>. Book projects: <code>ssh_ch5_ex1</code> to <code>ssh_ch5_ex8</code>.</p>
+<blockquote>
+<p>[!abstract] Takeaways
+A <strong>scope</strong> says how Spring creates and manages a bean. Two matter here:</p>
+<ul>
+<li>
+<p><strong>Singleton</strong> (default): one instance per bean <em>name</em>, shared by everyone. Keep these <strong>immutable</strong>.</p>
+</li>
+<li>
+<p><strong>Prototype</strong>: a new instance every time you ask. Fine for mutable objects.</p>
+</li>
+<li>
+<p>Within singleton you also choose <strong>eager</strong> (default, created at startup) or <strong>lazy</strong> (created on first use).</p>
+</li>
+<li>
+<p>Beans are for things Spring must manage; not every object should be one.</p>
+</li>
+</ul>
+<p><img src="/book-digest/spring-start-here/img/singleton-vs-prototype.svg" alt="Singleton vs prototype" loading="lazy" /></p>
+</blockquote>
+<h2 id="5-1-singleton-scope">5.1 Singleton scope</h2>
+<ul>
+<li>Spring creates the bean at context load and gives it a name (bean ID). Every reference to that name returns the same instance.</li>
+<li><strong>Singleton here is not the classic GoF singleton.</strong> In Spring it means <em>unique per name</em>, not unique per app: two beans of the same type with different names are two instances.</li>
+</ul>
+<h3 id="with-bean-ssh-ch5-ex1">With <code>@Bean</code> (<code>ssh_ch5_ex1</code>)</h3>
+<pre class="hl"><code><span class="c1">// CommentService.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ProjectConfig.java</span>
+<span class="nd">@Configuration</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Bean</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">CommentService</span><span class="w"> </span><span class="nf">commentService</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommentService</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Usage</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AnnotationConfigApplicationContext</span><span class="p">(</span><span class="n">ProjectConfig</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">cs1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="s">"commentService"</span><span class="p">,</span><span class="w"> </span><span class="n">CommentService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">cs2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="s">"commentService"</span><span class="p">,</span><span class="w"> </span><span class="n">CommentService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">cs1</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">cs2</span><span class="p">);</span><span class="w">   </span><span class="c1">// true</span>
+</code></pre>
+<p>With only one bean of the type, you can fetch by type; the name was used here just to stress it is the same bean.</p>
+<h3 id="with-stereotype-annotations-ssh-ch5-ex2">With stereotype annotations (<code>ssh_ch5_ex2</code>)</h3>
+<p>Same behaviour. Two services depend on one repository; Spring injects the same repository instance into both.</p>
+<pre class="hl"><code><span class="c1">// CommentRepository.java</span>
+<span class="nd">@Repository</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentRepository</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// CommentService.java</span>
+<span class="nd">@Service</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Autowired</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="nf">getCommentRepository</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="c1">// UserService is identical</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ProjectConfig.java</span>
+<span class="nd">@Configuration</span>
+<span class="nd">@ComponentScan</span><span class="p">(</span><span class="n">basePackages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="s">"com.example.services"</span><span class="p">,</span><span class="w"> </span><span class="s">"com.example.repositories"</span><span class="p">})</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Usage</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">s1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">CommentService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">s2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">UserService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">s1</span><span class="p">.</span><span class="na">getCommentRepository</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">s2</span><span class="p">.</span><span class="na">getCommentRepository</span><span class="p">());</span><span class="w">  </span><span class="c1">// true</span>
+</code></pre>
+<h3 id="5-1-1-singletons-in-real-apps-keep-them-immutable">5.1.1 Singletons in real apps: keep them immutable</h3>
+<ul>
+<li>A web app runs on <strong>many threads</strong> sharing the same singleton instance. If threads mutate it at once you get a <strong>race condition</strong> (unpredictable results or exceptions).</li>
+<li>You <em>could</em> synchronise a mutable singleton, but singletons are meant to be the app's backbone (delegating to each other), and synchronising a shared instance can hurt performance badly
+<ul>
+<li>Avoid it.</li>
+</ul>
+</li>
+<li><strong>Constructor injection helps:</strong> <code>final</code> fields make the bean immutable.</li>
+</ul>
+<pre class="hl"><code><span class="nd">@Service</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">CommentService</span><span class="p">(</span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">commentRepository</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="nf">getCommentRepository</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><strong>Three rules for using beans (book sidebar):</strong></p>
+<ol>
+<li>Make an object a bean only if Spring must manage it to add capabilities.</li>
+<li>A bean should be singleton only if it is immutable.</li>
+<li>If a bean must be mutable, consider prototype.</li>
+</ol>
+<h3 id="5-1-2-eager-vs-lazy-instantiation">5.1.2 Eager vs lazy instantiation</h3>
+<p><img src="/book-digest/spring-start-here/img/eager-vs-lazy.svg" alt="Eager vs lazy" loading="lazy" /></p>
+<ul>
+<li>
+<p><strong>Eager (default):</strong> all singletons are created when the context starts. Proof (<code>ssh_ch5_ex3</code>): the constructor prints even though nobody uses the bean.</p>
+<pre class="hl"><code><span class="nd">@Service</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">CommentService</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"CommentService instance created!"</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AnnotationConfigApplicationContext</span><span class="p">(</span><span class="n">ProjectConfig</span><span class="p">.</span><span class="na">class</span><span class="p">);</span><span class="w">   </span><span class="c1">// prints the message</span>
+</code></pre>
+</li>
+<li>
+<p><strong>Lazy (<code>ssh_ch5_ex4</code>):</strong> add <code>@Lazy</code> on the class (stereotype) or on the <code>@Bean</code> method. Now the bean is created only when first referenced.</p>
+<pre class="hl"><code><span class="nd">@Service</span>
+<span class="nd">@Lazy</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* same constructor */</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AnnotationConfigApplicationContext</span><span class="p">(</span><span class="n">ProjectConfig</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Before retrieving the CommentService"</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">service</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">CommentService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"After retrieving the CommentService"</span><span class="p">);</span>
+</code></pre>
+<pre class="hl"><code>Before retrieving the CommentService
+CommentService instance created!
+After retrieving the CommentService
+</code></pre>
+</li>
+<li>
+<p><strong>Why eager is the default pick:</strong></p>
+<ul>
+<li>Delegation is cheaper: the target bean already exists; lazy needs an existence check each time.</li>
+<li><strong>Failures surface at startup</strong>, not later while the app is running.</li>
+</ul>
+</li>
+<li>
+<p><strong>Where lazy helped (author's story):</strong></p>
+<ul>
+<li>a huge monolith installed at many clients, each using only part of it</li>
+<li>Instantiating everything wasted memory and slowed startup, so most beans were lazy.</li>
+</ul>
+</li>
+<li>
+<p><strong>His advice:</strong></p>
+<ul>
+<li>stay eager</li>
+<li>If you need lazy everywhere, the design is probably the problem (a modular design or microservices would let you deploy only what each client needs)</li>
+<li>If you cannot fix the cause (cost, time), lazy treats the symptom.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-2-prototype-scope">5.2 Prototype scope</h2>
+<ul>
+<li>Spring stores the bean's <em>type</em>, not an instance. Every request creates a new object (the book draws a coffee plant instead of a bean).</li>
+<li>Use <code>@Scope</code>: on the <code>@Bean</code> method, or on the class next to the stereotype annotation.</li>
+<li><strong>No concurrency problem:</strong> each thread that asks gets its own instance, so mutable prototypes are fine.</li>
+</ul>
+<h3 id="with-bean-ssh-ch5-ex5">With <code>@Bean</code> (<code>ssh_ch5_ex5</code>)</h3>
+<pre class="hl"><code><span class="nd">@Bean</span>
+<span class="nd">@Scope</span><span class="p">(</span><span class="n">BeanDefinition</span><span class="p">.</span><span class="na">SCOPE_PROTOTYPE</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">CommentService</span><span class="w"> </span><span class="nf">commentService</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommentService</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Usage</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">cs1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="s">"commentService"</span><span class="p">,</span><span class="w"> </span><span class="n">CommentService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">cs2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="s">"commentService"</span><span class="p">,</span><span class="w"> </span><span class="n">CommentService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">cs1</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">cs2</span><span class="p">);</span><span class="w">   </span><span class="c1">// false</span>
+</code></pre>
+<h3 id="with-stereotype-annotations-ssh-ch5-ex6">With stereotype annotations (<code>ssh_ch5_ex6</code>)</h3>
+<pre class="hl"><code><span class="nd">@Repository</span>
+<span class="nd">@Scope</span><span class="p">(</span><span class="n">BeanDefinition</span><span class="p">.</span><span class="na">SCOPE_PROTOTYPE</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentRepository</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p><code>CommentService</code> and <code>UserService</code> each inject it with <code>@Autowired</code>; comparing their repositories prints <code>false</code>.</p>
+<h3 id="5-2-1-a-real-use-mutable-helper-that-needs-di-ssh-ch5-ex7">5.2.1 A real use: mutable helper that needs DI (<code>ssh_ch5_ex7</code>)</h3>
+<p>A <code>CommentProcessor</code> stores a <code>Comment</code> as state and mutates it:</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentProcessor</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">private</span><span class="w"> </span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">comment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">comment</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Comment</span><span class="w"> </span><span class="nf">getComment</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="na">comment</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">processComment</span><span class="p">()</span><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="cm">/* changes comment */</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">validateComment</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* validates and changes comment */</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>A service that just does <code>new CommentProcessor()</code> per call does not need a bean at all. It <strong>becomes a bean only if it needs something Spring provides</strong>, e.g. a <code>CommentRepository</code> injected into it. Then it cannot be a singleton (threads would trample each other's comment), so make it a prototype:</p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="nd">@Scope</span><span class="p">(</span><span class="n">BeanDefinition</span><span class="p">.</span><span class="na">SCOPE_PROTOTYPE</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentProcessor</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Autowired</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</code></pre>
+<p><strong>Trap: how you obtain a prototype.</strong> Inject the <code>ApplicationContext</code> and call <code>getBean()</code> inside the method, so each call gets a fresh instance:</p>
+<pre class="hl"><code><span class="nd">@Service</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Autowired</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="n">ApplicationContext</span><span class="w"> </span><span class="n">context</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">sendComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">c</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">CommentProcessor</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">CommentProcessor</span><span class="p">.</span><span class="na">class</span><span class="p">);</span><span class="w">   </span><span class="c1">// new instance each call</span>
+<span class="w">      </span><span class="n">p</span><span class="p">.</span><span class="na">setComment</span><span class="p">(</span><span class="n">c</span><span class="p">);</span>
+<span class="w">      </span><span class="n">p</span><span class="p">.</span><span class="na">processComment</span><span class="p">(</span><span class="n">c</span><span class="p">);</span>
+<span class="w">      </span><span class="n">p</span><span class="p">.</span><span class="na">validateComment</span><span class="p">(</span><span class="n">c</span><span class="p">);</span>
+<span class="w">      </span><span class="n">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="na">getComment</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Do <strong>not</strong> inject the prototype straight into the singleton (<code>ssh_ch5_ex8</code>, exercise on GitHub):</p>
+<pre class="hl"><code><span class="nd">@Service</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Autowired</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="n">CommentProcessor</span><span class="w"> </span><span class="n">p</span><span class="p">;</span><span class="w">   </span><span class="c1">// injected ONCE when CommentService is created</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="p">}</span>
+</code></pre>
+<p><code>CommentService</code> is a singleton, created once, so its dependencies are injected once; every call then shares one <code>CommentProcessor</code> and the race conditions return.</p>
+<p><img src="/book-digest/spring-start-here/img/prototype-into-singleton.svg" alt="Prototype injected into a singleton" loading="lazy" /></p>
+<p><strong>Author's opinion:</strong> he avoids prototypes and mutable instances where he can. He used prototypes while refactoring an old app to Spring, where mutating objects were everywhere and could only be refactored gradually.</p>
+<h3 id="table-5-1-singleton-vs-prototype">Table 5.1 Singleton vs prototype</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Singleton</th>
+<th>Prototype</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name maps to</td>
+<td>an actual instance</td>
+<td>a type</td>
+</tr>
+<tr>
+<td>Each reference gives</td>
+<td>the same instance</td>
+<td>a new instance</td>
+</tr>
+<tr>
+<td>Created</td>
+<td>at context load, or on first use if <code>@Lazy</code></td>
+<td>always when you ask</td>
+</tr>
+<tr>
+<td>Default</td>
+<td>yes</td>
+<td>must be declared</td>
+</tr>
+<tr>
+<td>Mutable attributes</td>
+<td>not recommended</td>
+<td>fine</td>
+</tr>
+</tbody>
+</table>
+<h2 id="chapter-summary-book">Chapter summary (book)</h2>
+<ul>
+<li>A scope defines how Spring creates and manages instances; main scopes: singleton and prototype.</li>
+<li>Singleton (default): one instance stored in the context, same object every time. Created at startup unless lazy.</li>
+<li>Most apps use singletons; because threads share them, they should be immutable (or you handle thread safety).</li>
+<li>Prototype: new instance per request; useful for mutable objects.</li>
+<li>Injecting a prototype into a singleton injects it once, defeating the point.</li>
+</ul>
+<h2 id="terms-to-carry-forward">Terms to carry forward</h2>
+<p>scope · singleton · prototype · eager / lazy instantiation · <code>@Lazy</code> · <code>@Scope</code> · <code>BeanDefinition.SCOPE_PROTOTYPE</code> · race condition · immutability · <code>ApplicationContext</code>.</p>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 5. https://www.manning.com/books/spring-start-here-second-edition (unverified)</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/spring-start-here/ch04-spring-context-using-abstractions/">Ch 4: The Spring context, using abstractions</a> · <a href="/book-digest/spring-start-here/ch06-aspects-with-spring-aop/">Ch 6: Using aspects with Spring AOP</a> · java-concurrency</p>
+<nav class="pager"><a href="/book-digest/spring-start-here/ch04-spring-context-using-abstractions/">&larr; Ch 4: The Spring context, using abstractions</a><a href="/book-digest/spring-start-here/">Contents</a><a href="/book-digest/spring-start-here/ch06-aspects-with-spring-aop/">Ch 6: Using aspects with Spring AOP &rarr;</a></nav></main></body></html>

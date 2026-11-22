@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 14: Architecting for Quality and Observability</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-14-architecting-for-quality-and-observability">Grokking Software Architecture 14: Architecting for Quality and Observability</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 14. Previous: <a href="/book-digest/grokking-software-architecture/gsa-13-cicd-delivery-lifecycle/">Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD)</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-15-communicating-and-planning-architecture/">Grokking Software Architecture 15: Communicating and Planning Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>In production you cannot attach a debugger. You need <strong>testability</strong> (verify before deploy) and <strong>observability</strong> (infer internal state from emitted telemetry).</li>
+<li><strong>Inversion of Control</strong> makes testing possible: a boundary is &quot;only as real as your ability to mock it&quot;.</li>
+<li>Observability = <strong>logs</strong> (why), <strong>metrics</strong> (how: the <strong>Four Golden Signals</strong>), <strong>traces</strong> (where). Use <strong>OpenTelemetry</strong>.</li>
+<li><strong>Structured JSON logs</strong> plus <strong>MDC</strong> (thread-local context) keep business code clean.</li>
+<li><strong>LLM-ops</strong> adds token cost, time-to-first-token, drift and evaluation telemetry.</li>
+<li>Avoid the <strong>Dashboard Illusion</strong>, <strong>Log Bombing</strong> and <strong>Observability as an Afterthought</strong>.</li>
+<li><strong>Nagios</strong> lesson: outside-in checks give the <strong>Green Light Lie</strong>.</li>
+</ul>
+</div></div>
+<h2 id="14-2-testability-ioc-makes-testing-possible">14.2 Testability: IoC makes testing possible</h2>
+<p>Testing an aircraft wing: bolt it on a half-built plane in a thunderstorm, or put it in a <strong>wind tunnel</strong>. Most code is welded to live databases, real payment gateways and the system clock, so tests fail when a remote API is down or at 11:59 p.m. vs 12:00 a.m.</p>
+<ul>
+<li>If a class does <code>new FlakyPaymentAdapter()</code> in its constructor it is physically coupled to the internet.</li>
+<li>With <strong>IoC</strong>, the class demands an <strong>interface</strong>
+<ul>
+<li>production's <strong>DI container</strong> supplies the real adapter and tests pass a <code>MockPaymentAdapter</code> that succeeds or fails instantly, no network.</li>
+</ul>
+</li>
+<li>&quot;An architectural boundary is only as real as your ability to mock it.&quot;</li>
+</ul>
+<h2 id="14-3-observability-runtime-insight">14.3 Observability: runtime insight</h2>
+<p><strong>Observability</strong> = determining internal health, bottlenecks and execution state from the data an app outputs (logs, metrics, traces). <strong>Monitoring</strong> (outside-in) asks &quot;is the server up?&quot;; observability answers &quot;why is this tenant's payment stalling on a nested lookup five layers down?&quot; (Majors, Fong-Jones, Miranda, <em>Observability Engineering</em>).</p>
+<p><strong>The three-tier telemetry stack</strong></p>
+<ol>
+<li><strong>SDK instrumentation layer:</strong> language libraries (Logback/SLF4J for Java, Serilog for .NET, Winston or Pino for Node.js) capture side effects, timings, thread context.</li>
+<li><strong>Collector or gateway (or sidecar agent):</strong> buffers, batches and filters before shipping.</li>
+<li><strong>Centralised storage and analytics sinks:</strong> Elasticsearch, Datadog, Prometheus, Splunk.</li>
+</ol>
+<p><strong>OpenTelemetry (OTel):</strong> vendor-neutral CNCF standard (APIs, SDKs, tooling) so you can swap back-end providers with a config change (https://opentelemetry.io/docs/).</p>
+<h3 id="pillar-1-structured-semantic-logging">Pillar 1: structured semantic logging</h3>
+<p>Prose logs (<code>logger.info(&quot;Order processed successfully for user &quot; + userId)</code>) are an anti-pattern: aggregators struggle to parse them and refactors break them. Emit <strong>machine-readable JSON</strong> with typed metadata:</p>
+<pre class="hl"><code><span class="p">{</span><span class="w"> </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-05-30T07:57:34Z"</span><span class="p">,</span><span class="w"> </span><span class="nt">"level"</span><span class="p">:</span><span class="w"> </span><span class="s2">"INFO"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Order processed successfully"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"service"</span><span class="p">:</span><span class="w"> </span><span class="s2">"order-service"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"context"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"orderId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ord_99812"</span><span class="p">,</span><span class="w"> </span><span class="nt">"customerId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"cust_4412"</span><span class="p">,</span><span class="w"> </span><span class="nt">"tenantId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tenant_enterprise_beta"</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>You can filter a billion logs down to one customer's order quickly.</p>
+<h3 id="pillar-2-metrics-and-the-four-golden-signals">Pillar 2: metrics and the Four Golden Signals</h3>
+<p>Metrics are numerical aggregations over time: <strong>infrastructure vitals</strong> (CPU, memory, network I/O) and <strong>application vitals</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Latency</strong></td>
+<td>time to serve a request; track <strong>p99 tail latency</strong> (the threshold below which 99% of requests fall, i.e. the slowest 1%'s experience), not the flat average</td>
+</tr>
+<tr>
+<td><strong>Traffic</strong></td>
+<td>demand: requests per second, concurrent actions</td>
+</tr>
+<tr>
+<td><strong>Errors</strong></td>
+<td>failure rate: HTTP 5xx or caught exceptions</td>
+</tr>
+<tr>
+<td><strong>Saturation</strong></td>
+<td>how close resources are to capacity: queues, heaps, thread pools. Pool of 50 DB connections at 100% means request 51 waits, latency spikes, then times out</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Limit:</strong> aggregates tell you the system suffers (p99 8.5 s, errors +4%) but not <strong>who or what</strong>: 10,000 healthy users hide one tenant locking the thread pool. You need traces.</p>
+<h3 id="pillar-3-traces">Pillar 3: traces</h3>
+<p>A <strong>trace</strong> links all hops of one request. A unique <strong>trace ID</strong> (correlation ID) is injected into headers or event metadata at the edge, carrying across boundaries, threads and queues into an end-to-end tree. Standard header spec: W3C Trace Context (https://www.w3.org/TR/trace-context/).</p>
+<p><img src="/book-digest/grokking-software-architecture/img/trace-propagation.svg" alt="Trace propagation across services" loading="lazy" /></p>
+<h3 id="model-observability-llm-ops">Model observability (LLM-ops)</h3>
+<p>Classic observability asks if the server is up; <strong>model observability</strong> asks if the intelligence is correct, cost-effective and safe. Four data classes:</p>
+<ol>
+<li><strong>Token diagnostics and economic guardrails:</strong> track <code>prompt_tokens</code> and <code>completion_tokens</code> in real time; a recursive agent loop can burn thousands of dollars an hour, so telemetry must trigger <strong>circuit breakers</strong> over tenant budgets or depth limits.</li>
+<li><strong>Semantic latency and the &quot;reasoning gap&quot;:</strong> measure <strong>Time-to-First-Token (TTFT)</strong> separately from total generation time; trace streaming chunks.</li>
+<li><strong>Guardrails, toxicity and semantic drift:</strong> log prompt and completion <strong>embeddings</strong>; vector distance reveals <strong>semantic drift</strong>. Add a human-in-the-loop hook that logs the full chain of thought when a guardrail (e.g. prompt-injection catch) fires.</li>
+<li><strong>Automated evaluation frameworks:</strong> <strong>RAGAS</strong> (grades accuracy and relevance), <strong>LangSmith</strong> (traces reasoning chains) act like fitness functions, failing the pipeline on hallucination or low faithfulness. They are <strong>heuristic and evolving</strong>: early indicators, not proof.</li>
+</ol>
+<h2 id="14-4-instrumentation-logging">14.4 Instrumentation logging</h2>
+<p>Visibility erodes one uninstrumented endpoint at a time (&quot;we'll add logging later&quot;).</p>
+<h3 id="mapped-diagnostic-context-mdc">Mapped Diagnostic Context (MDC)</h3>
+<p>Passing a <code>TelemetryContext</code> into every port, entity method and repository violates Separation of Concerns. <strong>MDC</strong> (pioneered by Ceki Gülcü in Java's log4j) tags a <strong>thread</strong> with context in <strong>thread-local storage</strong>; the logging framework stamps it on every downstream log from that thread.</p>
+<ul>
+<li><strong>Equivalents:</strong> <code>AsyncLocal</code> (.NET), <code>AsyncLocalStorage</code> (Node.js), <code>contextvars</code> (Python).</li>
+<li><strong>Thread-local storage</strong> = per-thread private variable (&quot;sandbox&quot;; writes invisible to other threads).</li>
+<li><strong>Steps</strong>
+<ol>
+<li><strong>Entry:</strong> at the edge (middleware or controller) <code>MDC.put(&quot;tenantId&quot;, ...)</code>, <code>MDC.put(&quot;orderId&quot;, ...)</code>. In production use a <strong>decorator, AOP aspect or middleware</strong>, not manual puts in service logic.</li>
+<li><strong>Deep stack:</strong> controller, application service, domain aggregate and repository know nothing about MDC.</li>
+<li><strong>Enriched log:</strong> five layers down <code>logger.debug(&quot;Executing relational record lookup&quot;)</code> is output as JSON with <code>tenantId</code> and <code>orderId</code>.</li>
+<li><strong>Cleanup:</strong> when the request ends the map is emptied (no leaks or contamination).</li>
+</ol>
+</li>
+<li><strong>Legacy tip:</strong> add a single Servlet filter, HTTP interceptor or gateway middleware at the edge to upgrade an old codebase's logs without changing signatures.</li>
+</ul>
+<h3 id="case-study-the-high-volume-breaking-client">Case study: the high-volume breaking client</h3>
+<p>One tenant created vastly more records than any other; screens hung for seconds, pipelines crawled, while infrastructure dashboards looked fine. <strong>5 Whys</strong> with the Four Golden Signals:</p>
+<table>
+<thead>
+<tr>
+<th>Why</th>
+<th>Finding (tool)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Why slow for one client?</td>
+<td>p99 latency spike on one API endpoint (request telemetry)</td>
+</tr>
+<tr>
+<td>2. Why that endpoint?</td>
+<td>not CPU: stalled waiting on a repository lookup (custom telemetry logs)</td>
+</tr>
+<tr>
+<td>3. Why was the query slow?</td>
+<td>excessive disk reads loading deeply nested relational tables (database performance insights)</td>
+</tr>
+<tr>
+<td>4. Why this client?</td>
+<td>cloned their data to staging: tens of thousands of deeply nested records, a non-standard usage</td>
+</tr>
+<tr>
+<td>5. Root cause?</td>
+<td>single-tier caching and connection-pool assumptions overwhelmed; pool <strong>saturation hit 100%</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Three tools:</strong> database query and performance insights; Application Insights request telemetry and live metrics; custom telemetry debug logs.</li>
+<li><strong>Remedy:</strong>
+<ul>
+<li>because queries sat behind clean interfaces (ch. 3, 5) the data-access strategy changed without touching the domain</li>
+<li>an <strong>in-memory L1 cache with a shared L2 (Redis)</strong> (ch. 8, 10) kept redundant reads off the database.</li>
+</ul>
+</li>
+<li><strong>Afterwards:</strong>
+<ul>
+<li>rich logging, duration metrics, tenant-scoped tracing and query hooks became first-class for critical paths, <strong>enforced with fitness functions</strong> (ArchUnit, NetArchTest) asserting new endpoints, services and repositories must inject loggers and bind MDC hooks</li>
+<li>run in CI (ch. 13).</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-5-three-observability-anti-patterns">14.5 Three observability anti-patterns</h2>
+<table>
+<thead>
+<tr>
+<th>Anti-pattern</th>
+<th>What goes wrong</th>
+<th>Instead</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dashboard Illusion</strong></td>
+<td>a wall of green aggregate gauges (CPU, memory, error rate fine) hides one tenant's collapse</td>
+<td>add tenant- and transaction-scoped telemetry; aggregates say all is fine, instrumentation logs say where</td>
+</tr>
+<tr>
+<td><strong>Log Bombing</strong></td>
+<td>logging everything (every assignment, function entry, status) buries the needle and costs storage and I/O</td>
+<td>log contextually; dynamic levels; sampling; volumetric alarms</td>
+</tr>
+<tr>
+<td><strong>Observability as an afterthought</strong></td>
+<td>retrofitting at 2 a.m. mid-incident is stressful and too late for the data you need</td>
+<td>ship telemetry with the feature: duration metrics, tenant-scoped trace IDs, query hooks</td>
+</tr>
+</tbody>
+</table>
+<p>Common root cause: treating observability as something the system provides automatically.</p>
+<p><strong>Defensive volume management</strong></p>
+<ul>
+<li><strong>Log contextually:</strong> log boundary entries (hitting the database), failures and unusual states; let a correct repetitive loop work in silence.</li>
+<li><strong>Dynamic log levels:</strong> keep WARN/ERROR normally; flip one component to DEBUG at runtime with no redeploy.</li>
+<li><strong>Event sampling:</strong> in a batch of 100,000 card payments log the first, then ~1% (every 100th).</li>
+<li><strong>Volumetric alarms:</strong> a &quot;water meter&quot;: 50 logs/s on a normal Thursday jumping to 5,000/s signals a code emergency (an infinite loop repeating one error).</li>
+</ul>
+<p><strong>When to log</strong></p>
+<table>
+<thead>
+<tr>
+<th>Do log</th>
+<th>Don't log</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Boundary crossings</strong> (database, external API)</td>
+<td><strong>Tight loops</strong> (inside a foreach over thousands of rows)</td>
+</tr>
+<tr>
+<td><strong>State and lifecycle transitions</strong> (<code>OrderPlaced</code>, <code>PaymentSettled</code>, <code>AccountLocked</code>)</td>
+<td><strong>Method entry/exit tracing</strong> (use trace spans)</td>
+</tr>
+<tr>
+<td><strong>Failures and anomalies</strong> (exceptions, fallbacks, unexpected data)</td>
+<td><strong>Happy-path noise</strong> (&quot;iteration 42 successful&quot;)</td>
+</tr>
+<tr>
+<td><strong>Security audit milestones</strong> (auth attempts, escalations, denials)</td>
+<td><strong>Secrets and PII</strong> (passwords, tokens, card PANs, health records; violates ch. 11)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="14-7-code-instrumented-service-and-telemetry-tests-java">14.7 Code: instrumented service and telemetry tests (Java)</h2>
+<p><strong>Outbound port</strong> (decoupled boundary, also the ideal measuring point):</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">PaymentPort</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">process</span><span class="p">(</span><span class="kt">double</span><span class="w"> </span><span class="n">amount</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<p><strong>&quot;Measure at the boundaries&quot;:</strong> because network calls sit behind ports, metrics collectors can wrap them with a decorator or proxy (p99 dependency latency, error rate) without touching domain rules; and the <strong>trace ID</strong> is read from MDC and injected into HTTP or queue headers before the adapter ships the payload.</p>
+<p><strong>Instrumented service</strong> (constructor injection, MDC bound for the request):</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">checkout</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">orderId</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">amount</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MDC</span><span class="p">.</span><span class="na">putCloseable</span><span class="p">(</span><span class="s">"orderId"</span><span class="p">,</span><span class="w"> </span><span class="n">orderId</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w">         </span><span class="c1">// thread-local, auto-cleaned</span>
+<span class="w">    </span><span class="n">logger</span><span class="p">.</span><span class="na">info</span><span class="p">(</span><span class="s">"Executing transaction payment processing phase"</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">boolean</span><span class="w"> </span><span class="n">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">paymentPort</span><span class="p">.</span><span class="na">process</span><span class="p">(</span><span class="n">amount</span><span class="p">);</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">ok</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">logger</span><span class="p">.</span><span class="na">error</span><span class="p">(</span><span class="s">"Payment transaction rejected by outbound payment port provider"</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">logger</span><span class="p">.</span><span class="na">info</span><span class="p">(</span><span class="s">"Transaction payment processed successfully"</span><span class="p">);</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>Every log in the block and down the call stack carries <code>orderId</code>; operators query one order's story across services.</p>
+<p><strong>Test doubles</strong></p>
+<ul>
+<li><strong>Pattern A: lambda stub.</strong>
+<ul>
+<li><code>PaymentPort inlinePaymentStub = amount -&gt; true;</code> (a Java functional interface)</li>
+<li><code>new OrderService(stub).checkout(&quot;ord_99812&quot;, 150.00)</code> asserts true. Passive: cannot count calls.</li>
+</ul>
+</li>
+<li><strong>Pattern B: Mockito mock.</strong>
+<ul>
+<li><code>mock(PaymentPort.class); when(mock.process(anyDouble())).thenReturn(true);</code> then <code>verify(mockPaymentPort, times(1)).process(150.00)</code></li>
+<li>Mockito generates a <strong>dynamic proxy</strong> recording who called, when and with what.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Stub (A)</th>
+<th>Mock framework (B)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup</td>
+<td>extremely low</td>
+<td>medium</td>
+</tr>
+<tr>
+<td>State assertions</td>
+<td>manual</td>
+<td>dynamic</td>
+</tr>
+<tr>
+<td>Behavioural verification</td>
+<td><strong>no</strong></td>
+<td>yes (<code>times(x)</code>)</td>
+</tr>
+<tr>
+<td>Telemetry assertions</td>
+<td>hard</td>
+<td>easy</td>
+</tr>
+<tr>
+<td>Best for</td>
+<td>trivial happy paths</td>
+<td>complex structural constraints</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Audit-driven verification:</strong> a stub would absorb a duplicated payment and stay green; Mockito's <code>verify</code> fails the CI build before a customer is double-charged.</li>
+<li><strong>Telemetry quality gate:</strong> an interceptor port asserts <code>MDC.get(&quot;orderId&quot;)</code> equals <code>&quot;ord_99812&quot;</code> mid-call and <code>assertNull(MDC.get(&quot;orderId&quot;))</code> after, catching a dropped MDC block or a leaked context.</li>
+<li><strong>Summary:</strong> IoC and observability are two sides of one coin: testable boundaries make good measuring points.</li>
+</ul>
+<h2 id="14-8-the-dork-side-nagios-and-the-fallacy-of-outside-in-monitoring">14.8 The Dork Side: Nagios and the fallacy of outside-in monitoring</h2>
+<p>Early-2000s <strong>Nagios</strong> dominated server rooms. Apps were mute black boxes, so a supervisor ran <strong>external checks</strong> every few minutes: <strong>ICMP ping</strong>, <strong>TCP port check</strong> (80/443), <strong>remote shell</strong> (<code>df -h</code>, <code>uptime</code>). Green if ping returns, the socket opens and disk is under (say) 90%; red triggers email or pager.</p>
+<ul>
+<li><strong>Vulnerability 1: the Green Light Lie.</strong>
+<ul>
+<li>A memory leak or race deadlocks the DB connection pool</li>
+<li>every worker freezes</li>
+<li>requests stall 2 minutes then 500. Nagios stays green: kernel running, NIC answers ping in 4 ms, port 443 accepts a handshake, and frozen threads drop CPU to 2%. Dashboards say healthy</li>
+<li>customers see 100% downtime.</li>
+</ul>
+</li>
+<li><strong>Vulnerability 2: blunt thresholds and alert fatigue.</strong> A rotating log disk at 91% is normal but wakes someone at 3 a.m.; engineers learn to ignore alerts and miss real failures.</li>
+<li><strong>Cloud friction</strong>
+<ul>
+<li><strong>Auto-scaling:</strong> 50 containers appear and vanish in 30 minutes; static host lists alarm on decommissioning.</li>
+<li><strong>War-room silos:</strong> DBAs say disk I/O is fine, network says switches are up, developers say CPU is low: finger-pointing without trace context.</li>
+<li><strong>Reinvention:</strong>
+<ul>
+<li>CNCF championed <strong>Prometheus</strong> (multi-dimensional metrics)</li>
+<li><strong>Grafana</strong></li>
+<li><strong>OpenTelemetry</strong>, plus Datadog and Honeycomb: the application reports on itself. Nagios evolved too (cloud discovery, REST automation, container monitoring, Nagios Log Server).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Modern repeats:</strong> external <code>/healthz</code> pings, container liveness probes checking socket handshakes, or high-level cloud CPU gauges.</li>
+<li><strong>Inside-out flip (using the case study):</strong>
+<ul>
+<li><strong>contextual awareness</strong> via MDC <code>tenantId</code></li>
+<li><strong>multi-plane correlation</strong> of logs, application behaviour and database metrics (e.g. Azure Performance Insights)</li>
+<li><strong>data-driven architecture</strong>, showing where time goes per transaction</li>
+</ul>
+</li>
+<li><strong>Cornerstone lesson:</strong> build clean boundaries with IoC so the system is testable, embed inside-out observability from day one, and let telemetry (not guesses) guide the trade-offs.</li>
+</ul>
+<h2 id="14-9-mission-checklist-recap">14.9 Mission, checklist, recap</h2>
+<p><strong>Mission: instrument a legacy <code>InventoryService</code> endpoint.</strong> A high-volume tenant sees very long load screens; hardware metrics are fine; no logs, no correlation, SQL inside the endpoint handler. Document:</p>
+<ol>
+<li><strong>Multi-layer map:</strong> query analysers, request telemetry, application metrics to find where time is lost per block.</li>
+<li><strong>Controlled replication:</strong> capture and replicate the tenant's data safely; use Dependency Inversion to separate endpoint code from infrastructure for local benchmarking.</li>
+<li><strong>Thread-context instrumentation:</strong> the exact MDC keys bound on every nested loop.</li>
+<li><strong>Strategic remedy:</strong> options (query optimisation, indexing, caching redesign) with trade-offs and a metrics-driven defence of one.
+(Guided solution in Appendix A.) Next: communicating and planning architecture (ch. 15).</li>
+</ol>
+<p><strong>Recap:</strong> testability is structural; the boundary rule; three pillars; Golden Signals; data-driven architecture; three anti-patterns; MDC; flip the polling paradigm.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+testability · IoC / DI container · test double (stub, mock) · observability vs monitoring · OpenTelemetry · structured logging · Four Golden Signals · p99 tail latency · saturation · trace ID / correlation ID · W3C Trace Context · TTFT · semantic drift · RAGAS · MDC · thread-local storage · Dashboard Illusion · Log Bombing · dynamic log level · event sampling · volumetric alarm · Green Light Lie.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 14. Pre-release; no public source page found.</li>
+<li>OpenTelemetry: https://opentelemetry.io/docs/ · W3C Trace Context: https://www.w3.org/TR/trace-context/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-13-cicd-delivery-lifecycle/">Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD)</a> · <a href="/book-digest/grokking-software-architecture/gsa-15-communicating-and-planning-architecture/">Grokking Software Architecture 15: Communicating and Planning Architecture</a> · <a href="/book-digest/understanding-distributed-systems/uds-31-monitoring/">Understanding Distributed Systems 31: Monitoring</a> · <a href="/book-digest/understanding-distributed-systems/uds-32-to-34-observability-manageability-final-words/">Understanding Distributed Systems 32-34: Observability, manageability, final words</a> · <a href="/book-digest/grokking-software-architecture/gsa-10-resilience-and-scale/">Grokking Software Architecture 10: Architecting for Resilience and Scale</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-13-cicd-delivery-lifecycle/">&larr; Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD)</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-15-communicating-and-planning-architecture/">Grokking Software Architecture 15: Communicating and Planning Architecture &rarr;</a></nav></main></body></html>

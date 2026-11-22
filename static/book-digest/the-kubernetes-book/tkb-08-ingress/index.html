@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 8: Ingress</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-8-ingress">The Kubernetes Book 8: Ingress</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 8. Previous: <a href="/book-digest/the-kubernetes-book/tkb-07-kubernetes-services/">The Kubernetes Book 7: Kubernetes Services</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-09-wasm-on-kubernetes/">The Kubernetes Book 9: Wasm on Kubernetes</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Ingress</strong> exposes many web apps through <strong>one</strong> cloud load balancer, using host-based and path-based routing at layer 7.</li>
+<li>Without it, every internet-facing app needs its own LoadBalancer Service, so 25 apps need 25 paid cloud load balancers (and your cloud may cap the number).</li>
+<li>Ingress needs a <strong>resource</strong> (routing rules, <code>networking.k8s.io/v1</code>) and a <strong>controller</strong> (implements them). Kubernetes has <strong>no built-in controller</strong>; you install one (the book uses NGINX).</li>
+<li><strong>Ingress classes</strong> let several controllers coexist; each Ingress names its class.</li>
+<li>Ingress only supports <strong>HTTP and HTTPS</strong>, and overlaps with service meshes: with a mesh you may not need Ingress.</li>
+</ul>
+</div></div>
+<p>Conventions: <strong>LoadBalancer</strong> is a Service of <code>type=LoadBalancer</code>; <strong>load balancer</strong> is the cloud's internet-facing load balancer. Creating a LoadBalancer Service makes Kubernetes ask the cloud for a load balancer. Ingress went <strong>GA in Kubernetes 1.19</strong> after being beta for over 15 releases; during its 3+ years in alpha and beta, service meshes grew popular.</p>
+<h2 id="8-1-setting-the-scene-for-ingress">8.1 Setting the scene for Ingress</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-08-loadbalancer-vs-ingress.svg" alt="One load balancer per app versus one load balancer with Ingress" loading="lazy" /></p>
+<ul>
+<li>NodePort Services use only high ports and clients must track node IPs.</li>
+<li>LoadBalancer Services fix that but map <strong>one Service to one cloud load balancer</strong>: 25 apps, 25 load balancers, which cost money and may hit cloud limits.</li>
+<li>Ingress creates a <strong>single load balancer on port 80 or 443</strong> and uses <strong>host-based</strong> and <strong>path-based routing</strong> to reach different Services.</li>
+</ul>
+<h2 id="8-2-ingress-architecture">8.2 Ingress architecture</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-08-ingress-routing.svg" alt="Host-based and path-based routing through one load balancer" loading="lazy" /></p>
+<ul>
+<li>Defined in the <code>networking.k8s.io/v1</code> API sub-group, with the usual two parts:
+<ul>
+<li><strong>resource</strong>: defines the routing rules</li>
+<li><strong>controller</strong>: implements them</li>
+</ul>
+</li>
+<li>Unlike Deployments, ReplicaSets or Services, there is <strong>no built-in Ingress controller</strong>; install one (some clouds offer one at cluster build time).</li>
+<li>Ingress works at <strong>layer 7</strong> (application layer) of the OSI model, so it can read HTTP headers and route on hostnames and paths.</li>
+</ul>
+<blockquote>
+<p>[!note] OSI model (as the book explains it)
+The industry reference model for TCP/IP networking, seven layers. Lowest layers deal with signalling and electronics, middle layers with reliability (acknowledgements, retries), higher layers with services like HTTP.</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Host-based</th>
+<th>Path-based</th>
+<th>Backend Service</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>shield.mcu.com</code></td>
+<td><code>mcu.com/shield</code></td>
+<td><code>shield</code></td>
+</tr>
+<tr>
+<td><code>hydra.mcu.com</code></td>
+<td><code>mcu.com/hydra</code></td>
+<td><code>hydra</code></td>
+</tr>
+</tbody>
+</table>
+<p>Figure 8.1: DNS maps both hostnames to the same load balancer IP; the Ingress controller reads the hostname in the HTTP headers and routes <code>shield.mcu.com</code> to the <code>shield</code> ClusterIP Service and <code>hydra.mcu.com</code> to <code>hydra</code>. Path-based works the same way.</p>
+<h2 id="8-3-hands-on-with-ingress">8.3 Hands-on with Ingress</h2>
+<ul>
+<li><strong>Does not work</strong>
+<ul>
+<li>with the multi-node cluster in Docker Desktop <strong>4.38 or earlier</strong> (may work in later releases)</li>
+<li>Use a cloud cluster such as the LKE cluster from <a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes</a>.</li>
+</ul>
+</li>
+<li>You need a cluster and the book's repo; run from the <code>ingress</code> directory.</li>
+</ul>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+</code></pre>
+<p>Steps:</p>
+<ol>
+<li>Install the NGINX Ingress controller.</li>
+<li>Configure an Ingress class.</li>
+<li>Deploy a sample app.</li>
+<li>Configure an Ingress object.</li>
+<li>Inspect it.</li>
+<li>Configure DNS name resolution.</li>
+<li>Test.</li>
+</ol>
+<h3 id="install-the-nginx-ingress-controller">Install the NGINX Ingress controller</h3>
+<p>It installs from a YAML file in the Kubernetes GitHub repo, creating a Namespace, ServiceAccounts, ConfigMaps, Roles, RoleBindings and more. The URL is split here for width; run it as <strong>one line</strong>:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.0/deploy/static/provider/cloud/deploy.yaml
+<span class="go">namespace/ingress-nginx created</span>
+<span class="go">serviceaccount/ingress-nginx created</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>Check the controller Pod (Windows users replace the backslash with a backtick):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>ingress-nginx<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>ingress-nginx
+<span class="go">NAME                                        READY   STATUS      RESTARTS   AGE</span>
+<span class="go">ingress-nginx-admission-create-789md        0/1     Completed   0          25s</span>
+<span class="go">ingress-nginx-admission-patch-tc4cl         0/1     Completed   0          25s</span>
+<span class="go">ingress-nginx-controller-7445ddc6c4-csf98   0/1     Running     0          26s</span>
+</code></pre>
+<p>The <code>Completed</code> Pods were short-lived ones that initialised the environment.</p>
+<h3 id="ingress-classes">Ingress classes</h3>
+<ul>
+<li>Let you run <strong>multiple Ingress controllers</strong> on one cluster: map each controller to its own class, and assign each Ingress object to a class.</li>
+<li>You will have at least one class called <code>nginx</code>, created by the install (more if the cluster already had a controller).</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>ingressclass
+<span class="go">NAME    CONTROLLER             PARAMETERS   AGE</span>
+<span class="go">nginx   k8s.io/ingress-nginx   &lt;none&gt;       2m25s</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>ingressclass<span class="w"> </span>nginx
+<span class="go">Name:         nginx</span>
+<span class="go">Labels:       app.kubernetes.io/component=controller</span>
+<span class="go">              app.kubernetes.io/instance=ingress-nginx</span>
+<span class="go">              app.kubernetes.io/name=ingress-nginx</span>
+<span class="go">              app.kubernetes.io/part-of=ingress-nginx</span>
+<span class="go">              app.kubernetes.io/version=1.9.4</span>
+<span class="go">Annotations:  &lt;none&gt;</span>
+<span class="go">Controller:   k8s.io/ingress-nginx</span>
+<span class="go">Events:       &lt;none&gt;</span>
+</code></pre>
+<p>(There is no short name for IngressClass objects.)</p>
+<h3 id="configure-host-based-and-path-based-routing">Configure host-based and path-based routing</h3>
+<p>Two apps and one Ingress route through a single load balancer (a cloud one, or <code>localhost</code> on some local clusters). Steps:</p>
+<ol>
+<li>App <code>shield</code> fronted by ClusterIP Service <code>svc-shield</code>.</li>
+<li>App <code>hydra</code> fronted by ClusterIP Service <code>svc-hydra</code>.</li>
+<li>One Ingress with four rules:
+<ul>
+<li>host <code>shield.mcu.com</code> to <code>svc-shield</code></li>
+<li>host <code>hydra.mcu.com</code> to <code>svc-hydra</code></li>
+<li>path <code>mcu.com/shield</code> to <code>svc-shield</code></li>
+<li>path <code>mcu.com/hydra</code> to <code>svc-hydra</code></li>
+</ul>
+</li>
+<li>DNS so <code>shield.mcu.com</code>, <code>hydra.mcu.com</code> and <code>mcu.com</code> point to the load balancer.</li>
+</ol>
+<p>Traffic to shield (Figure 8.2):</p>
+<ol>
+<li>Client sends to <code>shield.mcu.com</code> or <code>mcu.com/shield</code>.</li>
+<li>DNS sends it to the cloud load balancer.</li>
+<li>The Ingress controller reads the hostname or path from the HTTP headers.</li>
+<li>The Ingress rule routes it to the <code>svc-shield</code> ClusterIP Service.</li>
+<li>That Service sends it to a shield Pod.</li>
+</ol>
+<h3 id="deploy-the-sample-environment">Deploy the sample environment</h3>
+<p><code>app.yml</code> creates <code>shield</code> (port 8080, behind <code>svc-shield</code>) and <code>hydra</code> (port 8080, behind <code>svc-hydra</code>):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>app.yml
+<span class="go">service/svc-shield created</span>
+<span class="go">service/svc-hydra created</span>
+<span class="go">pod/shield created</span>
+<span class="go">pod/hydra created</span>
+</code></pre>
+<h3 id="create-the-ingress-object">Create the Ingress object</h3>
+<p><code>ig-all.yml</code> defines Ingress <code>mcu-all</code> with four rules (the book prints line numbers; they are removed here):</p>
+<pre class="hl"><code><span class="c1"># ig-all.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">networking.k8s.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ingress</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mcu-all</span>
+<span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">nginx.ingress.kubernetes.io/rewrite-target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">ingressClassName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">  </span><span class="nt">rules</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield.mcu.com</span><span class="w">        </span><span class="c1"># host rule block for shield app</span>
+<span class="w">    </span><span class="nt">http</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">paths</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/</span>
+<span class="w">        </span><span class="nt">pathType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Prefix</span>
+<span class="w">        </span><span class="nt">backend</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">service</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">svc-shield</span>
+<span class="w">            </span><span class="nt">port</span><span class="p">:</span>
+<span class="w">              </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hydra.mcu.com</span><span class="w">         </span><span class="c1"># host rule block for hydra app</span>
+<span class="w">    </span><span class="nt">http</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">paths</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/</span>
+<span class="w">        </span><span class="nt">pathType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Prefix</span>
+<span class="w">        </span><span class="nt">backend</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">service</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">svc-hydra</span>
+<span class="w">            </span><span class="nt">port</span><span class="p">:</span>
+<span class="w">              </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mcu.com</span>
+<span class="w">    </span><span class="nt">http</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">paths</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/shield</span><span class="w">           </span><span class="c1"># path rule block for shield app</span>
+<span class="w">        </span><span class="nt">pathType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Prefix</span>
+<span class="w">        </span><span class="nt">backend</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">service</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">svc-shield</span>
+<span class="w">            </span><span class="nt">port</span><span class="p">:</span>
+<span class="w">              </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/hydra</span><span class="w">            </span><span class="c1"># path rule block for hydra app</span>
+<span class="w">        </span><span class="nt">pathType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Prefix</span>
+<span class="w">        </span><span class="nt">backend</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">service</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">svc-hydra</span>
+<span class="w">            </span><span class="nt">port</span><span class="p">:</span>
+<span class="w">              </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+</code></pre>
+<p>(The book's listing labels the <code>/hydra</code> block &quot;for shield app&quot; and refers to lines up to 49 although the listing ends at line 46.)</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion</code>, <code>kind</code></td>
+<td>An Ingress from the <code>networking.k8s.io/v1</code> schema</td>
+</tr>
+<tr>
+<td><code>metadata.name</code></td>
+<td><code>mcu-all</code></td>
+</tr>
+<tr>
+<td><code>rewrite-target: /</code> annotation</td>
+<td><strong>NGINX-specific</strong>, best-effort: rewrites incoming paths to <code>/</code>, so <code>mcu.com/shield</code> arrives at the app as <code>mcu.com/</code>. Comment it out for other controllers.</td>
+</tr>
+<tr>
+<td><code>spec.ingressClassName: nginx</code></td>
+<td>Managed by the NGINX controller; change or comment out for another controller</td>
+</tr>
+<tr>
+<td>Four rules</td>
+<td>Two host rules (shield, hydra) and two path rules under host <code>mcu.com</code></td>
+</tr>
+</tbody>
+</table>
+<p>The two rule styles, in isolation. A host-based rule (traffic arriving via <code>shield.mcu.com</code> at the root path goes to <code>svc-shield</code> on 8080):</p>
+<pre class="hl"><code><span class="c1"># host-based rule (excerpt)</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield.mcu.com</span><span class="w">        </span><span class="c1"># traffic arriving via this hostname</span>
+<span class="w">  </span><span class="nt">http</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">paths</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/</span><span class="w">                 </span><span class="c1"># arriving at root (no subpath)</span>
+<span class="w">      </span><span class="nt">pathType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Prefix</span>
+<span class="w">      </span><span class="nt">backend</span><span class="p">:</span><span class="w">                </span><span class="c1"># send to an existing "backend" ClusterIP Service</span>
+<span class="w">        </span><span class="nt">service</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">svc-shield</span><span class="w">    </span><span class="c1"># called "svc-shield"</span>
+<span class="w">          </span><span class="nt">port</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span><span class="w">      </span><span class="c1"># listening on port 8080</span>
+</code></pre>
+<p>A path-based rule (traffic via <code>mcu.com/shield</code> goes to the same Service and port):</p>
+<pre class="hl"><code><span class="c1"># path-based rule (excerpt)</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mcu.com</span><span class="w">               </span><span class="c1"># traffic arriving via this hostname</span>
+<span class="w">  </span><span class="nt">http</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">paths</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/shield</span><span class="w">           </span><span class="c1"># arriving on this subpath</span>
+<span class="w">      </span><span class="nt">pathType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Prefix</span>
+<span class="w">      </span><span class="nt">backend</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">service</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">svc-shield</span>
+<span class="w">          </span><span class="nt">port</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>ig-all.yml
+<span class="go">ingress.networking.k8s.io/mcu-all created</span>
+</code></pre>
+<h3 id="inspecting-ingress-objects">Inspecting Ingress objects</h3>
+<p>On a cloud, <code>ADDRESS</code> can take a minute while the load balancer is provisioned.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>ing
+<span class="go">NAME      CLASS   HOSTS                                ADDRESS         PORTS</span>
+<span class="go">mcu-all   nginx   shield.mcu.com,hydra.mcu.com,mcu.com 212.2.246.150   80</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CLASS</td>
+<td>Which Ingress class handles the rules (may show <code>&lt;None&gt;</code> with a single controller and no classes)</td>
+</tr>
+<tr>
+<td>HOSTS</td>
+<td>Hostnames the Ingress handles</td>
+</tr>
+<tr>
+<td>ADDRESS</td>
+<td>Load balancer endpoint: public IP or DNS name in the cloud, probably <code>localhost</code> locally</td>
+</tr>
+<tr>
+<td>PORTS</td>
+<td>80 or 443</td>
+</tr>
+</tbody>
+</table>
+<p>Ingress only supports <strong>HTTP and HTTPS</strong>.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>ing<span class="w"> </span>mcu-all
+<span class="go">Name:             mcu-all</span>
+<span class="go">Namespace:        default</span>
+<span class="go">Address:          212.2.246.150</span>
+<span class="go">Ingress Class:    nginx</span>
+<span class="go">Default backend:  &lt;default&gt;</span>
+<span class="go">Rules:</span>
+<span class="go">  Host            Path      Backends</span>
+<span class="go">  ----            ----      --------</span>
+<span class="go">  shield.mcu.com  /         svc-shield:8080 (10.36.1.5:8080)</span>
+<span class="go">  hydra.mcu.com   /         svc-hydra:8080 (10.36.0.7:8080)</span>
+<span class="go">  mcu.com         /shield   svc-shield:8080 (10.36.1.5:8080)</span>
+<span class="go">                  /hydra    svc-hydra:8080 (10.36.0.7:8080)</span>
+<span class="go">Annotations:      nginx.ingress.kubernetes.io/rewrite-target: /</span>
+<span class="go">Events:</span>
+<span class="go">  Type    Reason  Age                From                      Message</span>
+<span class="go">  ----    ------  ----               ----                      -------</span>
+<span class="go">  Normal  Sync    27s (x2 over 28s)  nginx-ingress-controller  Scheduled for sync</span>
+</code></pre>
+<ul>
+<li><strong>Address</strong>: the load balancer the Ingress created (<code>localhost</code> on local clusters).</li>
+<li><strong>Default backend</strong>: where traffic with no matching route goes; not every controller implements one.</li>
+<li><strong>Rules</strong>: host and path mappings to backends (usually ClusterIP Services).</li>
+<li><strong>Annotations</strong>: controller-specific features and cloud back-end integrations; this one rewrites all paths to <code>/</code>, best effort, and does not work with all apps.</li>
+<li>The load balancer now exists and may be visible in your cloud console (Figure 8.3 shows it in Google Cloud on GKE).</li>
+</ul>
+<p>You now have two apps with ClusterIP Services, a load balancer, and an Ingress (controller and resource). Only DNS remains.</p>
+<h3 id="configure-dns-name-resolution">Configure DNS name resolution</h3>
+<ul>
+<li>Real world: configure internal or internet DNS to point the hostnames at the Ingress load balancer; how depends on your environment and DNS provider.</li>
+<li>To follow along, edit your <strong>hosts file</strong>:
+<ul>
+<li>Mac and Linux: <code>/etc/hosts</code> (needs root)</li>
+<li>Windows: <code>C:\Windows\System32\drivers\etc\hosts</code> (open Notepad as administrator; set the open dialog to <strong>All files</strong>)</li>
+</ul>
+</li>
+<li>Add three lines mapping the names to the IP from <code>kubectl get ing mcu-all</code> (use <code>127.0.0.1</code> if yours says <code>localhost</code>):</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>sudo<span class="w"> </span>vi<span class="w"> </span>/etc/hosts
+</code></pre>
+<pre class="hl"><code># Host Database
+&lt;Snip&gt;
+212.2.246.150 shield.mcu.com
+212.2.246.150 hydra.mcu.com
+212.2.246.150 mcu.com
+</code></pre>
+<p>Save. Traffic to those names now goes to the Ingress load balancer.</p>
+<h3 id="test-the-ingress">Test the Ingress</h3>
+<p>Browse to <code>shield.mcu.com</code>, <code>hydra.mcu.com</code> and <code>mcu.com</code>.</p>
+<ul>
+<li>Figure 8.4: traffic hits the auto-created load balancer on port 80 and the Ingress routes to the ClusterIP Service by hostname.</li>
+<li>Requests to <code>mcu.com</code> go to the <strong>default backend</strong>, because no rule covers the bare host
+<ul>
+<li>What you see depends on the controller, which may not implement a default backend</li>
+<li>GKE's built-in Ingress returns &quot;response 404 (backend NotFound), service rules for [ / ] non-existent&quot;.</li>
+</ul>
+</li>
+<li>Now try <code>mcu.com/shield</code> and <code>mcu.com/hydra</code>: path routing uses the rewrite-target annotation, but <strong>the image does not display</strong>, because path rewrites do not work for all apps.</li>
+</ul>
+<p>Result: two apps behind two ClusterIP Services, published through <strong>one</strong> load balancer managed by Ingress.</p>
+<h3 id="clean-up">Clean up</h3>
+<p>Deployed: Pods <code>shield</code>, <code>hydra</code>; Services <code>svc-shield</code>, <code>svc-hydra</code>; controller <code>ingress-nginx</code>; Ingress <code>mcu-all</code>.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>ig-all.yml
+<span class="go">ingress.networking.k8s.io "mcu-all" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>app.yml
+<span class="go">service "svc-shield" deleted</span>
+<span class="go">service "svc-hydra" deleted</span>
+<span class="go">pod "shield" deleted</span>
+<span class="go">pod "hydra" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.0/deploy/static/provider/cloud/deploy.yaml
+<span class="go">namespace "ingress-nginx" deleted</span>
+<span class="go">serviceaccount "ingress-nginx" deleted</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>(Run the last command on one line; it can take about a minute.) Then remove your three hosts-file entries:</p>
+<pre class="hl"><code><span class="gp">$ </span>sudo<span class="w"> </span>vi<span class="w"> </span>/etc/hosts
+</code></pre>
+<pre class="hl"><code># Host Database
+&lt;Snip&gt;
+212.2.246.150 shield.mcu.com    # delete this entry
+212.2.246.150 hydra.mcu.com     # delete this entry
+212.2.246.150 mcu.com           # delete this entry
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Ingress exposes multiple apps (ClusterIP Services) through a single cloud load balancer; stable API object whose features overlap with service meshes.</li>
+<li>Many clusters require installing an Ingress controller; some hosted services ship one.</li>
+<li>Ingress objects are rule lists for host-based and path-based HTTP routing.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Ingress resource / controller</strong>: rules / implementation (controller not built in).</li>
+<li><strong>Ingress class</strong>: maps Ingress objects to a controller.</li>
+<li><strong>Host-based / path-based routing</strong>: route on hostname / URL path.</li>
+<li><strong>Layer 7</strong>: application layer, HTTP-aware.</li>
+<li><strong>Default backend</strong>: handles unmatched hosts and paths.</li>
+<li><strong>rewrite-target</strong>: NGINX annotation, best-effort path rewriting.</li>
+<li><strong>LoadBalancer vs load balancer</strong>: Service type vs cloud device.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 8. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap09.xhtml</li>
+<li>NGINX Ingress controller manifest: https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.0/deploy/static/provider/cloud/deploy.yaml</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-07-kubernetes-services/">The Kubernetes Book 7: Kubernetes Services</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-09-wasm-on-kubernetes/">The Kubernetes Book 9: Wasm on Kubernetes</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-07-kubernetes-services/">&larr; The Kubernetes Book 7: Kubernetes Services</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-09-wasm-on-kubernetes/">The Kubernetes Book 9: Wasm on Kubernetes &rarr;</a></nav></main></body></html>

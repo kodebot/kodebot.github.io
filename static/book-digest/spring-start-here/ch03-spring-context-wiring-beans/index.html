@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Ch 3: The Spring context, wiring beans</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/spring-start-here/">Spring Start Here</a></div>
+<main>
+<h1 id="ch-3-the-spring-context-wiring-beans">Ch 3: The Spring context, wiring beans</h1>
+<p>Source: Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 3. Previous: <a href="/book-digest/spring-start-here/ch02-spring-context-defining-beans/">Ch 2: The Spring context, defining beans</a>. Book projects: <code>ssh_ch3_ex1</code> to <code>ssh_ch3_ex9</code>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Objects rarely work alone: a <code>Person</code> has a <code>Parrot</code>.</li>
+<li>Instead of fetching beans with <code>getBean()</code>, you let Spring hand each bean its collaborators.</li>
+<li>That is <strong>dependency injection (DI)</strong>, an application of IoC.</li>
+<li>You can link beans by <strong>wiring</strong> (inside <code>@Bean</code> methods) or by <strong>autowiring</strong> (<code>@Autowired</code>).</li>
+<li>Prefer <strong>constructor injection</strong>.</li>
+<li>When several beans match, pick with <code>@Primary</code> or <code>@Qualifier</code>.</li>
+<li><strong>Parameter name vs bean name:</strong> injection is by <strong>type</strong>; the parameter name only matters as a fallback when <strong>several beans of that type</strong> exist (then <code>parrot2</code> picks the bean named <code>parrot2</code>). With one bean the name is irrelevant; prefer an explicit <code>@Qualifier</code>.</li>
+</ul>
+<p><img src="/book-digest/spring-start-here/img/wiring-options.svg" alt="Ways to link a Person to a Parrot" loading="lazy" /></p>
+<ul>
+<li>Chapters 2 and 3 use toy classes (parrots, persons) on purpose, to focus on syntax. From chapter 4 the class design gets closer to real projects.</li>
+<li><strong>Has-A relationship:</strong> <code>Person</code> holds a <code>Parrot</code> field. Both are beans; the task is to set that field.</li>
+</ul>
+</div></div>
+<h2 id="3-1-linking-beans-defined-with-bean">3.1 Linking beans defined with <code>@Bean</code></h2>
+<p>Use this when you cannot edit the class (JDK or library types). Two steps each time: (1) define both beans, (2) link them.</p>
+<p><strong>Step 1 (<code>ssh_ch3_ex1</code>), two beans, no link yet:</strong></p>
+<pre class="hl"><code><span class="c1">// Parrot.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Parrot</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// getters, setters</span>
+<span class="w">    </span><span class="nd">@Override</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">toString</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"Parrot : "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Person.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Person</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// getters, setters</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ProjectConfig.java</span>
+<span class="nd">@Configuration</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Parrot</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="w">        </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Koko"</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">Person</span><span class="w"> </span><span class="nf">person</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Person</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">();</span>
+<span class="w">        </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Ella"</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Usage</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AnnotationConfigApplicationContext</span><span class="p">(</span><span class="n">ProjectConfig</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">Person</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">Person</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">Parrot</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Person's name: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">person</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span><span class="w">      </span><span class="c1">// Ella</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Parrot's name: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">parrot</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span><span class="w">      </span><span class="c1">// Koko</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Person's parrot: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">person</span><span class="p">.</span><span class="na">getParrot</span><span class="p">());</span><span class="w">  </span><span class="c1">// null  &lt;- not linked</span>
+</code></pre>
+<h3 id="3-1-1-wiring-by-calling-the-other-bean-method-ssh-ch3-ex2">3.1.1 Wiring by calling the other <code>@Bean</code> method (<code>ssh_ch3_ex2</code>)</h3>
+<pre class="hl"><code><span class="nd">@Bean</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">Person</span><span class="w"> </span><span class="nf">person</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Person</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Ella"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setParrot</span><span class="p">(</span><span class="n">parrot</span><span class="p">());</span><span class="w">   </span><span class="c1">// direct call</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<p>Output: <code>Person's parrot: Parrot : Koko</code>.</p>
+<p><strong>The classic question: does this create two Parrots?</strong> No. Spring controls how <code>@Bean</code> methods are called (it intercepts them; chapter 6 explains how). A call to <code>parrot()</code> from another <code>@Bean</code> method means &quot;give me the parrot bean&quot;.</p>
+<p><img src="/book-digest/spring-start-here/img/single-instance-call.svg" alt="What Spring does when person() calls parrot()" loading="lazy" /></p>
+<p>Proof: add a constructor that prints, run again, and the message appears once.</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="nf">Parrot</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Parrot created"</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code>Parrot created
+Person's name: Ella
+Person's parrot: Parrot : Koko
+</code></pre>
+<h3 id="3-1-2-wiring-by-method-parameter-ssh-ch3-ex3">3.1.2 Wiring by method parameter (<code>ssh_ch3_ex3</code>)</h3>
+<p>Add a parameter of the needed type and Spring injects the bean from its context.</p>
+<pre class="hl"><code><span class="nd">@Bean</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">Person</span><span class="w"> </span><span class="nf">person</span><span class="p">(</span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">   </span><span class="c1">// Spring injects the parrot bean here</span>
+<span class="w">    </span><span class="n">Person</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Ella"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setParrot</span><span class="p">(</span><span class="n">parrot</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Works whether the parrot bean came from a <code>@Bean</code> method or a stereotype annotation like <code>@Component</code>; that flexibility is a plus over the direct call.</li>
+<li><strong>Does the parameter name have to match the bean method name? Only when there is more than one bean of that type.</strong>
+<ul>
+<li>Spring matches by <strong>type</strong> first. With <strong>one</strong> <code>Parrot</code> bean, <code>Person person(Parrot parrot)</code> works whatever the parameter is called (<code>parrot</code>, <code>p</code>, <code>bird</code>).</li>
+<li>With <strong>several</strong> <code>Parrot</code> beans (say <code>parrot1()</code> and <code>parrot2()</code>), Spring falls back to the <strong>parameter name</strong>: a parameter called <code>parrot2</code> gets the bean named <code>parrot2</code> (a <code>@Bean</code> method's name is the bean's name by default). This is the book's figure 3.12 point.</li>
+<li>If the name matches no bean and there is no <code>@Primary</code> or <code>@Qualifier</code>, startup fails because Spring cannot choose (section 3.4).</li>
+<li><strong>Safer:</strong> don't depend on the name; use <code>@Qualifier(&quot;parrot2&quot;)</code>, which survives renaming the parameter. (Not from the book: the name fallback also needs the parameter names kept in the compiled class, the <code>-parameters</code> compiler flag, which Spring Boot's build plugins set by default.)</li>
+</ul>
+</li>
+<li>Author's view: which one developers pick is mostly taste; know both, you will meet both.</li>
+<li><strong>DI defined (book):</strong> the framework sets a value into a field or parameter. It is an application of IoC, because the framework (a dependency) controls the app.</li>
+</ul>
+<h2 id="3-2-autowired">3.2 <code>@Autowired</code></h2>
+<p>You mark the dependency in the class that needs it, so the relationship is visible right where it is used. Three places to put it. Examples use <code>@Component</code> beans, the common real-world combo.</p>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>How</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Field injection</td>
+<td><code>@Autowired</code> on the field</td>
+<td>fine in demos and tests; the field cannot be <code>final</code></td>
+</tr>
+<tr>
+<td>Constructor injection</td>
+<td><code>@Autowired</code> on the constructor (optional if there is one constructor)</td>
+<td>field can be <code>final</code>; easy to test</td>
+</tr>
+<tr>
+<td>Setter injection</td>
+<td><code>@Autowired</code> on the setter</td>
+<td>rare, found in old apps; field cannot be <code>final</code>; harder to test</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-2-1-on-the-field-ssh-ch3-ex4">3.2.1 On the field (<code>ssh_ch3_ex4</code>)</h3>
+<pre class="hl"><code><span class="c1">// Parrot.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Parrot</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Koko"</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// getters, setters, toString</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Person.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Person</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Ella"</span><span class="p">;</span>
+<span class="w">    </span><span class="nd">@Autowired</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// getters, setters</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ProjectConfig.java</span>
+<span class="nd">@Configuration</span>
+<span class="nd">@ComponentScan</span><span class="p">(</span><span class="n">basePackages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"com.example.beans"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>Output: <code>Person's name: Ella</code> / <code>Person's parrot: Parrot : Koko</code>.</p>
+<p>Why avoid it in production code:</p>
+<ul>
+<li>You cannot make the field <code>final</code>, so nobody can guarantee immutability:<pre class="hl"><code><span class="nd">@Autowired</span>
+<span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span><span class="w">   </span><span class="c1">// does not compile: final field has no initial value</span>
+</code></pre>
+</li>
+<li>It is harder to set the dependency yourself, which makes unit tests awkward (chapter 15).</li>
+<li>Still common in demos, proofs of concept and tests, so you must read it.</li>
+</ul>
+<h3 id="3-2-2-on-the-constructor-ssh-ch3-ex5-the-recommended-way">3.2.2 On the constructor (<code>ssh_ch3_ex5</code>), the recommended way</h3>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Person</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Ella"</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nd">@Autowired</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">Person</span><span class="p">(</span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">parrot</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Field can be <code>final</code>; tests can pass any <code>Parrot</code> straight to the constructor.</li>
+<li><strong>Since Spring 4.3, <code>@Autowired</code> is optional when the class has one constructor.</strong></li>
+</ul>
+<h3 id="3-2-3-on-the-setter-ssh-ch3-ex6">3.2.3 On the setter (<code>ssh_ch3_ex6</code>)</h3>
+<pre class="hl"><code><span class="nd">@Autowired</span>
+<span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setParrot</span><span class="p">(</span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="na">parrot</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Rare: harder to read, no <code>final</code>, no testing benefit. The author has seen it only in a couple of old apps.</li>
+</ul>
+<h2 id="3-3-circular-dependencies-ssh-ch3-ex7">3.3 Circular dependencies (<code>ssh_ch3_ex7</code>)</h2>
+<p>Bean A needs bean B to be created, and B needs A. Spring is deadlocked.</p>
+<p><img src="/book-digest/spring-start-here/img/circular-dependency.svg" alt="A circular dependency" loading="lazy" /></p>
+<pre class="hl"><code><span class="c1">// Person.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Person</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span>
+<span class="w">    </span><span class="nd">@Autowired</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="nf">Person</span><span class="p">(</span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">parrot</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Parrot.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Parrot</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Koko"</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Person</span><span class="w"> </span><span class="n">person</span><span class="p">;</span>
+<span class="w">    </span><span class="nd">@Autowired</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="nf">Parrot</span><span class="p">(</span><span class="n">Person</span><span class="w"> </span><span class="n">person</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">person</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">person</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Startup fails:</p>
+<pre class="hl"><code>Caused by: org.springframework.beans.factory.BeanCurrentlyInCreationException:
+Error creating bean with name 'parrot': Requested bean is currently in creation:
+Is there an unresolvable circular reference?
+</code></pre>
+<ul>
+<li>The author's claim: nearly every Spring developer has created one by mistake.</li>
+<li>It signals bad class design. The fix is to rewrite so the two classes do not depend on each other for creation; read the exception, it names the classes involved.</li>
+</ul>
+<h2 id="3-4-choosing-among-several-beans-of-one-type">3.4 Choosing among several beans of one type</h2>
+<p>Three cases when you inject a <code>Parrot</code> and several exist:</p>
+<p><img src="/book-digest/spring-start-here/img/choose-bean.svg" alt="How Spring chooses among several beans" loading="lazy" /></p>
+<ol>
+<li>One bean is <code>@Primary</code> (chapter 2): Spring injects it.</li>
+<li>You pick explicitly with <code>@Qualifier</code>.</li>
+<li>Neither: exception, because Spring cannot choose.</li>
+</ol>
+<p><strong>Parameter injection (<code>ssh_ch3_ex8</code>):</strong></p>
+<pre class="hl"><code><span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot1</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Parrot</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Koko"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot2</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Parrot</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Miki"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="nd">@Bean</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">Person</span><span class="w"> </span><span class="nf">person</span><span class="p">(</span><span class="nd">@Qualifier</span><span class="p">(</span><span class="s">"parrot2"</span><span class="p">)</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot2</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Person</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Ella"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setParrot</span><span class="p">(</span><span class="n">parrot2</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<p>Output: <code>Person's parrot: Parrot : Miki</code>. The book's figure 3.12 also states that naming the parameter like the bean (<code>parrot2</code>) lets Spring pick it; the code uses <code>@Qualifier</code> explicitly, which is the unambiguous form.</p>
+<p><strong><code>@Autowired</code> constructor (<code>ssh_ch3_ex9</code>)</strong>, <code>Parrot</code> has no annotation; both beans come from <code>@Bean</code> methods, <code>Person</code> is a <code>@Component</code>:</p>
+<pre class="hl"><code><span class="c1">// Person.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Person</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Ella"</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">Person</span><span class="p">(</span><span class="nd">@Qualifier</span><span class="p">(</span><span class="s">"parrot2"</span><span class="p">)</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="n">parrot2</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">parrot</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parrot2</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ProjectConfig.java</span>
+<span class="nd">@Configuration</span>
+<span class="nd">@ComponentScan</span><span class="p">(</span><span class="n">basePackages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"com.example.beans"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot1</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="s">"Koko"</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot2</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="s">"Miki"</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Output: <code>Person's parrot: Parrot : Miki</code>.</p>
+<p>Author's wrap-up: you will use constructor injection most of the time; knowing why the other options exist lets you debug a strange context &quot;without panic (and without blaming the parrot)&quot;.</p>
+<h2 id="chapter-summary-book">Chapter summary (book)</h2>
+<ul>
+<li>Beans collaborate; Spring manages the links through DI.</li>
+<li>In config classes: call one <code>@Bean</code> method from another, or inject through method parameters.</li>
+<li>DI implements IoC: objects receive dependencies instead of creating them.</li>
+<li><code>@Autowired</code> works on field, constructor and setter. Constructor injection is preferred (immutability, readability, testability).</li>
+<li>Circular dependencies are a design problem: refactor.</li>
+<li>Several beans of one type need extra information (<code>@Primary</code> or <code>@Qualifier</code>).</li>
+<li>Wiring by method parameter is <strong>by type</strong>. The parameter name only has to match the <code>@Bean</code> method (bean) name when <strong>several beans of that type</strong> exist and you rely on the name to choose; with a single bean it need not match, and <code>@Qualifier</code> is the explicit alternative.</li>
+</ul>
+<h2 id="terms-to-carry-forward">Terms to carry forward</h2>
+<p>wiring · autowiring · dependency injection · has-A · <code>@Autowired</code> · field / constructor / setter injection · circular dependency · <code>BeanCurrentlyInCreationException</code> · <code>@Qualifier</code> · <code>@Primary</code>.</p>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 3. https://www.manning.com/books/spring-start-here-second-edition (unverified)</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/spring-start-here/ch02-spring-context-defining-beans/">Ch 2: The Spring context, defining beans</a> · <a href="/book-digest/spring-start-here/ch01-spring-in-the-real-world/">Ch 1: Spring in the real world</a></p>
+<nav class="pager"><a href="/book-digest/spring-start-here/ch02-spring-context-defining-beans/">&larr; Ch 2: The Spring context, defining beans</a><a href="/book-digest/spring-start-here/">Contents</a><a href="/book-digest/spring-start-here/ch04-spring-context-using-abstractions/">Ch 4: The Spring context, using abstractions &rarr;</a></nav></main></body></html>

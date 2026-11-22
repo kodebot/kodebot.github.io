@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 4: Working with Pods</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-4-working-with-pods">The Kubernetes Book 4: Working with Pods</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 4. Previous: <a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-05-virtual-clusters-with-namespaces/">The Kubernetes Book 5: Virtual Clusters with Namespaces</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Every app runs in a Pod: deploy, terminate, scale and update all mean creating or removing Pods.</li>
+<li>Pods are an <strong>abstraction layer</strong> (containers, Wasm, VMs and serverless all fit) and give resource sharing, scheduling control, probes, restart policies and more.</li>
+<li>Pods are <strong>mortal and immutable</strong>; &quot;restart&quot; or &quot;update&quot; a Pod really means replace it. Only the <strong>kubelet</strong> restarts <strong>containers</strong>, governed by <code>restartPolicy</code>.</li>
+<li>Always set <strong>resource requests and limits</strong>; the scheduler uses requests, the runtime enforces limits.</li>
+<li>Multi-container patterns: <strong>init containers</strong> (run once, finish first) and <strong>sidecars</strong> (init containers with <code>restartPolicy: Always</code>; start first, run alongside, stop last).</li>
+</ul>
+</div></div>
+<p>The chapter has two parts: Pod theory, then hands-on.</p>
+<h2 id="4-1-pod-theory">4.1 Pod theory</h2>
+<h3 id="pods-are-an-abstraction-layer">Pods are an abstraction layer</h3>
+<ul>
+<li>Containers, VMs, serverless functions and Wasm apps all run in Pods; Kubernetes does not know the difference.</li>
+<li>Benefits:
+<ul>
+<li>Kubernetes manages Pods without caring what is inside.</li>
+<li>Different workloads run side by side and use the full declarative API.</li>
+</ul>
+</li>
+<li>Containers and Wasm apps use standard Pods, controllers and runtimes.</li>
+<li>Serverless functions run in standard Pods but need extra apps such as <strong>Knative</strong> (custom resources and controllers). VMs need <strong>KubeVirt</strong>.</li>
+<li>Figure 4.1: four workloads on one cluster; VM workloads run in a <strong>VirtualMachineInstance (VMI)</strong>, similar to a Pod.</li>
+</ul>
+<h3 id="pods-augment-workloads">Pods augment workloads</h3>
+<p>Features Pods add:</p>
+<ul>
+<li>resource sharing</li>
+<li>advanced scheduling</li>
+<li>application health probes</li>
+<li>restart policies</li>
+<li>security policies</li>
+<li>termination control</li>
+<li>volumes</li>
+</ul>
+<p>Inspect every Pod attribute (over 1,000 lines; space pages, <code>q</code> quits):</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>explain<span class="w"> </span>pods<span class="w"> </span>--recursive<span class="w"> </span><span class="p">|</span><span class="w"> </span>more
+</code></pre>
+<pre class="hl"><code>KIND:     Pod
+VERSION:  v1
+DESCRIPTION:
+     Pod is a collection of containers that can run on a host. This resource is
+     created by clients and scheduled onto hosts.
+FIELDS:
+   apiVersion   &lt;string&gt;
+   kind         &lt;string&gt;
+   metadata     &lt;Object&gt;
+      annotations  &lt;map[string]string&gt;
+      labels       &lt;map[string]string&gt;
+      name         &lt;string&gt;
+      namespace    &lt;string&gt;
+&lt;Snip&gt;
+</code></pre>
+<p>Drill into one attribute:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>explain<span class="w"> </span>pod.spec.restartPolicy
+</code></pre>
+<pre class="hl"><code>KIND:     Pod
+VERSION:  v1
+FIELD:    restartPolicy &lt;string&gt;
+DESCRIPTION:
+     Restart policy for all containers within the pod. One of Always, OnFailure, Never.
+     Default to Always.
+Possible enum values:
+  - `"Always"`
+  - `"Never"`
+  - `"OnFailure"`
+</code></pre>
+<p>Despite all this, Pods are lightweight with very little overhead.</p>
+<h3 id="pods-enable-resource-sharing">Pods enable resource sharing</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-04-multi-container-pod.svg" alt="Containers in a Pod share the IP, localhost and volume" loading="lazy" /></p>
+<p>All containers in a Pod share its execution environment:</p>
+<table>
+<thead>
+<tr>
+<th>Shared</th>
+<th>Linux namespace</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Filesystem and volumes</td>
+<td>mnt</td>
+</tr>
+<tr>
+<td>Network stack</td>
+<td>net</td>
+</tr>
+<tr>
+<td>Memory</td>
+<td>IPC</td>
+</tr>
+<tr>
+<td>Process tree</td>
+<td>pid</td>
+</tr>
+<tr>
+<td>Hostname</td>
+<td>uts</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Figure 4.2: a multi-container Pod sharing IP and volume. Clients reach the main container on <code>10.0.10.15:8080</code> and the sidecar on <code>10.0.10.15:5005</code>.</li>
+<li>Containers talk to each other over the Pod's <code>localhost</code> and mount the same volume.</li>
+<li>Example: a sidecar syncs static content from a remote Git repo into the volume; the main container reads it and serves it as a web page.</li>
+</ul>
+<h3 id="pods-and-scheduling">Pods and scheduling</h3>
+<ul>
+<li><strong>All containers in a Pod are scheduled to the same node</strong> (nodes are physical servers, VMs or cloud instances).</li>
+<li>Put containers in one Pod only if they need to share memory, volumes or networking. If you merely want two workloads on the same node, use separate Pods plus one of:
+<ul>
+<li>nodeSelectors</li>
+<li>affinity and anti-affinity</li>
+<li>topology spread constraints</li>
+<li>resource requests and limits</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Mechanism</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>nodeSelector</strong></td>
+<td>Simplest. Give labels; scheduler picks only nodes with all of them.</td>
+</tr>
+<tr>
+<td><strong>Affinity / anti-affinity</strong></td>
+<td>A more powerful nodeSelector: schedule alongside (affinity, attracts) or away from (anti-affinity, repels) resources; <strong>hard</strong> rules must be obeyed, <strong>soft</strong> rules are best effort; can select on <strong>Pods</strong> as well as nodes.</td>
+</tr>
+<tr>
+<td><strong>Topology spread constraints</strong></td>
+<td>Spread Pods across infrastructure for availability, performance or locality, for example across availability zones for HA; custom domains allowed (close to data sources, close to clients for lower latency).</td>
+</tr>
+<tr>
+<td><strong>Requests and limits</strong></td>
+<td>Tell the scheduler how much CPU and memory a Pod needs. Every Pod should set them; without them the scheduler may place a Pod on a node without enough resources.</td>
+</tr>
+</tbody>
+</table>
+<p>Affinity example: a <strong>hard</strong> node affinity for <code>project=tkb</code> only runs on nodes with that label, and the Pod is not scheduled if none exists. A <strong>soft</strong> rule tries first but still schedules elsewhere. <strong>Anti-affinity</strong> looks for nodes <strong>without</strong> the label. Pod-based rules work the same way.</p>
+<h3 id="deploying-pods">Deploying Pods</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-04-deploy-pod.svg" alt="Sequence of deploying a Pod" loading="lazy" /></p>
+<ol>
+<li>Define the Pod in a YAML manifest.</li>
+<li>Post it to the API server.</li>
+<li>The request is authenticated and authorised.</li>
+<li>The Pod spec is validated.</li>
+<li>The scheduler filters nodes using nodeSelectors, affinity and anti-affinity, topology spread constraints, resource requirements and limits.</li>
+<li>The Pod is assigned to a healthy node meeting all requirements.</li>
+<li>The node's kubelet notices the assignment through the API server.</li>
+<li>The kubelet downloads the spec and asks the local runtime to start it.</li>
+<li>The kubelet monitors status and reports changes to the API server.</li>
+</ol>
+<ul>
+<li>No suitable node: the Pod is <strong>pending</strong>.</li>
+<li>Deployment is <strong>atomic</strong>: the Pod serves requests only when all containers are running.</li>
+</ul>
+<h3 id="pod-lifecycle">Pod lifecycle</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-04-pod-lifecycle.svg" alt="Pod phases: Pending, Running, Succeeded" loading="lazy" /></p>
+<ul>
+<li><strong>Mortal:</strong> you cannot restart a failed or deleted Pod. A controller replaces it, which is not the same as restarting and fixing it.</li>
+<li><strong>Immutable:</strong>
+<ul>
+<li>you cannot modify a deployed Pod</li>
+<li>To change one, create a new Pod with the change, delete the old one</li>
+<li>To write data, attach a <strong>volume</strong> so the data outlives the Pod</li>
+<li>(A shift for people used to patching live servers.)</li>
+</ul>
+</li>
+<li>Lifecycle:
+<ul>
+<li>you post the YAML, the Pod is <strong>Pending</strong> while the scheduler finds a node, the kubelet starts the containers, then <strong>Running</strong> once all are up. Long-lived Pods (web server) stay Running</li>
+<li>short-lived ones (batch job) reach <strong>Succeeded</strong> when all containers finish (Figure 4.3).</li>
+</ul>
+</li>
+<li><strong>VMs</strong> are the opposite: mutable and immortal (restart, reconfigure, migrate). KubeVirt wraps them in a modified Pod, the <strong>VMI</strong>, with custom controllers.</li>
+</ul>
+<h3 id="restart-policies">Restart policies</h3>
+<ul>
+<li>They apply to individual <strong>containers</strong>, not the Pod.</li>
+<li>A Deployment replaces a Pod on a failed node with a new one:
+<ul>
+<li>same spec, but new <strong>UID</strong>, new <strong>IP</strong> and <strong>no state</strong></li>
+<li>The same happens on node eviction, scale-down (deletes Pods), scale-up (new Pods), updates and rollbacks.</li>
+</ul>
+</li>
+<li>So &quot;update or restart Pods&quot; always means <strong>replace</strong> them.</li>
+<li>Kubernetes can restart <strong>containers</strong>, always via the local kubelet, governed by <code>spec.restartPolicy</code>:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+<th>Typical use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Always</code></td>
+<td>Always restart</td>
+<td>Long-living: web servers, data stores, message queues</td>
+</tr>
+<tr>
+<td><code>OnFailure</code></td>
+<td>Restart only on an error exit code</td>
+<td>Short-living batch jobs</td>
+</tr>
+<tr>
+<td><code>Never</code></td>
+<td>Never restart</td>
+<td>Short-living, when failure does not matter</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The policy is Pod-wide, except for init containers.</li>
+</ul>
+<h3 id="static-pods-vs-controllers">Static Pods vs controllers</h3>
+<table>
+<thead>
+<tr>
+<th>Deployment style</th>
+<th>Frequency</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Directly from a Pod manifest (<strong>static Pod</strong>)</td>
+<td>Rare</td>
+<td>Managed only by the node's kubelet: no self-healing, scaling or rolling updates; if the node fails the kubelet fails with it</td>
+</tr>
+<tr>
+<td>Via a workload resource and controller</td>
+<td>Most common</td>
+<td>Highly available controller restarts Pods on other nodes, scales, does rolling updates and versioned rollbacks; kubelet still restarts failed containers</td>
+</tr>
+</tbody>
+</table>
+<p>Workload controllers are covered in chapter 6.</p>
+<h3 id="the-pod-network">The pod network</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-04-pod-network.svg" alt="One flat Pod network spans all nodes; nodes connect to external networks separately" loading="lazy" /></p>
+<ul>
+<li>Every cluster runs a <strong>pod network</strong> connecting all Pods; usually a <strong>flat Layer-2 overlay</strong> spanning all nodes so every Pod can talk directly to every other Pod.</li>
+<li>Implemented by a third-party plugin via the <strong>Container Network Interface (CNI)</strong>, chosen at cluster build time. Plugins differ
+<ul>
+<li>at the time of writing <strong>Cilium</strong> is most popular, with security and observability features.</li>
+</ul>
+</li>
+<li>Figure 4.4: three nodes, five Pods, one pod network; nodes connect to external networks but not directly to the pod network.</li>
+<li>New clusters are often very open with little security. Use <strong>Network Policies</strong> and other measures to secure it.</li>
+</ul>
+<h3 id="multi-container-pods">Multi-container Pods</h3>
+<ul>
+<li>Microservice design says one container, one clearly defined responsibility (separation of concerns, <strong>single responsibility principle</strong>)
+<ul>
+<li>Keeps containers small, reusable and easier to troubleshoot.</li>
+</ul>
+</li>
+<li>Example: an app that syncs content from a repo and serves it as a web page has two responsibilities, so design two microservices, one container each.</li>
+<li>Usually they sit in separate Pods and talk over the pod network
+<ul>
+<li>Sometimes one Pod is better: the sync container stores content in a shared volume and the web container serves it (Figure 4.5).</li>
+</ul>
+</li>
+<li>Two main patterns: <strong>init containers</strong> and <strong>sidecars</strong>.</li>
+</ul>
+<h3 id="init-containers">Init containers</h3>
+<ul>
+<li>A special container type in the API. Kubernetes guarantees it <strong>starts and completes before the main app container starts</strong>, and runs <strong>only once</strong>.</li>
+<li>Purpose: prepare the environment for the app.</li>
+<li>Examples:
+<ul>
+<li><strong>Wait for a remote API:</strong> the init container polls the API until it responds; the app is blocked until then, then Kubernetes starts it.</li>
+<li><strong>One-time repo clone:</strong> instead of bloating the app with the remote address, certificates, auth, sync protocol and checksum logic, an init container does it first.</li>
+</ul>
+</li>
+<li>You can list several; they run <strong>in manifest order</strong> and all must finish before app containers start.</li>
+<li>A failed init container is restarted; with <code>restartPolicy: Never</code> the <strong>Pod fails</strong>.</li>
+<li>Limitation: they only run <strong>before</strong> the app starts.</li>
+</ul>
+<h3 id="sidecars">Sidecars</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-04-init-and-sidecar-timeline.svg" alt="Start and stop order of init container, sidecar and app container" loading="lazy" /></p>
+<ul>
+<li>A sidecar adds functionality without putting it in the app container
+<ul>
+<li>Examples: scraping logs, monitoring and syncing remote content, brokering connections, munging data, encrypting network traffic.</li>
+</ul>
+</li>
+<li>Figure 4.6: a service mesh sidecar intercepting and encrypting all traffic; it must start before the app and run for the Pod's whole life, otherwise the app cannot use the network.</li>
+<li>Old Kubernetes had no sidecar concept, so they were regular containers, with no reliable way to start them first, keep them running or stop them after the app.</li>
+<li><strong>Native sidecars:</strong>
+<ul>
+<li>alpha in <strong>v1.28</strong>, beta in <strong>v1.29</strong></li>
+<li>as of v1.32 still beta (use with caution) but enabled by default and used by projects including <strong>Argo CD</strong> and <strong>Istio</strong></li>
+<li>GA expected soon.</li>
+</ul>
+</li>
+<li>Definition: an entry in <code>spec.initContainers</code> with <code>restartPolicy: Always</code>. Kubernetes guarantees they:
+<ol>
+<li>start before the main application container</li>
+<li>keep running alongside it</li>
+<li>terminate after it</li>
+</ol>
+</li>
+<li>Otherwise they follow init container rules (startup order, probes attach to them).</li>
+</ul>
+<h3 id="pod-theory-summary">Pod theory summary</h3>
+<ul>
+<li>The Pod is the atomic unit of scheduling and abstracts the workload.</li>
+<li>Multi-container Pods tightly couple workloads that share resources, augment apps (sidecar) and initialise environments (init).</li>
+<li>Usually you deploy via controllers for self-healing and autoscaling.</li>
+</ul>
+<h2 id="4-2-hands-on-with-pods">4.2 Hands-on with Pods</h2>
+<p>Clone the book's repo (see <a href="/book-digest/the-kubernetes-book/tkb-00-preface/">The Kubernetes Book 0: Preface</a>) and run all commands from the <code>pods</code> folder.</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+</code></pre>
+<h3 id="pod-manifest-files">Pod manifest files</h3>
+<pre class="hl"><code><span class="c1"># pod.yml</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-pod</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">zone</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod</span>
+<span class="w">    </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-ctr</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/k8sbook:1.0</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">    </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">limits</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.5</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kind</code></td>
+<td>Object type (Pod; for a Deployment it would say Deployment)</td>
+</tr>
+<tr>
+<td><code>apiVersion</code></td>
+<td>API version to use (<code>v1</code> Pod schema)</td>
+</tr>
+<tr>
+<td><code>metadata</code></td>
+<td>Name <code>hello-pod</code> and two labels (used later to connect to a Service)</td>
+</tr>
+<tr>
+<td><code>spec</code></td>
+<td>One container <code>hello-ctr</code> from <code>nigelpoulton/k8sbook:1.0</code>, port 8080, max 128MB memory and half a CPU</td>
+</tr>
+</tbody>
+</table>
+<h4 id="manifest-files-empathy-as-code">Manifest files: Empathy as Code</h4>
+<ul>
+<li>YAML manifests document the app: newcomers learn its functions and requirements; ops teams see ports, CPU and memory needs.</li>
+<li>They can live in source control for versioning and diffs.</li>
+<li>Nirmal Mehta called this <strong>empathy as code</strong> in his 2017 DockerCon talk <em>A Strong Belief, Loosely Held: Bringing Empathy to IT</em> (as cited by the book).</li>
+</ul>
+<h3 id="deploying-from-a-manifest">Deploying from a manifest</h3>
+<p><code>kubectl apply</code> sends the file to the API server in your current context and authenticates with your kubeconfig credentials.</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>pod.yml
+</code></pre>
+<pre class="hl"><code>pod/hello-pod created
+</code></pre>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>pods
+</code></pre>
+<pre class="hl"><code>NAME        READY   STATUS              RESTARTS   AGE
+hello-pod   0/1     ContainerCreating   0          9s
+</code></pre>
+<ul>
+<li>&quot;Created&quot; may still be pulling the image; wait for <code>READY 1/1</code> and <code>STATUS Running</code>, at which point the kubelet is actively monitoring it.</li>
+<li>Kubernetes pulls images from <strong>Docker Hub</strong> by default; add the registry URL before the image name for another registry.</li>
+</ul>
+<h3 id="introspecting-pods">Introspecting Pods</h3>
+<p><strong><code>kubectl get</code></strong></p>
+<ul>
+<li><code>-o wide</code>: a few more columns, one line.</li>
+<li><code>-o yaml</code>: everything Kubernetes knows, split into <strong>spec</strong> (desired state) and <strong>status</strong> (observed state).</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>hello-pod<span class="w"> </span>-o<span class="w"> </span>yaml
+</code></pre>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">kubectl.kubernetes.io/last-applied-configuration</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<span class="w">      </span><span class="no"># &lt;Snip&gt;</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-pod</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="nt">spec</span><span class="p">:</span><span class="w">                 </span><span class="c1"># desired state is in this block</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/k8sbook:1.0</span>
+<span class="w">    </span><span class="nt">imagePullPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">IfNotPresent</span>
+<span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-ctr</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="nt">status</span><span class="p">:</span><span class="w">               </span><span class="c1"># observed state is in this block</span>
+<span class="w">  </span><span class="nt">conditions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">lastProbeTime</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span>
+<span class="w">    </span><span class="nt">lastTransitionTime</span><span class="p">:</span><span class="w"> </span><span class="s">"2024-01-03T18:21:51Z"</span>
+<span class="w">    </span><span class="nt">status</span><span class="p">:</span><span class="w"> </span><span class="s">"True"</span>
+<span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Initialized</span>
+<span class="w">  </span><span class="c1"># &lt;Snip&gt;</span>
+</code></pre>
+<p>The output is far larger than your 17-line YAML for two reasons:</p>
+<ul>
+<li>unspecified properties are filled with <strong>defaults</strong></li>
+<li><code>status</code> is current state and not part of your YAML</li>
+</ul>
+<p><strong><code>kubectl describe</code></strong>: a formatted overview including lifecycle events.</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>hello-pod
+</code></pre>
+<pre class="hl"><code>Name:         hello-pod
+Namespace:    default
+Labels:       version=v1
+              zone=prod
+Status:       Running
+IP:           10.1.0.103
+Containers:
+  hello-ctr:
+    Container ID:   containerd://ec0c3e...
+    Image:          nigelpoulton/k8sbook:1.0
+    Port:           8080/TCP
+&lt;Snip&gt;
+Conditions:
+  Type              Status
+  Initialized       True
+  Ready             True
+  ContainersReady   True
+&lt;Snip&gt;
+Events:
+  Type    Reason     Age    Message
+  ----    ------     ----   -------
+  Normal  Scheduled  5m30s  Successfully assigned ...
+  Normal  Pulling    5m30s  Pulling image "nigelpoulton/k8sbook:1.0"
+  Normal  Pulled     5m8s   Successfully pulled image ...
+  Normal  Created    5m8s   Created container hello-ctr
+  Normal  Started    5m8s   Started container hello-ctr
+</code></pre>
+<p><strong><code>kubectl logs &lt;pod&gt;</code></strong></p>
+<ul>
+<li>On a multi-container Pod you get the <strong>first</strong> container's logs; override with <code>--container</code>.</li>
+<li>Find container names with <code>kubectl describe pod &lt;pod&gt;</code> or the YAML.</li>
+<li>Example Pod <code>logtest</code> with containers <code>app</code> (first) and <code>syncer</code>:</li>
+</ul>
+<pre class="hl"><code><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">logtest</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">app</span><span class="w">             </span><span class="c1"># first container (default)</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">syncer</span><span class="w">          </span><span class="c1"># second container</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.gcr.io/git-sync:v3.1.6</span>
+<span class="w">    </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">html</span>
+<span class="w">    </span><span class="c1"># &lt;Snip&gt;</span>
+</code></pre>
+<pre class="hl"><code>kubectl<span class="w"> </span>logs<span class="w"> </span>logtest<span class="w"> </span>--container<span class="w"> </span>syncer
+</code></pre>
+<p>(The book says not to run this; the Pod is not deployed.)</p>
+<p><strong><code>kubectl exec</code></strong> has two modes:</p>
+<ul>
+<li><strong>Remote command execution</strong>: run a command from your shell, get the output back.</li>
+<li><strong>Exec session</strong>: connect your shell to the container's shell, like being logged on.</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>hello-pod<span class="w"> </span>--<span class="w"> </span>ps
+</code></pre>
+<pre class="hl"><code>PID   USER     TIME   COMMAND
+    1 root       0:00 node ./app.js
+   17 root       0:00 ps aux
+</code></pre>
+<ul>
+<li>Format: <code>kubectl exec &lt;pod&gt; -- &lt;command&gt;</code>; use <code>--container</code> to target a specific container.</li>
+<li><code>curl</code> fails because the image does not include it:</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>hello-pod<span class="w"> </span>--<span class="w"> </span>curl<span class="w"> </span>localhost:8080
+</code></pre>
+<pre class="hl"><code>OCI runtime exec failed:...... "curl": executable file not found in $PATH
+</code></pre>
+<ul>
+<li>Interactive session (<code>-it</code> connects STDIN and STDOUT; <code>sh</code> starts a shell; feels like SSH):</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>hello-pod<span class="w"> </span>--<span class="w"> </span>sh
+</code></pre>
+<p>Inside, install and use curl:</p>
+<pre class="hl"><code>apk<span class="w"> </span>add<span class="w"> </span>curl
+curl<span class="w"> </span>localhost:8080
+</code></pre>
+<pre class="hl"><code>&lt;html&gt;&lt;head&gt;&lt;title&gt;K8s rocks!&lt;/title&gt;&lt;link rel="stylesheet" href="http://netdna....
+</code></pre>
+<p>Changing a live Pod like this is an <strong>anti-pattern</strong> (Pods are immutable); fine for the demo.</p>
+<h3 id="pod-hostnames">Pod hostnames</h3>
+<ul>
+<li>The Pod's <code>metadata.name</code> becomes the <strong>hostname of every container</strong> in the Pod.</li>
+<li>Check from inside the exec session (case-sensitive):</li>
+</ul>
+<pre class="hl"><code>env<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>HOSTNAME
+</code></pre>
+<pre class="hl"><code>HOSTNAME=hello-pod
+</code></pre>
+<ul>
+<li>A multi-container Pod gives all containers the same hostname.</li>
+<li>Pod names should be valid <strong>DNS names</strong>: a-z, 0-9, minus and period.</li>
+<li>Type <code>exit</code> to leave the session.</li>
+</ul>
+<h3 id="check-pod-immutability">Check Pod immutability</h3>
+<p>Immutability has two levels:</p>
+<ul>
+<li><strong>Object immutability</strong> (the Pod): Kubernetes prevents config changes to a running Pod.</li>
+<li><strong>App immutability</strong> (containers): Kubernetes cannot stop you changing the app or filesystem in a container; <strong>you</strong> must keep containers and apps stateless and immutable.</li>
+</ul>
+<p>Try <code>kubectl edit pod hello-pod</code> (opens <code>vi</code> on Mac and Linux, <code>notepad.exe</code> on Windows) and change the container name, port or resources:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>edit<span class="w"> </span>pod<span class="w"> </span>hello-pod
+</code></pre>
+<pre class="hl"><code><span class="c1"># Please edit the object below. Lines beginning with a '#' will be ignored...</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="w">    </span><span class="nt">zone</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-pod</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="w">  </span><span class="nt">resourceVersion</span><span class="p">:</span><span class="w"> </span><span class="s">"432621"</span>
+<span class="w">  </span><span class="nt">uid</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">a131fb37-ceb4-4484-9e23-26c0b9e7b4f4</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/k8sbook:1.0</span>
+<span class="w">    </span><span class="nt">imagePullPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">IfNotPresent</span>
+<span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-ctr</span><span class="w">          </span><span class="c1"># try to change this</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span><span class="w">    </span><span class="c1"># try to change this</span>
+<span class="w">      </span><span class="nt">protocol</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TCP</span>
+<span class="w">    </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">limits</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500m</span><span class="w">            </span><span class="c1"># try to change this</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span><span class="w">        </span><span class="c1"># try to change this</span>
+<span class="w">      </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500m</span><span class="w">            </span><span class="c1"># try to change this</span>
+<span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span><span class="w">        </span><span class="c1"># try to change this</span>
+</code></pre>
+<p>Saving gives a message that the changes are <strong>forbidden</strong> because the attributes are immutable. If stuck in <code>vi</code>, type <code>:q!</code> then Return.</p>
+<h3 id="resource-requests-and-limits">Resource requests and limits</h3>
+<ul>
+<li><strong>Requests</strong> are minimums; <strong>limits</strong> are maximums, set per container.</li>
+</ul>
+<pre class="hl"><code><span class="nt">resources</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">requests</span><span class="p">:</span><span class="w">        </span><span class="c1"># minimums for scheduling</span>
+<span class="w">    </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.5</span>
+<span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+<span class="w">  </span><span class="nt">limits</span><span class="p">:</span><span class="w">          </span><span class="c1"># maximums for the kubelet to cap</span>
+<span class="w">    </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.0</span>
+<span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512Mi</span>
+</code></pre>
+<p>How it plays out:</p>
+<ol>
+<li>The scheduler finds a node with at least 256Mi and half a CPU; if none, the Pod is <strong>pending</strong> and the <strong>Cluster Autoscaler</strong> tries to add a node.</li>
+<li>The kubelet downloads the spec, <strong>reserves</strong> the requested resources and asks the runtime to cap the container at 1 CPU and 512Mi.</li>
+<li>Runtimes mostly enforce limits, though the implementation varies.</li>
+<li>The container is guaranteed its requests, may burst above them if the node has spare capacity, but never exceeds its limits.</li>
+<li>For multi-container Pods the scheduler <strong>sums the requests</strong> of all containers.</li>
+</ol>
+<ul>
+<li><code>hello-pod</code> only set <strong>limits</strong>, yet outputs show requests too: Kubernetes <strong>sets requests equal to limits</strong> when you omit requests.</li>
+</ul>
+<h3 id="multi-container-pod-example-init-container">Multi-container Pod example: init container</h3>
+<pre class="hl"><code><span class="c1"># initpod.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">initpod</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">initializer</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">initContainers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">init-ctr</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">busybox:1.28.4</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">'sh'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'-c'</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">'until</span><span class="nv"> </span><span class="s">nslookup</span><span class="nv"> </span><span class="s">k8sbook;</span><span class="nv"> </span><span class="s">do</span><span class="nv"> </span><span class="s">echo</span><span class="nv"> </span><span class="s">waiting</span><span class="nv"> </span><span class="s">for</span><span class="nv"> </span><span class="s">k8sbook</span><span class="nv"> </span><span class="s">service;</span><span class="nv"> </span><span class="s">sleep</span><span class="nv"> </span><span class="s">1;</span><span class="nv"> </span><span class="s">done;</span><span class="nv"> </span><span class="s">echo</span><span class="nv"> </span><span class="s">Service</span><span class="nv"> </span><span class="s">found!'</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web-ctr</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/web-app:1.0</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+</code></pre>
+<ul>
+<li><code>spec.initContainers</code> entries run to completion first; regular containers (<code>spec.containers</code>) wait.</li>
+<li><code>init-ctr</code> loops looking for a Service named <code>k8sbook</code> and exits when it exists.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>initpod.yml
+<span class="go">pod/initpod created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>--watch
+<span class="go">NAME      READY   STATUS     RESTARTS   AGE</span>
+<span class="go">initpod   0/1     Init:0/1   0          6s</span>
+</code></pre>
+<ul>
+<li><code>Init:0/1</code> means the init container is still running and the main container has not started; <code>kubectl describe</code> shows the Pod <code>Status: Pending</code>.</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>initpod
+</code></pre>
+<pre class="hl"><code>Name:             initpod
+Namespace:        default
+Priority:         0
+Service Account:  default
+Node:             docker-desktop/192.168.65.3
+Labels:           app=initializer
+Annotations:      &lt;none&gt;
+Status:           Pending
+&lt;Snip&gt;
+</code></pre>
+<p>Create the Service and watch again:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>initsvc.yml
+<span class="go">service/k8sbook created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>--watch
+<span class="go">NAME      READY   STATUS            RESTARTS   AGE</span>
+<span class="go">initpod   0/1     Init:0/1          0          15s</span>
+<span class="go">initpod   0/1     PodInitializing   0          3m39s</span>
+<span class="go">initpod   1/1     Running           0          3m57s</span>
+</code></pre>
+<p><code>kubectl describe</code> then shows the init container <strong>terminated</strong> with exit code 0.</p>
+<h3 id="multi-container-pod-example-sidecar">Multi-container Pod example: sidecar</h3>
+<ul>
+<li>A sidecar augments the app (log scraping, remote repo sync), shares volumes, starts first, runs as long as the app and terminates after it.</li>
+<li>Defined under <code>spec.initContainers</code> with <code>restartPolicy: Always</code>; app containers under <code>spec.containers</code>. The container-level <code>restartPolicy</code> overrides any Pod-level policy.</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">git-sync</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sidecar</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">initContainers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ctr-sync</span><span class="w">            </span><span class="c1"># sidecar</span>
+<span class="w">    </span><span class="nt">restartPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Always</span><span class="w">     </span><span class="c1"># "Always" makes this a sidecar</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.gcr.io/git-sync:v3.1.6</span>
+<span class="w">    </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">html</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/tmp/git</span>
+<span class="w">    </span><span class="nt">env</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">GIT_SYNC_REPO</span>
+<span class="w">      </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://github.com...</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">GIT_SYNC_BRANCH</span>
+<span class="w">      </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">master</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">GIT_SYNC_DEPTH</span>
+<span class="w">      </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">"1"</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">GIT_SYNC_DEST</span>
+<span class="w">      </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">"html"</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ctr-web</span><span class="w">             </span><span class="c1"># app container</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">html</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/usr/share/nginx/</span>
+<span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">html</span>
+<span class="w">    </span><span class="nt">emptyDir</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{}</span>
+</code></pre>
+<ul>
+<li><code>ctr-sync</code> watches a GitHub repo and syncs into the shared <code>html</code> volume; <code>ctr-web</code> serves a page from it.</li>
+<li><strong>Prerequisites:</strong> Kubernetes <strong>v1.29 or later</strong> and a (free) GitHub account.</li>
+</ul>
+<p>Steps:</p>
+<ol>
+<li><strong>Fork</strong> <code>https://github.com/nigelpoulton/ps-sidecar</code> (Fork dropdown, <strong>Create a new fork</strong>, <strong>Create fork</strong>) and copy your fork's URL.</li>
+<li>Edit <code>initsidecar.yml</code> in the <code>pods</code> directory: paste your fork URL into <code>GIT_SYNC_REPO</code>.</li>
+<li>Deploy (creates the Pod and a Service):</li>
+</ol>
+<pre class="hl"><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>initsidecar.yml
+</code></pre>
+<pre class="hl"><code>pod/git-sync created
+service/svc-sidecar created
+</code></pre>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>pods
+</code></pre>
+<pre class="hl"><code>NAME       READY   STATUS    RESTARTS   AGE
+git-sync   2/2     Running   0          12s
+</code></pre>
+<p>Confirm which is the init container and which the regular one:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-o<span class="w"> </span><span class="s2">"custom-columns=NAME:.metadata.name,INIT:.spec.initContainers[*].name,CONTAINERS:.spec.containers[*].name"</span>
+</code></pre>
+<pre class="hl"><code>NAME       INIT        CONTAINERS
+git-sync   ctr-sync    ctr-web
+</code></pre>
+<p>Confirm order with <code>kubectl describe pod git-sync</code> (Events):</p>
+<pre class="hl"><code>Events:
+  Type    Reason   Age   From     Message
+  ----    ------   ----  ----     -------
+  Normal  Created  19s   kubelet  Created container ctr-sync
+  Normal  Started  19s   kubelet  Started container ctr-sync
+  Normal  Pulling  18s   kubelet  Pulling image "nginx"
+  Normal  Created  17s   kubelet  Created container ctr-web
+  Normal  Started  17s   kubelet  Started container ctr-web
+</code></pre>
+<p>The timestamps show the sidecar started before the app.</p>
+<ol start="4">
+<li><strong>Connect:</strong> run <code>kubectl get svc svc-sidecar</code> and use the <code>EXTERNAL-IP</code> (public IP or DNS name in the cloud; <code>localhost</code> on local Docker Desktop) in a browser. It shows &quot;This is version 1.0&quot;.</li>
+<li><strong>Change your fork:</strong> edit <code>index.html</code>, change the <code>&lt;h1&gt;</code> line, commit.</li>
+<li><strong>Verify:</strong> refresh the page; your change appears, proving the sidecar is still running and syncing.</li>
+</ol>
+<h3 id="clean-up">Clean up</h3>
+<p>Deployed objects: Pods <code>hello-pod</code>, <code>initpod</code>, <code>git-sync</code>; Services <code>k8sbook</code>, <code>svc-sidecar</code>.</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>hello-pod<span class="w"> </span>initpod<span class="w"> </span>git-sync
+kubectl<span class="w"> </span>delete<span class="w"> </span>svc<span class="w"> </span>k8sbook<span class="w"> </span>svc-sidecar
+</code></pre>
+<p>Or via the YAML files:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>initsidecar.yml<span class="w"> </span>-f<span class="w"> </span>initpod.yml<span class="w"> </span>-f<span class="w"> </span>pod.yml<span class="w"> </span>-f<span class="w"> </span>initsvc.yml
+</code></pre>
+<p>You may also delete your GitHub fork.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>All apps (containers, serverless, Wasm, VMs) run inside Pods; usually containers.</li>
+<li>Pods give a shared execution environment, advanced scheduling, probes and more.</li>
+<li>Multi-container Pods share networking, volumes and memory.</li>
+<li>Usually deploy via higher-level controllers (Deployments, Jobs, DaemonSets); Knative and KubeVirt extend the API for serverless and VMs.</li>
+<li>Define Pods declaratively and post with <code>kubectl apply</code>.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Pod</strong>: atomic unit of scheduling; shared execution environment.</li>
+<li><strong>Static Pod</strong>: Pod deployed directly, managed only by its node's kubelet.</li>
+<li><strong>restartPolicy</strong>: Always, OnFailure, Never; restarts containers, not Pods.</li>
+<li><strong>Pod network / CNI</strong>: flat overlay network for all Pods via a plugin.</li>
+<li><strong>Init container</strong>: runs once to completion before app containers.</li>
+<li><strong>Sidecar</strong>: init container with <code>restartPolicy: Always</code>.</li>
+<li><strong>Requests / limits</strong>: scheduling minimum / enforced maximum.</li>
+<li><strong>nodeSelector, affinity, topology spread constraints</strong>: placement controls.</li>
+<li><strong>VMI, Knative, KubeVirt</strong>: VM and serverless support.</li>
+<li><strong>spec vs status</strong>: desired vs observed state.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 4. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap05.xhtml</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+<li>https://github.com/nigelpoulton/ps-sidecar</li>
+<li>Pod lifecycle docs referenced in <code>kubectl explain</code> output: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/</li>
+<li>Empathy as code: Nirmal Mehta, DockerCon 2017, <em>A Strong Belief, Loosely Held: Bringing Empathy to IT</em> (as cited by the book; no link given).</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-02-kubernetes-principles-of-operation/">The Kubernetes Book 2: Kubernetes Principles of Operation</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-05-virtual-clusters-with-namespaces/">The Kubernetes Book 5: Virtual Clusters with Namespaces</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">&larr; The Kubernetes Book 3: Getting Kubernetes</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-05-virtual-clusters-with-namespaces/">The Kubernetes Book 5: Virtual Clusters with Namespaces &rarr;</a></nav></main></body></html>

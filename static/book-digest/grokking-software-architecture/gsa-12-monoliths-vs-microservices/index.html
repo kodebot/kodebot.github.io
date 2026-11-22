@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-12-the-great-debate-monoliths-vs-microservices">Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 12 (Part IV: Architecture in the real world). Previous: <a href="/book-digest/grokking-software-architecture/gsa-11-foundational-security-architecture/">Grokking Software Architecture 11: Foundational Security Architecture</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-13-cicd-delivery-lifecycle/">Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD)</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>It is a <strong>spectrum</strong>, not a binary: <strong>monolith → modular monolith → microservices</strong>. No heroes or villains, only trade-offs (see <em>Software Architecture: The Hard Parts</em>, Ford et al.).</li>
+<li>Microservices are mainly an <strong>organisational scaling tool</strong> (<strong>Conway's Law</strong>), not a speed-up.</li>
+<li><strong>&quot;Monolith first.&quot;</strong> Pay the <strong>Microservice Premium</strong> only when team size, asymmetric scaling, polyglot needs or regulatory blast radius justify it.</li>
+<li>Avoid the <strong>distributed monolith</strong> (shared database or synchronous chains).</li>
+<li>Migrate with the <strong>Strangler Fig</strong> (never a Big Bang rewrite), moving <strong>data</strong> with a snapshot plus CDC or an outbox.</li>
+<li>Distribution brings the <strong>Network Tax</strong> (8 fallacies); retries amplify like the <strong>Bullwhip Effect</strong>.</li>
+</ul>
+</div></div>
+<h2 id="12-2-the-architecture-spectrum">12.2 The architecture spectrum</h2>
+<p>Moving to microservices is a two-step evolution: first decouple logic with strict interfaces (<strong>modular monolith</strong>), then decouple infrastructure across a network.</p>
+<h3 id="the-monolith">The monolith</h3>
+<p>All code (UI, business logic, data access) in <strong>one deployable unit</strong>, one process, shared memory.</p>
+<ul>
+<li><strong>Strength:</strong> simple to deploy and test; in-memory calls take fractions of a millisecond with zero network latency.</li>
+<li><strong>Weakness:</strong> boundaries are easy to bypass (a junior calls the database from the UI under deadline), producing a <strong>Big Ball of Mud</strong>.</li>
+<li><strong>All-or-nothing deploy and scale:</strong>
+<ul>
+<li>fixing a typo in inventory means redeploying everything (risking checkout)</li>
+<li>you cannot scale memory-heavy image processing separately from CPU-heavy checkout: you buy a bigger server.</li>
+</ul>
+</li>
+</ul>
+<h3 id="microservices">Microservices</h3>
+<p>A suite of small, <strong>independently deployable services</strong> modelled around business domains. No shared memory, and <strong>no shared databases</strong>.</p>
+<ul>
+<li><strong>Pro:</strong> scale inventory horizontally by itself; teams deploy dozens of times a day.</li>
+<li><strong>Cost:</strong> you monitor dozens or hundreds of apps; need network security, complex pipelines, distributed data consistency.</li>
+<li>A microservice is <strong>SRP at infrastructure level</strong>: a server and its database have one reason to change.</li>
+</ul>
+<h3 id="conway-s-law">Conway's Law</h3>
+<p>Melvin Conway, <strong>1967</strong>: &quot;Any organization that designs a system will produce a design whose structure is a copy of the organization's communication structure.&quot;</p>
+<ul>
+<li>Microservices solve a <strong>human scaling</strong> problem:
+<ul>
+<li>500 developers on one repository queue for deployments behind each other's broken builds</li>
+<li>Decoupled release schedules give autonomy (https://martinfowler.com/bliki/MicroservicePrerequisites.html).</li>
+</ul>
+</li>
+<li><strong>5 to 15 developers: build a monolith.</strong> Without a large organisation, microservices are &quot;architectural self-sabotage&quot;.</li>
+</ul>
+<h3 id="the-trap-the-distributed-monolith">The trap: the distributed monolith</h3>
+<p>Separately deployed services that are still logically coupled: physical separation, extreme logical coupling (the opposite of high cohesion and loose coupling).</p>
+<ul>
+<li><strong>Shared database:</strong> five services on one SQL schema all break together on a schema change.</li>
+<li><strong>Synchronous coupling:</strong> <code>OrderService</code> calls <code>PaymentService</code> live over HTTP (temporal coupling, ch. 6-7): if payment crashes, so does ordering.</li>
+<li>You inherit latency, packet loss and debugging pain while gaining <strong>no agility</strong>: &quot;a ball of mud stretched across a fragile network&quot;.</li>
+</ul>
+<h3 id="the-modular-monolith-golden-middle">The modular monolith (golden middle)</h3>
+<p><strong>One deployable unit</strong> whose internals are strictly separated into isolated modules that may not touch each other's internals or tables; communication only through well-defined interfaces. Like a cruise ship with <strong>watertight bulkheads</strong>.</p>
+<p><strong>Vertical Slice Architecture</strong> (Jimmy Bogard: https://jimmybogard.com/vertical-slice-architecture/)</p>
+<ul>
+<li>Group code by <strong>business feature</strong>, not technical layer. A &quot;Checkout&quot; slice holds its own endpoint, logic and queries (a slice of cake: frosting, cake and filling together).</li>
+<li>Horizontal grouping (all controllers in <code>UI</code>, all logic in <code>Services</code>, all queries in <code>Data</code>) forces you through three folders to understand one feature.</li>
+<li>Result: highly cohesive modules; extracting Checkout later is &quot;copy that folder into a new repository&quot;.</li>
+</ul>
+<p><strong>Enforce the boundaries</strong></p>
+<ul>
+<li>Human nature is the risk (importing the <code>UserProfile</code> model into Checkout).</li>
+<li>Write <strong>automated architecture tests</strong> (<strong>ArchUnit</strong> for Java, <strong>NetArchTest</strong> for C#) in CI/CD; the build fails if the Checkout namespace references UserProfile.</li>
+</ul>
+<p><strong>Quick reference</strong></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Monolith</th>
+<th>Microservice</th>
+<th>Modular monolith</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Deployment unit</td>
+<td>single executable</td>
+<td>multiple independent services</td>
+<td>single executable</td>
+</tr>
+<tr>
+<td>Interaction</td>
+<td>in-memory calls</td>
+<td>network (REST/events)</td>
+<td>in-memory via strict interfaces</td>
+</tr>
+<tr>
+<td>Scaling</td>
+<td>all-or-nothing (vertical)</td>
+<td>independent (horizontal)</td>
+<td>all-or-nothing (vertical)</td>
+</tr>
+<tr>
+<td>Data</td>
+<td>one shared database</td>
+<td>database per service</td>
+<td>one database, logically separated</td>
+</tr>
+<tr>
+<td>Advantage</td>
+<td>simplicity, zero latency</td>
+<td>extreme agility, independent scaling</td>
+<td>clean boundaries without the network tax</td>
+</tr>
+<tr>
+<td>Risk</td>
+<td>high coupling, deployment jams</td>
+<td>distributed data complexity</td>
+<td>needs strict discipline</td>
+</tr>
+</tbody>
+</table>
+<h2 id="12-3-why-monolith-is-not-a-dirty-word">12.3 Why &quot;monolith&quot; is not a dirty word</h2>
+<ul>
+<li><strong>Resume-Driven Development:</strong> choosing Kubernetes and microservices to decorate a CV, not because the business needs them.</li>
+<li>A monolith is optimal when the project is <strong>young</strong>, requirements <strong>fluid</strong>, team <strong>small</strong>.</li>
+<li><strong>The Majestic Monolith</strong>
+<ul>
+<li>(David Heinemeier Hansson, creator of Ruby on Rails, founder of Basecamp): Shopify, Stack Overflow and Basecamp serve huge scale on well-structured modular monoliths</li>
+<li>Often you just need a bigger web server and a scaled database.</li>
+</ul>
+</li>
+<li><strong>Developer velocity:</strong> early on the risk is building what nobody buys; time to market beats infinite scale.</li>
+<li><strong>Pivot example (Shop-Zilla):</strong> <code>GuestUser</code> and <code>PayingCustomer</code> are merged into <code>Account</code>.
+<ul>
+<li><strong>Monolith:</strong> an IDE rename and a test run: a few hours.</li>
+<li><strong>Microservices:</strong> change API contracts in three services, deprecate old APIs, write cross-network data migrations, coordinate deployments: weeks.</li>
+</ul>
+</li>
+<li><strong>The Microservice Premium</strong>
+<ul>
+<li>(Fowler: https://martinfowler.com/bliki/MicroservicePremium.html): microservices cost <strong>simplicity and money</strong> for independent scalability. You need CI/CD, centralised logging, distributed monitoring and container orchestration</li>
+<li>a small team's productivity grinds to a halt.</li>
+</ul>
+</li>
+<li><strong>&quot;Monolith First&quot;</strong>
+<ul>
+<li>(https://martinfowler.com/bliki/MonolithFirst.html): start with a well-structured modular monolith</li>
+<li>split when developers constantly step on each other during deployments or a module needs drastically different hardware.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-4-when-microservices-actually-win">12.4 When microservices actually win</h2>
+<ol>
+<li><strong>Human scaling (Conway at scale):</strong> 200 engineers on one repository block each other. 20 services turn them into autonomous teams of ~10 who deploy 50 times a day with <strong>architectural accountability</strong> (the third A).</li>
+<li><strong>Extreme asymmetric scaling:</strong> User Profiles need little compute; <strong>Video Transcoding</strong> needs expensive GPUs. In a monolith you run profile code on $5,000/month GPU servers. Extract transcoding to its own GPU cluster.</li>
+<li><strong>Polyglot environments:</strong> Python for data science, C#/Java for the enterprise backend, Rust for high-frequency trading. Services talk over HTTP or brokers, language-agnostic (https://martinfowler.com/bliki/PolyglotPersistence.html).</li>
+<li><strong>Regulatory and security blast radii:</strong> <strong>PCI-DSS</strong> audits cover everything sharing memory and infrastructure. A separate <strong>Payment service</strong> with its own database shrinks audit scope and cost; a hacker in &quot;Product Reviews&quot; is trapped in its container (enforce with <strong>mTLS</strong>, ch. 11).</li>
+</ol>
+<h2 id="12-5-the-strangler-fig-pattern">12.5 The Strangler Fig pattern</h2>
+<p><strong>Big Bang Rewrite</strong> (&quot;stop features for 18 months&quot;): requirements change and competitors move on; the &quot;perfect&quot; system is stale at launch.</p>
+<p><strong>Botanical inspiration:</strong> an Australian rainforest <strong>strangler fig</strong> starts in a host tree's canopy, sends roots down, encases the host; the host decays, leaving the fig. Grow the new system around the old until the old is unneeded (same idea as ch. 5, now at macro scale).</p>
+<p><img src="/book-digest/grokking-software-architecture/img/strangler-fig.svg" alt="Strangler fig migration" loading="lazy" /></p>
+<p><strong>Extracting &quot;Billing&quot; in four steps</strong></p>
+<ol>
+<li><strong>Gateway intercept (plant the seed):</strong> put an <strong>API gateway</strong> in front of the monolith; 100% of traffic still goes to it; no legacy change.</li>
+<li><strong>Build the new vine:</strong> build the Billing microservice in a separate repository with its <strong>own database</strong> (hexagonal, zero risk: no live users).</li>
+<li><strong>Strangle the data (the hard part; &quot;data is gravity&quot;):</strong> <strong>Snapshot-and-Stream</strong>:
+<ul>
+<li><strong>Snapshot:</strong> one-time bulk copy of historical data (<code>pg_dump</code>, AWS DMS).</li>
+<li><strong>Stream:</strong> capture and replay changes after the snapshot began, until both are in sync.</li>
+<li><strong>Option A: Change Data Capture (CDC):</strong>
+<ul>
+<li>a non-invasive tool reads the database's <strong>transaction log</strong> (running record of every <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>) and streams changes
+<ul>
+<li>industry standard <strong>Debezium</strong> (on Kafka: https://debezium.io/)</li>
+</ul>
+</li>
+<li>It bypasses messy legacy code</li>
+<li><strong>Log-purging trap:</strong> databases roll over and purge old WAL/redo logs, so a new CDC engine only sees changes from today: <strong>you cannot skip the snapshot</strong>.</li>
+</ul>
+</li>
+<li><strong>Option B: application-level syncing via the Transactional Outbox</strong>
+<ul>
+<li>(when you lack log access)</li>
+<li><strong>Dual writes</strong> (save to both databases in code) are dangerous: a network blip after the first write leaves systems permanently out of sync (https://www.confluent.io/blog/dual-write-vs-change-data-capture/)</li>
+<li><strong>Outbox:</strong>
+<ul>
+<li>write business data and a message into an <strong>outbox table</strong> in the same local transaction</li>
+<li>a relay (custom or Debezium) delivers messages and deletes them only after delivery (https://microservices.io/patterns/data/transactional-outbox.html).</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Reroute the traffic (the strangulation):</strong> gateway rule: <code>/catalog</code> and <code>/checkout</code> to the monolith, <code>/billing</code> to the new service. The old billing code is dead. Repeat for Inventory, Shipping...; finally every route points to a microservice and the monolith is starved and deleted.</li>
+</ol>
+<h2 id="12-6-the-network-tax">12.6 The Network Tax</h2>
+<p>The unavoidable performance, reliability and operational overhead of replacing in-memory calls with network calls (Kleppmann, <em>Designing Data-Intensive Applications</em>, chapter 8 &quot;The Trouble with Distributed Systems&quot;: https://dataintensive.net/; Fowler: https://martinfowler.com/articles/patterns-of-distributed-systems).</p>
+<p><strong>The 8 Fallacies of Distributed Computing</strong> (Sun Microsystems, <strong>1994</strong>; originally drafted by L. Peter Deutsch and expanded by James Gosling; explained by Arnon Rotem-Gal-Oz: https://www.researchgate.net/publication/322500050_Fallacies_of_Distributed_Computing_Explained):</p>
+<ol>
+<li>The network is reliable.</li>
+<li>Latency is zero.</li>
+<li>Bandwidth is infinite.</li>
+<li>The network is secure.</li>
+<li>Topology doesn't change.</li>
+<li>There is one administrator.</li>
+<li>Transport cost is zero.</li>
+<li>The network is homogeneous.</li>
+</ol>
+<p><strong>The taxes</strong></p>
+<ul>
+<li><strong>Latency tax (#2).</strong>
+<ul>
+<li>A dashboard needs profile, recent orders and shipping status</li>
+<li>Monolith: one SQL JOIN, <strong>~5 ms</strong></li>
+<li>Microservices: three calls (30 ms network + 5 ms JSON = 35; 30 + 10 = 40; 30 + 5 = 35) = <strong>110 ms</strong> sequentially</li>
+<li>Pay with parallel async calls, event-driven design, aggressive caching.</li>
+</ul>
+</li>
+<li><strong>Reliability tax (#1).</strong> Every call can fail: timeouts, retries, circuit breakers (ch. 10).</li>
+<li><strong>Serialisation tax (#3).</strong>
+<ul>
+<li>Objects become JSON and back</li>
+<li>a &quot;God object&quot; payload for three fields wastes bandwidth and CPU. Pay with <strong>pagination</strong>, <strong>GraphQL</strong>, or binary <strong>gRPC/Protobuf</strong> internally.</li>
+</ul>
+</li>
+<li><strong>Security tax (#4).</strong> An attacker in a low-level service can eavesdrop on traffic to the core database. Pay with <strong>zero trust, mTLS, service mesh</strong> (ch. 11).</li>
+<li><strong>Data consistency tax.</strong> Database-per-service means no cross-network rollback. Inventory deducts a laptop, the network dies before Billing: inconsistent. Pay with the <strong>Saga pattern</strong>.</li>
+<li><strong>Observability tax.</strong>
+<ul>
+<li>A monolith gives one stack trace</li>
+<li>a click crossing gateway, auth, order and payment shows only a 500. Pay with <strong>distributed tracing</strong> and a <strong>correlation ID</strong> injected at the gateway and propagated to every service (ch. 14).</li>
+</ul>
+</li>
+</ul>
+<h3 id="saga-pattern">Saga pattern</h3>
+<p>Because services own databases there is no single ACID transaction. Each service commits locally and publishes an event; on failure, <strong>compensating transactions</strong> undo earlier steps (https://microservices.io/patterns/data/saga.html). Introduced in a <strong>1987</strong> paper by Hector Garcia-Molina and Kenneth Salem (https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf).</p>
+<ul>
+<li><strong>Happy path:</strong> Checkout saves the order, publishes <code>OrderPlaced</code>; Inventory deducts stock and publishes <code>InventorySecured</code>; Billing charges the card and publishes <code>PaymentSecured</code>.</li>
+<li><strong>Failure path:</strong>
+<ul>
+<li>Billing's card is declined and it publishes <code>PaymentFailed</code></li>
+<li><strong>Inventory and Checkout both hear it</strong> (pub/sub) and compensate simultaneously (restore stock; mark the order &quot;Failed&quot;).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/grokking-software-architecture/img/saga-failure-path.svg" alt="Saga failure path with compensation" loading="lazy" /></p>
+<ul>
+<li><strong>Orchestration:</strong> a central saga manager commands the services. Easier to trace, but a <strong>single point of failure</strong>.</li>
+<li><strong>Choreography:</strong> services react to each other's events, no central boss. Resilient but <strong>hard to debug</strong> (logic scattered).</li>
+<li><strong>Frontend analogy:</strong>
+<ul>
+<li>choreography is like <strong>Redux/NgRx</strong> (immutable actions on an event stream; reducers update local state)</li>
+<li>orchestration is like <strong>redux-saga</strong>, named after this backend pattern.</li>
+</ul>
+</li>
+<li><strong>Guaranteeing the event is published:</strong> if Inventory saves but crashes before publishing, the saga breaks: use the <strong>Transactional Outbox</strong> (at-least-once delivery).</li>
+</ul>
+<p><strong>Summary table: fallacy → tax → solution</strong></p>
+<table>
+<thead>
+<tr>
+<th>Fallacy</th>
+<th>Tax</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Network is reliable</td>
+<td>reliability and consistency</td>
+<td>timeouts, circuit breakers, backoff, saga</td>
+</tr>
+<tr>
+<td>Latency is zero</td>
+<td>latency (5 ms becomes ~150 ms)</td>
+<td>async, EDA, caching</td>
+</tr>
+<tr>
+<td>Bandwidth is infinite</td>
+<td>serialisation</td>
+<td>pagination, GraphQL, gRPC/Protobuf</td>
+</tr>
+<tr>
+<td>Network is secure</td>
+<td>security</td>
+<td>zero trust, mTLS, service mesh</td>
+</tr>
+<tr>
+<td>Topology doesn't change</td>
+<td>discovery (IPs churn with autoscaling)</td>
+<td>API gateways, service discovery (Consul), load balancers</td>
+</tr>
+<tr>
+<td>One administrator</td>
+<td>versioning (teams deploy at different times)</td>
+<td>strict API versioning, consumer-driven contract tests</td>
+</tr>
+<tr>
+<td>Transport cost is zero</td>
+<td>financial (egress, CPU parsing JSON)</td>
+<td>compression, local L1 caching, fewer cross-region calls</td>
+</tr>
+<tr>
+<td>Network is homogeneous</td>
+<td>interoperability</td>
+<td>standard protocols (REST/JSON), language-agnostic brokers</td>
+</tr>
+</tbody>
+</table>
+<h2 id="12-7-code-the-network-tax-in-action-blog-endpoint">12.7 Code: the network tax in action (blog endpoint)</h2>
+<p>Fetch a blog post, its author and recent comments.</p>
+<p><strong>Monolith (C#): one query, ~5 ms</strong></p>
+<pre class="hl"><code><span class="kt">var</span><span class="w"> </span><span class="n">blogPost</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_dbContext</span><span class="p">.</span><span class="n">Posts</span><span class="p">.</span><span class="n">Include</span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="n">Author</span><span class="p">).</span><span class="n">Include</span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="n">Comments</span><span class="p">)</span>
+<span class="w">                  </span><span class="p">.</span><span class="n">FirstOrDefault</span><span class="p">(</span><span class="n">p</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="n">Id</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">blogId</span><span class="p">);</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">blogPost</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="k">null</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">NotFoundException</span><span class="p">();</span>
+<span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="nf">BlogDetailsViewModel</span><span class="p">(</span><span class="n">blogPost</span><span class="p">);</span><span class="w">   </span><span class="c1">// DB down = whole query fails together</span>
+</code></pre>
+<p><strong>Microservices aggregator: 3 HTTP calls plus fallbacks</strong></p>
+<pre class="hl"><code><span class="kt">var</span><span class="w"> </span><span class="n">postTask</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="n">_httpClient</span><span class="p">.</span><span class="n">GetAsync</span><span class="p">(</span><span class="s">$"http://post-service/api/posts/{blogId}"</span><span class="p">);</span><span class="w">        </span><span class="c1">// latency tax</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">authorTask</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="n">_httpClient</span><span class="p">.</span><span class="n">GetAsync</span><span class="p">(</span><span class="s">$"http://author-service/api/authors/{blogId}"</span><span class="p">);</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">commentsTask</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_httpClient</span><span class="p">.</span><span class="n">GetAsync</span><span class="p">(</span><span class="s">$"http://comment-service/api/comments/{blogId}"</span><span class="p">);</span>
+<span class="k">await</span><span class="w"> </span><span class="n">Task</span><span class="p">.</span><span class="n">WhenAll</span><span class="p">(</span><span class="n">postTask</span><span class="p">,</span><span class="w"> </span><span class="n">authorTask</span><span class="p">,</span><span class="w"> </span><span class="n">commentsTask</span><span class="p">);</span><span class="w">                                   </span><span class="c1">// reliability tax</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">postTask</span><span class="p">.</span><span class="n">Result</span><span class="p">.</span><span class="n">IsSuccessStatusCode</span><span class="p">)</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Exception</span><span class="p">(</span><span class="s">"Core post data unavailable."</span><span class="p">);</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">Comment</span><span class="o">&gt;</span><span class="w"> </span><span class="n">comments</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="p">();</span><span class="w">                                                           </span><span class="c1">// partial failure</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">commentsTask</span><span class="p">.</span><span class="n">Result</span><span class="p">.</span><span class="n">IsSuccessStatusCode</span><span class="p">)</span><span class="w"> </span><span class="n">comments</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="p">...</span><span class="n">ReadFromJsonAsync</span><span class="o">&lt;</span><span class="n">List</span><span class="o">&lt;</span><span class="n">Comment</span><span class="o">&gt;&gt;</span><span class="p">();</span>
+<span class="k">else</span><span class="w"> </span><span class="n">_logger</span><span class="p">.</span><span class="n">LogWarning</span><span class="p">(</span><span class="s">"Comment service is down. Serving page without comments."</span><span class="p">);</span><span class="w">       </span><span class="c1">// fallback</span>
+</code></pre>
+<p>Same requirement, far more complexity (async, independent status codes, partial-failure fallbacks). Litmus test: &quot;does our need for independent scaling outweigh this tax?&quot;</p>
+<h2 id="12-8-the-dork-side-mit-s-beer-game-the-bullwhip-effect">12.8 The Dork Side: MIT's Beer Game (the Bullwhip Effect)</h2>
+<p><strong>1960s, Jay Forrester</strong>, MIT Sloan: the <strong>Beer Distribution Game</strong> with four players (Retailer, Wholesaler, Distributor, Factory) and two rules: <strong>no talking</strong> (only paper order slips, like JSON over HTTP) and <strong>built-in multi-week delays</strong> both ways.</p>
+<ul>
+<li>Demand is steady at 2 cases a week
+<ul>
+<li>one customer buys 4 extra. The retailer runs low, orders more</li>
+<li>delay means empty shelves, so the retailer panics and orders much more. The wholesaler sees a spike and over-orders</li>
+<li>so does the distributor.</li>
+</ul>
+</li>
+<li>By the factory, a 4-case blip is <strong>4,000 cases</strong>. Mountains of beer later arrive at a tiny warehouse
+<ul>
+<li>everyone is bankrupt. This is the <strong>Bullwhip Effect</strong>: small edge fluctuations amplified deeper in the chain (https://mitsloan.mit.edu/teaching-resources-library/mit-sloan-beer-game-online).</li>
+</ul>
+</li>
+<li><strong>Architectural lesson: retry storms.</strong>
+<ul>
+<li>A 2-second delay in the Payment API makes the Order Service &quot;re-order&quot; via retries</li>
+<li>A naive loop (<code>while (!success &amp;&amp; retryCount &lt; 3)</code> calling <code>PostAsync(&quot;http://payment-api/charge&quot;, order)</code> immediately) with <strong>1,000 users</strong> fires <strong>3,000 un-spaced requests</strong>, melting the payment database.</li>
+</ul>
+</li>
+<li><strong>Dampen it</strong> with the ch. 10 shock absorbers: <strong>circuit breaker</strong> (break out and fail fast) and <strong>exponential backoff with jitter</strong>.</li>
+</ul>
+<h2 id="12-9-mission-checklist-recap">12.9 Mission, checklist, recap</h2>
+<p><strong>Mission: Stream-Flix.</strong> A new streaming startup (<strong>10 engineers</strong>, tight budget, MVP in <strong>4 months</strong> for VC funding). The CEO wants <strong>20 microservices on day 1</strong> because &quot;Netflix uses microservices&quot;. Write an <strong>ADR</strong> answering:</p>
+<ol>
+<li><strong>Context:</strong> hard constraints; which laws or &quot;premiums&quot; from this chapter prove copying Netflix would destroy a 10-person startup?</li>
+<li><strong>Decision:</strong> proposed style for the MVP (the modular monolith with vertical slices) and how to keep it clean.</li>
+<li><strong>Consequences and escape hatch:</strong> two future <strong>triggers</strong> (e.g. &quot;50th engineer&quot; or &quot;Transcoding uses 80% of server resources&quot;) and the extraction pattern (Strangler Fig); extract only the module needing independent scale, keep the rest a modular monolith.</li>
+</ol>
+<p>Template: <code># ADR 001: Stream-Flix MVP Core Architecture</code> / <code>## Status: Proposed</code> / <code>## Context</code> / <code>## Decision</code> / <code>## Consequences &amp; Escape Hatch</code>. (Guided solution in Appendix A.) Next: CI/CD (ch. 13).</p>
+<p><strong>Recap:</strong> a spectrum; monolith is not a dirty word; Conway's Law; the distributed monolith is the worst trap; modular monolith via vertical slices; pay the Microservice Premium only at real triggers; Strangler Fig, never Big Bang; data is gravity (CDC); the network tax; sagas and outboxes; the Bullwhip Effect and retry storms.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+monolith · Big Ball of Mud · microservice · Conway's Law · distributed monolith · modular monolith · Vertical Slice Architecture · ArchUnit / NetArchTest · Resume-Driven Development · Majestic Monolith · Microservice Premium · Monolith First · PCI-DSS · Strangler Fig · Big Bang rewrite · snapshot-and-stream · CDC (Debezium) · dual writes · transactional outbox · Network Tax · 8 fallacies · saga · compensating transaction · orchestration vs choreography · correlation ID · Bullwhip Effect · retry storm.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 12. Pre-release; no public source page found.</li>
+<li>Fowler: https://martinfowler.com/bliki/MicroservicePremium.html · https://martinfowler.com/bliki/MonolithFirst.html</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-11-foundational-security-architecture/">Grokking Software Architecture 11: Foundational Security Architecture</a> · <a href="/book-digest/grokking-software-architecture/gsa-13-cicd-delivery-lifecycle/">Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD)</a> · <a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">Understanding Distributed Systems 21: Microservices</a> · <a href="/book-digest/understanding-distributed-systems/uds-13-asynchronous-transactions/">Understanding Distributed Systems 13: Asynchronous transactions</a> · <a href="/book-digest/grokking-software-architecture/gsa-05-hexagonal-architecture/">Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters)</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-11-foundational-security-architecture/">&larr; Grokking Software Architecture 11: Foundational Security Architecture</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-13-cicd-delivery-lifecycle/">Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD) &rarr;</a></nav></main></body></html>

@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 10: Architecting for Resilience and Scale</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-10-architecting-for-resilience-and-scale">Grokking Software Architecture 10: Architecting for Resilience and Scale</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 10. Previous: <a href="/book-digest/grokking-software-architecture/gsa-09-architecting-for-the-cloud/">Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-11-foundational-security-architecture/">Grokking Software Architecture 11: Foundational Security Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The <strong>Happy Path is a lie</strong>: in the cloud, hardware breaks daily, networks fail, APIs go down. Failure is <strong>statistically guaranteed</strong>; design to <strong>survive</strong> it.</li>
+<li>Client-side shock absorbers: <strong>timeout</strong> (escape hatch), <strong>retry with exponential backoff</strong> (second chance), <strong>fallback</strong> (plan B), <strong>circuit breaker</strong> (fire alarm), <strong>bulkhead</strong> (watertight compartments).</li>
+<li>Keep resilience out of business logic with <strong>decorators/annotations</strong> (Polly, Resilience4j, tenacity).</li>
+<li><strong>Scale up</strong> (bigger box, ceiling, single point of failure) vs <strong>scale out</strong> (more boxes, needs statelessness, load balancer). Scale is a <strong>business decision</strong> (money).</li>
+<li><strong>Cache before you scale out</strong>. Avoid L1/L2 caching unless you must.</li>
+<li><strong>Ariane 5</strong> ($370M): blind code reuse and <strong>redundancy without diversity</strong> are not resilience.</li>
+</ul>
+</div></div>
+<h2 id="10-1-designing-for-failure">10.1 Designing for failure</h2>
+<p>New developers try to prevent failure; seniors <strong>survive</strong> it. Two failure kinds:</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Examples</th>
+<th>Response</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Transient</strong></td>
+<td>network blips, socket timeouts, HTTP 503</td>
+<td>retry with exponential backoff</td>
+</tr>
+<tr>
+<td><strong>Non-transient</strong></td>
+<td>400 Bad Request, 401/403, corrupt &quot;poison pill&quot; messages</td>
+<td><strong>fail fast</strong> or send to a <strong>DLQ</strong>; retrying wastes compute and clogs queues</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Resilience</strong> = accept that micro-failures happen and stop them taking down the application (a localised failure, not a total one). Replace the old <code>try/catch</code> + log + 500 page.</p>
+<p><strong>Restaurant analogy:</strong> the bad waiter stares at the chef forever (you wait 3 hours); the <strong>resilient waiter</strong> waits two minutes, then says &quot;out of steak, but the chef can do chicken now&quot;. Three patterns: <strong>timeouts, retries, fallbacks</strong>.</p>
+<p><strong>Rate limiting vs these patterns:</strong> timeouts, retries and breakers protect you as a <strong>client</strong>; <strong>rate limiting</strong> protects you as a <strong>server</strong> (at the API gateway; ch. 11).</p>
+<h3 id="timeouts-the-escape-hatch">Timeouts (the escape hatch)</h3>
+<ul>
+<li>Many libraries <strong>wait indefinitely</strong> by default
+<ul>
+<li>1,000 users on a hung dependency exhaust your memory &quot;just waiting&quot;</li>
+<li>A timeout is a hard limit: &quot;abort after X seconds&quot;</li>
+<li>Assume every network call will hang; <strong>timeout every one</strong>.</li>
+</ul>
+</li>
+<li><strong>Two timeouts:</strong>
+<ul>
+<li><strong>connection</strong> (the handshake; e.g. 2 s: a healthy server answers instantly, otherwise fail fast) and <strong>read</strong> (waiting for the payload; e.g. 8 s)</li>
+<li>Python <code>requests</code>: <code>timeout=(2, 8)</code>.</li>
+</ul>
+</li>
+<li><strong>Where numbers come from:</strong>
+<ul>
+<li>monitoring baselines and the provider's <strong>SLA</strong></li>
+<li>If 99% of healthy requests finish under 2 s, a 2 s connection timeout is defensible</li>
+<li>An <strong>SLA</strong> is a formal, contractual standard of service (uptime such as 99.9%, and for architects the <strong>latency guarantee</strong>: &quot;95% under 500 ms&quot;)</li>
+<li>Triggered timeouts become evidence for vendor accountability.</li>
+</ul>
+</li>
+<li>Timeouts alone leave the user without their order; give the network a polite second chance.</li>
+</ul>
+<h3 id="retries-the-second-chance">Retries (the second chance)</h3>
+<ul>
+<li>Many failures are one-millisecond blips (a 503 can be a router hiccup). But retrying 50 times a second <strong>DDoSes your own partner</strong>.</li>
+<li><strong>Exponential backoff:</strong>
+<ul>
+<li>multiply the delay after each failure (1 s, 2 s, 4 s, 8 s)</li>
+<li>Popularised by Metcalfe and Boggs's 1976 Ethernet paper (http://www.bitsavers.org/pdf/xerox/parc/techReports/CSL-75-7_Ethernet_Distributed_Packet_Switching_for_Local_Computer_Networks.pdf).</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> retrying a payment can <strong>double-charge</strong>; generate an <strong>idempotency key</strong> in the business layer and pass it on every attempt (see 10.3).</li>
+</ul>
+<h3 id="fallbacks-plan-b">Fallbacks (plan B)</h3>
+<ul>
+<li>A <strong>fallback</strong> is a pre-programmed alternative when the primary fails: default data, a cached response, a simplified rule (graceful degradation).</li>
+<li>Examples:
+<ul>
+<li>Netflix cannot reach the AI recommender → hardcoded <strong>Top 10 Global Hits</strong></li>
+<li>shipping calculator down → <strong>flat $5 shipping</strong> (a deliberate trade-off: lose a few dollars to save a $100 sale).</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-2-the-circuit-breaker-pattern">10.2 The circuit breaker pattern</h2>
+<p><img src="/book-digest/grokking-software-architecture/img/circuit-breaker-states.svg" alt="Circuit breaker states" loading="lazy" /></p>
+<p>Timeouts and retries don't help when a dependency is <strong>down for an hour</strong>: every checkout blocks a thread for 10 s, threads and memory run out, and the failure <strong>cascades upstream</strong>. Like a household breaker that trips to stop a fire.</p>
+<p>A <strong>circuit breaker</strong> is a protective proxy around external calls: if failures cross a threshold it <strong>trips (opens)</strong>, blocks further requests, and returns a fast error or a fallback; the dependency gets breathing room.</p>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Closed</strong></td>
+<td>normal; requests flow; failures are counted (electrical &quot;closed&quot; = wire connected, a common confusion)</td>
+</tr>
+<tr>
+<td><strong>Open</strong></td>
+<td>tripped (e.g. 5 failures in a row, or 50% failures over 30 s); calls fail <strong>immediately</strong>, saving memory, user time and the struggling API</td>
+</tr>
+<tr>
+<td><strong>Half-open</strong></td>
+<td>after a cooldown (e.g. 60 s) <strong>one test request</strong> goes through: success → <strong>closed</strong>; failure → <strong>open</strong> and the timer restarts</td>
+</tr>
+</tbody>
+</table>
+<p>Result: self-healing. Formalised by <strong>Michael Nygard</strong>, <em>Release It!</em> (2007): https://pragprog.com/titles/mnee2/release-it-second-edition/.</p>
+<p><strong>Bulkhead pattern</strong> (breaker's partner: the breaker prevents the fire, the bulkhead prevents the flood). Partition threads, memory or DB connections into isolated compartments.</p>
+<p>With 100 threads, a slow Payment API could occupy all of them and block even the homepage; give <strong>80 to general traffic and 20 to payments</strong>: checkout breaks but browsing continues.</p>
+<p>Implementation is complex (custom thread pools); see https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead.</p>
+<h2 id="10-3-in-practice-the-resilience-decorator">10.3 In practice: the resilience decorator</h2>
+<p>Hand-written <code>while</code> loops, counters and <code>sleep()</code> inside business code violate <strong>Separation of Concerns</strong>: fetching a user is business, surviving the network is infrastructure. Use language features (decorators, attributes, annotations): <strong>Polly</strong> (C#), <strong>Resilience4j</strong> (Java), <strong>tenacity</strong> (Python).</p>
+<p><strong>The fragile way (Listing 10.1):</strong> <code>requests.post(&quot;https://api.FlakyPayments.com/charge&quot;, json={&quot;amount&quot;: amount, &quot;order_id&quot;: &quot;12345&quot;})</code> then <code>raise_for_status()</code>. Four production failures:</p>
+<ol>
+<li><strong>Infinite hang</strong> (no timeout; <code>requests</code> has none by default).</li>
+<li><strong>One-strike out</strong> (no retries; a blip is a fatal 500).</li>
+<li><strong>Missing plan B</strong> (an hour of downtime means unhandled exceptions; no queue).</li>
+<li><strong>Double charge</strong> (no idempotency key).</li>
+</ol>
+<p>It also violates SoC, testability, coupling, encapsulation, abstraction, and every SOLID principle (SRP, OCP, LSP, IoC, DIP), and fails the four architect roles (<strong>Boundary Keeper</strong>: HTTP in domain logic; <strong>Risk Scout</strong>: assumed the happy path; <strong>Explainer-in-Chief</strong>: a risky call looks safe; <strong>Scribe</strong>: magic string <code>&quot;12345&quot;</code>, no timeouts documented).</p>
+<p><strong>The resilient way (Listing 10.2, Python)</strong></p>
+<pre class="hl"><code><span class="kn">import</span><span class="w"> </span><span class="nn">requests</span><span class="o">,</span><span class="w"> </span><span class="nn">uuid</span><span class="o">,</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">enum</span><span class="w"> </span><span class="kn">import</span> <span class="n">Enum</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pybreaker</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tenacity</span><span class="w"> </span><span class="kn">import</span> <span class="n">retry</span><span class="p">,</span> <span class="n">stop_after_attempt</span><span class="p">,</span> <span class="n">wait_exponential</span>
+
+<span class="n">db_breaker</span> <span class="o">=</span> <span class="n">pybreaker</span><span class="o">.</span><span class="n">CircuitBreaker</span><span class="p">(</span><span class="n">fail_max</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">reset_timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>   <span class="c1"># trips after 5 failures; OPEN for 30 s</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">OrderStatus</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>                                              <span class="c1"># domain vocabulary, no magic strings</span>
+    <span class="n">PENDING_PAYMENT</span> <span class="o">=</span> <span class="s2">"PENDING_PAYMENT"</span><span class="p">;</span> <span class="n">PAID</span> <span class="o">=</span> <span class="s2">"PAID"</span><span class="p">;</span> <span class="n">FAILED</span> <span class="o">=</span> <span class="s2">"FAILED"</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">PaymentService</span><span class="p">:</span>                                                 <span class="c1"># infrastructure layer</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">base_url</span><span class="p">):</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_url</span> <span class="o">=</span> <span class="n">base_url</span>           <span class="c1"># injected config</span>
+    <span class="nd">@db_breaker</span>
+    <span class="nd">@retry</span><span class="p">(</span><span class="n">stop</span><span class="o">=</span><span class="n">stop_after_attempt</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span> <span class="n">wait</span><span class="o">=</span><span class="n">wait_exponential</span><span class="p">(</span><span class="n">multiplier</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="nb">max</span><span class="o">=</span><span class="mi">10</span><span class="p">),</span> <span class="n">reraise</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">charge_credit_card</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">amount</span><span class="p">,</span> <span class="n">order_id</span><span class="p">,</span> <span class="n">idempotency_key</span><span class="p">):</span>
+        <span class="n">response</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">base_url</span><span class="si">}</span><span class="s2">/charge"</span><span class="p">,</span>
+            <span class="n">json</span><span class="o">=</span><span class="p">{</span><span class="s2">"amount"</span><span class="p">:</span> <span class="n">amount</span><span class="p">,</span> <span class="s2">"order_id"</span><span class="p">:</span> <span class="n">order_id</span><span class="p">},</span>
+            <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">"Idempotency-Key"</span><span class="p">:</span> <span class="n">idempotency_key</span><span class="p">},</span>
+            <span class="n">timeout</span><span class="o">=</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>                                          <span class="c1"># escape hatch</span>
+        <span class="n">response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">process_checkout</span><span class="p">(</span><span class="n">user_cart</span><span class="p">):</span>                                      <span class="c1"># business layer with fallback</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">api_url</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"PAYMENT_API_URL"</span><span class="p">,</span> <span class="s2">"https://api.flakypayments.com"</span><span class="p">)</span>
+        <span class="n">order_key</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">())</span>                                 <span class="c1"># generated ONCE, outside the retry loop</span>
+        <span class="n">PaymentService</span><span class="p">(</span><span class="n">base_url</span><span class="o">=</span><span class="n">api_url</span><span class="p">)</span><span class="o">.</span><span class="n">charge_credit_card</span><span class="p">(</span><span class="n">user_cart</span><span class="o">.</span><span class="n">total_amount</span><span class="p">,</span> <span class="n">user_cart</span><span class="o">.</span><span class="n">order_id</span><span class="p">,</span> <span class="n">order_key</span><span class="p">)</span>
+    <span class="k">except</span> <span class="n">requests</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">RequestException</span><span class="p">:</span>                      <span class="c1"># specific, never a naked Exception</span>
+        <span class="n">send_to_async_queue</span><span class="p">({</span><span class="s2">"order_id"</span><span class="p">:</span> <span class="n">user_cart</span><span class="o">.</span><span class="n">order_id</span><span class="p">,</span> <span class="s2">"amount"</span><span class="p">:</span> <span class="n">user_cart</span><span class="o">.</span><span class="n">total_amount</span><span class="p">,</span>
+                             <span class="s2">"status"</span><span class="p">:</span> <span class="n">OrderStatus</span><span class="o">.</span><span class="n">PENDING_PAYMENT</span><span class="o">.</span><span class="n">value</span><span class="p">})</span>
+</code></pre>
+<p>Why each choice:</p>
+<ul>
+<li><code>reraise=True</code> surfaces the real network error instead of tenacity's generic <code>RetryError</code>.</li>
+<li>The <strong>idempotency key is generated in the business layer</strong>; created inside the retried function, each attempt would get a new key and charge again.</li>
+<li>Catch <strong>specific</strong> exceptions (<code>RequestException</code>); a naked <code>except Exception</code> would swallow unrelated bugs.</li>
+<li>When the breaker is <strong>OPEN</strong>, <code>charge_credit_card()</code> raises <code>pybreaker.CircuitBreakerError</code> without touching the network, so Plan B runs.</li>
+<li><strong>&quot;Don't leak the loop&quot;:</strong> the decorator handles retries, but the business layer must catch the final failure.</li>
+<li>The env-var URL allows sandbox/staging swaps without touching the service. (In real code the enum, service and controller live in separate files.)</li>
+</ul>
+<p>Payoff: survives blips, preserves transaction intent, protects the infrastructure; policy is declared in plain English at the top of the function (Explainer-in-Chief) and documented (Scribe).</p>
+<p><strong>Sidecars vs decorators:</strong> a <strong>service mesh</strong> (Linkerd, Istio, Envoy sidecar proxies) can do transparent network retries, circuit breaking (ejecting failing nodes), connection pooling, mTLS. Use <strong>application code for domain-aware fallbacks</strong> (a cached value, a queued order); a proxy can retry a packet but only your code knows the business plan B.</p>
+<p><strong>Caveat on payment fallbacks:</strong> queuing unauthorised card charges for later creates financial liability (delayed declines), locks inventory, and risks false confirmations. Don't implement it alone: present the business with <strong>synchronous fail-fast</strong> (reject checkout, protect inventory) vs <strong>asynchronous order capture</strong> (<code>PENDING_PAYMENT</code> with an inventory lock timeout).</p>
+<p><strong>Architecture as a financial record (the Scribe role):</strong> timestamped logs of triggered timeouts and breakers are evidence:</p>
+<ul>
+<li><strong>Service credits:</strong> timeouts prove individual SLA breaches; breakers prove systemic outages.</li>
+<li><strong>The &quot;wait-tax&quot; audit:</strong> hanging requests burn CPU and memory; hard limits and fallbacks avoid scaling out just to hold a backlog.</li>
+<li><strong>Vendor accountability:</strong>
+<ul>
+<li>a 2.0 s timeout against a promised 0.5 s is an exhibit</li>
+<li>The author's team once proved a provider's repeated <strong>SLA latency breaches over 5 days</strong> (slow network caused backup retries and data-transfer overages) and received <strong>over $10,000 in service credits</strong>.</li>
+</ul>
+</li>
+<li>Needs <strong>observability</strong> (Datadog, Splunk, New Relic, Prometheus + Grafana; ch. 14).</li>
+</ul>
+<h2 id="10-4-scalability">10.4 Scalability</h2>
+<p><strong>Scalability</strong> = handling increasing workloads by adding resources (e.g. 10 users a minute to 10,000 a second after an influencer tweet).</p>
+<ul>
+<li><strong>A business decision:</strong>
+<ul>
+<li>each extra &quot;nine&quot; (99.9% to 99.99%) raises cost, complexity and maintenance exponentially</li>
+<li>The architect <strong>presents the trade-off</strong> (&quot;$5,000 a month extra to survive a 10,000 users/second spike: worth it?&quot;) and aligns</li>
+<li>Over-engineering a 500-employee HR tool is an architectural failure.</li>
+</ul>
+</li>
+<li><strong>Scale up (vertical):</strong>
+<ul>
+<li>one more powerful worker (a $20/month 2 GB server to a $400/month 64 GB, 16-core server). <strong>Pro:</strong> easy, no code change. <strong>Con:</strong> hard physical ceiling</li>
+<li><strong>single point of failure</strong>.</li>
+</ul>
+</li>
+<li><strong>Scale out (horizontal):</strong>
+<ul>
+<li>more identical smaller servers behind a <strong>load balancer</strong></li>
+<li><strong>Pro:</strong> practically infinite and resilient (a crashed server is skipped)</li>
+<li><strong>Con:</strong> complexity: servers must hold <strong>no local state</strong> (a cart on Server A empties when the next click hits B) so session state lives in an external store or cache.</li>
+</ul>
+</li>
+<li><strong>Resilience at the data layer</strong> (the availability ceiling):
+<ul>
+<li><strong>Replication (primary/replica)</strong> with automated <strong>failover</strong> that promotes a replica.</li>
+<li><strong>Multi-region read replicas</strong> for global scale and region outages; offloads reads.</li>
+<li><strong>Replication is not a backup:</strong> a destructive query propagates to every replica. Use the <strong>3-2-1 rule</strong>: <strong>3 copies, 2 storage types, 1 offsite/cross-region immutable snapshot</strong>.</li>
+<li><strong>RPO</strong>
+<ul>
+<li>(Recovery Point Objective: minutes of data loss tolerable) and <strong>RTO</strong> (Recovery Time Objective: restore time). RPO = 0 and RTO = 0 cost exponentially more</li>
+<li>match the business's willingness to pay.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-5-basic-performance-tuning-don-t-compute-what-you-can-remember">10.5 Basic performance tuning: don't compute what you can remember</h2>
+<p>Before scaling out, ask &quot;are we doing unnecessary work?&quot; A &quot;Top 10 Bestsellers of the Week&quot; join run 5,000 times for 5,000 visitors is wasteful: run it once, cache in <strong>Redis</strong> for five minutes; two servers may then suffice.</p>
+<ul>
+<li><strong>Multi-level caching (L1/L2):</strong> L1 = local in-process memory (a sticky note on the desk); L2 = shared distributed cache like Redis (a whiteboard). Naming comes from CPU caches.</li>
+<li><strong>Trap:</strong> cache invalidation (&quot;only two hard things: cache invalidation and naming things&quot;): a profile picture update must reach the database, L2 and every server's L1, or users see <strong>flickering stale data</strong>.</li>
+<li><strong>Use L1 only when:</strong>
+<ul>
+<li>data is practically <strong>immutable</strong> (US states, ZIP codes, historic tax rates)</li>
+<li>you need <strong>microsecond latency</strong> (high-frequency trading, real-time game routing)</li>
+<li>you pay heavy <strong>network egress</strong> (a 5 MB file read from Redis 10,000 times a minute).</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> a single L2 cache first; L1 early is premature optimisation until metrics prove latency or cost hurt.</li>
+</ul>
+<h2 id="10-6-the-dork-side-the-370-million-overflow-ariane-5">10.6 The Dork Side: the $370 million overflow (Ariane 5)</h2>
+<p><strong>4 June 1996:</strong> the European Space Agency's uncrewed <strong>Ariane 5</strong> (four scientific satellites) veered 90 degrees <strong>37 seconds</strong> after liftoff (about 2.5 miles up); aerodynamic stress ripped off the boosters, triggering self-destruct: <strong>$370 million</strong> and a decade of research. Cause: <strong>software</strong>.</p>
+<ul>
+<li><strong>The bug:</strong>
+<ul>
+<li>horizontal velocity stored as a <strong>64-bit float</strong> was converted to a <strong>16-bit signed integer</strong> (max <strong>32,767</strong>)</li>
+<li>Ariane 5 was faster, the value overflowed, an <strong>unhandled exception</strong> crashed the navigation computer
+<ul>
+<li>(An unsigned 16-bit, max 65,535, would also have been exceeded a fraction of a second later.)</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Lesson 1: context is everything (blind reuse).</strong>
+<ul>
+<li>The failing function (Inertial Reference System alignment) only needs to run on the launchpad</li>
+<li>On <strong>Ariane 4</strong> a hack kept it running <strong>50 seconds after liftoff</strong> (restarting after a late hold took <strong>45 minutes</strong>); Ariane 4 could not reach the limit in that window</li>
+<li>It was copied into Ariane 5 with no simulation against the new flight profile</li>
+<li>&quot;Proven&quot; only in the environment where it was tested.</li>
+</ul>
+</li>
+<li><strong>Lesson 2: redundancy is not resilience.</strong>
+<ul>
+<li>A fully independent backup computer ran the <strong>same software</strong></li>
+<li>it hit the same line <strong>0.05 seconds later</strong> and crashed identically. <strong>True resilience requires diversity</strong>: a backup database running the same bad SQL does not help</li>
+<li>a real fallback does something <em>different</em> (cached result, graceful degradation).</li>
+</ul>
+</li>
+<li><strong>Convenience trap:</strong>
+<ul>
+<li>code left running purely for human convenience destroyed a rocket
+<ul>
+<li>&quot;Writing or leaving code in production simply to make your own life easier is architectural malpractice.&quot; Every running line, thread, connection or task is a liability</li>
+</ul>
+</li>
+<li>turn off what serves no purpose in that context.</li>
+</ul>
+</li>
+<li>Report: Ariane 501 Inquiry Board (Prof. J. L. Lions, 19 July 1996): https://www-users.math.umn.edu/~arnold/disasters/ariane5rep.html.</li>
+</ul>
+<h2 id="10-7-mission-checklist-recap">10.7 Mission, checklist, recap</h2>
+<p><strong>Mission: Protecting Shop-Zilla on Black Friday.</strong> FlakyPayments fails ~<strong>30%</strong> of requests; successes take <strong>8 s</strong> instead of 1 s.</p>
+<p>Decide: (1) a <strong>timeout</strong> (assume 99% of healthy requests finish under 2 s; 8 s is too long to hold a thread); (2) <strong>retry count</strong> and <strong>backoff multiplier</strong>; (3) <strong>circuit breaker</strong> failure threshold (e.g. 10 in a row) and cooldown before half-open; (4) the <strong>fallback</strong>: what to show the user and how to capture the order data to charge later.</p>
+<p>No single right numbers, but defensible ones.</p>
+<p><strong>Recap:</strong> Happy Path is an illusion; timeouts prevent thread exhaustion; retries with backoff; the breaker fails fast and probes; fallbacks degrade gracefully; bulkheads isolate resources; decorators keep SoC; architecture is a financial record; scale up vs out; cache before scaling; Ariane 5.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+Happy Path · transient vs non-transient failure · timeout (connection/read) · SLA · exponential backoff · idempotency key · fallback · graceful degradation · circuit breaker (closed/open/half-open) · bulkhead · decorator · service mesh/sidecar · service credit · wait-tax · scale up/out · load balancer · replication/failover · 3-2-1 rule · RPO/RTO · multi-level cache · cache invalidation · integer overflow.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 10. Pre-release; no public source page found.</li>
+<li>Nygard, <em>Release It!</em>: https://pragprog.com/titles/mnee2/release-it-second-edition/ · Ariane 501 report: https://www-users.math.umn.edu/~arnold/disasters/ariane5rep.html</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-09-architecting-for-the-cloud/">Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</a> · <a href="/book-digest/grokking-software-architecture/gsa-11-foundational-security-architecture/">Grokking Software Architecture 11: Foundational Security Architecture</a> · <a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency</a> · <a href="/book-digest/understanding-distributed-systems/uds-28-upstream-resiliency/">Understanding Distributed Systems 28: Upstream resiliency (and Part V intro)</a> · <a href="/book-digest/understanding-distributed-systems/uds-25-and-26-redundancy-and-fault-isolation/">Understanding Distributed Systems 25-26: Redundancy and fault isolation</a> · <a href="/book-digest/understanding-distributed-systems/uds-20-caching/">Understanding Distributed Systems 20: Caching</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-09-architecting-for-the-cloud/">&larr; Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-11-foundational-security-architecture/">Grokking Software Architecture 11: Foundational Security Architecture &rarr;</a></nav></main></body></html>

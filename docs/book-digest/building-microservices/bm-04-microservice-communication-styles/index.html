@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 4: Microservice Communication Styles</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-4-microservice-communication-styles">Building Microservices 4: Microservice Communication Styles</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 4. Previous: <a href="/book-digest/building-microservices/bm-03-splitting-the-monolith/">Building Microservices 3: Splitting the Monolith</a>. Next: <a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Decide the <strong>style</strong> of communication first, and the technology second. Teams often pick technology before asking what kind of interaction they want.</li>
+<li>Inter-process calls differ from in-process calls in <strong>performance, changing interfaces and error handling</strong>; do not hide the network from developers.</li>
+<li>Two axes: <strong>synchronous blocking vs asynchronous nonblocking</strong>, and <strong>request-response vs event-driven</strong> (plus <strong>common data</strong>). A system usually mixes them.</li>
+<li><strong>Request-response</strong> fits when you need a result. <strong>Event-driven</strong> inverts responsibility: the emitter does not know who listens, so coupling is lower. <strong>Common data</strong> suits bulk data and legacy interoperability.</li>
+<li>Asynchronous and event-driven styles add real complexity (retries, dead letters, correlation); start small.</li>
+</ul>
+</div></div>
+<h2 id="4-1-from-in-process-to-inter-process">4.1 From in-process to inter-process</h2>
+<p>Calls across a network are very different from calls within a process. Thinking &quot;an object calling an object&quot; gets you into trouble.</p>
+<h3 id="performance">Performance</h3>
+<ul>
+<li>In-process calls can be <strong>inlined</strong> by the compiler or runtime
+<ul>
+<li>round-tripping a packet in a data centre is <strong>measured in milliseconds</strong>. A thousand in-process calls are fine</li>
+<li>a thousand network calls between two services probably not, so APIs may need rethinking.</li>
+</ul>
+</li>
+<li>In-process parameters are pointers
+<ul>
+<li>Across a network the data is <strong>serialised, sent and deserialised</strong>, so you must care about <strong>payload size</strong>: send less (good for information hiding), pick more efficient serialisation, or pass a <strong>reference to a file</strong>.</li>
+</ul>
+</li>
+<li>Abstractions that hide the network call from developers hide too much: surprise bottlenecks follow.</li>
+</ul>
+<h3 id="changing-interfaces">Changing interfaces</h3>
+<ul>
+<li>In-process, caller and callee ship together (an IDE refactoring updates both), so a change is <strong>atomic</strong>
+<ul>
+<li>Between microservices they are separately deployable, so a backward-incompatible change needs a <strong>lockstep deployment</strong> or a <strong>phased rollout</strong> of the new contract.</li>
+</ul>
+</li>
+</ul>
+<h3 id="error-handling">Error handling</h3>
+<ul>
+<li>In-process errors are mostly deterministic:
+<ul>
+<li>expected and handled, or catastrophic and propagated</li>
+<li>In a distributed system many errors are outside your control: timeouts, unavailable services, dropped networks, containers killed for memory, &quot;bits of your data center can catch fire&quot;.</li>
+</ul>
+</li>
+<li>Tanenbaum and van Steen (<em>Distributed Systems</em>) give <strong>five failure modes</strong> (simplified):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Crash</strong></td>
+<td>Fine until the server crashed: reboot</td>
+</tr>
+<tr>
+<td><strong>Omission</strong></td>
+<td>You sent something and got no response (or an expected stream of events just stops)</td>
+</tr>
+<tr>
+<td><strong>Timing</strong></td>
+<td>Something happened too late, or too early</td>
+</tr>
+<tr>
+<td><strong>Response</strong></td>
+<td>A response arrived but looks wrong (missing needed information)</td>
+</tr>
+<tr>
+<td><strong>Arbitrary (Byzantine)</strong></td>
+<td>Something is wrong but participants cannot agree whether or why</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Many are <strong>transient</strong>
+<ul>
+<li>others need a human. So a <strong>rich set of error semantics</strong> lets clients act: HTTP's 4xx are request errors (is there point retrying a 404?)</li>
+<li>5xx relate to downstream issues, some temporary (<strong>503</strong> may be worth a retry; <strong>501</strong> probably not)
+<ul>
+<li>Whatever the protocol, rich semantics make <strong>compensating actions</strong> easier and systems more robust.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-04-in-process-vs-inter-process.svg" alt="In-process versus inter-process calls" loading="lazy" /></p>
+<h2 id="4-2-technology-for-ipc-so-many-choices">4.2 Technology for IPC: so many choices</h2>
+<ul>
+<li>People gravitate to familiar or fashionable technology and buy into its ideas and constraints
+<ul>
+<li>Examples of mismatch: Angular or React for a plain website, or <strong>Kafka for request-response</strong> (it was designed for event-based interactions).</li>
+</ul>
+</li>
+<li>So describe the <strong>style</strong> first, then filter technology (Newman's model; chapter 5 covers technology).</li>
+</ul>
+<h2 id="4-3-styles-of-microservice-communication">4.3 Styles of microservice communication</h2>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Synchronous blocking</strong></td>
+<td>A service calls another and blocks waiting for the response</td>
+</tr>
+<tr>
+<td><strong>Asynchronous nonblocking</strong></td>
+<td>The caller carries on processing whether or not the call is received</td>
+</tr>
+<tr>
+<td><strong>Request-response</strong></td>
+<td>A service asks another to do something and expects a response with the result</td>
+</tr>
+<tr>
+<td><strong>Event-driven</strong></td>
+<td>Services emit events; others consume and react; the emitter is unaware which services, if any, consume them</td>
+</tr>
+<tr>
+<td><strong>Common data</strong></td>
+<td>Services collaborate through a shared data source (not often seen as a communication style)</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/building-microservices/img/bm-04-communication-styles-model.svg" alt="The communication styles model" loading="lazy" /></p>
+<ul>
+<li>Newman starts by choosing <strong>request-response or event-driven</strong> for the situation
+<ul>
+<li>With request-response he still chooses sync or async; with event-driven he is limited to <strong>nonblocking asynchronous</strong> options</li>
+<li>Reliability, latency, volume, security and scale also matter.</li>
+</ul>
+</li>
+<li><strong>Mix and match</strong>
+<ul>
+<li>is the norm</li>
+<li>one microservice can use several styles (an <strong>Order</strong> service with a request-response API that places or changes orders <strong>and</strong> fires events when they change).</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-4-pattern-synchronous-blocking">4.4 Pattern: synchronous blocking</h2>
+<ul>
+<li>A service calls a downstream one and <strong>blocks until it completes</strong>, often waiting for a response (so nearly always also request-response)
+<ul>
+<li>Example: <strong>Order Processor</strong> tells <strong>Loyalty</strong> to add points.</li>
+</ul>
+</li>
+<li><strong>Advantages:</strong>
+<ul>
+<li>simple and <strong>familiar</strong>: it reads like a script, like a SQL query or an HTTP request</li>
+<li>Sticking with the familiar can make sense when moving from a monolith with so much else new.</li>
+</ul>
+</li>
+<li><strong>Disadvantages:</strong>
+<ul>
+<li><strong>Temporal coupling</strong> (chapter 2): Loyalty must be reachable, else Order Processor must choose a compensating action (retry now, buffer and retry later, or give up).</li>
+<li>The coupling is two-way and between <strong>specific instances</strong>: the response travels back over the same connection, so if the caller's instance died, the response is lost.</li>
+<li>Slow downstream or network means the caller is blocked, so slowness propagates: more vulnerable to <strong>cascading failures</strong> than async.</li>
+</ul>
+</li>
+<li><strong>Where to use it:</strong>
+<ul>
+<li>fine for simple architectures</li>
+<li>Problems appear with <strong>chains of calls</strong>: Order Processor → Payment → Fraud Detection → Customer</li>
+<li>Any service or hop failing fails the whole operation, and each service holds an open connection waiting (risking running out of connections and congestion).</li>
+</ul>
+</li>
+<li>Fix by restructuring:
+<ul>
+<li>move <strong>Fraud Detection out of the purchase flow into the background</strong>, updating customer records that payment checks earlier</li>
+<li>This shortens the chain, improves latency, removes a critical-path dependency</li>
+<li>Or use nonblocking interactions without changing the workflow.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-04-call-chain-and-background-fraud.svg" alt="A long blocking chain versus moving fraud detection to the background" loading="lazy" /></p>
+<h2 id="4-5-pattern-asynchronous-nonblocking">4.5 Pattern: asynchronous nonblocking</h2>
+<p>Sending a call does not block the caller. Three common styles: <strong>common data</strong>, <strong>request-response</strong>, <strong>event-driven</strong>.</p>
+<ul>
+<li><strong>Advantages:</strong>
+<ul>
+<li>sender and receiver are <strong>temporally decoupled</strong> (the receiver need not be reachable when called) and it suits <strong>long-running work</strong></li>
+<li>Example:
+<ul>
+<li>Order Processor tells <strong>Warehouse</strong> to dispatch a package (finding, packing, pickup may take hours or days)</li>
+<li>Warehouse calls back with progress, a form of <strong>asynchronous request-response</strong></li>
+</ul>
+</li>
+<li>A blocking call held open for hours or days is not feasible.</li>
+</ul>
+</li>
+<li><strong>Disadvantages:</strong> <strong>complexity</strong> and <strong>choice</strong>; several styles, bewildering technology, and a different mental model that offers many ways to get into trouble.</li>
+</ul>
+<blockquote>
+<p>[!note] async/await and &quot;asynchronous&quot; that is still blocking
+<code>async</code>/<code>await</code> lets you work with an asynchronous source (such as exchange rates arriving via a broker, a <strong>Promise</strong> that resolves later) in a <strong>blocking, synchronous style</strong>: <code>await</code> blocks until the value is fulfilled, so <code>process(latestRate)</code> does not run before it resolves. From your code's point of view it is a synchronous, blocking interaction. (The book's JavaScript example omits error handling.)</p>
+</blockquote>
+<ul>
+<li><strong>Where to use it:</strong> long-running processes and long call chains you cannot restructure.</li>
+</ul>
+<h2 id="4-6-pattern-communication-through-common-data">4.6 Pattern: communication through common data</h2>
+<ul>
+<li>One service puts data in a defined location and others use it later; <strong>fundamentally asynchronous</strong>
+<ul>
+<li>Example: the <strong>New Product Importer</strong> writes a file read by <strong>Inventory</strong> and <strong>Catalog</strong></li>
+<li>It is probably the <strong>most common</strong> IPC pattern, yet often not recognised because it is so indirect.</li>
+</ul>
+</li>
+<li><strong>Implementation:</strong>
+<ul>
+<li>needs a <strong>persistent store</strong></li>
+<li>a filesystem often suffices (or a robust distributed memory store). Consumers need their own way to notice new data, commonly <strong>polling</strong>.</li>
+</ul>
+</li>
+<li>Data lake vs data warehouse sit at opposite coupling ends:
+<ul>
+<li>in a <strong>data lake</strong> sources upload raw data in any format and consumers must know how to process it</li>
+<li>a <strong>data warehouse</strong> is a structured store, so producers must know its structure and update if it changes incompatibly.</li>
+</ul>
+</li>
+<li>Both assume <strong>one-way flow</strong>, easier to reason about
+<ul>
+<li>A <strong>shared database with several readers and writers</strong> is the problematic form (common coupling, chapter 2; Order Processor and Warehouse updating one record).</li>
+</ul>
+</li>
+<li><strong>Advantages:</strong> simple, uses commonly understood technology (file or database), <strong>interoperable</strong> with older systems (mainframes, COTS products), good for <strong>large volumes</strong>.</li>
+<li><strong>Disadvantages:</strong>
+<ul>
+<li>polling or timed jobs mean it is <strong>not for low latency</strong> (you can add a notification call, or use streaming such as Kafka for near real-time)</li>
+<li>the common store is a <strong>coupling source</strong> and its robustness is yours to worry about.</li>
+</ul>
+</li>
+<li><strong>Where to use it:</strong> interoperability with systems restricted in technology (a mainframe may not talk gRPC or Kafka or Redis, but can read a file), and <strong>sharing large volumes</strong> (multigigabyte files, millions of rows).</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-04-communication-through-common-data.svg" alt="A file written by one service and polled by others" loading="lazy" /></p>
+<h2 id="4-7-pattern-request-response-communication">4.7 Pattern: request-response communication</h2>
+<ul>
+<li>A service sends a request and expects a response with the result; implementable <strong>synchronously or asynchronously</strong>.</li>
+<li>Examples:
+<ul>
+<li><strong>Chart</strong> (best-selling CDs by genre) asks <strong>Inventory</strong> for stock levels</li>
+<li><strong>Order Processor</strong> asks <strong>Warehouse</strong> to reserve stock and needs success before taking payment (if stock cannot be reserved, payment is cancelled). Useful where calls must complete in a given order.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] Commands versus requests
+Some say &quot;command&quot; for asynchronous request-response. Newman prefers <strong>request</strong>: a command implies a directive that must be obeyed, whereas a request can be <strong>rejected</strong>. A microservice should judge each request by its own internal logic and reject it if it violates that logic.</p>
+</blockquote>
+<h3 id="synchronous-vs-asynchronous-implementation">Synchronous vs asynchronous implementation</h3>
+<ul>
+<li><strong>Synchronous:</strong> a connection to the downstream service stays open while it responds; the responder needs to know nothing about the requester, and trouble comes if the connection dies.</li>
+<li><strong>Asynchronous (via a message broker):</strong>
+<ul>
+<li>the request sits in a <strong>queue</strong> that Inventory consumes when able</li>
+<li>Inventory then sends the response to <strong>another queue</strong> that Order Processor reads. The responder must know (or be told) where to send the response.</li>
+<li>Queues <strong>buffer</strong> requests so the service is not overwhelmed (depending on the queue absorbing them).</li>
+<li>To <strong>relate the response to the original request</strong> (it may return to a different instance, much later), store the request's state in a database so any instance can reload it.</li>
+</ul>
+</li>
+<li>All request-response needs <strong>timeouts</strong> so nothing waits forever (chapter 12).</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-04-async-request-response-queues.svg" alt="Asynchronous request-response over request and response queues" loading="lazy" /></p>
+<blockquote>
+<p>[!note] Parallel versus sequential calls
+Checking a price with three stockists: sequential calls cost the <strong>sum</strong> of latencies (1 s each is 3 s); parallel calls cost the <strong>slowest</strong> (about 1 s). Reactive extensions and <code>async</code>/<code>await</code> help run calls in parallel.</p>
+</blockquote>
+<p><img src="/book-digest/building-microservices/img/bm-04-sequential-vs-parallel-calls.svg" alt="Sequential versus parallel calls" loading="lazy" /></p>
+<ul>
+<li><strong>Where to use it:</strong>
+<ul>
+<li>whenever you need the result before continuing, or want to know a call failed so you can compensate (for example retry)</li>
+<li>Then choose sync or async with the trade-offs above.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-8-pattern-event-driven-communication">4.8 Pattern: event-driven communication</h2>
+<ul>
+<li>A service <strong>emits events</strong> that other services may or may not receive
+<ul>
+<li>Inherently asynchronous</li>
+<li>An <strong>event is a statement of something that has occurred</strong>, nearly always inside the emitter's world; the emitter has no knowledge of other services' intent and may not know they exist.</li>
+</ul>
+</li>
+<li>Example: <strong>Warehouse</strong> emits events about packing an order; <strong>Notifications</strong> emails the customer and <strong>Inventory</strong> updates stock.</li>
+<li>It <strong>inverts responsibility</strong>:
+<ul>
+<li>in request-response, Warehouse would tell Notifications to send emails and need to know which events matter</li>
+<li>With events, that responsibility moves into Notifications</li>
+<li>The intent is the <strong>opposite of a request</strong>: the emitter leaves it to recipients</li>
+<li>Coupling drops sharply (less domain coupling)</li>
+<li>It mirrors autonomous teams (chapter 15) and spreads &quot;smarts&quot; more evenly; compare <strong>choreography and orchestration</strong> in chapter 6.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] Events and messages
+An <strong>event</strong> is a fact (something happened, with detail). A <strong>message</strong> is what you send over an asynchronous mechanism such as a broker. &quot;The message is the medium; the event is the payload.&quot; A request can also be a message payload (asynchronous request-response).</p>
+</blockquote>
+<p><img src="/book-digest/building-microservices/img/bm-04-event-driven-collaboration.svg" alt="Warehouse emits events that downstream services subscribe to" loading="lazy" /></p>
+<h3 id="implementation">Implementation</h3>
+<p>Two aspects: a way to <strong>emit</strong> events and a way for consumers to <strong>find out</strong>.</p>
+<ul>
+<li><strong>Message brokers</strong>
+<ul>
+<li>(RabbitMQ) usually do both: producers publish; the broker handles subscriptions and can track what consumers have seen</li>
+<li>Scalable and resilient but at a cost: another system to run, test against and staff</li>
+<li>Newman is &quot;a fan&quot;.</li>
+</ul>
+</li>
+<li>Beware <strong>middleware</strong> smarts: vendors bundle more and more (the <strong>enterprise service bus</strong>). &quot;Keep your middleware dumb, and keep the smarts in the endpoints.&quot;</li>
+<li><strong>Atom</strong>
+<ul>
+<li>(a REST-compliant feed specification): publish feeds over HTTP and have consumers poll</li>
+<li>It reuses libraries and HTTP scales, but is poor at <strong>low latency</strong>, and consumers must track what they have seen and manage polling</li>
+<li>People then spend ages rebuilding broker features (for example <strong>competing consumers</strong>, where workers compete for messages and two must not process the same one; a broker's standard queue handles it, Atom needs shared state)</li>
+<li>If you have a good broker, use it; if not, try Atom but beware the <strong>sunk cost fallacy</strong>.</li>
+</ul>
+</li>
+<li>Payload encoding is the same question as for synchronous calls: if you are happy with JSON, keep it.</li>
+</ul>
+<h3 id="what-s-in-an-event">What's in an event?</h3>
+<p>Example: <strong>Customer</strong> emits &quot;new customer registered&quot;; <strong>Loyalty</strong> creates an account, <strong>Notifications</strong> sends a welcome email.</p>
+<ul>
+<li><strong>Just an ID:</strong>
+<ul>
+<li>Loyalty has enough, but Notifications needs an email and name, so it <strong>calls back to Customer</strong></li>
+<li>Downsides: extra <strong>domain coupling</strong>, and a <strong>barrage of requests</strong> on Customer if many consumers all call back.</li>
+</ul>
+</li>
+<li><strong>Fully detailed events (Newman's preference):</strong>
+<ul>
+<li>put in everything you would be happy sharing via an API; Notifications can act without ever knowing Customer exists</li>
+<li>Events can double as a <strong>historical record</strong> (auditing, even reconstituting an entity: <strong>event sourcing</strong>)</li>
+<li>Downsides:</li>
+<li><strong>Size:</strong>
+<ul>
+<li>Kafka's default maximum message is <strong>1 MB</strong></li>
+<li>RabbitMQ's theoretical limit is <strong>512 MB</strong> (down from 2 GB) though performance suffers. For large data use a <strong>hybrid</strong>: some data in the event, the rest looked up.</li>
+</ul>
+</li>
+<li><strong>Visibility:</strong>
+<ul>
+<li>Loyalty receives an email address it does not need</li>
+<li>To limit exposure of <strong>PII or card data</strong>, send two event types (one with PII, one without), but then managing visibility and guaranteeing both fire is hard (what if the service dies between them?).</li>
+</ul>
+</li>
+<li><strong>Contract:</strong>
+<ul>
+<li>event content becomes part of your contract</li>
+<li>removing a field can break others. Information hiding still applies. Rule: <strong>put information in an event only if you would share it over a request-response API.</strong></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-04-event-contents.svg" alt="An ID-only event needs callbacks; a detailed event does not" loading="lazy" /></p>
+<ul>
+<li><strong>Where to use it:</strong>
+<ul>
+<li>when information wants to be broadcast and you are happy to <strong>invert intent</strong>; when loose coupling matters most</li>
+<li>Newman gravitates to it almost by default, admitting a bias from past bad experiences with overly coupled systems (&quot;fighting the last battle&quot;)</li>
+<li>He sees <strong>far more teams replacing request-response with event-driven than the reverse</strong></li>
+<li>If unsure, <strong>start with one event</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-9-proceed-with-caution">4.9 Proceed with caution</h2>
+<ul>
+<li>Event-driven architectures can be more decoupled and scalable, but cost <strong>complexity</strong>: for long-running async request-response, does the response return to the same node? If that node is down, or if not, where is state stored? It is a different way of thinking for programmers used to in-process calls.</li>
+<li><strong>Cautionary tale (a bank pricing system, 2006):</strong>
+<ul>
+<li>market events produced a list of items to reprice, put on a message queue, consumed by a pool of pricing workers using the <strong>competing consumers</strong> pattern</li>
+<li>After a release the workers kept <strong>dying</strong>:
+<ul>
+<li>a bug crashed a worker on a certain request type</li>
+<li>on a <strong>transacted queue</strong> the worker's lock timed out and the request went back on the queue, where another worker picked it up and died</li>
+</ul>
+</li>
+<li>Martin Fowler calls this a <strong>catastrophic failover</strong></li>
+<li>They had set <strong>no maximum retry limit</strong></li>
+<li>Fixes: the bug fix, a <strong>maximum retry</strong>, and a <strong>message hospital (dead letter queue)</strong> with a UI to view and replay failed messages.</li>
+</ul>
+</li>
+<li>So adopt eagerly <strong>only with good monitoring</strong> and consider <strong>correlation IDs</strong> (chapter 10). Recommended: Hohpe and Woolf, <em>Enterprise Integration Patterns</em> (2003).</li>
+<li>Synchronous calls are not exempt:
+<ul>
+<li>on a <strong>timeout</strong>, did the request get lost, or the response? If you retry and the original got through, what then? The answer is <strong>idempotency</strong> (chapter 12)</li>
+<li>Those headaches are just more familiar.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-04-catastrophic-failover.svg" alt="The poison-message loop and its fixes" loading="lazy" /></p>
+<p><img src="/book-digest/building-microservices/img/bm-04-choosing-a-style.svg" alt="Choosing a style from the problem" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>There is rarely one right option; weigh synchronous vs asynchronous and event-driven vs request-response for your context.</li>
+<li>Newman's bias is towards asynchronous, event-driven collaboration (from experience and an aversion to coupling), with significant complexity attached.</li>
+<li>Next: implementation, starting with communication technology.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Synchronous blocking, asynchronous nonblocking, request-response, event-driven, common data</strong>.</li>
+<li><strong>Temporal coupling, cascading failure, compensating action</strong>.</li>
+<li><strong>Message broker, dead letter queue (message hospital), competing consumers</strong>.</li>
+<li><strong>Fully detailed event, event sourcing, correlation ID</strong>.</li>
+<li><strong>Five failure modes</strong> (crash, omission, timing, response, arbitrary).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 4. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch04.html</li>
+<li>Maarten van Steen and Andrew S. Tanenbaum, <em>Distributed Systems</em>, 3rd ed. (CreateSpace, 2017)
+<ul>
+<li>Gregor Hohpe and Bobby Woolf, <em>Enterprise Integration Patterns</em> (Addison-Wesley, 2003)</li>
+<li>Martin Fowler's &quot;catastrophic failover&quot;: as cited by the book, no links given.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-03-splitting-the-monolith/">Building Microservices 3: Splitting the Monolith</a></li>
+<li><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a></li>
+<li><a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-03-splitting-the-monolith/">&larr; Building Microservices 3: Splitting the Monolith</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication &rarr;</a></nav></main></body></html>

@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 7: Kubernetes Services</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-7-kubernetes-services">The Kubernetes Book 7: Kubernetes Services</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 7. Previous: <a href="/book-digest/the-kubernetes-book/tkb-06-kubernetes-deployments/">The Kubernetes Book 6: Kubernetes Deployments</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-08-ingress/">The Kubernetes Book 8: Ingress</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Pods are ephemeral and unreliable, so never connect to them directly; connect through a <strong>Service</strong>.</li>
+<li>A Service has a <strong>front end</strong> (DNS name, IP, port that never change) and a <strong>back end</strong> (a label selector sending traffic to healthy matching Pods).</li>
+<li>An <strong>EndpointSlice</strong>, created automatically per Service, tracks the healthy matching Pods.</li>
+<li>Three main types stack: <strong>ClusterIP</strong> (internal), <strong>NodePort</strong> (adds a port on every node), <strong>LoadBalancer</strong> (adds a cloud load balancer).</li>
+<li>Create Services declaratively from YAML; <code>kubectl expose</code> is the imperative shortcut.</li>
+</ul>
+</div></div>
+<h2 id="7-1-service-theory">7.1 Service theory</h2>
+<p>Kubernetes deletes Pods on:</p>
+<ul>
+<li>scale-downs</li>
+<li>rolling updates</li>
+<li>rollbacks</li>
+<li>node maintenance or evictions</li>
+<li>failures</li>
+</ul>
+<p>So apps cannot rely on a Pod being there. A <strong>Service</strong> sits in front of one or more identical Pods and exposes them through a reliable DNS name, IP address and port. (Capital &quot;S&quot;: it is a Kubernetes API resource.)</p>
+<p>Figure 7.1: a client reaches a Service called <code>app1</code> by name or IP, and the Service forwards to the Pods behind it.</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Front end</td>
+<td>DNS name, IP and port that Kubernetes guarantees never change</td>
+</tr>
+<tr>
+<td>Back end</td>
+<td>A <strong>label selector</strong> that sends traffic to healthy Pods with matching labels</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>In Figure 7.1 the client sends traffic to <code>app1:8080</code> or <code>10.99.11.23:8080</code> and it reaches a Pod with the <code>project=tkb</code> label.</li>
+<li>Services track the list of healthy Pods, so scaling, rollouts, rollbacks and even failures never leave the Service with a stale list.</li>
+</ul>
+<h3 id="labels-and-loose-coupling">Labels and loose coupling</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-07-labels-and-selectors.svg" alt="A Service sends traffic only to Pods with all its selector labels" loading="lazy" /></p>
+<ul>
+<li>Services use the same labels and selectors technology that tells Deployments which Pods they manage.</li>
+<li>Figure 7.2: a Service selecting <code>project=tkb</code> and <code>zone=prod</code>. It sends to Pods A, B and D (all labels present; D's extra labels do not matter) but not to Pod C (missing one label).</li>
+</ul>
+<p>A Deployment creating Pods with those labels, and a Service selecting them (both in one file, separated by <code>---</code>):</p>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb-2024</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<span class="w">  </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">project</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb</span><span class="w">      </span><span class="c1"># create Pods</span>
+<span class="w">        </span><span class="nt">zone</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod</span><span class="w">        </span><span class="c1"># with these labels</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">project</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb</span><span class="w">          </span><span class="c1"># send to Pods</span>
+<span class="w">    </span><span class="nt">zone</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod</span><span class="w">            </span><span class="c1"># with these labels</span>
+</code></pre>
+<h3 id="behind-the-scenes-with-endpointslices">Behind the scenes with EndpointSlices</h3>
+<ol>
+<li>Creating a Service makes the <strong>EndpointSlice controller</strong> create an associated <strong>EndpointSlice</strong>.</li>
+<li>Kubernetes watches for Pods matching the selector; new matches are added, deleted Pods are removed.</li>
+<li>An app sends traffic to the Service <strong>name</strong>; its container resolves the name to the Service IP through <strong>cluster DNS</strong>.</li>
+<li>The container sends to the Service IP, and the Service forwards to one Pod in the EndpointSlice.</li>
+</ol>
+<p>Older Kubernetes used <strong>Endpoints</strong> objects; they are functionally identical, but EndpointSlices perform better on large busy clusters.</p>
+<h3 id="service-types">Service types</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-07-service-stacking.svg" alt="LoadBalancer builds on NodePort which builds on ClusterIP" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Builds on</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ClusterIP</strong></td>
+<td>(base)</td>
+<td>Reliable endpoint (name, IP, port) on the internal Pod network</td>
+</tr>
+<tr>
+<td><strong>NodePort</strong></td>
+<td>ClusterIP</td>
+<td>Lets external clients connect through a port on every cluster node</td>
+</tr>
+<tr>
+<td><strong>LoadBalancer</strong></td>
+<td>NodePort and ClusterIP</td>
+<td>Integrates with cloud load balancers for simple internet access</td>
+</tr>
+</tbody>
+</table>
+<h4 id="clusterip-access-from-inside-the-cluster">ClusterIP: access from inside the cluster</h4>
+<ul>
+<li>The <strong>default</strong> type. Name and IP are programmed into the internal network fabric.
+<ul>
+<li>The IP is routable only on the internal Pod network.</li>
+<li>The name is registered automatically with the cluster's internal DNS.</li>
+<li>All containers are pre-programmed to use cluster DNS.</li>
+</ul>
+</li>
+<li>Example: an app <code>skippy</code>; create a ClusterIP Service <code>skippy</code>, and every app on the cluster can reach it by that name.</li>
+<li>ClusterIP Services are not routable and need the cluster DNS, so they <strong>do not work from outside</strong> the cluster. (Chapter 10 covers service discovery in depth.)</li>
+</ul>
+<h4 id="nodeport-access-from-outside-the-cluster">NodePort: access from outside the cluster</h4>
+<p>Adds a dedicated port, the <strong>NodePort</strong>, on every node.</p>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">skippy</span><span class="w">           </span><span class="c1"># registered with the internal cluster DNS (ClusterIP)</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">NodePort</span><span class="w">         </span><span class="c1"># Service type</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span><span class="w">           </span><span class="c1"># internal ClusterIP port</span>
+<span class="w">    </span><span class="nt">targetPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9000</span><span class="w">     </span><span class="c1"># application port in the container</span>
+<span class="w">    </span><span class="nt">nodePort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30050</span><span class="w">      </span><span class="c1"># external port on every cluster node (NodePort)</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-world</span>
+</code></pre>
+<ul>
+<li>This creates the usual ClusterIP Service and also publishes port <strong>30050</strong> on every node, mapped to the ClusterIP.</li>
+<li>Figure 7.3 flow:
+<ol>
+<li>An external client hits any node on the NodePort.</li>
+<li>The node forwards to the Service's ClusterIP.</li>
+<li>The Service picks a Pod from the always-current EndpointSlice list.</li>
+<li>The request is forwarded to the chosen Pod.</li>
+</ol>
+</li>
+<li>The Service does simple <strong>round-robin</strong> load balancing, so later requests probably reach other Pods.</li>
+<li>Two significant limitations:
+<ul>
+<li>Ports are in the high range <strong>30000 to 32767</strong>.</li>
+<li>Clients must know node names or IPs and whether nodes are healthy.</li>
+</ul>
+</li>
+</ul>
+<p>So most people use LoadBalancer Services.</p>
+<h4 id="loadbalancer-access-via-cloud-load-balancers">LoadBalancer: access via cloud load balancers</h4>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-07-nodeport-loadbalancer-flow.svg" alt="Request paths for NodePort and LoadBalancer Services" loading="lazy" /></p>
+<ul>
+<li>The easiest way to expose services externally: a NodePort Service fronted by a highly available cloud load balancer with a publicly resolvable DNS name and a low port number (Figure 7.4).</li>
+<li>Flow: client, load balancer, NodePort on a healthy node, internal ClusterIP Service, Pod chosen from the EndpointSlice.</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">lb</span><span class="w">               </span><span class="c1"># registered with cluster DNS</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LoadBalancer</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span><span class="w">           </span><span class="c1"># load balancer port</span>
+<span class="w">    </span><span class="nt">targetPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9000</span><span class="w">     </span><span class="c1"># application port inside the container</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">project</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb</span>
+</code></pre>
+<p>It listens on 8080 and maps to port 9000 on Pods labelled <code>project=tkb</code>, creating the NodePort and ClusterIP constructs automatically.</p>
+<h3 id="summary-of-service-theory">Summary of Service theory</h3>
+<ul>
+<li>Services give Pods a reliable endpoint; the front end is stable for the Service's whole life; the back end load balances over a dynamic Pod set matched by labels.</li>
+<li>ClusterIP is default and internal; NodePort and LoadBalancer give external endpoints.</li>
+<li>LoadBalancer creates a cloud load balancer and all the mappings to the Pods.</li>
+</ul>
+<h2 id="7-2-hands-on-with-services">7.2 Hands-on with Services</h2>
+<ul>
+<li>Declarative (YAML) is preferred, but the imperative commands are useful to know.</li>
+<li>You need the book's repo and a cluster from chapter 3.
+<ul>
+<li>Cloud cluster: Kubernetes provisions an internet-facing load balancer and gives public IPs or DNS names.</li>
+<li>Local (Docker Desktop): same experience using <code>localhost</code>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+<span class="nb">cd</span><span class="w"> </span>TKB/services
+</code></pre>
+<p>Deploy the sample app <code>svc-test</code> (a Deployment of ten Pods, a web app on port 8080, label <code>chapter=services</code>):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy.yml
+<span class="go">deployment.apps/svc-test created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>svc-test
+<span class="go">NAME       READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">svc-test   10/10   10           10          24s</span>
+</code></pre>
+<h3 id="working-with-services-imperatively">Working with Services imperatively</h3>
+<p><code>kubectl expose</code> inspects the running Deployment and creates IP, label selector, DNS records and port mappings.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>expose<span class="w"> </span>deployment<span class="w"> </span>svc-test<span class="w"> </span>--type<span class="o">=</span>LoadBalancer
+<span class="go">service/svc-test exposed</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-o<span class="w"> </span>wide
+<span class="go">NAME         TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)          SELECTOR</span>
+<span class="go">kubernetes   ClusterIP      10.96.0.1      &lt;none&gt;          443/TCP          &lt;none&gt;</span>
+<span class="go">svc-test     LoadBalancer   10.10.19.33    212.2.245.220   8080:31755/TCP   chapter=services</span>
+</code></pre>
+<p>(On a cloud the <code>EXTERNAL-IP</code> may take a minute to populate.) Reading the output:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kubernetes</code> line</td>
+<td>System Service exposing the Kubernetes API to all Pods and containers</td>
+</tr>
+<tr>
+<td>Name</td>
+<td>Same as the Deployment (<code>svc-test</code>)</td>
+</tr>
+<tr>
+<td>TYPE</td>
+<td><code>LoadBalancer</code>; <code>EXTERNAL-IP</code> is <code>localhost</code> on local clusters (ignore a wrong <code>172</code> address on Docker Desktop)</td>
+</tr>
+<tr>
+<td>CLUSTER-IP</td>
+<td>Internal IP, routable only on the internal network</td>
+</tr>
+<tr>
+<td>PORT(S)</td>
+<td>Load balancer port 8080 and NodePort 31755; by default the LB port matches the app port; NodePort is random in 30000 to 32767</td>
+</tr>
+<tr>
+<td>SELECTOR</td>
+<td>Matches the Pod labels</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>It inspected the Deployment to get the right port mapping (app on 8080) and selector (<code>chapter=services</code> on all 10 Pods).</li>
+<li>It also created the ClusterIP and NodePort constructs: <strong>LoadBalancer builds on NodePort, which builds on ClusterIP</strong> (Figure 7.5, service stacking).</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span>describe<span class="w"> </span>svc<span class="w"> </span>svc-test
+</code></pre>
+<pre class="hl"><code>Name:                     svc-test
+Namespace:                default
+Labels:                   &lt;none&gt;
+Annotations:              &lt;none&gt;
+Selector:                 chapter=services
+Type:                     LoadBalancer
+IP Family Policy:         SingleStack
+IP Families:              IPv4
+IP:                       10.10.19.33
+IPs:                      10.10.19.33
+LoadBalancer Ingress:     212.2.245.220
+Port:                     &lt;unset&gt;  8080/TCP        # load balancer port
+TargetPort:               8080/TCP                 # application port in container
+NodePort:                 &lt;unset&gt;  31755/TCP       # NodePort on each cluster node
+Endpoints:                10.1.0.200:8080,10.1.0.201:8080,10.1.0.202:8080 + 7 more...
+Session Affinity:         None
+External Traffic Policy:  Cluster
+Events:                   &lt;none&gt;
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Line</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Endpoints</strong></td>
+<td>Healthy matching Pods from the Service's EndpointSlice</td>
+</tr>
+<tr>
+<td><strong>Session Affinity</strong></td>
+<td>Session stickiness. Default <code>None</code> sends a client's connections to different Pods. <code>ClientIP</code> pins a client to one Pod, but needing it is an <strong>anti-pattern</strong>: microservices should be designed for <strong>process disposability</strong> so clients can use any Pod.</td>
+</tr>
+<tr>
+<td><strong>External Traffic Policy</strong></td>
+<td><code>Cluster</code> (default): balance across Pods on all nodes but obscure source IPs. <code>Local</code>: only Pods on the node the traffic arrives on, preserving source IPs.</td>
+</tr>
+</tbody>
+</table>
+<p>Dual-stack clusters may also list IPv6 addresses. Browse to <code>EXTERNAL-IP:8080</code> to confirm. The path: LoadBalancer on 8080, NodePort on each node, ClusterIP on 8080, Pod on 8080.</p>
+<p>Clean up before the declarative version:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>svc<span class="w"> </span>svc-test
+<span class="go">service "svc-test" deleted</span>
+</code></pre>
+<h3 id="the-declarative-way">The declarative way</h3>
+<pre class="hl"><code><span class="c1"># lb.yml</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">svc-lb</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LoadBalancer</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9000</span><span class="w">          </span><span class="c1"># load balancer port</span>
+<span class="w">    </span><span class="nt">targetPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span><span class="w">    </span><span class="c1"># application port inside the container</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">chapter</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">services</span>
+</code></pre>
+<ul>
+<li><code>metadata</code> names the Service <code>svc-lb</code> and registers it with internal cluster DNS; custom labels and annotations go here too.</li>
+<li><code>spec</code> defines front end (port 9000) and back end (Pods labelled <code>chapter=services</code>, port 8080).</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>lb.yml
+<span class="go">service/svc-lb created</span>
+</code></pre>
+<h3 id="inspecting-services">Inspecting Services</h3>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>svc-lb
+<span class="go">NAME     TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)</span>
+<span class="go">svc-lb   LoadBalancer   10.43.191.202   212.2.247.202   9000:30202/TCP</span>
+</code></pre>
+<ul>
+<li>On a cloud, <code>EXTERNAL-IP</code> shows <code>&lt;pending&gt;</code> while the load balancer is provisioned; keep re-running the command.</li>
+<li>Locally use <code>localhost</code> on port 9000 (ignore a <code>172</code> address on Docker Desktop). Browse to confirm the app.</li>
+</ul>
+<h3 id="endpointslice-objects">EndpointSlice objects</h3>
+<ul>
+<li>Every Service gets one or more EndpointSlices holding the current list of healthy Pods; inspect them with normal commands.</li>
+<li>The book's cluster is dual-stack, so there are two: IPv4 and IPv6. Yours may have only IPv4.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>endpointslices
+<span class="go">NAME           ADDRESSTYPE   PORTS   ENDPOINTS                                AGE</span>
+<span class="go">svc-lb-n7jg4   IPv4          8080    10.42.1.16,10.42.1.17,10.42.0.19 + 7 more...   2m1s</span>
+<span class="go">svc-lb-9s6sq   IPv6          8080    fd00:10:244:1::c,fd00:10:244:1::9 + 7 more...  2m1s</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>endpointslice<span class="w"> </span>svc-lb-n7jg4
+<span class="go">Name:         svc-lb-n7jg4</span>
+<span class="go">Namespace:    default</span>
+<span class="go">Labels:       chapter=services</span>
+<span class="go">              endpointslice.kubernetes.io/managed-by=endpointslice-controller.k8s.io</span>
+<span class="go">              kubernetes.io/service-name=svc-lb</span>
+<span class="go">Annotations:  endpoints.kubernetes.io/last-change-trigger-time: 2024-01-01T18:13:40Z</span>
+<span class="go">AddressType:  IPv4</span>
+<span class="go">Ports:</span>
+<span class="go">  Name     Port  Protocol</span>
+<span class="go">  ----     ----  --------</span>
+<span class="go">  &lt;unset&gt;  8080  TCP</span>
+<span class="go">Endpoints:</span>
+<span class="go">  - Addresses:  10.42.1.16</span>
+<span class="go">    Conditions:</span>
+<span class="go">      Ready:    true</span>
+<span class="go">    Hostname:   &lt;unset&gt;</span>
+<span class="go">    TargetRef:  Pod/svc-lb-9d7b4cf9d-hnvbf</span>
+<span class="go">    NodeName:   k3d-tkb-agent-2</span>
+<span class="go">    Zone:       &lt;unset&gt;</span>
+<span class="go">  - Addresses:  10.42.1.17</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">Events:         &lt;none&gt;</span>
+</code></pre>
+<ul>
+<li>The full output has a block per healthy Pod.</li>
+<li>A Service mapping to <strong>more than 100 Pods</strong> gets more than one EndpointSlice.</li>
+</ul>
+<h3 id="clean-up">Clean up</h3>
+<p>Deleting a Service automatically deletes its Endpoints and EndpointSlices.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>deploy.yml<span class="w"> </span>-f<span class="w"> </span>lb.yml
+<span class="go">deployment.apps "svc-lb" deleted</span>
+<span class="go">service "svc-lb" deleted</span>
+</code></pre>
+<p>(The book's output prints <code>deployment.apps &quot;svc-lb&quot;</code> although the Deployment is <code>svc-test</code>; shown as printed.)</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Services give Pods reliable networking: a stable front end and a label-selected back end of healthy Pods.</li>
+<li>ClusterIP is internal, NodePort exposes a port on every node, LoadBalancer integrates with cloud load balancers.</li>
+<li>Services are first-class API objects; manage them declaratively through version-controlled YAML.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Service front end / back end</strong>: stable name, IP, port / label selector over healthy Pods.</li>
+<li><strong>EndpointSlice</strong>: auto-created list of healthy Pods for a Service (replaced Endpoints).</li>
+<li><strong>ClusterIP / NodePort / LoadBalancer</strong>: stacked Service types.</li>
+<li><strong>port / targetPort / nodePort</strong>: Service port, container port, port on every node.</li>
+<li><strong>Session affinity</strong>: <code>None</code> or <code>ClientIP</code> stickiness (anti-pattern).</li>
+<li><strong>External Traffic Policy</strong>: <code>Cluster</code> or <code>Local</code>.</li>
+<li><strong>kubectl expose</strong>: imperative Service creation.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 7. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap08.xhtml</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-06-kubernetes-deployments/">The Kubernetes Book 6: Kubernetes Deployments</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-08-ingress/">The Kubernetes Book 8: Ingress</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-06-kubernetes-deployments/">&larr; The Kubernetes Book 6: Kubernetes Deployments</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-08-ingress/">The Kubernetes Book 8: Ingress &rarr;</a></nav></main></body></html>

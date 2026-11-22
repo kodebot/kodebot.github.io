@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 17: File storage</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-17-file-storage">Understanding Distributed Systems 17: File storage</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 17. Previous: <a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">Understanding Distributed Systems 18: Network load balancing</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+Even with a CDN a server's local disk eventually runs out of space for images and videos. Move large static files to a <strong>managed file store</strong> (AWS S3, Azure Blob Storage): scalable, highly available, <strong>strong durability</strong>, and the <strong>CDN can point straight at it</strong>, offloading storage and serving of static resources completely. To see how such stores work, the chapter dissects <strong>Azure Storage</strong>, which combines <strong>partitioning, chain replication and control planes</strong> in three layers.</p>
+</blockquote>
+<h2 id="the-idea">The idea</h2>
+<ul>
+<li>A CDN cut the requests hitting Cruder's server, but <strong>local disks have limits</strong>
+<ul>
+<li>Use a <strong>managed file store</strong> like <strong>AWS S3</strong> (https://aws.amazon.com/s3/) or <strong>Azure Blob Storage</strong> (https://azure.microsoft.com/en-us/services/storage/blobs/#overview) for large static files.</li>
+</ul>
+</li>
+<li>They are <strong>scalable, highly available, strongly durable</strong>
+<ul>
+<li>A file can be configured so <strong>anyone who knows its URL can access it</strong>, so you point the CDN straight at the store and <strong>completely offload storing and serving static resources</strong> to managed services.</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-1-blob-storage-architecture-azure-storage-as">17.1 Blob storage architecture: Azure Storage (AS)</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-17-azure-storage-layers.svg" alt="The three layers of an Azure Storage cluster" loading="lazy" />
+Distributed file stores are crucial in modern apps, so it helps to know how they work.</p>
+<p>The book dissects <strong>Azure Storage</strong>, &quot;a scalable cloud storage system that provides <strong>strong consistency</strong>&quot; (&quot;Windows Azure Storage: A Highly Available Cloud Storage Service with Strong Consistency&quot;: https://sigops.org/s/conferences/sosp/2011/current/2011-Cascais/printable/11-calder.pdf).</p>
+<p>AS has file, queue and table abstractions; the book covers only the <strong>file (blob store)</strong> abstraction.</p>
+<p><strong>Physical layout.</strong> AS is made of <strong>storage clusters distributed across regions worldwide</strong>. A cluster has <strong>multiple racks of nodes</strong>, each rack built as a separate unit with <strong>redundant networking and power</strong>.</p>
+<p><strong>Namespace.</strong> A <strong>global namespace based on domain names</strong> with two parts, <strong>account name</strong> and <strong>file name</strong>, forming a unique URL: <code>https://ACCOUNT_NAME.blob.core.windows.net/FILE_NAME</code>. The customer sets the account name; <strong>AS's DNS server uses it to identify the storage cluster</strong> holding the data; <strong>the cluster uses the file name to locate the node</strong> responsible for it.</p>
+<p><strong>Location service (global control plane).</strong> Creates accounts, allocates them to clusters, and moves them between clusters for better load distribution.</p>
+<p>When a customer creates an account in a region, it: (1) <strong>chooses a suitable cluster</strong> based on load information; (2) <strong>updates the cluster's configuration</strong> to start accepting requests for the account; (3) <strong>creates a DNS record</strong> mapping the account name to the cluster's public IP.</p>
+<p>A storage cluster has <strong>three layers</strong>: <strong>stream layer, partition layer, front-end layer</strong>.</p>
+<p><strong>Stream layer.</strong></p>
+<ul>
+<li>A <strong>distributed append-only file system</strong> where data lives in <strong>streams</strong>
+<ul>
+<li>A stream is a <strong>sequence of extents</strong>, and the <strong>extent is the unit of replication</strong></li>
+<li>Writes to extents are <strong>replicated synchronously using chain replication</strong> (section 10.4).</li>
+</ul>
+</li>
+<li>The <strong>stream manager</strong> is the <strong>control plane</strong> that assigns an extent to a <strong>chain of storage servers</strong>
+<ul>
+<li>When asked to allocate a new extent it replies with the list of storage servers holding a copy; the <strong>client caches this</strong> and sends later writes to the <strong>primary</strong> server</li>
+<li>It also handles <strong>unavailable or faulty extent replicas</strong> by creating new ones and <strong>reconfiguring the replication chains</strong> they belong to.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Partition layer.</strong></p>
+<ul>
+<li>Translates <strong>high-level file operations into low-level stream operations</strong>
+<ul>
+<li>The <strong>partition manager</strong> (another control plane) manages a <strong>large index of all files in the cluster</strong></li>
+<li>Each index entry has metadata (<strong>account and file name</strong>) and a <strong>pointer to the data in the stream service</strong>: <strong>list of extents plus offset and length</strong>.</li>
+</ul>
+</li>
+<li>The partition manager <strong>range-partitions the index</strong> and maps each partition to a <strong>partition server</strong>
+<ul>
+<li>it <strong>load-balances partitions across servers, splits hot partitions and merges cold ones</strong> (range partitioning with dynamic partitioning, chapter 16).</li>
+</ul>
+</li>
+<li>It also <strong>replicates accounts across clusters asynchronously</strong> in the background, used to <strong>migrate accounts</strong> between clusters for load balancing and for <strong>disaster recovery</strong>.</li>
+</ul>
+<p><strong>Front-end layer.</strong> A <strong>stateless reverse proxy</strong> that <strong>authenticates requests</strong> and <strong>routes</strong> them to the right partition server using the mapping the partition manager maintains.</p>
+<p><strong>Takeaway.</strong> Coarse as this description is, AS &quot;is a great showcase of the scalability patterns applied to a concrete system&quot;: partitioning, replication, control planes. <strong>Historical note:</strong> AS was built from the start to be <strong>strongly consistent</strong>, while <strong>AWS S3 started offering the same guarantee in 2021</strong> (&quot;Diving Deep on S3 Consistency&quot;: https://www.allthingsdistributed.com/2021/04/s3-strong-consistency.html).</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+managed file store · blob store · storage cluster · rack · global namespace (account + file name) · location service · stream layer · extent · stream manager · partition layer · partition manager / partition server · front-end layer · control plane.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 17. https://understandingdistributed.systems/</li>
+<li>Calder et al., Windows Azure Storage (SOSP 2011), as linked above (cited by the book).</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a> · <a href="/book-digest/understanding-distributed-systems/uds-10-replication/">Understanding Distributed Systems 10: Replication</a> · <a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">Understanding Distributed Systems 22: Control planes and data planes</a> · <a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">Understanding Distributed Systems 18: Network load balancing</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">&larr; Understanding Distributed Systems 16: Partitioning</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">Understanding Distributed Systems 18: Network load balancing &rarr;</a></nav></main></body></html>

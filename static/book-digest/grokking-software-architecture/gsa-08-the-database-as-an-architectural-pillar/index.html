@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 8: The Database as an Architectural Pillar</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-8-the-database-as-an-architectural-pillar">Grokking Software Architecture 8: The Database as an Architectural Pillar</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 8. Previous: <a href="/book-digest/grokking-software-architecture/gsa-07-event-driven-architecture/">Grokking Software Architecture 7: Event-Driven Architecture (temporal decoupling and async communication)</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-09-architecting-for-the-cloud/">Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The database is a <strong>pillar</strong>, not a magic bucket: a poor choice or schema cannot be rescued by clean controllers.</li>
+<li>Three families: <strong>SQL</strong> (strict order), <strong>NoSQL</strong> (massive scale), <strong>Vector</strong> (semantic meaning). The SQL vs NoSQL feud is largely over: they <strong>converged</strong>.</li>
+<li><strong>Default to PostgreSQL</strong> until you hit an empirical limit.</li>
+<li>ORMs are productive but <strong>leaky</strong> (N+1, massive objects, client-side evaluation).</li>
+<li><strong>Normalise by default</strong>; denormalise, cache or add read replicas only for a measured bottleneck.</li>
+<li>Index columns used in <code>WHERE</code>, <code>JOIN</code>, <code>ORDER BY</code>; indexes carry a <strong>write penalty</strong>.</li>
+<li><strong>Parameterised queries</strong> stop SQL injection. &quot;Data outlives code.&quot;</li>
+</ul>
+</div></div>
+<h2 id="8-2-1-the-relational-model-sql">8.2.1 The relational model (SQL)</h2>
+<p>A relational database (RDBMS) stores data in <strong>tables</strong> (rows and columns). Three traits:</p>
+<ol>
+<li><strong>Strict schema:</strong> define structure upfront. You cannot add <code>FavoriteColor</code> to one row without adding the column to the table.</li>
+<li><strong>Normalisation:</strong> split data into logical pieces linked by foreign keys. Store the customer's address once in an <code>Address</code> table, not in every order.</li>
+<li><strong>Declarative integrity:</strong> the engine rejects invalid writes. No child without a valid parent (no &quot;orphans&quot;).</li>
+</ol>
+<p><strong>Keys</strong></p>
+<ul>
+<li><strong>Primary key (PK):</strong> the row's unique, non-null identity. It must <strong>never change</strong> (use an integer or UUID, not an email).</li>
+<li><strong>Foreign key (FK):</strong>
+<ul>
+<li>an explicit constraint (e.g. <code>Orders.CustomerId</code> references <code>Customers.Id</code>)</li>
+<li>Merely naming a column <code>CustomerId</code> does not create it</li>
+<li>Docs: https://learn.microsoft.com/en-us/sql/relational-databases/tables/primary-and-foreign-key-constraints.</li>
+</ul>
+</li>
+<li><strong>Guardrail:</strong> cannot create an order for a customer that does not exist. <strong>Safety net:</strong> cannot delete a customer with open orders.</li>
+<li><strong>Why PKs matter:</strong> two users named John Smith; <code>DELETE ... WHERE Name = 'John Smith'</code> removes both; <code>WHERE UserId = 101</code> removes one.</li>
+</ul>
+<p><strong>History:</strong> before 1970 databases were hierarchical or network models; apps navigated physical record paths. **E. F.</p>
+<p>(Ted) Codd** at IBM published &quot;A Relational Model of Data for Large Shared Data Banks&quot; in <strong>1970</strong> (https://doi.org/10.1145/362384.362685): flat tables (&quot;relations&quot;) linked by common values, and <strong>normalisation</strong> to reduce redundancy.</p>
+<p>It shifted the industry from <strong>imperative</strong> to <strong>declarative</strong> retrieval.</p>
+<p><strong>Champions</strong></p>
+<ul>
+<li><strong>PostgreSQL:</strong> the all-rounder and reliability standard.</li>
+<li><strong>SQL Server / Oracle:</strong> enterprise scale and support.</li>
+<li><strong>MySQL:</strong> read-heavy web apps (WordPress, early Facebook).</li>
+<li><strong>SQLite:</strong> a single file, no server: mobile, small tools, local testing.</li>
+</ul>
+<p><strong>ACID</strong> (coined <strong>1983</strong> by Theo Härder and Andreas Reuter, building on Jim Gray's transaction research; &quot;Principles of Transaction-Oriented Database Recovery&quot;: https://dl.acm.org/doi/10.1145/289.291). Example: buying the last limited-edition sneakers.</p>
+<table>
+<thead>
+<tr>
+<th>Letter</th>
+<th>Meaning</th>
+<th>Sneaker example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A</strong>tomicity</td>
+<td>all or nothing</td>
+<td>no inventory deduction without an order record; payment timeout rolls back everything</td>
+</tr>
+<tr>
+<td><strong>C</strong>onsistency</td>
+<td>only valid-to-valid states</td>
+<td>&quot;inventory cannot drop below zero&quot; rejects a sale a millisecond after sell-out</td>
+</tr>
+<tr>
+<td><strong>I</strong>solation</td>
+<td>transactions don't peek</td>
+<td>others see &quot;1 pair left&quot; or &quot;Sold out&quot;, never the half-done maths</td>
+</tr>
+<tr>
+<td><strong>D</strong>urability</td>
+<td>committed = permanent</td>
+<td>survives the server catching fire</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Durability is NOT a backup.</strong> A <code>DELETE</code> with no <code>WHERE</code> is durably deleted. Configure automated <strong>point-in-time backups</strong> (a reason to prefer managed PaaS).</li>
+<li><strong>Isolation levels</strong>
+<ul>
+<li>are a volume dial: <strong>Serializable</strong> (strictest, slow; financial ledgers)</li>
+<li><strong>Read Committed</strong> (default in PostgreSQL; right for ~95% of apps)</li>
+<li><strong>Read Uncommitted</strong> (&quot;Wild West&quot;, dirty reads; non-critical analytics only).</li>
+</ul>
+</li>
+</ul>
+<p><strong>Choose by data access patterns</strong> (how data moves: query shapes, read/write ratio, payload size, latency, lookups), not feature lists. SQL fits when:</p>
+<ul>
+<li>it is your <strong>default</strong>: ~90% of business data (users, orders, inventory, financials), until evidence says otherwise;</li>
+<li>you need <strong>ad-hoc, complex joins</strong> across domains (&quot;active orders by customers in Asia in the last 30 days with payment history&quot;);</li>
+<li>query shapes are <strong>unpredictable</strong>;</li>
+<li><strong>integrity constraints</strong> must hold at the storage layer.</li>
+</ul>
+<p>Counter-case: if you always read or write a whole entity by one key (e.g. a full <code>UserProfile</code>), spreading it over five tables adds join overhead; document or key-value stores shine.</p>
+<p><strong>The SQL landscape</strong></p>
+<table>
+<thead>
+<tr>
+<th>Database</th>
+<th>Archetype</th>
+<th>Pros</th>
+<th>Cons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PostgreSQL</td>
+<td>modern standard</td>
+<td>advanced open source; JSON, PostGIS, vector search</td>
+<td>tooling (pgAdmin) less polished</td>
+</tr>
+<tr>
+<td>SQL Server</td>
+<td>enterprise workhorse</td>
+<td>SSMS tooling; Azure SQL serverless tier</td>
+<td>licensing cost; tied to the Windows ecosystem</td>
+</tr>
+<tr>
+<td>MySQL / MariaDB</td>
+<td>web scale</td>
+<td>powers Facebook, WordPress, Uber; cheap reads</td>
+<td>historically looser constraints; fewer analytics features</td>
+</tr>
+<tr>
+<td>Oracle</td>
+<td>&quot;too big to fail&quot;</td>
+<td>banks and airlines; granular hardware/locking control</td>
+<td>astronomical cost; steep curve; needs a DBA</td>
+</tr>
+<tr>
+<td>SQLite</td>
+<td>sidecar</td>
+<td>single file, runs in-app</td>
+<td>coarse file lock: poor concurrent writes</td>
+</tr>
+</tbody>
+</table>
+<p><strong>PaaS</strong> = treat the database as a <strong>managed utility</strong>: the provider handles OS, patching, upgrades, backups, scaling (https://azure.microsoft.com/en-us/resources/cloud-computing-dictionary/what-is-paas). More in ch. 9.</p>
+<p><strong>Author's advice:</strong> default PostgreSQL; high-scale reads MySQL/MariaDB; mobile/IoT SQLite.</p>
+<h2 id="8-2-2-the-document-model-nosql">8.2.2 The document model (NoSQL)</h2>
+<p>SQL is a strict librarian; NoSQL is the collector with a bin. NoSQL emerged for scale, speed and unstructured data; it scales <strong>horizontally</strong>.</p>
+<ul>
+<li><strong>Aggregate orientation:</strong> group related data (profile, addresses, recent orders) into one <strong>aggregate</strong> (a JSON document) fetched in one operation (Fowler: https://martinfowler.com/bliki/AggregateOrientedDatabase.html).</li>
+<li><strong>Pros:</strong> looks like your classes (serialise a <code>User</code> to JSON); no join tax (the address is a nested object).</li>
+<li><strong>Con:</strong> harder to update across many documents (changing every red brick: one drawer in SQL, every box in NoSQL).</li>
+</ul>
+<p><strong>Champions</strong></p>
+<ul>
+<li><strong>Document:</strong> MongoDB, CosmosDB, DynamoDB (variety, prototyping).</li>
+<li><strong>Key-value:</strong> Redis (caching, sessions, sub-millisecond; &quot;coat check ticket&quot;).</li>
+<li><strong>Wide-column:</strong> Cassandra (write throughput; IoT, activity tracking, millions of events per second).</li>
+</ul>
+<p><strong>The hidden trap: &quot;schema-less&quot; is a myth.</strong> You only choose whether the <strong>database</strong> enforces the schema (SQL) or your <strong>application code</strong> scatters it (NoSQL).</p>
+<ul>
+<li><strong>Schema drift:</strong> different services write <code>fullName</code>, <code>name</code>, or nested <code>firstName</code>/<code>lastName</code> into one collection.</li>
+<li><strong>Application-level migration pain:</strong> no single migration query; code needs defensive <code>if (doc.has(&quot;legacyField&quot;))</code> blocks or risky back-fill scripts.</li>
+<li><strong>Consistency trade-off:</strong> <strong>BASE</strong> is fine for a &quot;like&quot; count, not for balances or inventory.</li>
+</ul>
+<p><strong>Three conventions:</strong> (1) standardise key naming (camelCase, <code>userId</code>); (2) <strong>application-layer validation</strong> (Zod, JSON Schema); (3) keep embedded sub-documents identical (<code>street</code>, <code>city</code>, <code>zipCode</code>, not <code>addr</code>).</p>
+<p><strong>BASE</strong> (https://queue.acm.org/detail.cfm?id=1394128):</p>
+<ul>
+<li><strong>Ba</strong>sically Available: if a node fails another takes over.</li>
+<li><strong>S</strong>oft state: state changes without input; <strong>replication lag</strong> means Server A may show the new profile picture while B is catching up.</li>
+<li><strong>E</strong>ventually consistent: stop writing and all readers converge.</li>
+</ul>
+<p><strong>SQL vs NoSQL</strong></p>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>SQL (librarian)</th>
+<th>NoSQL (collector)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Structure</td>
+<td>predictable</td>
+<td>fluid (shirts, shoes, electronics)</td>
+</tr>
+<tr>
+<td>Integrity</td>
+<td>absolute ($1 discrepancy is a disaster)</td>
+<td>flexible (&quot;like&quot; count)</td>
+</tr>
+<tr>
+<td>Relationships</td>
+<td>complex joins</td>
+<td>isolated aggregates</td>
+</tr>
+<tr>
+<td>Scaling</td>
+<td>vertical, one big source of truth</td>
+<td>horizontal, many cheap servers</td>
+</tr>
+<tr>
+<td>Best for</td>
+<td>accounting, ERP, medical records, inventory</td>
+<td>IoT logs, leaderboards, CMS, prototyping</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Blurring lines / tunable consistency.</strong> MongoDB 4.0+ and DynamoDB offer multi-document ACID transactions. <strong>Tunable consistency</strong> lets you choose per request how many servers must confirm a write (e.g. MongoDB write concern: https://www.mongodb.com/docs/manual/reference/write-concern/):</p>
+<ul>
+<li><strong>fastest:</strong> one server acknowledges (a video &quot;Like&quot;; may be lost if that server crashes);</li>
+<li><strong>quorum:</strong> a majority confirms (a profile bio edit);</li>
+<li><strong>strict:</strong> every server confirms (a $500 payment).</li>
+</ul>
+<p>(&quot;NoSQL&quot; can be read as &quot;Not Only SQL&quot;; Fowler, <em>NoSQL Distilled</em>: https://martinfowler.com/books/nosql.html.)</p>
+<h2 id="8-2-3-vector-databases">8.2.3 Vector databases</h2>
+<p>SQL and NoSQL are <strong>literal</strong>: &quot;puppy&quot; finds only the characters P-U-P-P-Y. Vector databases search <strong>meaning</strong>.</p>
+<ul>
+<li><strong>Embeddings:</strong>
+<ul>
+<li>an AI model turns text or an image into a <strong>vector</strong> (a long list of numbers; one number may score &quot;red-ness&quot;, another &quot;casualness&quot;)</li>
+<li>Real models: <strong>768</strong> dims (BERT), <strong>1536</strong> (OpenAI ada-002), <strong>3072</strong> (text-embedding-3)</li>
+<li>Illustration: dog <code>[0.1, 0.9, 0.3, …]</code>, puppy <code>[0.1, 0.85, 0.3, …]</code> (close), car <code>[0.9, 0.1, 0.0, …]</code> (far)</li>
+<li>Docs: https://platform.openai.com/docs/guides/embeddings.</li>
+</ul>
+</li>
+<li>A query for &quot;Canine&quot; is embedded and matched to <strong>nearest neighbours</strong>: dog and puppy.</li>
+<li><strong>Players:</strong> Pinecone (managed; https://www.pinecone.io), Weaviate (open source; https://weaviate.io), <strong>pgvector</strong> (Postgres plugin; https://github.com/pgvector/pgvector), Azure AI Search.</li>
+<li><strong>Use for:</strong> semantic search (&quot;something to wear to a wedding&quot;), recommendations (&quot;users who liked this movie...&quot;), <strong>RAG</strong> (retrieval-augmented generation: give an LLM your private documents).</li>
+<li><strong>Two taxes:</strong> <strong>accuracy</strong> (ANN, <em>approximate</em> nearest neighbours: probabilistic; &quot;mathematically close&quot; can be dangerously wrong in medical or legal apps) and <strong>infrastructure</strong> (memory-hungry indexes, plus embedding API cost).</li>
+</ul>
+<p><strong>Same task, three styles</strong> (saving and finding a Lasagna recipe):</p>
+<pre class="hl"><code><span class="c1">-- SQL: exact match</span>
+<span class="k">INSERT</span><span class="w"> </span><span class="k">INTO</span><span class="w"> </span><span class="n">Recipes</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="k">type</span><span class="p">)</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s1">'Lasagna'</span><span class="p">,</span><span class="w"> </span><span class="s1">'Pasta'</span><span class="p">);</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">Recipes</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'Pasta'</span><span class="p">;</span><span class="w">      </span><span class="c1">-- "Italian" finds nothing</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// MongoDB: flexible keys, still exact words</span>
+<span class="nx">db</span><span class="p">.</span><span class="nx">recipes</span><span class="p">.</span><span class="nx">insertOne</span><span class="p">({</span><span class="w"> </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"Lasagna"</span><span class="p">,</span><span class="w"> </span><span class="nx">tags</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"pasta"</span><span class="p">,</span><span class="s2">"cheese"</span><span class="p">,</span><span class="s2">"italian"</span><span class="p">,</span><span class="s2">"dinner"</span><span class="p">]</span><span class="w"> </span><span class="p">});</span>
+<span class="nx">db</span><span class="p">.</span><span class="nx">recipes</span><span class="p">.</span><span class="nx">find</span><span class="p">({</span><span class="w"> </span><span class="nx">tags</span><span class="o">:</span><span class="w"> </span><span class="s2">"pasta"</span><span class="w"> </span><span class="p">});</span>
+</code></pre>
+<pre class="hl"><code><span class="c1"># Vector: similarity</span>
+<span class="n">vector</span> <span class="o">=</span> <span class="n">openai</span><span class="o">.</span><span class="n">Embedding</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="nb">input</span><span class="o">=</span><span class="s2">"Lasagna"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"text-embedding-ada-002"</span><span class="p">)[</span><span class="s1">'data'</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s1">'embedding'</span><span class="p">]</span>
+<span class="n">vector_db</span><span class="o">.</span><span class="n">upsert</span><span class="p">(</span><span class="nb">id</span><span class="o">=</span><span class="s2">"recipe_1"</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="n">vector</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"Lasagna"</span><span class="p">})</span>
+<span class="n">q</span> <span class="o">=</span> <span class="n">openai</span><span class="o">.</span><span class="n">Embedding</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="nb">input</span><span class="o">=</span><span class="s2">"Comfort Food"</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">"text-embedding-ada-002"</span><span class="p">)[</span><span class="s1">'data'</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s1">'embedding'</span><span class="p">]</span>
+<span class="n">vector_db</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">vector</span><span class="o">=</span><span class="n">q</span><span class="p">,</span> <span class="n">top_k</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>               <span class="c1"># returns "Lasagna"</span>
+</code></pre>
+<p>SQL = <strong>structure first</strong>, NoSQL = <strong>code first</strong>, Vector = <strong>meaning first</strong>.</p>
+<h2 id="8-2-5-the-verdict-convergence">8.2.5 The verdict: convergence</h2>
+<p>Neither side won; they merged. Today the choice is <strong>structure vs scale</strong>.</p>
+<ul>
+<li><strong>JSON columns:</strong> SQL got flexible.</li>
+<li><strong>Sharding:</strong>
+<ul>
+<li>SQL got scalable (<strong>Citus</strong> for Postgres: https://www.citusdata.com, <strong>Vitess</strong> for MySQL: https://vitess.io)</li>
+<li>Sharding = splitting one database horizontally across servers (10 TB becomes 10 x 1 TB; users 1 to 1,000,000 on shard 1, etc.).</li>
+</ul>
+</li>
+<li><strong>ACID transactions:</strong> NoSQL got safe.</li>
+<li><strong>Vectors:</strong> everyone got smart (pgvector).</li>
+<li><strong>Tip:</strong> standardise on <strong>PostgreSQL</strong> (relational + JSON + vectors) until a clear empirical limit (petabyte write volumes, very low-latency key-value cache).</li>
+</ul>
+<h2 id="8-2-6-choosing-your-pillar">8.2.6 Choosing your pillar</h2>
+<p>PACELC (ch. 7): always a latency vs consistency choice.</p>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>SQL (accountant)</th>
+<th>NoSQL (collector)</th>
+<th>Vector (brain)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Data type</td>
+<td>structured, strict relationships</td>
+<td>variable JSON</td>
+<td>high-dimensional embeddings</td>
+</tr>
+<tr>
+<td>Consistency</td>
+<td>absolute (ACID)</td>
+<td>flexible (BASE/eventual)</td>
+<td>probabilistic</td>
+</tr>
+<tr>
+<td>Priority</td>
+<td>integrity, complex joins</td>
+<td>write speed, horizontal scale</td>
+<td>semantic similarity</td>
+</tr>
+<tr>
+<td>Search logic</td>
+<td>exact match</td>
+<td>key-value or field filter</td>
+<td>&quot;neighbourhood&quot; distance</td>
+</tr>
+<tr>
+<td>Maintenance</td>
+<td>high (DBA for tuning)</td>
+<td>low to medium</td>
+<td>medium (needs an AI service)</td>
+</tr>
+<tr>
+<td>Skills</td>
+<td>well-understood</td>
+<td>schema drift in code, clusters</td>
+<td>vector indexing, RAM, AI pipeline sync</td>
+</tr>
+<tr>
+<td>Cost</td>
+<td>predictable (server size)</td>
+<td>pay per request/storage</td>
+<td>premium (RAM + embedding calls)</td>
+</tr>
+<tr>
+<td>Trade-off</td>
+<td>speed for bulletproof accuracy</td>
+<td>strict structure for unlimited growth</td>
+<td>literal truth (and cash) for meaning</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Video streaming example (hybrid):</strong></p>
+<ul>
+<li><strong>Watch progress:</strong> raw write speed, millions of pauses per second → <strong>NoSQL</strong> (losing a few ms means resuming 3 s earlier: acceptable).</li>
+<li><strong>Billing and subscriptions:</strong> cannot double-charge or lose history → <strong>SQL</strong>.</li>
+<li><strong>Recommendations:</strong> semantic &quot;mood&quot; similarity → <strong>Vector DB</strong>.</li>
+</ul>
+<p><strong>The polyglot tax</strong> (never free):</p>
+<ol>
+<li><strong>Cognitive load:</strong> PostgreSQL tuning, MongoDB aggregation pipelines and Pinecone indexing at once dilute depth; outages are debugged blind.</li>
+<li><strong>CI/CD and infra:</strong> versioned SQL migrations (Flyway), document validation, vector reindexing; heavy Docker Compose locally.</li>
+<li><strong>Cost and backups:</strong> baseline PaaS cost per engine, connection pools, monitoring, and synchronised point-in-time backups across paradigms.</li>
+</ol>
+<ul>
+<li><strong>Operational Tax Audit:</strong> is the gain worth a second pipeline, double monitoring and fragmented backups? If not a clear, data-backed yes, keep it in the primary engine.</li>
+</ul>
+<h2 id="8-3-orms-and-query-builders">8.3 ORMs and query builders</h2>
+<p><strong>Object-relational impedance mismatch:</strong> objects (behaviour, encapsulation, references) vs relational tables (flat, set logic). An <strong>ORM</strong> translates; the abstraction is <strong>leaky</strong>: magic for ~90% of cases, spectacular failure for the other 10%.</p>
+<p><strong>Declarative querying:</strong> declare <em>what</em>, not <em>how</em>. Raw SQL: <code>SELECT * FROM Users WHERE Age &gt; 21 AND IsActive = 1 ORDER BY LastName;</code>. Equivalents:</p>
+<pre class="hl"><code><span class="c1">// C# Entity Framework / LINQ (https://learn.microsoft.com/en-us/ef)</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">users</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="n">Users</span><span class="p">.</span><span class="n">Where</span><span class="p">(</span><span class="n">u</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">Age</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">21</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">IsActive</span><span class="p">).</span><span class="n">OrderBy</span><span class="p">(</span><span class="n">u</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">LastName</span><span class="p">).</span><span class="n">ToList</span><span class="p">();</span>
+</code></pre>
+<pre class="hl"><code><span class="c1"># SQLAlchemy (https://www.sqlalchemy.org)</span>
+<span class="n">users</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">User</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">User</span><span class="o">.</span><span class="n">age</span> <span class="o">&gt;</span> <span class="mi">21</span><span class="p">,</span> <span class="n">User</span><span class="o">.</span><span class="n">is_active</span> <span class="o">==</span> <span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">order_by</span><span class="p">(</span><span class="n">User</span><span class="o">.</span><span class="n">last_name</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Prisma (https://www.prisma.io)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">users</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">prisma</span><span class="p">.</span><span class="nx">user</span><span class="p">.</span><span class="nx">findMany</span><span class="p">({</span><span class="w"> </span><span class="nx">where</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">age</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">gt</span><span class="o">:</span><span class="w"> </span><span class="kt">21</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nx">isActive</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nx">orderBy</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">lastName</span><span class="o">:</span><span class="w"> </span><span class="s1">'asc'</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+</code></pre>
+<p><strong>Why it matters:</strong> <strong>type safety</strong> (renaming <code>Age</code> to <code>YearsOld</code> breaks compilation, not production); <strong>security</strong> (parameterisation prevents SQL injection); <strong>refactoring</strong> (swap SQL Server for Postgres, often without rewriting queries).</p>
+<p><strong>The Law of Leaky Abstractions</strong> (&quot;all non-trivial abstractions, to some degree, are leaky&quot;):</p>
+<ol>
+<li><strong>Massive object / <code>SELECT *</code>:</strong> <code>db.Users.Find(1)</code> pulls a 5 MB <code>ProfilePicture</code>; 100 users = 500 MB. Fix: <strong>projections</strong> (<code>.Select(u =&gt; new { u.Name, u.Email })</code>).</li>
+<li><strong>Client-side evaluation:</strong> <code>db.Users.Where(u =&gt; CalculateAge(u.DOB) &gt; 18)</code>; SQL Server cannot run your C# function. Old <strong>EF6</strong> silently downloaded the whole table and filtered in memory (10 rows wanted, 10 million fetched); <strong>EF Core 3+</strong> throws <code>InvalidOperationException: The LINQ expression 'CalculateAge(u.DOB)' could not be translated</code>. Fix: rewrite with SQL-compatible logic (<code>DateDiff</code>/<code>DATEADD</code>), or <code>.ToList()</code> first for <strong>small datasets only</strong>.</li>
+<li><strong>Hidden network I/O and N+1:</strong> lazy loading makes <code>person.Address</code> or <code>user.Orders</code> a silent query. Risks: <strong>thread timeout explosions</strong> under load; <strong>N+1 cascade</strong> (1,000 users = 1 + 1,000 queries). Fix: <strong>eager load</strong> or dedicated DTO queries; treat data access as explicit network operations.</li>
+</ol>
+<ul>
+<li><strong>Tip:</strong> ORM for ~90% of CRUD; for complex reports (window functions, CTEs, aggregations across a dozen tables) drop to <strong>raw SQL</strong> or a micro-ORM like <strong>Dapper</strong>.</li>
+</ul>
+<h2 id="8-4-normalisation-vs-denormalisation">8.4 Normalisation vs denormalisation</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Normalisation (&quot;one truth&quot;)</th>
+<th>Denormalisation (&quot;speed demon&quot;)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rule</td>
+<td>each fact lives in exactly one place</td>
+<td>duplicate data where it is read</td>
+</tr>
+<tr>
+<td>Goal</td>
+<td>integrity: move once, every order sees the new address</td>
+<td>read speed: snapshot the address in the order, no join</td>
+</tr>
+<tr>
+<td>Cost</td>
+<td>slower reads (invoice → customer → address joins)</td>
+<td>update the profile <strong>plus</strong> last 10 orders <strong>plus</strong> pending invoices (the &quot;Hydra&quot;)</td>
+</tr>
+<tr>
+<td>Analogy</td>
+<td>one library copy of <em>The Hobbit</em></td>
+<td>100 flyers with a typo</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Verdict:</strong> normalise by default; denormalise only for a specific bottleneck (e.g. &quot;Order History under 100 ms&quot;).</li>
+<li><strong>Three read-speed levers:</strong> denormalise, add a <strong>cache</strong> (Redis), use <strong>read replicas</strong>.</li>
+<li><strong>Schema migrations:</strong> version-controlled upgrade/rollback scripts (Flyway, Liquibase, ORM migrations) so local equals production.</li>
+</ul>
+<p><strong>Schema checklist</strong></p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Clarity check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Primary keys</td>
+<td>every table has a unique, immutable ID</td>
+</tr>
+<tr>
+<td>Foreign keys</td>
+<td>relationships enforced (no ghost records)</td>
+</tr>
+<tr>
+<td>Unique constraints</td>
+<td>tell the database an email is unique, do not hope code catches it</td>
+</tr>
+<tr>
+<td>Check constraints</td>
+<td>business rules at the bedrock (price &gt; 0)</td>
+</tr>
+<tr>
+<td>Correct types</td>
+<td>native <code>DATE</code>/<code>BOOLEAN</code>, not lazy strings</td>
+</tr>
+<tr>
+<td>Sanity</td>
+<td>do not over-normalise (no <code>EyeColor</code> table for a string column)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="8-5-performance-reality-indexing-and-types">8.5 Performance reality: indexing and types</h2>
+<p>The database is a physical machine: finite RAM, CPU, SSD <strong>IOPS</strong>.</p>
+<p><strong>Indexing (&quot;phone book&quot;)</strong></p>
+<ul>
+<li>Without an index: <strong>full table scan</strong> (every row).</li>
+<li>With an index:
+<ul>
+<li>a sorted <strong>B-tree</strong> lookup. A B-tree (balanced tree) keeps data sorted and supports search and insert in logarithmic time</li>
+<li>&quot;balanced&quot; means every path is the same length (https://www.youtube.com/watch?v=SI6E4Ma2ddg).</li>
+</ul>
+</li>
+<li><strong>Write penalty:</strong>
+<ul>
+<li>each <code>INSERT/UPDATE/DELETE</code> also updates every index B-tree (and may cause an expensive <strong>page split</strong>)</li>
+<li>A table with 5 indexes means 1 table write plus 5 index maintenance operations.</li>
+</ul>
+</li>
+<li><strong>Numbers:</strong> a good index can speed reads <strong>100 to 1000x</strong>; each index costs <strong>10 to 20%</strong> write speed.</li>
+<li><strong>Rule of thumb for user-perceived speed:</strong>
+<ul>
+<li>under 100 ms feels instant</li>
+<li>100 to 300 ms fine</li>
+<li>300 ms to 1 s noticeable</li>
+<li><strong>over 1 s</strong> frustrating (denormalise, cache, index). Mobile: add 200 to 500 ms for network.</li>
+</ul>
+</li>
+<li><strong>Index:</strong>
+<ul>
+<li>columns in <code>WHERE</code>, <code>JOIN</code>, <code>ORDER BY</code> (<code>Email</code>, <code>ForeignKeyId</code>, <code>CreatedDate</code>)</li>
+<li><strong>Don't index</strong> low-cardinality columns (<code>Gender</code>, <code>IsActive</code>) or huge text (<code>Bio</code>, <code>Comments</code>) without full-text features</li>
+<li>Resource: https://use-the-index-luke.com.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Data types (the &quot;String trap&quot;)</strong></p>
+<ul>
+<li>Dates as strings (<code>&quot;2026-02-09&quot;</code>) or booleans as text (<code>&quot;True&quot;</code>) hurt <strong>performance</strong> (parsing every query) and <strong>storage</strong> (a boolean is ~1 byte in SQL Server; &quot;False&quot; is 5 bytes).</li>
+<li>Use <code>INTEGER</code> (status code/enum), <code>BOOLEAN</code>, <code>TIMESTAMP</code>/<code>DATETIME</code>.</li>
+<li>Guardrail: a <code>DATE</code> column rejects &quot;February 31st&quot; instantly; a string saves it and reporting crashes three months later.</li>
+<li>A schema is a <strong>contract</strong> (like interfaces in ch. 3 and APIs in ch. 6).</li>
+</ul>
+<h2 id="8-6-case-study-the-hydra-revisited">8.6 Case study: the Hydra revisited</h2>
+<p>Original developers confused <strong>data with logic</strong>: a Retail scorecard looks different from a Manufacturing one, so they built <strong>35 applications in one codebase</strong>: 35 classes, 35 stored procedures, 35 tables. Adding a &quot;Global Risk Factor&quot; meant 35 code changes and 35 SQL statements.</p>
+<p><strong>Hardcoded trap:</strong></p>
+<pre class="hl"><code><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">Retail_Scorecard</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="p">,</span><span class="w"> </span><span class="n">revenue</span><span class="w"> </span><span class="nb">DECIMAL</span><span class="p">,</span><span class="w"> </span><span class="n">same_store_sales</span><span class="w"> </span><span class="nb">DECIMAL</span><span class="p">);</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">Mfg_Scorecard</span><span class="w">    </span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="p">,</span><span class="w"> </span><span class="n">revenue</span><span class="w"> </span><span class="nb">DECIMAL</span><span class="p">,</span><span class="w"> </span><span class="n">inventory_turnover</span><span class="w"> </span><span class="nb">DECIMAL</span><span class="p">);</span><span class="w"> </span><span class="c1">-- revenue duplicated</span>
+</code></pre>
+<p><strong>Fix (&quot;Platform&quot; approach): dynamic rows.</strong> &quot;Same Store Sales&quot; and &quot;Inventory Turnover&quot; are just <strong>attributes</strong> with definitions.</p>
+<pre class="hl"><code><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">LoanApplication</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="p">,</span><span class="w"> </span><span class="n">business_name</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">),</span><span class="w"> </span><span class="n">scorecard_type_id</span><span class="w"> </span><span class="nb">INT</span><span class="p">);</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">ScorecardAttributes</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="p">,</span><span class="w"> </span><span class="n">scorecard_type_id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">attribute_name</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span><span class="w"> </span><span class="n">weight</span><span class="w"> </span><span class="nb">DECIMAL</span><span class="p">);</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">ApplicationValues</span><span class="w"> </span><span class="p">(</span><span class="n">application_id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">attribute_id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="nb">DECIMAL</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>Result: <strong>one engine</strong> rendering fields from the database; adding the Global Risk Factor = <strong>one row</strong>, no schema change, downtime or deployment.</li>
+<li><strong>Warning: Entity-Attribute-Value (EAV)</strong>
+<ul>
+<li>destroys <strong>type safety</strong> and kills <strong>query performance</strong> for cross-record filtering or reporting (https://www.dremio.com/wiki/entity-attribute-value-model/)</li>
+<li>It worked because scorecards were fetched <strong>by ID</strong></li>
+<li>Use only for dynamic configuration or truly variable metadata, never for stable entities like Users or Orders.</li>
+</ul>
+</li>
+<li><strong>&quot;Data outlives code&quot;:</strong> model data correctly and you can rewrite the application a dozen times.</li>
+</ul>
+<h2 id="8-7-the-dork-side-little-bobby-tables">8.7 The Dork Side: Little Bobby Tables</h2>
+<p>xkcd &quot;Exploits of a Mom&quot; (https://xkcd.com/327): a school registers a child named <code>Robert'); DROP TABLE Students;--</code>.</p>
+<ul>
+<li><strong>SQL injection (SQLi):</strong> attacker input is executed as a command (https://owasp.org/www-community/attacks/SQL_Injection).</li>
+<li><strong>Vulnerable:</strong> <code>&quot;SELECT * FROM Students WHERE Name = '&quot; + userName + &quot;'&quot;</code> becomes <code>... Name = 'Robert'); DROP TABLE Students; --'</code>: a harmless <code>SELECT</code>, then <strong><code>DROP TABLE</code></strong>, then <code>--</code> comments out the rest.</li>
+<li><strong>Fix:</strong>
+<ul>
+<li><strong>parameterised queries</strong> (or an ORM): the template <code>SELECT * FROM Students WHERE Name = @Name</code> plus <code>command.Parameters.AddWithValue(&quot;@Name&quot;, userName)</code></li>
+<li>The engine compiles the SQL before inserting data, so the input is only a (weird) name</li>
+<li>News-anchor analogy: concatenation = he reads &quot;Go home early&quot; and leaves; parameterised = &quot;Please welcome Mr</li>
+<li>Go Home Early&quot;.</li>
+</ul>
+</li>
+<li>SQLi dates to the <strong>1990s</strong> and is still on the OWASP Top 10 (https://owasp.org/Top10/2025)
+<ul>
+<li>Never concatenate, even &quot;internal&quot; tools: any input crossing a <strong>trust boundary</strong> is hostile until proven otherwise.</li>
+</ul>
+</li>
+<li><strong>More DB security:</strong>
+<ul>
+<li><strong>least-privilege</strong> DB user (read/write only; never <code>DROP</code>/alter schema)</li>
+<li><strong>hash</strong> passwords (bcrypt or Argon2 with a random <strong>salt</strong>), never plaintext or reversible encryption</li>
+<li><strong>secrets</strong> in a key vault or environment variables, not source code.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-8-mission-checklist-recap">8.8 Mission, checklist, recap</h2>
+<p><strong>Mission: &quot;Shop-Zilla&quot;.</strong> A legacy giant crashes every Black Friday (one SQL Server at 100% CPU). The CTO demands a full MongoDB migration (&quot;Web Scale, schema-less&quot;). Assign an engine to each workload:</p>
+<ol>
+<li><strong>Shopping cart</strong> (thousands of writes/s, loss tolerable).</li>
+<li><strong>General ledger</strong> (100% accurate, instant rollback).</li>
+<li><strong>Similar products</strong> (distance maths, not keywords).</li>
+<li><strong>Product catalogue</strong> (1 million reads per write, wildly varying structure).</li>
+</ol>
+<p>Guided solution in Appendix A. (Hint from the text: ledger on NoSQL is a &quot;suicide mission&quot;; session data in SQL is what is killing the CPU.)</p>
+<p><strong>Recap:</strong> the database is a physical machine; polyglot persistence (SQL for ACID, NoSQL for scale, vectors for semantics); ORMs give productivity but leak; normalise by default; the Hydra shows bad modelling cannot be fixed by clean code; indexes are phone books with a write penalty; use native types; parameterise.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+RDBMS · PK/FK · normalisation · ACID · isolation level · BASE · replication lag · aggregate orientation · schema drift · tunable consistency · embedding · ANN · pgvector · RAG · sharding · polyglot persistence · PaaS · impedance mismatch · ORM · projection · client-side evaluation · N+1 · eager loading · denormalisation · read replica · B-tree · write penalty · cardinality · EAV · SQL injection · parameterised query · salt.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 8. Pre-release; no public source page found.</li>
+<li>Codd (1970): https://doi.org/10.1145/362384.362685 · Härder and Reuter (1983): https://dl.acm.org/doi/10.1145/289.291 · OWASP SQLi: https://owasp.org/www-community/attacks/SQL_Injection</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-07-event-driven-architecture/">Grokking Software Architecture 7: Event-Driven Architecture (temporal decoupling and async communication)</a> · <a href="/book-digest/grokking-software-architecture/gsa-09-architecting-for-the-cloud/">Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</a> · <a href="/book-digest/understanding-distributed-systems/uds-19-data-storage/">Understanding Distributed Systems 19: Data storage</a> · <a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a> · <a href="/book-digest/spring-start-here/ch12-using-data-sources-in-spring-apps/">Ch 12: Using data sources in Spring apps</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-07-event-driven-architecture/">&larr; Grokking Software Architecture 7: Event-Driven Architecture (temporal decoupling and async communication)</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-09-architecting-for-the-cloud/">Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code) &rarr;</a></nav></main></body></html>

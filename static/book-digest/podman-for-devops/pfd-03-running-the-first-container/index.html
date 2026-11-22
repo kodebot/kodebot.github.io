@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 3: Running the first container</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-3-running-the-first-container">Podman for DevOps 3: Running the first container</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 3. Previous: <a href="/book-digest/podman-for-devops/pfd-02-comparing-podman-and-docker/">Podman for DevOps 2: Comparing Podman and Docker</a>. Next: <a href="/book-digest/podman-for-devops/pfd-04-managing-running-containers/">Podman for DevOps 4: Managing running containers</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Podman installs from the distribution's package manager (<code>dnf</code>, <code>apt-get</code>, <code>zypper</code>, <code>emerge</code>, <code>pacman</code>); on macOS and Windows it runs a <strong>Linux VM</strong> (<code>podman machine</code>) or acts as a <strong>remote client</strong>.</li>
+<li>The book's reference OS is <strong>Fedora Workstation 40</strong>.</li>
+<li>Config lives in TOML and JSON files with a <strong>system-wide, then per-user</strong> override order: <code>registries.conf</code>, <code>containers.conf</code>, <code>storage.conf</code>, <code>mounts.conf</code>, <code>seccomp.json</code>, <code>policy.json</code>.</li>
+<li>An optional <strong>socket-activated</strong> API (<code>podman.socket</code>) serves Docker-compatible and libpod REST calls and stops after 5 seconds idle.</li>
+<li><code>podman run</code> has about <strong>120 options</strong>; the first ones to know are <code>-i -t</code>, <code>-d</code>, <code>-p</code>, <code>--tz</code>, <code>--dns</code>, <code>--add-host</code> and <code>--env</code>. Containers are <strong>ephemeral</strong>, so use environment variables for configuration.</li>
+</ul>
+</div></div>
+<h2 id="3-1-choosing-an-operating-system-and-installation-method">3.1 Choosing an operating system and installation method</h2>
+<ul>
+<li>Podman is supported on many distributions and packaged by each; the book also covers macOS, Windows and <strong>building from source</strong>, with focus on Linux.</li>
+<li>Distribution differences: filesystem structure, libraries, packaging, and the <strong>mandatory access control</strong> system. <strong>Fedora, CentOS, RHEL</strong> and derivatives use <strong>SELinux</strong>; <strong>Debian, Ubuntu</strong> and derivatives use <strong>AppArmor</strong>. Podman works with both, through different interfaces. DistroWatch (https://distrowatch.com) tracks distributions.</li>
+<li><strong>Reference environment:</strong> all examples were written and tested on <strong>Fedora Workstation 40</strong>. To reproduce it:
+<ul>
+<li>the <strong>Fedora 40 Vagrant box</strong> (https://app.vagrantup.com/fedora/boxes/40-cloud-base); Vagrant is a HashiCorp tool for fast lightweight VMs (https://www.vagrantup.com/)</li>
+<li>the <strong>cloud image</strong> (https://alt.fedoraproject.org/cloud/) on a public or private cloud or a hypervisor</li>
+<li>a <strong>manual install</strong> of Fedora Workstation (https://docs.fedoraproject.org/en-US/workstation-docs/)</li>
+<li>public clouds (AWS, Google Cloud, Azure, DigitalOcean) offer Fedora instances at low prices and free learning tiers when you cannot run VMs locally</li>
+</ul>
+</li>
+<li><strong>Windows and macOS:</strong> containers are Linux-based. Windows has native containers, but only Windows-based images run natively and few engines support them. macOS uses the hybrid Mach/BSD kernel <strong>XNU</strong> (&quot;X is not Unix&quot;) with no Linux kernel features. Both need a <strong>virtualisation layer</strong>. Apple's <code>container</code> tool (Swift, optimised for Apple silicon) runs Linux containers as lightweight VMs and uses OCI images. Podman offers <strong>remote client</strong> functions; Windows can also use <strong>WSL 2</strong> (a lightweight Hyper-V VM exposing Linux kernel interfaces). Chapter 15 covers the Podman Desktop GUI.</li>
+</ul>
+<h3 id="installing-by-distribution">Installing by distribution</h3>
+<table>
+<thead>
+<tr>
+<th>Distribution</th>
+<th>Command</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Fedora</strong></td>
+<td><code># dnf install -y podman</code></td>
+<td>DNF; installs config files and systemd units (REST API, auto-update)</td>
+</tr>
+<tr>
+<td><strong>CentOS Stream</strong></td>
+<td><code># dnf install -y podman</code></td>
+<td>from the enabled AppStream repository</td>
+</tr>
+<tr>
+<td><strong>RHEL 8</strong></td>
+<td><code># yum module enable -y container-tools:rhel8</code> then <code># yum module install -y container-tools:rhel8</code></td>
+<td>the <strong>container-tools module</strong> (RPM sets in streams); Podman alone: <code># yum install -y podman</code></td>
+</tr>
+<tr>
+<td><strong>RHEL 9 and 10</strong></td>
+<td><code># dnf install -y container-tools</code></td>
+<td>a <strong>meta-package</strong> instead of the module; Podman alone: <code># dnf install -y podman</code></td>
+</tr>
+<tr>
+<td><strong>Rocky Linux</strong></td>
+<td><code># dnf install -y podman</code></td>
+<td>community distribution with bug-for-bug RHEL compatibility</td>
+</tr>
+<tr>
+<td><strong>Fedora CoreOS, Silverblue</strong></td>
+<td>nothing: already installed</td>
+<td>immutable, atomic OSes: CoreOS for servers and cloud (upstream of Red Hat CoreOS and OKD), Silverblue for desktops</td>
+</tr>
+<tr>
+<td><strong>Debian</strong></td>
+<td><code># apt-get -y install podman</code></td>
+<td>available since Debian <strong>11 (Bullseye)</strong></td>
+</tr>
+<tr>
+<td><strong>Ubuntu 20.10+</strong></td>
+<td><code># apt-get -y update</code> then <code># apt-get -y install podman</code></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>openSUSE</strong></td>
+<td><code># zypper install podman</code></td>
+<td>Tumbleweed (rolling) and Leap (LTS)</td>
+</tr>
+<tr>
+<td><strong>Gentoo</strong></td>
+<td><code># emerge app-emulation/podman</code></td>
+<td>builds from source with Portage</td>
+</tr>
+<tr>
+<td><strong>Arch Linux</strong></td>
+<td><code># pacman -S podman</code></td>
+<td><strong>rootless is not permitted by default</strong>; see https://wiki.archlinux.org/title/Podman#Rootless_Podman</td>
+</tr>
+<tr>
+<td><strong>Raspberry Pi OS</strong></td>
+<td>as Debian</td>
+<td>based on Debian; arm64 build available</td>
+</tr>
+</tbody>
+</table>
+<p>The RHEL 8 <code>container-tools</code> module installs, with Podman and libraries:</p>
+<ul>
+<li><strong>Skopeo</strong>: manages OCI images and registries</li>
+<li><strong>Buildah</strong>: builds OCI images from Dockerfiles or from scratch</li>
+<li><strong>CRIU</strong>: checkpoint/restore for Linux</li>
+<li><strong>Udica</strong>: generates SELinux security profiles for containers</li>
+</ul>
+<h3 id="macos">macOS</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-03-machine-and-remote.svg" alt="On macOS and Windows Podman uses a Linux VM or a remote connection" loading="lazy" /></p>
+<ul>
+<li>Use the installer from Podman.io, or (not recommended by the Podman team) Homebrew: <code>$ brew install podman</code>.</li>
+<li>Then initialise and start the Linux VM that runs the containers:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>machine<span class="w"> </span>init
+$<span class="w"> </span>podman<span class="w"> </span>machine<span class="w"> </span>start
+$<span class="w"> </span>podman<span class="w"> </span>machine<span class="w"> </span>init<span class="w"> </span>--now<span class="w">    </span><span class="c1"># does both</span>
+</code></pre>
+<ul>
+<li>Alternatives: connect to an external Linux host with the remote client, or use <strong>Vagrant</strong> VMs provisioned with Podman.</li>
+</ul>
+<h3 id="windows">Windows</h3>
+<ul>
+<li>Recommended: <strong>Podman on WSL 2</strong>; needs a recent Windows 10 or 11 and virtualisation support. Hyper-V is an alternative (see the Podman docs).</li>
+<li>Download <code>podman-x.y.z-setup.exe</code> from https://github.com/containers/podman/releases/, run it, then:</li>
+</ul>
+<pre class="hl"><code><span class="nb">PS </span><span class="n">C</span><span class="p">:\</span><span class="n">Users</span><span class="p">\</span><span class="n">User</span><span class="p">&gt;</span> <span class="n">podman</span> <span class="n">machine</span> <span class="n">init</span>
+<span class="nb">PS </span><span class="n">C</span><span class="p">:\</span><span class="n">Users</span><span class="p">\</span><span class="n">User</span><span class="p">&gt;</span> <span class="n">podman</span> <span class="n">machine</span> <span class="nb">start</span>
+</code></pre>
+<ul>
+<li><code>podman machine init</code> installs WSL 2 components if missing (with reboots, or you can install manually); if WSL 2 exists it downloads a minimal <strong>Fedora</strong> distribution and imports it.</li>
+<li><strong>Remote client only:</strong> <code>podman system connection add</code> edits the config for you. The manual (not recommended) way: extract the release <code>.zip</code> and set the TOML <code>containers.conf</code>:</li>
+</ul>
+<pre class="hl"><code><span class="k">[engine]</span>
+<span class="n">remote_uri</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ssh://root@10.10.1.9:22/run/podman/podman.sock"</span>
+</code></pre>
+<p>The remote Linux machine exposes Podman on a Unix socket managed by a systemd unit (covered in chapter 15).</p>
+<h3 id="building-from-source">Building from source</h3>
+<p>Benefits: inspect and customise code, cross-compile, build a subset of binaries, learn the project, get the latest development features (bugs included). On Fedora:</p>
+<pre class="hl"><code><span class="c1"># git clone https://github.com/containers/podman/ &amp;&amp; \</span>
+<span class="w">    </span><span class="nb">cd</span><span class="w"> </span>podman
+<span class="c1"># dnf builddep -y rpm/podman.spec</span>
+</code></pre>
+<p><code>dnf builddep</code> installs the build dependencies declared in <code>rpm/podman.spec</code>. Then the runtime dependencies (the book's list is cut off after <code>nftables</code>):</p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>dnf<span class="w"> </span>-y<span class="w"> </span>install<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>conmon<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>containers-common<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>crun<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>netavark<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>nftables
+</code></pre>
+<p>Build and install:</p>
+<pre class="hl"><code>$<span class="w"> </span>make<span class="w"> </span><span class="nv">BUILDTAGS</span><span class="o">=</span><span class="s2">"selinux seccomp"</span><span class="w"> </span><span class="nv">PREFIX</span><span class="o">=</span>/usr
+$<span class="w"> </span>sudo<span class="w"> </span>make<span class="w"> </span>install<span class="w"> </span><span class="nv">PREFIX</span><span class="o">=</span>/usr
+</code></pre>
+<ul>
+<li>The tags enable <strong>SELinux and seccomp</strong> support, though recent releases auto-detect them. Installation goes under <code>/usr/bin</code>.</li>
+<li>Check: <code>$ podman version</code> (example: Client Podman Engine, version <code>5.3.0-dev</code>, API <code>5.3.0-dev</code>, Go <code>go1.22.7</code>, built Tue Sep 24 2024, <code>linux/amd64</code>).</li>
+<li>A binary release like the GitHub <code>.tar.gz</code>: <code>$ make podman-release</code>.</li>
+<li><strong>Bonus tip:</strong> build another version by checking out its tag: <code>$ git checkout v5.3.0</code>.</li>
+</ul>
+<h2 id="3-2-preparing-your-environment">3.2 Preparing your environment</h2>
+<p>Podman works out of the box; these tweaks help interoperability and runtime behaviour.</p>
+<h3 id="customising-the-registries-search-list">Customising the registries search list</h3>
+<ul>
+<li><strong><code>/etc/containers/registries.conf</code></strong> (TOML) controls the registries allowed for searching and pulling, registry mirroring, and insecure registries without TLS. The key <strong><code>unqualified-search-registries</code></strong> lists registries searched for names without a registry. On a new Fedora install:</li>
+</ul>
+<pre class="hl"><code><span class="n">unqualified-search-registries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"registry.fedoraproject.org"</span><span class="p">,</span><span class="w"> </span><span class="s2">"registry.access.redhat.com"</span><span class="p">,</span><span class="w"> </span><span class="s2">"docker.io"</span><span class="p">,</span><span class="w"> </span><span class="s2">"quay.io"</span><span class="p">]</span>
+</code></pre>
+<ul>
+<li>Add or remove entries. <strong>Use only trusted registries</strong> to avoid images containing malicious code. The default list suffices for all the book's examples.</li>
+<li>Private registries usually need authentication with <code>podman login</code> (chapter 9).</li>
+<li><code>$HOME/.config/containers/registries.conf</code> <strong>overrides</strong> the system file, so users can have their own whitelists and mirrors.</li>
+</ul>
+<h3 id="optional-socket-based-services">Optional: socket-based services</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-03-socket-activated-api.svg" alt="Socket activation starts the Podman API on demand" loading="lazy" /></p>
+<p>Podman needs no daemon, but you may want its <strong>libpod APIs</strong> or its <strong>Docker-compatible APIs</strong> (useful when migrating from Docker). The socket is a <strong>Unix socket</strong> (default) or <strong>TCP</strong>; TCP is less secure (reachable from outside) but needed for clients on Windows or macOS; consider <strong>SSH</strong> instead. <strong>A TCP endpoint on an internet-exposed machine is globally accessible.</strong> One-off command:</p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>podman<span class="w"> </span>system<span class="w"> </span>service<span class="w"> </span>--time<span class="o">=</span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>unix:///run/podman/podman.sock
+</code></pre>
+<p>Better: a <strong>systemd socket</strong> (<code>man systemd.socket</code>). Socket units are service activators: a connection to the endpoint makes systemd start the same-named service. Installing Podman creates <code>podman.socket</code> and <code>podman.service</code>:</p>
+<pre class="hl"><code><span class="c1"># /usr/lib/systemd/system/podman.socket</span>
+<span class="k">[Unit]</span>
+<span class="na">Description</span><span class="o">=</span><span class="s">Podman API Socket</span>
+<span class="na">Documentation</span><span class="o">=</span><span class="s">man:podman-system-service(1)</span>
+
+<span class="k">[Socket]</span>
+<span class="na">ListenStream</span><span class="o">=</span><span class="s">%t/podman/podman.sock</span>
+<span class="na">SocketMode</span><span class="o">=</span><span class="s">0660</span>
+
+<span class="k">[Install]</span>
+<span class="na">WantedBy</span><span class="o">=</span><span class="s">sockets.target</span>
+</code></pre>
+<p><code>ListenStream</code> expands to <code>/run/podman/podman.sock</code>.</p>
+<pre class="hl"><code><span class="c1"># /usr/lib/systemd/system/podman.service</span>
+<span class="k">[Unit]</span>
+<span class="na">Description</span><span class="o">=</span><span class="s">Podman API Service</span>
+<span class="na">Requires</span><span class="o">=</span><span class="s">podman.socket</span>
+<span class="na">After</span><span class="o">=</span><span class="s">podman.socket</span>
+<span class="na">Documentation</span><span class="o">=</span><span class="s">man:podman-system-service(1)</span>
+<span class="na">StartLimitIntervalSec</span><span class="o">=</span><span class="s">0</span>
+
+<span class="k">[Service]</span>
+<span class="na">Type</span><span class="o">=</span><span class="s">exec</span>
+<span class="na">KillMode</span><span class="o">=</span><span class="s">process</span>
+<span class="na">Environment=LOGGING</span><span class="o">=</span><span class="s">"--log-level=info"</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/bin/podman $LOGGING system service</span>
+
+<span class="k">[Install]</span>
+<span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target</span>
+</code></pre>
+<p><code>ExecStart</code> is the same <code>podman system service</code> command; <code>Requires=</code> says the service needs the socket. Enable it and test:</p>
+<pre class="hl"><code><span class="c1"># systemctl enable --now podman.socket</span>
+<span class="c1"># curl --unix-socket /run/podman/podman.sock \</span>
+<span class="w">    </span>http://d/v3.0.0/libpod/info
+</code></pre>
+<ul>
+<li>The reply is a JSON payload with the engine configuration. The first call has a delay of about <strong>1/10 s</strong> because the service starts on demand.</li>
+<li>After <strong>5 seconds of inactivity</strong> <code>podman.service</code> stops again: the default timeout of <code>podman system service</code>; <code>--time</code> sets another value (<strong>0 means forever</strong>).</li>
+</ul>
+<h3 id="optional-customising-podman-s-behaviour">Optional: customising Podman's behaviour</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Format</th>
+<th>Purpose</th>
+<th>Locations (default, then overrides)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>containers.conf</code></strong></td>
+<td>TOML</td>
+<td>runtime configuration and search paths for conmon and runtime binaries; logging, DNS, environment variables, shared memory, cgroup management; <code>man containers.conf</code></td>
+<td><code>/usr/share/containers/</code>; override <code>/etc/containers/containers.conf</code> (system) and <code>$HOME/.config/containers/containers.conf</code> (user)</td>
+</tr>
+<tr>
+<td><strong><code>storage.conf</code></strong></td>
+<td>TOML</td>
+<td>storage driver (default <strong>overlay</strong>) and the read/write directory (<strong>graph root</strong>)</td>
+<td><code>/usr/share/containers/storage.conf</code>; override <code>/etc/containers/storage.conf</code>; rootless: <code>$XDG_CONFIG_HOME/containers/storage.conf</code> or <code>$HOME/.config/containers/storage.conf</code></td>
+</tr>
+<tr>
+<td><strong><code>mounts.conf</code></strong></td>
+<td>text</td>
+<td>volume mounts auto-mounted in every container, e.g. to pass <strong>secrets</strong> such as keys and certificates</td>
+<td><code>/usr/share/containers/mounts.conf</code>; override <code>/etc/containers/mounts.conf</code>; rootless <code>$HOME/.config/containers/mounts.conf</code></td>
+</tr>
+<tr>
+<td><strong><code>seccomp.json</code></strong></td>
+<td>JSON</td>
+<td>allowed and blocked <strong>syscalls</strong> inside containers (chapter 10; <code>man seccomp</code>)</td>
+<td><code>/usr/share/containers/seccomp.json</code></td>
+</tr>
+<tr>
+<td><strong><code>policy.json</code></strong></td>
+<td>JSON</td>
+<td><strong>signature verification</strong></td>
+<td><code>/etc/containers/policy.json</code>; override <code>$HOME/.config/containers/policy.json</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>policy.json</code> accepts three policies (<code>man containers-policy.json</code>):</p>
+<ul>
+<li><strong><code>insecureAcceptAnything</code></strong>: accept any image from the registry (the <strong>default</strong>)</li>
+<li><strong><code>reject</code></strong>: reject any image from the registry</li>
+<li><strong><code>signedBy</code></strong>: accept only images signed by a specific known entity (custom GPG keys can verify signatures and identity)</li>
+</ul>
+<h2 id="3-3-running-your-first-container">3.3 Running your first container</h2>
+<p>The shortest form: <code>$ podman run &lt;imageID&gt;</code>. Replace the placeholder with the image name, location or tag; Podman <strong>pulls the image if it is not cached</strong>. <code>podman run</code> takes many options for behaviour, isolation, communication and storage.</p>
+<h3 id="interactive-and-pseudo-tty">Interactive and pseudo-tty</h3>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-i<span class="w"> </span>-t<span class="w"> </span>fedora<span class="w"> </span>/bin/bash
+Resolved<span class="w"> </span><span class="s2">"fedora"</span><span class="w"> </span>as<span class="w"> </span>an<span class="w"> </span><span class="nb">alias</span><span class="w"> </span><span class="o">(</span>/etc/containers/registries.conf.d/000-shortnames.conf<span class="o">)</span>
+Trying<span class="w"> </span>to<span class="w"> </span>pull<span class="w"> </span>registry.fedoraproject.org/fedora:latest...
+Getting<span class="w"> </span>image<span class="w"> </span><span class="nb">source</span><span class="w"> </span>signatures
+Copying<span class="w"> </span>blob<span class="w"> </span>dbe590460ba2<span class="w"> </span><span class="k">done</span><span class="w">  </span><span class="p">|</span>
+Copying<span class="w"> </span>config<span class="w"> </span>5eea52ff5b<span class="w"> </span><span class="k">done</span><span class="w">  </span><span class="p">|</span>
+Writing<span class="w"> </span>manifest<span class="w"> </span>to<span class="w"> </span>image<span class="w"> </span>destination
+<span class="o">[</span>root@a45628efe4b8<span class="w"> </span>/<span class="o">]</span><span class="c1">#</span>
+</code></pre>
+<p>What Podman did:</p>
+<ol>
+<li>Recognised <code>fedora</code> as an <strong>alias</strong> for the latest Fedora image.</li>
+<li>Found it missing from the local cache (first run).</li>
+<li>Pulled it from the right registry (the Fedora Project registry, matching the aliases in the registry configuration).</li>
+<li>Started the container and gave an interactive Bash shell.</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--tty</code>, <code>-t</code></td>
+<td>allocate a <strong>pseudo-tty</strong> (<code>man pty</code>) and attach it to the container's standard input</td>
+</tr>
+<tr>
+<td><code>--interactive</code>, <code>-i</code></td>
+<td>keep <strong>stdin</strong> open and ready to attach to that pseudo-tty</td>
+</tr>
+</tbody>
+</table>
+<p>Processes write on a writable layered-overlay root filesystem, but changes <strong>last only while the container runs</strong> (ephemeral). Example: inside the container, install tools and ping the default router, then everything is lost after stopping:</p>
+<pre class="hl"><code>[root@a45628efe4b8 /]# dnf install -y iputils iproute
+[root@a45628efe4b8 /]# ip r
+default via 192.168.124.1 dev eth0 proto dhcp metric 100
+192.168.124.0/24 dev eth0 proto kernel scope link metric 100
+[root@a45628efe4b8 /]# ping -c2 192.168.124.1
+64 bytes from 192.168.124.1: icmp_seq=1 ttl=255 time=0.354 ms
+64 bytes from 192.168.124.1: icmp_seq=2 ttl=255 time=0.516 ms
+</code></pre>
+<p>Exit with <strong>Ctrl+D</strong> or <code>exit</code>: the container <strong>terminates</strong> because its main process (<code>/bin/bash</code>) ended.</p>
+<h3 id="detaching-from-a-running-container">Detaching from a running container</h3>
+<p>Interactive attachment is not the preferred way to run containers. Run a web server with a tty:</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-i<span class="w"> </span>-t<span class="w"> </span>quay.io/fedora/httpd-24
+</code></pre>
+<ul>
+<li>It logs the startup scripts and Apache &quot;resuming normal operations&quot; (Apache/2.4.62 on Fedora, <code>httpd -D FOREGROUND</code>).</li>
+<li><strong>Detach</strong> with <strong>Ctrl+P, Ctrl+Q</strong>: you return to your prompt while the container keeps running.</li>
+<li><strong>Re-attach:</strong> find the ID with <code>podman ps</code> (covered in chapter 4), then:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>ps
+CONTAINER<span class="w"> </span>ID<span class="w">  </span>IMAGE<span class="w">                                </span>COMMAND<span class="w">            </span>CREATED<span class="w">        </span>STATUS<span class="w">            </span>PORTS<span class="w">  </span>NAMES
+685a339917e7<span class="w">  </span>registry.fedoraproject.org/httpd:latest<span class="w">  </span>/usr/bin/run-http...<span class="w">  </span><span class="m">3</span><span class="w"> </span>minutes<span class="w"> </span>ago<span class="w">  </span>Up<span class="w"> </span><span class="m">3</span><span class="w"> </span>minutes<span class="w"> </span>ago<span class="w">         </span>clever_zhukovsky
+$<span class="w"> </span>podman<span class="w"> </span>attach<span class="w"> </span>685a339917e7
+</code></pre>
+<ul>
+<li><strong>Start detached</strong> directly with <code>-d</code>: <code>$ podman run -d registry.fedoraproject.org/httpd</code>.</li>
+</ul>
+<h3 id="network-port-publishing">Network port publishing</h3>
+<p>A container gets a virtual network isolated from the host, so publish ports to reach it or expose it outside the host. The <code>-p</code> option:</p>
+<pre class="hl"><code>-p=ip:hostPort:containerPort/protocol
+</code></pre>
+<ul>
+<li><code>hostPort</code> and <code>containerPort</code> can be <strong>ranges</strong>. An unset host IP or <code>0.0.0.0</code> binds <strong>all IPv4 addresses</strong>; <code>[::]</code> binds all IPv6. The optional protocol restricts to <strong>TCP or UDP</strong>.</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:8080<span class="w"> </span>-d<span class="w"> </span>registry.fedoraproject.org/httpd
+$<span class="w"> </span>podman<span class="w"> </span>ps
+CONTAINER<span class="w"> </span>ID<span class="w">  </span>IMAGE<span class="w">                                </span>COMMAND<span class="w">  </span>CREATED<span class="w">         </span>STATUS<span class="w">          </span>PORTS<span class="w">                   </span>NAMES
+fc9d97642801<span class="w">  </span>registry.fedoraproject.org/httpd:latest<span class="w">  </span>...<span class="w">      </span><span class="m">10</span><span class="w"> </span>minutes<span class="w"> </span>ago<span class="w">  </span>Up<span class="w"> </span><span class="m">10</span><span class="w"> </span>minutes<span class="w"> </span>ago<span class="w">  </span><span class="m">0</span>.0.0.0:8080-&gt;8080/tcp<span class="w">  </span>confident_snyder
+$<span class="w"> </span>podman<span class="w"> </span>port<span class="w"> </span>fc9d97642801
+<span class="m">8080</span>/tcp<span class="w"> </span>-&gt;<span class="w"> </span><span class="m">0</span>.0.0.0:8080
+$<span class="w"> </span>curl<span class="w"> </span>-s<span class="w"> </span><span class="m">127</span>.0.0.1:8080<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
+</code></pre>
+<p>The reply is the &quot;Test Page for the Apache HTTP Server on Fedora&quot;. A browser works too.</p>
+<h3 id="configuration-and-environment-variables">Configuration and environment variables</h3>
+<p><code>podman run</code> has around <strong>120 options</strong> (at the time of writing). Examples:</p>
+<pre class="hl"><code>$<span class="w"> </span>date
+Wed<span class="w"> </span>Sep<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="m">09</span>:57:25<span class="w"> </span>AM<span class="w"> </span>UTC<span class="w"> </span><span class="m">2024</span>
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--tz<span class="o">=</span>Asia/Shanghai<span class="w"> </span>fedora<span class="w"> </span>date
+Wed<span class="w"> </span>Sep<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="m">17</span>:57:33<span class="w"> </span>CST<span class="w"> </span><span class="m">2024</span>
+
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--dns<span class="o">=</span><span class="m">1</span>.1.1.1<span class="w"> </span>fedora<span class="w"> </span>cat<span class="w"> </span>/etc/resolv.conf
+nameserver<span class="w"> </span><span class="m">1</span>.1.1.1
+
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--add-host<span class="o">=</span>my.server.local:192.168.1.10<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>fedora<span class="w"> </span>cat<span class="w"> </span>/etc/hosts
+<span class="m">192</span>.168.1.10<span class="w"> </span>my.server.local
+<span class="m">127</span>.0.0.1<span class="w"> </span>localhost<span class="w"> </span>localhost.localdomain<span class="w"> </span>localhost4<span class="w"> </span>localhost4.localdomain4
+::1<span class="w"> </span>localhost<span class="w"> </span>localhost.localdomain<span class="w"> </span>localhost6<span class="w"> </span>localhost6.localdomain6
+<span class="m">192</span>.168.124.6<span class="w"> </span>3497f23d8551<span class="w"> </span>serene_shannon
+</code></pre>
+<ul>
+<li><strong>HTTP proxy:</strong> Podman passes many host environment variables by default, including <code>http_proxy</code>, <code>https_proxy</code>, <code>ftp_proxy</code> and <code>no_proxy</code>.</li>
+<li><strong>Custom variables</strong> with <code>--env</code>:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--env<span class="w"> </span><span class="nv">MYENV</span><span class="o">=</span>podman<span class="w"> </span>fedora<span class="w"> </span>printenv
+<span class="nv">container</span><span class="o">=</span>oci
+<span class="nv">PATH</span><span class="o">=</span>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+<span class="nv">MYENV</span><span class="o">=</span>podman
+<span class="nv">HOME</span><span class="o">=</span>/root
+<span class="nv">HOSTNAME</span><span class="o">=</span>1db6008431c2
+</code></pre>
+<p><strong>Best practice:</strong> pass configuration as environment variables, because containers are immutable and ephemeral.</p>
+<h2 id="summary-points">Summary points</h2>
+<p>The chapter covered installing Podman on the major distributions, macOS and Windows, preparing the environment (registries, socket, config files), and running a first container with the most useful <code>podman run</code> options. Next chapter: managing the image and container life cycle, inspecting and getting logs, and pods.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+unqualified-search-registries · registries.conf · containers.conf · storage.conf (graph root) · mounts.conf · seccomp.json · policy.json (<code>insecureAcceptAnything</code>, <code>reject</code>, <code>signedBy</code>) · podman machine · remote client · socket activation (<code>podman.socket</code>) · <code>-i -t</code> · detach (Ctrl+P, Ctrl+Q) · <code>-p ip:hostPort:containerPort/proto</code> · <code>--env</code>.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 3; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>Install Podman on macOS: https://podman.io/blogs/2021/09/06/podman-on-macs.html</li>
+<li>Install Podman on Windows: https://www.redhat.com/sysadmin/podman-windows-wsl2</li>
+<li>Podman Desktop for Windows: https://podman-desktop.io/docs/installation/windows-install ; https://github.com/containers/podman/blob/main/docs/tutorials/podman-for-windows.md</li>
+<li>Manage container registries: https://www.redhat.com/sysadmin/manage-container-registries</li>
+<li>Podman API documentation: https://docs.podman.io/en/latest/_static/api.html</li>
+<li>Systemd socket manual: https://www.freedesktop.org/software/systemd/man/systemd.socket.html</li>
+<li>Podman and seccomp profiles: https://podman.io/blogs/2019/10/15/generate-seccomp-profiles.html</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-02-comparing-podman-and-docker/">Podman for DevOps 2: Comparing Podman and Docker</a> · <a href="/book-digest/podman-for-devops/pfd-04-managing-running-containers/">Podman for DevOps 4: Managing running containers</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-02-comparing-podman-and-docker/">&larr; Podman for DevOps 2: Comparing Podman and Docker</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-04-managing-running-containers/">Podman for DevOps 4: Managing running containers &rarr;</a></nav></main></body></html>

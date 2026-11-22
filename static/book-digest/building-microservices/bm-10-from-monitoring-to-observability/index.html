@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 10: From Monitoring to Observability</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-10-from-monitoring-to-observability">Building Microservices 10: From Monitoring to Observability</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 10. Previous: <a href="/book-digest/building-microservices/bm-09-testing/">Building Microservices 9: Testing</a>. Next: <a href="/book-digest/building-microservices/bm-11-security/">Building Microservices 11: Security</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A monolith has one obvious place to look when something breaks; a microservice system has many suspects (&quot;every outage could be more like a murder mystery&quot;). You need aggregation, tools to slice and dice, and a different mindset.</li>
+<li><strong>Monitoring</strong> is an activity; <strong>observability</strong> is a property: how well you can understand internal state from external outputs, including by asking questions you did not anticipate.</li>
+<li>Build, in order: <strong>log aggregation</strong> (a prerequisite, with <strong>correlation IDs</strong> from day one), <strong>metrics aggregation</strong> (mind <strong>cardinality</strong>), then <strong>distributed tracing</strong>.</li>
+<li>Define health with <strong>SLOs</strong>, <strong>SLIs</strong> and <strong>error budgets</strong>; alert sparingly (<strong>alert fatigue</strong>); use <strong>semantic monitoring</strong> and <strong>synthetic transactions</strong>.</li>
+<li>Pick democratic, integrable, contextual, real-time tools that fit your scale, and remember the expert is still the human.</li>
+</ul>
+</div></div>
+<h2 id="10-1-disruption-panic-and-confusion">10.1 Disruption, panic and confusion</h2>
+<ul>
+<li>Picture a Friday afternoon:
+<ul>
+<li>the site misbehaves, social media is ablaze. In a monolith: slow? the monolith</li>
+<li>errors? the monolith</li>
+<li>CPU at 100%? the monolith. With microservices there are <strong>multiple servers, log files and network latency spots</strong>, so the failure surface is larger.</li>
+</ul>
+</li>
+<li>Three needs:
+<ul>
+<li><strong>monitor the small things and aggregate</strong> to see the whole</li>
+<li>have tools to <strong>slice and dice</strong> data</li>
+<li>and <strong>think differently about system health</strong>, including testing in production.</li>
+</ul>
+</li>
+</ul>
+<h3 id="how-the-problem-grows">How the problem grows</h3>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>What you watch and how</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>One service, one server</strong></td>
+<td>Host metrics (CPU, memory), the service's logs (read locally), and external response time or a <strong>health check endpoint</strong></td>
+</tr>
+<tr>
+<td><strong>One service, many servers</strong></td>
+<td>Same, but aggregate <strong>and drill down</strong>: is high CPU on all hosts (the service) or one (the host)? SSH multiplexers can grep logs for a while; capture response times at the load balancer <strong>and</strong> at the service; defining &quot;healthy&quot; matters because the load balancer removes unhealthy nodes</td>
+</tr>
+<tr>
+<td><strong>Many services, many servers</strong></td>
+<td>Thousands of log lines across hosts: is a server or the system at fault, and how to trace an error deep in a call chain? Needs aggregated logs and metrics and a <strong>mindset shift</strong> from static monitoring to observability and testing in production</td>
+</tr>
+</tbody>
+</table>
+<h2 id="10-2-observability-versus-monitoring">10.2 Observability versus monitoring</h2>
+<ul>
+<li><strong>Observability</strong>
+<ul>
+<li>is the extent to which you can understand the system's <strong>internal state from its external outputs</strong></li>
+<li>it needs a holistic view (a system, not disparate entities). Highly observable systems let you &quot;ask questions of your production system that you never would have thought to ask&quot;.</li>
+</ul>
+</li>
+<li><strong>Monitoring</strong>
+<ul>
+<li>is something you do</li>
+<li>traditional monitoring predicts failures and defines alerts, which breaks down as systems distribute. So monitoring is an <strong>activity</strong>, observability a <strong>property</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-pillars-of-observability-not-so-fast">The pillars of observability? Not so fast</h3>
+<ul>
+<li>The &quot;three pillars&quot; are <strong>metrics, logs and distributed tracing</strong> (New Relic added events: <strong>MELT</strong>)
+<ul>
+<li>Newman moved away from it as <strong>reductive</strong>: it fixes on implementation instead of the outcome, the categories overlap (metrics in a logfile; traces built from log lines), and cynically it sells several tools.</li>
+</ul>
+</li>
+<li>Treat any output as an <strong>event</strong> and project from the event stream a <strong>trace</strong> (given correlation), a <strong>searchable index</strong> or <strong>aggregations</strong>
+<ul>
+<li>Think about outputs you can interrogate, not tool categories.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-10-observability-vs-monitoring.svg" alt="Monitoring versus observability" loading="lazy" /></p>
+<h3 id="building-blocks">Building blocks</h3>
+<ul>
+<li><strong>Log aggregation</strong>,
+<ul>
+<li><strong>metrics aggregation</strong></li>
+<li><strong>distributed tracing</strong></li>
+<li><strong>&quot;are you doing OK?&quot;</strong> (SLAs, SLOs and error budgets)</li>
+<li><strong>alerting</strong></li>
+<li><strong>semantic monitoring</strong> and <strong>testing in production</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-3-log-aggregation">10.3 Log aggregation</h2>
+<ul>
+<li>Logging into machines or using SSH multiplexers does not scale
+<ul>
+<li>Use a subsystem that collects logs centrally: services <strong>log to the local filesystem</strong>, a <strong>local daemon</strong> forwards to a store operators can query</li>
+<li>Your services stay unaware of it (no special API), but you must understand the <strong>failure modes</strong> of log shipping, where logs can be lost.</li>
+</ul>
+</li>
+<li>Newman's nearest thing to one-size-fits-all advice:
+<ul>
+<li><strong>log aggregation is a prerequisite for microservices</strong></li>
+<li>It is highly valuable, easy relative to other pain, and a test of readiness: if you cannot do it, you will struggle with the rest.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!warning] Before anything else
+Get a log aggregation tool running before building out the architecture.</p>
+</blockquote>
+<p><img src="/book-digest/building-microservices/img/bm-10-log-aggregation-pipeline.svg" alt="The log aggregation pipeline" loading="lazy" /></p>
+<h3 id="common-format">Common format</h3>
+<ul>
+<li>Pick one <strong>standard format</strong> (date, time, service name, level in consistent places)
+<ul>
+<li>Avoid <strong>reformatting in forwarding agents</strong> (computationally expensive; Newman has seen it cause CPU production issues): change the format at the source, and use agents only for legacy or third-party software</li>
+<li>No industry standard has emerged; most variants extend the Apache or nginx <strong>access log</strong> format.</li>
+</ul>
+</li>
+<li>Simple text lines put the data in fixed columns
+<ul>
+<li>but a <strong>customer ID</strong> that sits in different positions is hard to find, so consider <strong>structured JSON</strong> lines (harder for humans to read raw).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>15-02-2020 16:00:58 Order INFO [abc-123] Customer 2112 has placed order 988827
+15-02-2020 16:01:01 Payment INFO [abc-123] Payment $20.99 for 988827 by cust 2112
+</code></pre>
+<h3 id="correlating-log-lines">Correlating log lines</h3>
+<ul>
+<li>Example:
+<ul>
+<li>signing a customer up for the streaming service: UI click</li>
+<li><strong>Gateway</strong></li>
+<li><strong>Streaming</strong>, which calls <strong>Payment</strong></li>
+<li><strong>Customer</strong> and <strong>Email</strong>. If only Payment logs an odd error you cannot see it in context.</li>
+</ul>
+</li>
+<li>Use a <strong>correlation ID</strong>:
+<ul>
+<li>generated for the first call (in the Gateway) and <strong>passed to every subsequent call</strong>, written in a <strong>fixed place</strong> in each log line, so you can extract everything for a request</li>
+<li>Every service must pass it on, so standardise and enforce</li>
+<li>It also supports tooling for event storms, odd corner cases and costly transactions.</li>
+</ul>
+</li>
+<li>Hard to retrofit, so add them <strong>early</strong>; logs can take you far before you need a tracing tool.</li>
+</ul>
+<pre class="hl"><code>15-02-2020 16:01:01 Gateway INFO [abc-123] Signup for streaming
+15-02-2020 16:01:02 Streaming INFO [abc-123] Cust 773 signs up ...
+15-02-2020 16:01:03 Customer INFO [abc-123] Streaming package added ...
+15-02-2020 16:01:03 Email INFO [abc-123] Send streaming welcome ...
+15-02-2020 16:01:03 Payment ERROR [abc-123] ValidatePayment ...
+</code></pre>
+<p><img src="/book-digest/building-microservices/img/bm-10-correlation-ids.svg" alt="A correlation ID threads one request through services" loading="lazy" /></p>
+<h3 id="timing">Timing</h3>
+<ul>
+<li>Timestamps are written on each machine, and <strong>clocks drift (clock skew)</strong>
+<ul>
+<li><strong>NTP</strong> reduces but does not eliminate skew, so even a second can reorder a close sequence. So logs give neither fully accurate <strong>timing</strong> nor <strong>causality</strong>.</li>
+</ul>
+</li>
+<li><strong>Leslie Lamport's logical clocks</strong>
+<ul>
+<li>(&quot;Time, Clocks, and the Ordering of Events in a Distributed System&quot;, CACM 1978) use counters to order calls</li>
+<li>Newman would rather use <strong>distributed tracing</strong>, which fixes both.</li>
+</ul>
+</li>
+</ul>
+<h3 id="implementations">Implementations</h3>
+<ul>
+<li><strong>Open source:</strong>
+<ul>
+<li><strong>Fluentd</strong> forwarding to <strong>Elasticsearch</strong>, with <strong>Kibana</strong>. Costs: running Elasticsearch</li>
+<li>it is billed as a database but is a <strong>search index (a projection of the source of truth)</strong>, with data-loss problems found by Kyle Kingsbury's Jepsen analyses of versions 1.1.0 and 1.5.0, so keep the ability to <strong>re-index original logs</strong>
+<ul>
+<li>And Elastic changed the licence of Elasticsearch and Kibana from <strong>Apache 2.0</strong> to the <strong>SSPL</strong>, angering many contributors</li>
+</ul>
+</li>
+<li>AWS committed to an open source fork.</li>
+</ul>
+</li>
+<li><strong>Commercial:</strong>
+<ul>
+<li><strong>Splunk</strong> (valuable but &quot;eye-wateringly expensive&quot;)</li>
+<li><strong>Humio</strong> (Newman's favourite; built for efficient ingestion rather than indexing)</li>
+<li><strong>Datadog</strong>, and cloud tools such as <strong>CloudWatch</strong> (AWS) and <strong>Application Insights</strong> (Azure).</li>
+</ul>
+</li>
+</ul>
+<h3 id="shortcomings">Shortcomings</h3>
+<ul>
+<li><strong>Clock skew</strong> limits ordering and latency analysis.</li>
+<li><strong>Volume:</strong>
+<ul>
+<li>lots of data means hardware and fee costs</li>
+<li><strong>indexing</strong> is expensive as it grows (one team's Elasticsearch cluster handled only six weeks of logs for one product), pushing you to log less.</li>
+</ul>
+</li>
+<li><strong>Sensitive data:</strong>
+<ul>
+<li>logs can hold valuable information, forcing access limits (complicating collective ownership) and making them an attack target</li>
+<li>consider not logging some data (&quot;if you don't store data, it can't be stolen&quot;).</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-4-metrics-aggregation">10.4 Metrics aggregation</h2>
+<ul>
+<li>Raw numbers are hard to judge (&quot;50 4XX errors per second:
+<ul>
+<li>bad?&quot;)</li>
+<li>you need history to see patterns. New instances come and go, so collection must be easy, with <strong>metadata</strong> to aggregate for the whole system, per service or per instance.</li>
+</ul>
+</li>
+<li><strong>Capacity planning:</strong> with on-demand IaaS, scaling takes minutes, so understanding trends keeps infrastructure just enough.</li>
+<li><strong>Resolution:</strong>
+<ul>
+<li>keep, say, 10-second samples for the last 30 minutes, and hourly averages for last month</li>
+<li>Aggregating old data <strong>loses information</strong>, and you must guess in advance what to lose.</li>
+</ul>
+</li>
+<li>Standard metrics tools suit trends and simple failures but restrict the questions you can ask.</li>
+</ul>
+<h3 id="low-versus-high-cardinality">Low versus high cardinality</h3>
+<ul>
+<li><strong>Cardinality</strong>
+<ul>
+<li>is roughly <strong>how many fields you can query</strong> in a data point (service name, customer ID, request ID, build number, product ID, OS, cloud provider...)</li>
+<li>Time-series stores struggle as it grows.</li>
+</ul>
+</li>
+<li>Charity Majors (Honeycomb):
+<ul>
+<li>a metric is a number with tags, and &quot;storing a tag is expensive&quot;</li>
+<li><strong>Prometheus</strong> was built for low-cardinality data and its docs warn against labels such as user IDs or email addresses.</li>
+</ul>
+</li>
+<li>High-cardinality systems let you ask unplanned questions; they are very hard to retrofit.</li>
+<li><strong>Implementations:</strong>
+<ul>
+<li><strong>Prometheus</strong> is now the popular open source choice (replacing Graphite, recommended in the first edition)</li>
+<li>For <strong>high cardinality</strong>, Newman strongly suggests <strong>Honeycomb</strong> or <strong>Lightstep</strong> (often seen as tracing tools).</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!warning] Monitoring and observability systems are production systems
+Log aggregators, tracers and alerting tools are mission-critical and need the same diligence, and can be attack vectors: the <strong>SolarWinds</strong> supply chain attack (used by 425 of the US Fortune 500) reached networks including the US Treasury's.</p>
+</blockquote>
+<h2 id="10-5-distributed-tracing">10.5 Distributed tracing</h2>
+<ul>
+<li>Aggregation alone lacks the <strong>relationships</strong> between services
+<ul>
+<li>Correlation IDs in logs are a start, but need custom tooling to visualise</li>
+<li><strong>Distributed tracing</strong> works broadly the same everywhere: local activity in a thread is a <strong>span</strong>, spans share a unique identifier and go to a central <strong>collector</strong> that builds a <strong>trace</strong> (Figure 10-7 shows one in Honeycomb).</li>
+</ul>
+</li>
+<li>In the <strong>OpenTracing</strong> API a span has start and end times, associated logs and <strong>key-value pairs</strong> for querying (customer ID, order ID, hostname, build number).</li>
+<li><strong>Sampling:</strong>
+<ul>
+<li>collecting everything affects the system</li>
+<li>Google's <strong>Dapper</strong> (the inspiration for most tools) sampled randomly and aggressively; <strong>Jaeger</strong> keeps <strong>1 in 1,000</strong> by default</li>
+<li>Honeycomb and Lightstep sample <strong>dynamically</strong>: keep every error, but perhaps only 1 in 100 similar successes.</li>
+</ul>
+</li>
+<li><strong>Implementing:</strong>
+<ul>
+<li>capture spans inside services (libraries and frameworks often support OpenTracing or <strong>OpenTelemetry</strong> already; instrument your own code too), send them (usually via a <strong>local forwarding agent</strong> that can buffer, change sampling and add tags), and run a collector</li>
+<li><strong>Jaeger</strong> is the popular open source choice; <strong>Lightstep</strong> and <strong>Honeycomb</strong> commercially</li>
+<li>Choose something committed to <strong>OpenTelemetry</strong>, an open API from <strong>OpenTracing</strong> and <strong>OpenCensus</strong> with broad support, offering portability across vendors.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-10-distributed-tracing-spans.svg" alt="Spans assembled into a trace" loading="lazy" /></p>
+<h2 id="10-6-are-we-doing-ok">10.6 Are we doing OK?</h2>
+<ul>
+<li>&quot;Up or down&quot; means little in a distributed system: if one instance is unreachable, or <strong>Returns</strong> is reachable but half its functionality needs the troubled <strong>Inventory</strong> service, is it healthy? Like a <strong>beehive</strong>, one sick bee does not mean a sick hive
+<ul>
+<li>Metrics such as CPU are &quot;one step removed&quot; from &quot;is the system working?&quot;.</li>
+</ul>
+</li>
+<li>Concepts from <strong>site reliability engineering (SRE)</strong>:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SLA</strong> (service-level agreement)</td>
+<td>Agreement between builders and users with consequences; usually the bare minimum. Example: AWS EC2 promises best-effort 90% instance uptime per hour and just stops charging for that hour if missed (real performance is far higher)</td>
+</tr>
+<tr>
+<td><strong>SLO</strong> (service-level objective)</td>
+<td>What a team signs up to provide (uptime, response times); meeting all teams' SLOs should exceed the SLAs, but SLOs may also be aspirational or internal</td>
+</tr>
+<tr>
+<td><strong>SLI</strong> (service-level indicator)</td>
+<td>A measure of something the software does (response time, a customer registered, an error, an order placed), used to check SLOs</td>
+</tr>
+<tr>
+<td><strong>Error budget</strong></td>
+<td>How much error is acceptable: a 99.9% quarterly availability SLO allows about <strong>2 hours 11 minutes</strong> of downtime</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Error budgets inform risk: well under budget, perhaps roll out a service in a new language; over budget, focus on reliability. They give teams &quot;breathing room to try new things&quot;.</li>
+</ul>
+<h2 id="10-7-alerting">10.7 Alerting</h2>
+<ul>
+<li>With microservices something is often going wrong; decide which problems should alert a human and how. Key question: &quot;Should this problem cause someone to be woken up at 3 a.m.?&quot;</li>
+<li><strong>Google example:</strong>
+<ul>
+<li>servers in a Mountain View lobby had hard drives attached with <strong>Velcro</strong>, because drives fail so often they are simply swapped</li>
+<li>a drive failure is routine, handled in working hours.</li>
+</ul>
+</li>
+<li><strong>Alert fatigue:</strong>
+<ul>
+<li>at <strong>Three Mile Island</strong> (1979) operators were overwhelmed by alerts and could not see the fundamental problem (operator Craig Faust: &quot;I would have liked to have thrown away the alarm panel&quot;)</li>
+<li>The <strong>737 Max</strong> crashes (346 deaths) involved confusing multiple alerts, per the NTSB report</li>
+<li>Too many alerts exceed &quot;available mental resources&quot;.</li>
+</ul>
+</li>
+<li>Newman uses <strong>alert</strong> rather than alarm; the two are treated as equivalent. EEMUA's criteria for a good alert (via Steven Shorrock's &quot;Alarm Design: From Nuclear Power to WebOps&quot;):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Quality</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Relevant</strong></td>
+<td>Of value</td>
+</tr>
+<tr>
+<td><strong>Unique</strong></td>
+<td>Not duplicating another</td>
+</tr>
+<tr>
+<td><strong>Timely</strong></td>
+<td>Early enough to use</td>
+</tr>
+<tr>
+<td><strong>Prioritized</strong></td>
+<td>Enough information to order them</td>
+</tr>
+<tr>
+<td><strong>Understandable</strong></td>
+<td>Clear and readable</td>
+</tr>
+<tr>
+<td><strong>Diagnostic</strong></td>
+<td>Clear what is wrong</td>
+</tr>
+<tr>
+<td><strong>Advisory</strong></td>
+<td>Tells the operator what to do</td>
+</tr>
+<tr>
+<td><strong>Focusing</strong></td>
+<td>Draws attention to the most important issues</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/building-microservices/img/bm-10-slo-error-budget.svg" alt="SLA, SLO, SLI, error budget and the semantic model" loading="lazy" /></p>
+<h2 id="10-8-semantic-monitoring">10.8 Semantic monitoring</h2>
+<ul>
+<li>Define a model of <strong>acceptable system semantics</strong> and ask &quot;is the system behaving the way we expect?&quot; For MusicCorp: <strong>new customers can register</strong>
+<ul>
+<li><strong>at least $20,000 of products sold per hour at peak</strong></li>
+<li><strong>orders ship at a normal rate</strong>. These greatly exceed SLAs and help identify SLOs. Agreeing the model is hard and belongs with the <strong>product owner</strong></li>
+<li>operators must make sure the discussion happens.</li>
+</ul>
+</li>
+<li>Two ways to check: <strong>real user monitoring</strong> and <strong>synthetic transactions</strong>.</li>
+<li><strong>Real user monitoring:</strong>
+<ul>
+<li>compare real production behaviour with the model</li>
+<li>Business data (sales) is often locked in a database, so expose &quot;business&quot; metrics to production tooling (if you can emit CPU rate to a metrics store, record a sale too)</li>
+<li>It is <strong>noisy</strong> and tells you only <strong>what already happened</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-9-testing-in-production">10.9 Testing in production</h2>
+<ul>
+<li>Charity Majors:
+<ul>
+<li>&quot;Not testing in prod is like not practicing with the full orchestra because your solo sounded fine at home.&quot; Many people fear it yet already do it</li>
+<li>All forms are a kind of monitoring.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Technique</th>
+<th>Summary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Synthetic transactions</strong></td>
+<td>Inject fake user behaviour with known inputs and outputs (create a customer, check it exists) regularly</td>
+</tr>
+<tr>
+<td><strong>A/B testing</strong></td>
+<td>Two versions of a function shown to different users; compare which performs better (two registration forms)</td>
+</tr>
+<tr>
+<td><strong>Canary release</strong></td>
+<td>Small share of users sees the new version, increased if it works</td>
+</tr>
+<tr>
+<td><strong>Parallel run</strong></td>
+<td>Both implementations run on each request; the user sees one; compare results</td>
+</tr>
+<tr>
+<td><strong>Smoke tests</strong></td>
+<td>After deployment but before release; from a simple &quot;is it up&quot; to full synthetic transactions</td>
+</tr>
+<tr>
+<td><strong>Chaos engineering</strong></td>
+<td>Inject faults (Netflix's <strong>Chaos Monkey</strong> turns off production VMs); chapter 12</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Synthetic transactions in practice (2005):</strong>
+<ul>
+<li>a Thoughtworks team building a pricing system for an investment bank (about five services, one on a grid scavenging cycles from roughly 250 desktops) ran <strong>Nagios</strong> every minute to insert a <strong>fake event</strong> into a queue, priced in a &quot;junk&quot; book</li>
+<li>if no repricing appeared in time, an issue was raised. Newman finds it a far better indicator than low-level metrics, though you still need those to diagnose.</li>
+</ul>
+</li>
+<li><strong>Implementing:</strong>
+<ul>
+<li>reuse a <strong>subset of your end-to-end tests</strong> (chapter 9)</li>
+<li>Watch <strong>data requirements</strong> (fake users with known data) and <strong>side effects</strong>: a friend's ecommerce company ran its tests against production ordering and a large number of <strong>washing machines</strong> arrived at head office.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-10-standardisation-and-tool-selection">10.10 Standardisation and tool selection</h2>
+<ul>
+<li><strong>Standardise</strong>
+<ul>
+<li>observability: log format, one place for metrics, standard metric names (not <code>ResponseTime</code> in one service and <code>RspTimeSecs</code> in another)</li>
+<li>Make the right thing easy through a platform with building blocks (the platform team, chapter 15).</li>
+</ul>
+</li>
+<li>The space will churn (Honeycomb and Lightstep lead). Criteria:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Criterion</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Democratic</strong></td>
+<td>Usable by everyone, not only expert operators; affordable beyond critical production, and used in dev and test too</td>
+</tr>
+<tr>
+<td><strong>Easy to integrate</strong></td>
+<td>Open standards (OpenTracing, <strong>OpenTelemetry</strong>) ease integration and switching vendors</td>
+</tr>
+<tr>
+<td><strong>Provide context</strong></td>
+<td><strong>Temporal</strong> (versus a minute, day or month ago), <strong>relative</strong> (versus other things), <strong>relational</strong> (what depends on this), <strong>proportional</strong> (how bad, who is impacted), per a Lightstep post</td>
+</tr>
+<tr>
+<td><strong>Real-time</strong></td>
+<td>Seconds, not minutes or hours</td>
+</tr>
+<tr>
+<td><strong>Suitable for your scale</strong></td>
+<td>Do not copy Google: Ben Sigelman says tools scaling to 5 billion RPCs per second are &quot;profoundly feature poor&quot;; at 5 million you can afford more</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-expert-in-the-machine">The expert in the machine</h3>
+<ul>
+<li>Vendors keep claiming ML will detect and diagnose problems automatically; Newman is dubious
+<ul>
+<li>Example: a European data science startup found <strong>clusters of patients</strong> in bed-monitor data, but only a <strong>clinician</strong> knew the cluster meant sicker patients</li>
+<li>Likewise tools may say &quot;something looks odd&quot;, but acting on it needs expertise</li>
+<li>&quot;The expert in the system is, and will remain for some time, a human.&quot; Do not make experts fight poor tools.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-11-getting-started">10.11 Getting started</h2>
+<ul>
+<li>Capture <strong>host</strong> metrics (CPU, I/O) and link each instance to its host
+<ul>
+<li>capture <strong>response times</strong> for service interfaces and log all downstream calls</li>
+<li><strong>correlation IDs from the start</strong></li>
+<li>log major business process steps</li>
+<li>have basic <strong>log and metric aggregation</strong>.</li>
+</ul>
+</li>
+<li>Hesitate over a dedicated <strong>tracing tool</strong> if you must host it yourself (a managed service is easier). Create <strong>synthetic transactions</strong> for key operations.</li>
+<li>Then make sure you can <strong>ask questions</strong> and say with confidence the system works for users.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Shift from passive monitoring to actively making the system observable, from static dashboards to <strong>dynamic slicing and dicing</strong>.</li>
+<li>Start with log aggregation and correlation IDs; add tracing when needed.</li>
+<li>Move health from binary to nuanced; alert on SLOs rather than every small problem.</li>
+<li>&quot;Get good at handling the unknown.&quot; Reading: Majors, Fong-Jones and Miranda, <em>Observability Engineering</em> (O'Reilly, 2022)
+<ul>
+<li>Google's <em>Site Reliability Engineering</em> (2016) and <em>The Site Reliability Workbook</em> (2018).</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Observability, monitoring, event, MELT</strong>.</li>
+<li><strong>Log aggregation, correlation ID, clock skew, structured logging</strong>.</li>
+<li><strong>Cardinality, span, trace, collector, sampling, OpenTelemetry</strong>.</li>
+<li><strong>SLA, SLO, SLI, error budget</strong>.</li>
+<li><strong>Alert fatigue, semantic monitoring, real user monitoring, synthetic transaction, chaos engineering</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 10. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch10.html</li>
+<li>Leslie Lamport, &quot;Time, Clocks, and the Ordering of Events in a Distributed System&quot;, CACM 21(7), 1978 (https://oreil.ly/qzYmh)
+<ul>
+<li>Charity Majors, &quot;Metrics: Not the Observability Droids You're Looking For&quot; (https://oreil.ly/TEETp)</li>
+<li>Steven Shorrock, &quot;Alarm Design: From Nuclear Power to WebOps&quot; (https://oreil.ly/RCHDL)</li>
+<li>Ben Sigelman, &quot;Three Pillars with Zero Answers&quot; (https://oreil.ly/R3LwC)</li>
+<li>NTSB 2019 safety recommendation report</li>
+<li>Three Mile Island commission report (1979)</li>
+<li>Kyle Kingsbury's Jepsen Elasticsearch analyses (https://oreil.ly/uO9wU, https://oreil.ly/8fBCt): as cited by the book.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-09-testing/">Building Microservices 9: Testing</a></li>
+<li><a href="/book-digest/building-microservices/bm-11-security/">Building Microservices 11: Security</a></li>
+<li><a href="/book-digest/building-microservices/bm-06-workflow/">Building Microservices 6: Workflow</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-09-testing/">&larr; Building Microservices 9: Testing</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-11-security/">Building Microservices 11: Security &rarr;</a></nav></main></body></html>

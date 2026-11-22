@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 3: Secure links</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-3-secure-links">Understanding Distributed Systems 3: Secure links</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 3. Previous: <a href="/book-digest/understanding-distributed-systems/uds-02-reliable-links/">Understanding Distributed Systems 2: Reliable links</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">Understanding Distributed Systems 4: Discovery</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+TCP bytes travel <strong>in the clear</strong>, so a middleman can read or alter them. <strong>TLS</strong> (RFC 8446 for TLS 1.3: https://datatracker.ietf.org/doc/html/rfc8446) runs on top of TCP and adds <strong>encryption, authentication and integrity</strong>, so protocols like HTTP can use it. Use it for <strong>all</strong> communication, even inside your own network.</p>
+</blockquote>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-03-tls-layer.svg" alt="TLS sits between the application and TCP" loading="lazy" /></p>
+<h2 id="3-1-encryption">3.1 Encryption</h2>
+<p>Data between client and server is obfuscated so <strong>only the two processes can read it</strong>.</p>
+<ul>
+<li>On connection open the parties negotiate a <strong>shared secret using asymmetric encryption</strong>: each generates a <strong>key pair</strong> (private and public) and they exchange public keys
+<ul>
+<li>mathematical properties of the pairs let both derive the same secret (primer: https://blog.cloudflare.com/a-relatively-easy-to-understand-primer-on-elliptic-curve-cryptography/)
+<ul>
+<li><strong>The shared secret is never sent over the wire.</strong></li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Asymmetric encryption is slow and expensive, so it is used <strong>only to create the shared key</strong>
+<ul>
+<li>After that <strong>symmetric encryption</strong> (fast, cheap) is used</li>
+<li>The shared key is <strong>renegotiated periodically</strong> to limit how much data could be deciphered if it were broken.</li>
+</ul>
+</li>
+<li>Encrypting in-flight data costs CPU, but it is <strong>negligible</strong>:
+<ul>
+<li>modern processors have dedicated cryptographic instructions</li>
+<li>So <strong>use TLS for all communications, even those not on the public internet</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-2-authentication">3.2 Authentication</h2>
+<p>Encryption hides data, but the client must still know it is talking to the <strong>real server</strong> (and the server may want to verify the client).</p>
+<ul>
+<li>
+<p>TLS authenticates with <strong>digital signatures based on asymmetric cryptography</strong> (https://en.wikipedia.org/wiki/Digital_signature). The server has a key pair and shares its <strong>public key</strong></p>
+<ul>
+<li>it <strong>signs</strong> messages with its <strong>private key</strong></li>
+<li>the client uses the public key to verify the signature.</li>
+</ul>
+</li>
+<li>
+<p><strong>Problem:</strong></p>
+<ul>
+<li>how does the client know the public key is authentic? Hence <strong>certificates</strong>, which prove ownership of a public key</li>
+<li>A certificate holds the <strong>owner's information, expiration date, public key, and a digital signature of the third party that issued it</strong></li>
+<li>The issuer is a <strong>certificate authority (CA)</strong>, itself represented by a certificate, forming a <strong>chain</strong> that ends at a <strong>root CA</strong>, which self-signs its certificate.</li>
+</ul>
+</li>
+<li>
+<p>For a device to trust a certificate, the certificate <strong>or one of its ancestors</strong> must be in the client's <strong>trusted store</strong></p>
+<ul>
+<li>Trusted root CAs such as <strong>Let's Encrypt</strong> (https://letsencrypt.org/) are normally included by the OS vendor.</li>
+</ul>
+</li>
+<li>
+<p><strong>At connection time</strong></p>
+<ul>
+<li>the server sends the <strong>full chain</strong>, from its own certificate up to the root</li>
+<li>The client scans the chain until it finds a certificate it trusts, then verifies the certificates <strong>in reverse order from that point</strong>: checking things like <strong>expiration date</strong> and that the signature was really made by the issuing CA</li>
+<li>If verification reaches the server's own certificate without error, <strong>the path is verified and the server is authenticated</strong>.</li>
+</ul>
+</li>
+<li>
+<p><strong>Most common mistake: letting a certificate expire.</strong></p>
+<ul>
+<li>The client cannot verify the identity, opening a connection fails, and the <strong>whole application can go down</strong></li>
+<li>Automation to <strong>monitor and auto-renew</strong> certificates before expiry is well worth it.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-3-integrity">3.3 Integrity</h2>
+<ul>
+<li>Even obfuscated data can be tampered with (e.g. random bits swapped)
+<ul>
+<li>TLS computes a <strong>message digest</strong> with a secure hash function to produce a <strong>message authentication code (HMAC)</strong> (RFC 2104: https://datatracker.ietf.org/doc/html/rfc2104)</li>
+<li>The receiver <strong>recomputes the digest</strong> and compares it with the one in the message; on mismatch the message was corrupted or tampered with and is <strong>dropped</strong>.</li>
+</ul>
+</li>
+<li>The HMAC also protects against <strong>corruption</strong>, not only tampering
+<ul>
+<li>Why, if TCP guarantees integrity? TCP's checksum is <strong>not 100% reliable</strong>: it fails to detect errors for roughly <strong>1 in 16 million to 10 billion packets</strong></li>
+<li>with 1 KB packets, that is once per <strong>16 GB to 10 TB</strong> transmitted (source cited: &quot;When the CRC and TCP checksum disagree&quot;, https://dl.acm.org/doi/10.1145/347057.347561).</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-4-handshake">3.4 Handshake</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-03-tls-handshake.svg" alt="The TLS handshake step by step" loading="lazy" />
+When a TLS connection opens, a handshake happens:</p>
+<ol>
+<li>The parties agree on a <strong>cipher suite</strong>: the <strong>key exchange algorithm</strong> (to make shared secrets), the <strong>signature algorithm</strong> (to sign certificates), the <strong>symmetric encryption algorithm</strong> (for application data) and the <strong>HMAC algorithm</strong> (integrity and authenticity of application data).</li>
+<li>They use the key exchange algorithm to create the <strong>shared secret</strong>, which the symmetric algorithm then uses to encrypt the channel.</li>
+<li>The client <strong>verifies the server's certificate</strong>; on success it can send encrypted application data. The server can optionally also verify a <strong>client certificate</strong>.</li>
+</ol>
+<p>The steps need not happen in this order: implementations optimise to cut round trips. <strong>The handshake typically takes 2 round trips with TLS 1.2 and just one with TLS 1.3.</strong> Bottom line: <strong>a new connection is not free</strong>, so put servers geographically close and <strong>reuse connections</strong> when possible.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+TLS · encryption (asymmetric then symmetric) · key pair · shared secret · digital signature · certificate · certificate authority (CA) · root CA · trusted store · certificate chain · HMAC · message digest · cipher suite · TLS handshake (1.2 vs 1.3 round trips).</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 3. https://understandingdistributed.systems/</li>
+<li>RFC 8446 (TLS 1.3), RFC 2104 (HMAC) and the other references as cited by the book.</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-02-reliable-links/">Understanding Distributed Systems 2: Reliable links</a> · <a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">Understanding Distributed Systems 4: Discovery</a> · cryptography</p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-02-reliable-links/">&larr; Understanding Distributed Systems 2: Reliable links</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">Understanding Distributed Systems 4: Discovery &rarr;</a></nav></main></body></html>

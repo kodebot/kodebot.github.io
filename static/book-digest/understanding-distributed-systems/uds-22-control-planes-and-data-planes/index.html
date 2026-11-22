@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 22: Control planes and data planes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-22-control-planes-and-data-planes">Understanding Distributed Systems 22: Control planes and data planes</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), ch. 22. Previous: <a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">Understanding Distributed Systems 21: Microservices</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Split any component into a <strong>data plane</strong> (serves every request, fast and always up) and a <strong>control plane</strong> (manages config and metadata, consistent but low volume).</li>
+<li>The data plane must <strong>keep running with stale config</strong> if the control plane is down (<strong>static stability</strong>). A <strong>hard dependency</strong> caps availability at the product of both.</li>
+<li>Protect the control plane from the data plane's load with a <strong>buffer store</strong>, <strong>push instead of poll</strong>, and <strong>deltas plus snapshots</strong>.</li>
+<li>Think of the control plane as a <strong>feedback loop</strong>: monitor, compare, act. Most designs miss the monitoring.</li>
+</ul>
+</div></div>
+<h2 id="why-split">Why split</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-22-control-plane-and-data-plane.svg" alt="Control plane and data plane" loading="lazy" />
+The API gateway is a <strong>single point of failure</strong> (if it dies, the app dies) and every external request passes through it, so it must be <strong>highly available and scalable</strong>. But its needs conflict:</p>
+<ul>
+<li>A <strong>management endpoint</strong> (add, remove, configure API keys used for rate limiting) has far <strong>lower volume</strong>, so lower scale suffices.</li>
+<li>Routing external requests should favour <strong>availability and performance</strong> over consistency; the management endpoint should favour <strong>consistency over availability</strong>.</li>
+</ul>
+<p>So split it: a <strong>data plane</strong> service serving external requests to internal services, and a <strong>control plane</strong> service managing the gateway's <strong>metadata and configuration</strong> (https://brooker.co.za/blog/2019/03/17/control.html).</p>
+<p>Seen before: chain replication's control plane holds the chain configuration (section 10.4); in Azure Storage the stream and partition managers are control planes allocating streams and partitions (chapter 17).</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Data plane</th>
+<th>Control plane</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Role</td>
+<td>everything on the <strong>critical path</strong>, run for <strong>each</strong> request</td>
+<td>helps the data plane: manages metadata or config, coordinates complex, infrequent operations</td>
+</tr>
+<tr>
+<td>Needs</td>
+<td>highly available, fast, scales with request count</td>
+<td>less strict scaling; <strong>consistent view</strong> of its state for the data plane</td>
+</tr>
+<tr>
+<td>Favours</td>
+<td>availability</td>
+<td><strong>consistency over availability</strong></td>
+</tr>
+</tbody>
+</table>
+<p>An app can have <strong>several independent</strong> control and data planes (e.g. one control plane scales a service by load, another manages its config).</p>
+<h2 id="the-cost-hard-dependencies">The cost: hard dependencies</h2>
+<ul>
+<li>If the data plane stops serving when the control plane is unavailable, it has a <strong>hard dependency</strong> on it: either failing takes the whole system down.</li>
+<li>Availability of a chain of dependent components = <strong>product</strong> of their availabilities: data plane 99.99% x control plane 99% = <strong>0.9899 (98.99%)</strong>
+<ul>
+<li>A system is at best as available as its <strong>least available hard dependency</strong>.</li>
+</ul>
+</li>
+<li>Fix: improve the control plane, but above all make the <strong>data plane run on a stale configuration</strong> rather than stop. This is <strong>static stability</strong> (also DNS, chapter 4).</li>
+</ul>
+<h2 id="22-1-scale-imbalance">22.1 Scale imbalance</h2>
+<p>Data planes and control planes have very different scale, so the data plane can <strong>overload the control plane</strong> (https://aws.amazon.com/builders-library/avoiding-overload-in-distributed-systems-by-putting-the-smaller-service-in-control/).</p>
+<ul>
+<li>Example:
+<ul>
+<li>data plane processes poll the control plane for config</li>
+<li>Normally spread out in time, but if they <strong>all restart together</strong> and fetch config at once, they overload it</li>
+<li>Resiliency mechanisms (chapter 28) help only so far</li>
+<li>If the control plane goes down, <strong>new data plane instances cannot even start</strong>.</li>
+</ul>
+</li>
+</ul>
+<p>Ways to design around it:</p>
+<ol>
+<li><strong>Buffer store.</strong> The control plane <strong>periodically dumps its entire state</strong> (changed or not) to a scalable file store (S3, Azure Storage); the data plane <strong>reads from the store</strong>. Sounds naive and costly but is reliable, and cheap if the state is small. It is <strong>CQRS in practice</strong>. Benefits: protects the control plane from load; the data plane can <strong>start and run even if the control plane is down</strong>. Cost: <strong>higher latency and weaker consistency</strong> (slower propagation).</li>
+<li><strong>Push, no intermediary.</strong> The data plane connects to the control plane, which <strong>pushes config when it changes</strong>. Because the control plane sets the pace it <strong>slows down rather than falls over</strong>. (It can still be overloaded by too many connections.)</li>
+<li><strong>Push deltas.</strong> Version changes and send only <strong>updates/deltas</strong>: more complex but much faster when state is large.</li>
+<li><strong>Snapshot + delta.</strong> Many instances starting at once could still hammer the control plane reading the full config, so reintroduce a store holding a <strong>recent snapshot</strong>: instances read the snapshot at startup, then ask the control plane for a <strong>small delta</strong>. The store absorbs bulk reads; the control plane pushes small deltas.</li>
+</ol>
+<h2 id="22-2-control-theory">22.2 Control theory</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-22-control-loop.svg" alt="The control plane as a feedback loop" loading="lazy" />
+A <strong>controller</strong> monitors a dynamic system, compares its state to the <strong>desired</strong> state, and applies a <strong>corrective action</strong> to drive it there, minimising instability. Here the data plane is the system and the control plane the controller: a <strong>feedback loop</strong>.</p>
+<ul>
+<li>Without all three ingredients (<strong>monitor, compare, act</strong>) you have no <strong>closed loop</strong> and the data plane cannot reach the desired state (a closed loop is necessary, not sufficient)
+<ul>
+<li><strong>Monitoring is the most commonly missing piece.</strong> Talk: https://www.youtube.com/watch?v=O8xLxNje30M.</li>
+</ul>
+</li>
+<li><strong>Chain replication:</strong>
+<ul>
+<li>the control plane should not just push chain config</li>
+<li>it should check the data plane <strong>actually applied it</strong> within a reasonable time, else take corrective action (even naive: reboot nodes with stale config, or exclude them from any chain).</li>
+</ul>
+</li>
+<li><strong>CI/CD pipeline</strong>
+<ul>
+<li>as a control plane: releasing a build blindly risks a catastrophic failure (e.g. an exception at startup)</li>
+<li>Better: <strong>release incrementally while monitoring</strong>, stop the roll-out on clear evidence of trouble, and ideally <strong>roll back automatically</strong>.</li>
+</ul>
+</li>
+<li>Ask of any control plane: <strong>what is missing to close the loop?</strong> Further reading: &quot;Designing Distributed Control Systems&quot; (https://www.amazon.com/gp/product/1118694155).</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+data plane · control plane · hard dependency · static stability · scale imbalance · buffer store · push vs pull · delta · snapshot · closed loop (monitor, compare, act).</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 22. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">Understanding Distributed Systems 21: Microservices</a> · <a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging</a> · <a href="/book-digest/understanding-distributed-systems/uds-10-replication/">Understanding Distributed Systems 10: Replication</a> · <a href="/book-digest/understanding-distributed-systems/uds-17-file-storage/">Understanding Distributed Systems 17: File storage</a> · <a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">Understanding Distributed Systems 4: Discovery</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">&larr; Understanding Distributed Systems 21: Microservices</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging &rarr;</a></nav></main></body></html>

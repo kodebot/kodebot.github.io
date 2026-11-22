@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 31: Monitoring</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-31-monitoring">Understanding Distributed Systems 31: Monitoring</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), ch. 31. Previous: <a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">Understanding Distributed Systems 30: Continuous delivery and deployment</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-32-to-34-observability-manageability-final-words/">Understanding Distributed Systems 32-34: Observability, manageability, final words</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Monitoring detects <strong>user-impacting failures</strong>, <strong>alerts</strong> humans and gives <strong>dashboards</strong>. <strong>Black-box</strong> shows symptoms; <strong>white-box</strong> finds root causes.</li>
+<li><strong>Metrics</strong> are time series, <strong>pre-aggregated</strong> to be cheap. <strong>SLIs</strong> (good events / total events) quantify service level; <strong>SLOs</strong> set the acceptable range; the leftover is the <strong>error budget</strong>.</li>
+<li>Alert on <strong>SLO burn rate</strong>, not raw CPU. Use <strong>percentiles</strong>, not averages.</li>
+<li>Healthy on-call: <strong>actionable alerts</strong>, <strong>mitigate first</strong>, postmortem later.</li>
+</ul>
+</div></div>
+<h2 id="black-box-vs-white-box">Black-box vs white-box</h2>
+<p>Early monitoring only said whether a service was <strong>up</strong> (<strong>black-box</strong>). Later developers instrumented apps to report whether features worked (<strong>white-box</strong>), popularised by Etsy's <strong>statsd</strong> (https://codeascraft.com/2011/02/15/measure-anything-measure-everything/). Black-box finds <strong>symptoms</strong>; white-box helps find the <strong>root cause</strong>.</p>
+<ul>
+<li>Black-box main use:
+<ul>
+<li>monitor <strong>external dependencies</strong> (third-party APIs) and how users perceive the service from outside, via <strong>synthetics</strong>: scripts that periodically send test requests to the public endpoints from the <strong>same regions as users</strong>, timing them and checking success (https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries.html)</li>
+<li>They catch <strong>connectivity issues</strong> and problems in <strong>rarely used APIs</strong>.</li>
+</ul>
+</li>
+<li>Example: if a service's <strong>DNS server is down</strong>, synthetics cannot resolve the IP, yet the service itself thinks all is fine and just receives fewer requests.</li>
+</ul>
+<h2 id="31-1-metrics">31.1 Metrics</h2>
+<p>A <strong>metric</strong> is a <strong>time series of samples</strong> (a float and a timestamp) of resource usage (CPU) or behaviour (failed requests). Often tagged with <strong>labels</strong> (key-value pairs: region, data centre, cluster, node), so you can slice and dice without creating a metric per combination; but <strong>each distinct label combination is a separate metric</strong>, so tagging yields huge numbers of metrics to store and process.</p>
+<ul>
+<li>A service should at least emit:
+<ul>
+<li><strong>load</strong> (request throughput)</li>
+<li><strong>internal state</strong> (in-memory cache size)</li>
+<li><strong>dependencies' availability and performance</strong> (data store response time). This needs <strong>explicit code and deliberate effort</strong>.</li>
+</ul>
+</li>
+<li>Example handler (<code>get_resource(id)</code>: check in-process cache, else repository, then store) raises many questions: valid id? cache hit? age of the cached entry? did the remote call fail or time out and how long did it take? cache size? total handler time?</li>
+</ul>
+<p><strong>Event-based approach:</strong> on failure the handler sends an <strong>event</strong> (e.g. <code>{&quot;failureCount&quot;: 1, &quot;serviceRegion&quot;: &quot;EastUs2&quot;, &quot;timestamp&quot;: 1614438079}</code>) to a local <strong>telemetry agent</strong>, which batches and emits to a remote telemetry service persisting event logs (e.g. <strong>Azure Monitor log-based metrics</strong>: https://docs.microsoft.com/en-us/azure/azure-monitor/app/pre-aggregated-metrics-log-metrics#log-based-metrics).</p>
+<p><strong>Expensive:</strong> telemetry load grows with events, and aggregating at query time (failures in North Europe over a month) may mean fetching and aggregating <strong>trillions of events</strong>.</p>
+<p><strong>Pre-aggregation:</strong> since metrics are time series, pre-aggregate samples over fixed periods (1 min, 5 min, 1 h) as <strong>sum, average or percentiles</strong>.</p>
+<ul>
+<li>At ingestion with a 1-hour sum you get one <code>failureCount</code> per <code>serviceRegion</code> with one sample per hour (<code>00:00 -&gt; 561</code>, <code>01:00 -&gt; 42</code>, <code>02:00 -&gt; 61</code>).</li>
+<li>Create <strong>multiple pre-aggregates with different periods</strong> and pick the best at query time (<strong>CloudWatch</strong> pre-aggregates on ingestion: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html).</li>
+<li>Further:
+<ul>
+<li><strong>client-side pre-aggregation in the agent</strong> cuts bandwidth, compute and storage</li>
+<li><strong>Cost:</strong> you <strong>cannot re-aggregate after ingestion</strong> (an hourly metric cannot later become 5-minute) without the original events.</li>
+</ul>
+</li>
+<li>Metrics are mainly for alerting and visualisation, so they are stored pre-aggregated in a <strong>time-series store</strong> (e.g. Druid: http://static.druid.io/docs/druid.pdf).</li>
+</ul>
+<h2 id="31-2-service-level-indicators-slis">31.2 Service-level indicators (SLIs)</h2>
+<p>Not every metric deserves an alert (no 3 a.m. page for a memory spike minutes ago). An <strong>SLI</strong> is a metric measuring <strong>one aspect of the level of service users get</strong> (response time, error rate, throughput), typically aggregated over a <strong>rolling window</strong> with a summary statistic (average or percentile).</p>
+<ul>
+<li>Best defined as a <strong>ratio of good events over total events</strong>: <strong>0 = completely broken, 1 = working as expected</strong>; this also simplifies alert configuration.</li>
+<li>Common SLIs: <strong>response time</strong> (fraction of requests faster than a threshold); <strong>availability</strong> (successful requests over total).</li>
+<li><strong>Where to measure:</strong>
+<ul>
+<li>service, load balancer or client? Pick what best represents <strong>user experience</strong></li>
+<li>the <strong>client</strong> is most meaningful since it includes delays across the whole request path.</li>
+</ul>
+</li>
+<li><strong>How to measure:</strong>
+<ul>
+<li>response times follow a <strong>right-skewed, long-tailed distribution</strong> (https://igor.io/latency/), affected by network delays, page faults, context switching</li>
+<li>The <strong>average</strong> hides this: <strong>99 requests at 1 s and one at 10 minutes</strong> give an average of nearly <strong>7 s</strong> although 99% took 1 s.</li>
+</ul>
+</li>
+<li><strong>Percentiles</strong>
+<ul>
+<li>are better: the 99th percentile of 1 s means 99% of requests took at most 1 s. The upper ones (<strong>99th, 99.9th</strong>) are <strong>long-tail latencies</strong></li>
+<li>they hit the <strong>most important users</strong> (those making the most requests have the most chances to see them).</li>
+</ul>
+</li>
+<li>Revenue: Akamai study, a <strong>100 ms delay in load time can cut conversion by 7%</strong> (https://www.akamai.com/newsroom/press-release/akamai-releases-spring-2017-state-of-online-retail-performance-report).</li>
+<li><strong>Capacity impact via Little's Law</strong>
+<ul>
+<li>(average items in system = arrival rate x average time in system; https://robertovitillo.com/back-of-the-envelope-estimation-hacks/): a service using ~<strong>2K threads for 10K req/s</strong> has a <strong>200 ms</strong> average per request</li>
+<li>If <strong>1% of requests suddenly take 20 s</strong> (congested switch, relaxed timeouts), <strong>another 2K threads</strong> are needed: thread count must <strong>double</strong>.</li>
+</ul>
+</li>
+<li>Keeping tail latency in check improves <strong>resiliency</strong> and cuts <strong>operational cost</strong>, and improving the worst case also improves the average.</li>
+</ul>
+<h2 id="31-3-service-level-objectives-slos">31.3 Service-level objectives (SLOs)</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-31-sli-slo-error-budget.svg" alt="From SLIs to SLOs to the error budget and alerts" loading="lazy" />
+An <strong>SLO</strong> defines the <strong>range of acceptable values for an SLI</strong> at which the service is healthy; it sets users' expectations. A <strong>service-level agreement (SLA)</strong> is a <strong>contract</strong> on what happens when an SLO is missed, usually financial.</p>
+<ul>
+<li>Example: <strong>99% of calls to endpoint X complete under 200 ms, over a rolling 1 week</strong>. Equivalently up to <strong>1%</strong> may be slower: the <strong>error budget</strong> (failures that can be tolerated).</li>
+<li>Uses:
+<ul>
+<li><strong>alerting</strong>, and <strong>prioritising repair work</strong>: e.g</li>
+<li>when the budget is exhausted, <strong>repairs beat new features</strong> until the SLO is restored</li>
+<li>An incident's importance = <strong>fraction of budget burned</strong> (20% matters more than 1%).</li>
+</ul>
+</li>
+<li><strong>Window size:</strong> short windows force quick action on fixes; long windows suit <strong>long-term investment</strong> decisions: have <strong>several SLOs with different windows</strong>.</li>
+<li><strong>How strict:</strong>
+<ul>
+<li>too lenient misses user pain</li>
+<li>too strict wastes effort on micro-optimisation with diminishing returns
+<ul>
+<li>100% is impossible, and even then users' <strong>last-mile connection</strong> is outside your control</li>
+<li><strong>Start comfortable and tighten</strong> as confidence grows</li>
+</ul>
+</li>
+<li>do not just pick today's achievable numbers</li>
+<li><strong>work backward from what users care about</strong>. <strong>Above 3 nines</strong> is very costly with diminishing returns.</li>
+</ul>
+</li>
+<li>Keep <strong>as few SLOs as possible</strong> and <strong>review</strong> them: if a user-facing issue generated many support tickets but no SLO moved, SLOs are too relaxed or miss that use case.</li>
+<li>Agree SLOs with <strong>stakeholders</strong>:
+<ul>
+<li>engineers (achievable without excessive <strong>toil</strong>) and product managers (guarantee good UX)</li>
+<li>From Google's SRE book: &quot;if you can't ever win a conversation about priorities by quoting a particular SLO, it's probably not worth having that SLO&quot; (https://sre.google/sre-book/service-level-objectives/).</li>
+</ul>
+</li>
+<li><strong>Over-reliance:</strong>
+<ul>
+<li>users may depend on actual behaviour rather than the documented SLA</li>
+<li>Periodic <strong>controlled failures in production (chaos testing)</strong> (https://en.wikipedia.org/wiki/Chaos_engineering) show dependencies cope with the target service level, and validate resiliency mechanisms.</li>
+</ul>
+</li>
+</ul>
+<h2 id="31-4-alerts">31.4 Alerts</h2>
+<p>Alerting triggers an <strong>action</strong> when a condition occurs (e.g. a metric crosses a threshold): from <strong>automation</strong> (restart an instance) to <strong>ringing an on-call human</strong>.</p>
+<ul>
+<li>It must be <strong>actionable</strong>:
+<ul>
+<li>no digging in dashboards to judge impact or urgency. A <strong>CPU spike</strong> alert is not (impact unclear)</li>
+<li>an <strong>SLO</strong> is a good candidate as it quantifies user impact</li>
+<li>alert when a <strong>large fraction of the error budget</strong> is consumed.</li>
+</ul>
+</li>
+<li><strong>Precision vs recall:</strong>
+<ul>
+<li><strong>precision</strong> = significant events (real issues) / total alerts</li>
+<li><strong>recall</strong> = fraction of significant events that triggered an alert. Low precision = noisy, not actionable</li>
+<li>low recall = misses outages. Improving one usually lowers the other.</li>
+</ul>
+</li>
+<li><strong>Naive example:</strong>
+<ul>
+<li>availability SLO 99% over 30 days; alert if availability falls below 99% within <strong>1 hour</strong></li>
+<li>Budget spent when it fires = 1 hour / 30 days = <strong>0.14%</strong></li>
+<li>Systems are never 100% healthy, so that is not useful: <strong>high recall, low precision</strong>.</li>
+</ul>
+</li>
+<li>Raising the required duration improves precision but <strong>delays detection</strong> in a real outage
+<ul>
+<li>Better: alert on <strong>burn rate</strong> = <strong>% of error budget consumed / % of SLO window elapsed</strong>: burn rate <strong>1</strong> exhausts the budget in exactly 30 days</li>
+<li><strong>2</strong> in 15</li>
+<li><strong>3</strong> in 10.</li>
+</ul>
+</li>
+<li><strong>Improve recall</strong>
+<ul>
+<li>with multiple alerts at different thresholds: burn rate <strong>below 2</strong> = low-severity, check in working hours</li>
+<li><strong>above 10</strong> = automated call to an engineer. See the SRE workbook (https://sre.google/workbook/alerting-on-slos/).</li>
+</ul>
+</li>
+<li>Most alerts should be SLO-based, but some target <strong>known failure modes</strong> not yet fixed: e.g
+<ul>
+<li>a known memory leak, temporarily mitigated by an alert that <strong>triggers an automated restart</strong> when an instance runs out of memory.</li>
+</ul>
+</li>
+</ul>
+<h2 id="31-5-dashboards">31.5 Dashboards</h2>
+<p>Metrics also power <strong>real-time dashboards</strong>; they easily become a dumping ground of forgotten, confusing charts. First pick the <strong>audience</strong> and what they look for, then work backward to charts and metrics (https://aws.amazon.com/builders-library/building-dashboards-for-operational-visibility).</p>
+<table>
+<thead>
+<tr>
+<th>Dashboard</th>
+<th>Audience and purpose</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SLO</strong></td>
+<td>stakeholders across the org; during incidents <strong>quantifies user impact</strong></td>
+<td>the SLOs</td>
+</tr>
+<tr>
+<td><strong>Public API</strong></td>
+<td>operators; finds <strong>problematic paths</strong> during an incident</td>
+<td>per endpoint: requests received or messages pulled, request size, auth issues; handling duration, dependencies' availability and response time; counts per response type, response size</td>
+</tr>
+<tr>
+<td><strong>Service</strong></td>
+<td>the <strong>owning team</strong>; first entry point when debugging, needs deep internals knowledge</td>
+<td>service-specific metrics plus <strong>upstream</strong> (load balancers, queues) and <strong>downstream</strong> (data stores) dependencies; operators then drill down by segmenting, then raw logs and traces</td>
+</tr>
+</tbody>
+</table>
+<h3 id="31-5-1-best-practices">31.5.1 Best practices</h3>
+<ul>
+<li>Define dashboards and charts in a <strong>domain-specific language</strong> and <strong>version-control</strong> them like code, so they update in the <strong>same PR</strong> as the code and stay in sync across environments (pre-prod and prod)
+<ul>
+<li>manual updates are error-prone.</li>
+</ul>
+</li>
+<li><strong>Most important charts at the top</strong> (dashboards render top to bottom). Use a <strong>default timezone like UTC</strong> so people in different places talk about the same data.</li>
+<li><strong>Same time resolution and range</strong>
+<ul>
+<li>across a dashboard to correlate anomalies: <strong>1-hour range, 1-minute resolution</strong> for an ongoing incident</li>
+<li><strong>1-year range, 1-day resolution</strong> for capacity planning.</li>
+</ul>
+</li>
+<li><strong>Few data points and metrics per chart</strong>
+<ul>
+<li>(slow to render, hard to read). Only metrics with <strong>similar ranges</strong> share a chart, or the largest hides the rest: put 10th percentile, average and 90th percentile in one chart</li>
+<li>0.1th, 99.9th percentile, min and max in another.</li>
+</ul>
+</li>
+<li><strong>Annotate</strong>
+<ul>
+<li>charts: a description with links to <strong>runbooks, related dashboards, escalation contacts</strong></li>
+<li>a horizontal line per <strong>alert threshold</strong></li>
+<li>a vertical line per relevant <strong>deployment</strong>.</li>
+</ul>
+</li>
+<li>A metric emitted <strong>only on error</strong> leaves gaps and raises doubt whether the service stopped emitting. <strong>Emit 0 when no error and 1 when there is one.</strong></li>
+</ul>
+<h2 id="31-6-being-on-call">31.6 Being on call</h2>
+<p>A healthy rotation needs services built for <strong>reliability and operability</strong> from the start. Making <strong>developers operate what they build</strong> gives them the incentive to cut operational toil and puts the people who know the architecture and its limits on call.</p>
+<ul>
+<li>On call is <strong>stressful</strong> (even without call-outs, the loss of freedom causes anxiety), so it should be <strong>compensated</strong> and the engineer should <strong>not be expected to progress feature work</strong>
+<ul>
+<li>they are interrupted anyway, so give them <strong>free rein</strong> to improve the on-call experience (revise dashboards, improve resiliency).</li>
+</ul>
+</li>
+<li><strong>Alerts must be actionable</strong>:
+<ul>
+<li>link to <strong>dashboards</strong> and a <strong>runbook</strong> of actions (automate what you can: &quot;machines are good at following instructions&quot;)</li>
+<li>Unless it was a false positive, <strong>communicate every action in a shared channel</strong> (global chat), so others can chime in, track progress and <strong>hand over</strong> easily.</li>
+</ul>
+</li>
+<li><strong>Mitigate first, fix root cause later.</strong> Bad release? <strong>Roll back</strong>. Cannot cope with unchanged load? <strong>Scale out</strong>.</li>
+<li>Then find the root cause and prevent recurrence, spending <strong>more time the greater the SLO impact</strong>
+<ul>
+<li>Incidents burning a <strong>significant fraction of the error budget</strong> need a formal <strong>postmortem</strong> with <strong>repair items</strong></li>
+<li>Ideally the team agrees that if the <strong>error budget is burned or alerts spiral</strong>, <strong>everyone stops feature work</strong> until a healthy rotation is restored</li>
+<li>See the SRE books (https://sre.google/books/).</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+black-box / white-box monitoring · synthetics · metric · label · pre-aggregation · SLI · percentile · long-tail latency · Little's Law · SLO · SLA · error budget · chaos testing · precision / recall · burn rate · runbook · postmortem · toil.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 31. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">Understanding Distributed Systems 30: Continuous delivery and deployment</a> · <a href="/book-digest/understanding-distributed-systems/uds-32-to-34-observability-manageability-final-words/">Understanding Distributed Systems 32-34: Observability, manageability, final words</a> · <a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">Understanding Distributed Systems 24: Part IV intro and common failure causes</a> · <a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency</a> · <a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">&larr; Understanding Distributed Systems 30: Continuous delivery and deployment</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-32-to-34-observability-manageability-final-words/">Understanding Distributed Systems 32-34: Observability, manageability, final words &rarr;</a></nav></main></body></html>

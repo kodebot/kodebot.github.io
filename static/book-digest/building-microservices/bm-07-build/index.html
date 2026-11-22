@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 7: Build</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-7-build">Building Microservices 7: Build</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 7. Previous: <a href="/book-digest/building-microservices/bm-06-workflow/">Building Microservices 6: Workflow</a>. Next: <a href="/book-digest/building-microservices/bm-08-deployment/">Building Microservices 8: Deployment</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Continuous integration</strong> is a practice, not a tool: integrate to mainline at least daily, have tests, and make a broken build the team's top priority.</li>
+<li>Prefer <strong>trunk-based development</strong> with feature flags over long-lived feature branches, which only delay integration.</li>
+<li>A <strong>build pipeline</strong> models the path to production; <strong>continuous delivery</strong> treats every check-in as a release candidate. Build the artifact <strong>once</strong>, deploy <strong>that same artifact</strong> everywhere, keep configuration outside it.</li>
+<li>Mapping code to builds: one giant repo with one build is a trap; choose <strong>one repository per microservice (multirepo)</strong> or a <strong>monorepo</strong> with several builds. Newman prefers <strong>multirepo</strong>.</li>
+</ul>
+</div></div>
+<h2 id="7-1-a-brief-introduction-to-continuous-integration">7.1 A brief introduction to continuous integration</h2>
+<ul>
+<li><strong>CI</strong>
+<ul>
+<li>keeps everyone in sync by frequently checking that new code integrates. A CI server detects a commit, checks it out and verifies it (compiles, tests pass)</li>
+<li>daily integration is the bare minimum.</li>
+</ul>
+</li>
+<li>It produces <strong>artifacts</strong> for further validation, built <strong>once</strong> and stored in a repository (the CI tool's or a separate system), so you confirm that the artifact you deploy is the one you tested.</li>
+<li><strong>Benefits:</strong> fast feedback (static analysis and tests), <strong>automated artifact creation</strong>, everything <strong>version controlled</strong> (including infrastructure as code), and <strong>traceability</strong> from deployed artifact to code and tests.</li>
+</ul>
+<h3 id="are-you-really-doing-ci">Are you really doing CI?</h3>
+<p>Adopting Jenkins, CircleCI or Travis is not the same as doing CI. Jez Humble's three questions:</p>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Why it matters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Do you check in to mainline once per day?</strong></td>
+<td>Frequent integration keeps future integration easy, even with short-lived branches</td>
+</tr>
+<tr>
+<td><strong>Do you have tests that validate your changes?</strong></td>
+<td>Without tests you only know it compiles, not that behaviour is intact</td>
+</tr>
+<tr>
+<td><strong>When the build breaks, is fixing it the team's #1 priority?</strong></td>
+<td>A red build means the last change may not have integrated; stop other check-ins, or the fix time balloons (days of a broken build)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="7-2-branching-models">7.2 Branching models</h2>
+<ul>
+<li><strong>Feature branching</strong>
+<ul>
+<li>gives isolation but <strong>delays integration</strong>, so the eventual merge is more complex</li>
+<li><strong>Trunk-based development</strong> has everyone commit to the same trunk and uses <strong>feature flags</strong> to hide unfinished work</li>
+<li>Newman prefers it; flags also help <strong>progressive delivery</strong> (chapter 8).</li>
+</ul>
+</li>
+<li>Evidence:
+<ul>
+<li>the <strong>2016 State of DevOps report</strong> (DORA and Puppet) found that branches or forks living <strong>less than a day</strong>, <strong>fewer than three active branches</strong> in total, and <strong>daily merging to trunk</strong> all contribute to higher performance</li>
+<li>The 2019 report extends this to open source: <strong>commit sooner</strong> and <strong>work in small batches</strong> (large &quot;patch bombs&quot; are slower to merge).</li>
+</ul>
+</li>
+<li><strong>GitFlow</strong>
+<ul>
+<li>and branch-heavy flows are common in open source, where many time-poor <strong>untrusted</strong> committers need vetting</li>
+<li>Typical in-house teams are tight-knit with commit rights, so what works for open source may not suit your day job.</li>
+</ul>
+</li>
+<li>Rule: &quot;Integrate early, and integrate often.&quot; If you must branch, keep branches short.</li>
+</ul>
+<h2 id="7-3-build-pipelines-and-continuous-delivery">7.3 Build pipelines and continuous delivery</h2>
+<ul>
+<li>Early CI work at Thoughtworks showed the value of <strong>stages</strong>:
+<ul>
+<li>fast, small-scoped tests first</li>
+<li>slow, large-scoped tests later (no point running them if the fast ones fail). That is a <strong>build pipeline</strong>, where one <strong>deployable artifact</strong> progresses through stages, building confidence.</li>
+</ul>
+</li>
+<li><strong>Continuous delivery (CD)</strong>,
+<ul>
+<li>from Humble and Farley's book <em>Continuous Delivery</em> (2010): constant feedback on <strong>production readiness</strong>, treating <strong>every check-in as a release candidate</strong></li>
+<li>You model every stage, manual and automated, and know where each version stands.</li>
+</ul>
+</li>
+<li>Example (the Catalog service):
+<ul>
+<li><strong>build-120</strong> failed the fast tests</li>
+<li><strong>build-121</strong> failed the performance tests</li>
+<li><strong>build-122</strong> reached production; a version deploys only if it passes each stage.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-07-build-pipeline.svg" alt="A build pipeline with one artifact" loading="lazy" /></p>
+<blockquote>
+<p>[!note] Continuous delivery versus continuous deployment
+<strong>Continuous delivery</strong> treats each check-in as a release candidate and decides whether to deploy. <strong>Continuous deployment</strong> deploys automatically every check-in that passes automated checks. Deployment extends delivery: you can do delivery without deployment, not the reverse. Many want a human decision, which is compatible with delivery. Human steps after check-in are often bottlenecks (for example manual regression testing replaced by automated tests), so more automation moves you towards deployment.</p>
+</blockquote>
+<ul>
+<li><strong>Tooling:</strong>
+<ul>
+<li>choose a tool with CD as a first-class concept</li>
+<li>hacking CI tools into CD is complex. It should model manual stages too (for example a manual <strong>UAT</strong> environment where you mark the stage passed, which then triggers the next automated stage).</li>
+</ul>
+</li>
+</ul>
+<h3 id="trade-offs-and-environments">Trade-offs and environments</h3>
+<ul>
+<li>Early in the pipeline you want <strong>fast feedback</strong>
+<ul>
+<li>later you want <strong>certainty</strong>, via increasingly <strong>production-like environments</strong>. Your laptop is fastest but least like production</li>
+<li>a faithful production copy for every commit is slow and costly. Keep reviewing the balance.</li>
+</ul>
+</li>
+<li>Difficulty of replicating production is one reason for <strong>testing in production</strong> (smoke tests, parallel runs; chapter 8).</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-07-feedback-vs-realism.svg" alt="Fast feedback versus production-like realism" loading="lazy" /></p>
+<h3 id="artifact-creation">Artifact creation</h3>
+<ul>
+<li><strong>Rule 1:</strong> build an artifact <strong>once and once only</strong> (rebuilding wastes time, &quot;is bad for the planet&quot;, and a differing build flag can change behaviour).</li>
+<li><strong>Rule 2:</strong> the artifact you <strong>verify</strong> is the artifact you <strong>deploy</strong>.</li>
+<li>Build it early (after compiling and fast tests) and store it in an artifact repository (<strong>Artifactory</strong>, <strong>Nexus</strong> or a <strong>container registry</strong>)
+<ul>
+<li>The same artifact (build-123) is deployed for slow tests, performance tests and production.</li>
+</ul>
+</li>
+<li>So <strong>environment-specific configuration stays outside the artifact</strong>. Example: log level <code>DEBUG</code> in the Slow Tests stage to diagnose failures, <code>INFO</code> in Performance Tests and Production.</li>
+</ul>
+<h2 id="7-4-mapping-source-code-and-builds-to-microservices">7.4 Mapping source code and builds to microservices</h2>
+<p><img src="/book-digest/building-microservices/img/bm-07-repository-patterns.svg" alt="Repository patterns" loading="lazy" /></p>
+<h3 id="one-giant-repo-one-giant-build">One giant repo, one giant build</h3>
+<ul>
+<li>Simple:
+<ul>
+<li>one repository, one build producing several artifacts, one commit for multi-service changes</li>
+<li>It suits <strong>lockstep releases</strong>, which are normally to be avoided, though it may be fine for a short time early in a project with one team.</li>
+</ul>
+</li>
+<li><strong>Downsides:</strong>
+<ul>
+<li>a one-line change to the User service <strong>rebuilds and verifies everything</strong> (hurting <strong>cycle time</strong>, the speed from change to live)</li>
+<li>it is unclear <strong>which artifacts to deploy</strong> so teams deploy everything together</li>
+<li>a break blocks all other changes</li>
+<li>with several teams, <strong>who owns the build</strong>? It is &quot;the worst form of monorepo&quot; for independently deployable services, and Newman almost only sees it in early projects.</li>
+</ul>
+</li>
+</ul>
+<h3 id="pattern-one-repository-per-microservice-multirepo">Pattern: one repository per microservice (multirepo)</h3>
+<ul>
+<li>Each service has its own repository and a straightforward mapping from change to <strong>CI build</strong>, and ownership can change per repository
+<ul>
+<li>The cost: developers work across several repositories, and Git cannot make <strong>atomic changes across repositories</strong>.</li>
+</ul>
+</li>
+<li><strong>Reusing code:</strong>
+<ul>
+<li>package it as a <strong>library</strong> (the Invoice and Payroll services depend on a Connection library)</li>
+<li>Rolling out a library change means building a new version, bumping the dependency, <strong>and redeploying each consumer</strong></li>
+<li>The chapter 5 caveats apply: no atomic rollout, and it is harder to see which services use which version when deprecating one.</li>
+</ul>
+</li>
+<li><strong>Changes across repositories:</strong>
+<ul>
+<li>changing the Inventory API and the Shipping client needs <strong>two commits</strong>
+<ul>
+<li>stage them (Inventory first, since client code is useless without the new API) and handle the case where one fails</li>
+</ul>
+</li>
+<li>The lack of atomic deploy is, in Newman's view, usually a symptom of <strong>boundaries in the wrong place</strong>: &quot;If you are constantly making changes across multiple microservices, it's likely that your microservice boundaries are in the wrong place&quot;, so consider merging services</li>
+<li>The pain can usefully <strong>enforce boundaries</strong></li>
+<li>Eases: IDEs that support multiple repositories, or wrapper scripts.</li>
+</ul>
+</li>
+<li><strong>Where to use it:</strong> small or large teams alike; if you constantly change across boundaries it may not fit (but that is itself a warning sign), and code reuse is harder.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-07-cross-service-change.svg" alt="Changes across services" loading="lazy" /></p>
+<h3 id="pattern-monorepo">Pattern: monorepo</h3>
+<ul>
+<li>Code for several microservices (or projects) in one repository, popularised by big tech (<strong>Google</strong> is best known)
+<ul>
+<li>Main claimed benefits: <strong>atomic changes</strong> across projects, <strong>finer-grained reuse</strong> (depend on a single source file rather than a packaged library), and visibility of others' code.</li>
+</ul>
+</li>
+<li>Example: the Inventory and Shipping change fits in a <strong>single commit</strong>.</li>
+</ul>
+<blockquote>
+<p>[!warning] Atomic commit is not atomic deploy
+Committing across services at once does not give atomic <strong>rollout</strong>. Wanting to roll out changes across services simultaneously violates <strong>independent deployability</strong>.</p>
+</blockquote>
+<ul>
+<li><strong>Mapping to builds:</strong>
+<ul>
+<li>start by mapping <strong>folders to builds</strong> (a change in <code>user-service</code> triggers the User build; changes in both folders trigger both)</li>
+<li>It gets harder with a shared <code>common</code> folder (rebuilds everything) and overlapping folders</li>
+<li>Large repos need <strong>graph-based build tools</strong> such as <strong>Bazel</strong> (an open source version of Google's internal tool); changing build systems is a major undertaking.</li>
+</ul>
+</li>
+<li><strong>Defining ownership</strong> (Fowler's scale):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Strong</strong></td>
+<td>Owners make the changes; outsiders must ask</td>
+</tr>
+<tr>
+<td><strong>Weak</strong></td>
+<td>Outsiders may change code, but owners review and accept (a pull request)</td>
+</tr>
+<tr>
+<td><strong>Collective</strong></td>
+<td>Any developer can change any code</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Collective ownership suits about <strong>20 developers or fewer</strong>
+<ul>
+<li>beyond that, strong or weak. Monorepos need <strong>fine-grained ownership</strong> controls: Google built them on Perforce first</li>
+<li><strong>GitHub CODEOWNERS</strong> (since 2016) maps owners to directories or paths (owners are requested for review on a pull request; aim for small pull requests).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code># CODEOWNERS (examples from GitHub's documentation)
+# @doctocat owns files under build/logs at the repo root and below
+/build/logs/ @doctocat
+
+# @octocat owns any file in an apps directory anywhere
+apps/ @octocat
+
+# @doctocat owns /docs at the repo root
+/docs/ @doctocat
+</code></pre>
+<p><img src="/book-digest/building-microservices/img/bm-07-ownership-models.svg" alt="Ownership models" loading="lazy" /></p>
+<ul>
+<li><strong>Tooling and scale:</strong>
+<ul>
+<li>Google's monorepo took huge engineering: a graph-based build system, a distributed object linker, IDE plug-ins</li>
+<li>it outgrew Perforce and built its own tool, <strong>Piper</strong>
+<ul>
+<li>When Newman worked there (2007-2008) over a hundred people maintained developer tools</li>
+<li>Read Potvin and Levenberg, &quot;Why Google Stores Billions of Lines of Code in a Single Repository&quot; (CACM, 2016): &quot;your organization probably isn't Google&quot;</li>
+<li><strong>Microsoft</strong> put Windows in Git (about <strong>270 GB</strong> working directory) and built <strong>VFS for Git</strong> (formerly GVFS) to download only needed files</li>
+</ul>
+</li>
+<li>Newman knows no team outside Microsoft using it. <strong>Lerna</strong> (from the Babel team) helps produce several versioned artifacts from one repo.</li>
+</ul>
+</li>
+<li><strong>How &quot;mono&quot; is mono?</strong>
+<ul>
+<li>About <strong>95%</strong> of Google's code was in the monorepo as of 2016</li>
+<li>others scope a monorepo to one system, and some teams run a <strong>per-team monorepo</strong> (all of a team's services together), giving most benefits without the scale problems under collective ownership.</li>
+</ul>
+</li>
+<li><strong>Where to use it:</strong>
+<ul>
+<li>large tech-focused companies (Google, Microsoft, Facebook, Twitter, Uber) that can invest heavily, and very small teams (<strong>10 to 20 developers</strong>)</li>
+<li>The pain lands on <strong>organisations in the middle</strong>: enough scale to need new tooling, not enough bandwidth to build it.</li>
+</ul>
+</li>
+</ul>
+<h3 id="which-approach-would-newman-use">Which approach would Newman use?</h3>
+<ul>
+<li><strong>Multirepo.</strong>
+<ul>
+<li>The monorepo's main advantages (finer-grained reuse, atomic commits) do not outweigh the problems at scale: encouraging <strong>cross-service changes</strong>, <strong>confused ownership</strong>, and <strong>new tooling</strong></li>
+<li>Organisations that start with a monorepo find it hard to leave later (rapid growth, then the <strong>sunk cost fallacy</strong>)</li>
+<li>Fine-grained ownership tools may change his mind; graph-based build tool adoption remains low.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>The ideas here (CD, trunk-based development, repository layout) matter whether or not you use microservices.</li>
+<li>Next chapter: deployment.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Continuous integration, continuous delivery, continuous deployment</strong>.</li>
+<li><strong>Trunk-based development, feature branch, feature flag</strong>.</li>
+<li><strong>Build pipeline, artifact, artifact repository</strong>.</li>
+<li><strong>Multirepo, monorepo, Bazel, CODEOWNERS</strong>.</li>
+<li><strong>Strong, weak and collective ownership</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 7. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch07.html</li>
+<li>Jez Humble and David Farley, <em>Continuous Delivery</em> (Addison-Wesley, 2010)
+<ul>
+<li>Brown et al., <em>2016 State of DevOps Report</em> (https://oreil.ly/YqEEh)</li>
+<li>Forsgren et al., <em>Accelerate: State of DevOps 2019</em> (https://oreil.ly/mfkIJ)</li>
+<li>Rachel Potvin and Josh Levenberg, CACM 59(7), 2016, pp. 78-87: as cited by the book.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-06-workflow/">Building Microservices 6: Workflow</a></li>
+<li><a href="/book-digest/building-microservices/bm-08-deployment/">Building Microservices 8: Deployment</a></li>
+<li><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-06-workflow/">&larr; Building Microservices 6: Workflow</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-08-deployment/">Building Microservices 8: Deployment &rarr;</a></nav></main></body></html>

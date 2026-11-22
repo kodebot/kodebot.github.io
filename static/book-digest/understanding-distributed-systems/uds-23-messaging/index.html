@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 23: Messaging</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-23-messaging">Understanding Distributed Systems 23: Messaging</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), ch. 23 (end of Part III). Previous: <a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">Understanding Distributed Systems 22: Control planes and data planes</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">Understanding Distributed Systems 24: Part IV intro and common failure causes</a> (Part IV, resiliency).</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>message channel</strong> (broker) decouples a producer from a consumer: the consumer can be down, load spikes are smoothed, consumers scale out behind it.</li>
+<li><strong>There is no exactly-once delivery.</strong> Get <strong>exactly-once processing</strong> with <strong>at-least-once delivery + idempotent messages + delete after processing</strong>.</li>
+<li>Cap retries and park failures in a <strong>dead letter channel</strong>. Watch for <strong>backlogs</strong> (bimodal behaviour) and isolate <strong>poisonous</strong> sources.</li>
+<li>Part III summary: scale with <strong>functional decomposition, partitioning, replication</strong>, using a few <strong>managed services</strong>.</li>
+</ul>
+</div></div>
+<h2 id="why-a-channel">Why a channel</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-23-message-channel-and-dead-letters.svg" alt="A channel with at-least-once delivery and a dead letter channel" loading="lazy" />
+Cruder lets users upload a video and encode it in many formats. The gateway uploads to a file store (S3) and asks an <strong>encoding service</strong> to process it. Encoding takes minutes, so the gateway should not wait; but <strong>fire-and-forget loses the request</strong> if the encoder instance crashes.</p>
+<p><strong>Messaging</strong> (introduced in chapter 5) is <strong>indirect communication</strong>: a <strong>producer</strong> writes a message to a channel (<strong>message broker</strong>), which delivers it to a <strong>consumer</strong>. The channel is a <strong>temporary buffer</strong>; sending does not need the receiver online (<strong>asynchronous</strong>).</p>
+<p>A message has a <strong>header</strong> (metadata such as a unique ID) and a <strong>body</strong>. It is a <strong>command</strong> (an operation for the receiver to invoke) or an <strong>event</strong> (something of interest happened).</p>
+<p>Services use <strong>inbound adapters</strong> (consumers, part of the API surface) and <strong>outbound adapters</strong> to talk to channels.</p>
+<p>In the example the gateway writes a message with a <strong>link to the uploaded file</strong> and replies <strong>202 Accepted</strong> (accepted, not completed). The message is deleted from the channel <strong>only after successful processing</strong>, so a failed one is retried.</p>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>producer can send while the consumer is <strong>temporarily unavailable</strong>;</li>
+<li>requests are <strong>load-balanced</strong> across consumer instances (easy scale-out);</li>
+<li>the consumer reads at its own pace, so the channel <strong>smooths load spikes</strong>;</li>
+<li><strong>batching</strong>: fetch up to N messages per read; worse per-message latency, <strong>dramatically better throughput</strong> (&quot;a no brainer&quot; when latency allows).</li>
+</ul>
+<p><strong>Costs:</strong> the broker is <strong>yet another service</strong> to run, and the extra hop adds <strong>latency</strong>, more with a large backlog. Always a trade-off.</p>
+<p><strong>Channel types:</strong> <strong>point-to-point</strong> (each message to exactly <strong>one</strong> consumer instance) vs <strong>publish-subscribe</strong> (<strong>each</strong> instance gets a copy).</p>
+<h2 id="messaging-styles">Messaging styles</h2>
+<ul>
+<li><strong>One-way:</strong> producer writes to a point-to-point channel expecting a consumer to process it eventually (the video example).</li>
+<li><strong>Request-response:</strong>
+<ul>
+<li>like direct request-response but both messages flow through channels. The consumer has a point-to-point <strong>request channel</strong></li>
+<li>each producer has its own <strong>response channel</strong>. The producer tags a request with a <strong>request ID</strong> and a <strong>reference to its response channel</strong></li>
+<li>the consumer replies there with the same request ID.</li>
+</ul>
+</li>
+<li><strong>Broadcast:</strong> producer writes to a publish-subscribe channel to notify <strong>all</strong> consumers of an event (e.g. the outbox pattern, section 13.1).</li>
+</ul>
+<h2 id="23-1-guarantees">23.1 Guarantees</h2>
+<p>Brokers (<strong>AWS SQS</strong> https://aws.amazon.com/sqs/, <strong>Kafka</strong>) make different trade-offs. Surprise: some, like <strong>SQS standard queues</strong> (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html), give <strong>no strong ordering</strong>.</p>
+<p>Why: a broker must scale horizontally, so it is distributed, and ordering across nodes needs <strong>coordination</strong>.</p>
+<p><strong>Kafka</strong> partitions a channel into <strong>sub-channels</strong> by <strong>partition key</strong>; each partition fits one broker process so ordering within it is trivial, and <strong>only one consumer may read a given sub-channel</strong> to preserve order end to end (the <strong>competing consumer</strong> pattern, implemented with leader election).</p>
+<p>All of chapter 16's caveats apply: a <strong>hot partition</strong> may outpace its consumer, forcing <strong>rebalancing</strong> by adding partitions, which can degrade the broker while messages shuffle.</p>
+<p>Other broker trade-offs: <strong>delivery guarantees</strong> (at-most-once, at-least-once), <strong>durability</strong>, <strong>latency</strong>, <strong>standards</strong> (AMQP: https://en.wikipedia.org/wiki/Advanced_Message_Queuing_Protocol), <strong>competing consumers</strong>, <strong>limits</strong> such as maximum message size.</p>
+<p><strong>Assumptions used below</strong> (like SQS and Azure Queue Storage, https://azure.microsoft.com/en-us/services/storage/queues/):</p>
+<ul>
+<li>channels are point-to-point with many producers and consumers;</li>
+<li>delivery is <strong>at least once</strong>;</li>
+<li>while an instance processes a message it <strong>stays in the channel</strong> but is hidden from others for a <strong>visibility timeout</strong>
+<ul>
+<li>if the instance crashes, the timeout expires and another instance sees it</li>
+<li>on success the consumer <strong>deletes</strong> it.</li>
+</ul>
+</li>
+</ul>
+<h2 id="23-2-exactly-once-processing">23.2 Exactly-once processing</h2>
+<ul>
+<li>Delete <strong>before</strong> processing: a crash after deleting loses the message <strong>for good</strong>.</li>
+<li>Delete <strong>after</strong> processing: a crash after processing but before deleting means the message is <strong>read again</strong>.</li>
+<li>Hence <strong>there is no exactly-once message delivery</strong> (https://bravenewgeek.com/you-cannot-have-exactly-once-delivery-redux/)
+<ul>
+<li>Best a consumer can do: <strong>simulate exactly-once processing</strong> by requiring <strong>idempotent</strong> messages and <strong>deleting only after processing</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="23-3-failures">23.3 Failures</h2>
+<p>If processing a message <strong>always fails</strong>, the visibility timeout keeps redelivering it forever. So <strong>limit the number of reads</strong>: the broker stamps a <strong>delivery counter</strong> (or the consumer implements it).</p>
+<p>At the maximum, <strong>do not delete without processing</strong> (data loss); instead move it to a <strong>dead letter channel</strong>, which parks messages retried too often. They no longer pollute the main channel; a human <strong>inspects</strong> them, fixes the cause, and <strong>moves them back</strong> for reprocessing.</p>
+<h2 id="23-4-backlogs">23.4 Backlogs</h2>
+<p>A broker makes the system robust to outages: producers keep writing while the consumer is degraded. As long as <strong>arrival rate &lt;= deletion rate</strong> all is well; otherwise a <strong>backlog</strong> builds, giving <strong>bimodal behaviour</strong> (normal mode vs degraded mode); the longer it grows, the more time or resources to drain. Causes:</p>
+<ul>
+<li>more producers or higher throughput than the consumer can handle;</li>
+<li><strong>consumer degradation</strong> (slower processing, lower deletion rate);</li>
+<li>the consumer <strong>fails a fraction of messages</strong>, which are re-picked until they reach the dead letter channel, wasting resources and delaying healthy messages.</li>
+</ul>
+<p><strong>Detect</strong> by measuring the <strong>average time a message waits before first being read</strong>: the broker timestamps the write and the consumer compares it with the read time. Different physical clocks (section 8.1) make it imprecise but a good <strong>early warning</strong>.</p>
+<h2 id="23-5-fault-isolation">23.5 Fault isolation</h2>
+<p>A single producer emitting <strong>poisonous messages</strong> (fail repeatedly) degrades the consumer and can create a backlog, since each is processed several times before the dead letter channel.</p>
+<p>If messages carry a <strong>source identifier</strong>, the consumer can treat them differently: e.g. move a failing user's messages to a <strong>low-priority channel</strong> (read less often) without processing them on the main channel, <strong>isolating the damage</strong> one bad user can do.</p>
+<h2 id="part-iii-summary-the-author-s">Part III summary (the author's)</h2>
+<ul>
+<li>Scalability rests on <strong>three orthogonal patterns</strong>: <strong>functional decomposition</strong> (separate services with well-defined responsibilities), <strong>partitioning</strong>, <strong>replication</strong>.</li>
+<li>A small set of <strong>managed services</strong> builds a surprisingly large range of apps
+<ul>
+<li>the attraction is that <strong>someone else gets paged</strong> (Part V: maintaining a service is no small feat). Know how to: run instances in the cloud (<strong>EC2</strong>) and load-balance them (<strong>ELB</strong>)</li>
+<li>keep apps stateless with a <strong>file store (S3)</strong>, a <strong>key-value/document store (DynamoDB)</strong> and a <strong>messaging service (SQS, Kinesis)</strong>. These are reasonable defaults</li>
+<li>once you have a scalable core, add <strong>caching</strong> (managed Redis/Memcached) or <strong>CDNs</strong>.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+message channel / broker · producer / consumer · command vs event · 202 Accepted · point-to-point vs publish-subscribe · one-way / request-response / broadcast messaging · partition key · competing consumer · visibility timeout · at-least-once · exactly-once processing · dead letter channel · backlog · poisonous message.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 23 and the Part III summary. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">Understanding Distributed Systems 22: Control planes and data planes</a> · <a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">Understanding Distributed Systems 24: Part IV intro and common failure causes</a> · <a href="/book-digest/understanding-distributed-systems/uds-13-asynchronous-transactions/">Understanding Distributed Systems 13: Asynchronous transactions</a> · <a href="/book-digest/understanding-distributed-systems/uds-05-apis/">Understanding Distributed Systems 5: APIs</a> · <a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">&larr; Understanding Distributed Systems 22: Control planes and data planes</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">Understanding Distributed Systems 24: Part IV intro and common failure causes &rarr;</a></nav></main></body></html>

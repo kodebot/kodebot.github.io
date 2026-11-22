@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD)</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-13-architecting-for-the-delivery-lifecycle-ci-cd">Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD)</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 13. Previous: <a href="/book-digest/grokking-software-architecture/gsa-12-monoliths-vs-microservices/">Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-14-quality-and-observability/">Grokking Software Architecture 14: Architecting for Quality and Observability</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Deployability</strong> is a first-class -ility. A 40-step manual checklist at 2 a.m. is an <strong>architecture</strong> problem, not an IT problem.</li>
+<li>Traffic-shifting strategies: <strong>rolling</strong>, <strong>blue-green</strong>, <strong>canary</strong>. <strong>Feature flags</strong> separate <strong>deployment</strong> (engineering) from <strong>release</strong> (product).</li>
+<li>Governance as code: <strong>architectural fitness functions</strong> (NetArchTest, ArchUnit) as <strong>blocking</strong> CI gates; <strong>ratchet</strong> old debt.</li>
+<li>Change data shape with <strong>Expand/Contract</strong>; beware <strong>data divergence</strong> on rollback.</li>
+<li>Build <strong>one immutable image</strong> and <strong>promote</strong> it; consider <strong>testing in production</strong> vs a staging tier.</li>
+<li><strong>DORA metrics</strong> score the architecture. <strong>Knight Capital</strong> lost <strong>$440M</strong> in 45 minutes to a manual deployment.</li>
+</ul>
+</div></div>
+<h2 id="13-2-designing-for-deployability">13.2 Designing for deployability</h2>
+<p>A system that cannot be deployed &quot;at 2 p.m. on a Tuesday without anyone breaking a sweat&quot; has boundaries that are not as decoupled as you think (Humble and Farley, <em>Continuous Delivery</em>; Fowler: https://martinfowler.com/bliki/ContinuousDelivery.html).</p>
+<ul>
+<li><strong>Monolith:</strong> one artifact; but across 20 nodes behind a load balancer the pipeline must run <strong>rolling upgrades</strong> (drain connection pools, verify health checks, update target groups).</li>
+<li><strong>Microservices:</strong> the pipeline must also coordinate independent schedules, <strong>backward-compatible API contracts</strong> (ch. 6) and ensure shipping v2.4 cannot take down checkout.</li>
+</ul>
+<h2 id="13-3-deployment-strategies">13.3 Deployment strategies</h2>
+<p><strong>Big Bang (recreate):</strong> stop v1, show a maintenance page, upload v2, pray. Two hours dark to change a button colour violates SLAs.</p>
+<h3 id="rolling-updates-assembly-line">Rolling updates (assembly line)</h3>
+<p>Replace instances one by one or in small batches: drain, upgrade, health-check, return to the load balancer.</p>
+<ul>
+<li><strong>Pro:</strong> cheap; no parallel environment.</li>
+<li><strong>Con: dual-version problem:</strong> v1 and v2 serve the same pool; one refresh may hit v1 then v2, so schema changes cannot be dropped blindly (see Expand/Contract).</li>
+</ul>
+<h3 id="blue-green-parallel-worlds">Blue-green (parallel worlds)</h3>
+<p><strong>Blue</strong> = live (100% of traffic); <strong>Green</strong> = an identical isolated copy running the new code. Run end-to-end, load and security tests on Green, then flip <strong>one routing setting</strong> at the gateway or load balancer.</p>
+<p><img src="/book-digest/grokking-software-architecture/img/blue-green.svg" alt="Blue-green deployment" loading="lazy" /></p>
+<ul>
+<li><strong>Pro:</strong> zero downtime, no version mixing, near-instant rollback (flip back).</li>
+<li><strong>Con:</strong> two full environments (the &quot;Infrastructure Premium&quot;).</li>
+<li><strong>Data-divergence trap:</strong> orders written to Green in the five live minutes are trapped in Green's database if you roll back to Blue; you need a synchronisation strategy.</li>
+</ul>
+<h3 id="canary-early-warning">Canary (early warning)</h3>
+<p>Named for miners' canaries. Send a tiny slice (e.g. <strong>2%</strong>) of real traffic to the new version, watch error rates and checkout completion, then dial up (10%, 25%, 50%...) or tear down (https://martinfowler.com/bliki/CanaryRelease.html).</p>
+<ul>
+<li><strong>Pro:</strong> minimal blast radius using real behaviour.</li>
+<li><strong>Con:</strong>
+<ul>
+<li>operational complexity</li>
+<li>needs <strong>session affinity</strong> (no hopping between canary and main mid-session)</li>
+<li>both versions write to the shared database, so <strong>data divergence</strong> needs Expand/Contract.</li>
+</ul>
+</li>
+</ul>
+<h3 id="deployment-vs-release-feature-flags">Deployment vs release: feature flags</h3>
+<ul>
+<li><strong>Deployment</strong> = moving binaries to production (engineering concern).</li>
+<li><strong>Release</strong> = making a feature visible (product concern).</li>
+<li>A <strong>feature flag</strong> (toggle) changes the runtime path without redeploying:<pre class="hl"><code><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">_featureManager</span><span class="p">.</span><span class="n">IsEnabled</span><span class="p">(</span><span class="s">"EnterpriseDiscountV2"</span><span class="p">))</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">CalculateEnterpriseDiscount</span><span class="p">(</span><span class="n">order</span><span class="p">);</span>
+<span class="k">else</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nf">CalculateLegacyDiscount</span><span class="p">(</span><span class="n">order</span><span class="p">);</span>
+</code></pre>
+</li>
+<li><strong>Dark launch:</strong> ship with the flag off; enable for QA/audit accounts only; marketing flips it later with no pipeline run (Separation of Concerns).</li>
+<li><strong>Flag debt:</strong> forgotten toggles create dead paths (the Knight Capital cause). Govern with:
+<ul>
+<li><strong>Expiry metadata:</strong> owner, creation date, <code>expires: &quot;2026-10-01&quot;</code>; a CI fitness function fails the build past expiry.</li>
+<li><strong>Telemetry-driven stale audits:</strong> LaunchDarkly, Unleash; a flag 100% true or false for <strong>14 days</strong> is stale and auto-ticketed.</li>
+<li><strong>AST linters</strong> such as Uber's <strong>Piranha</strong> remove the dead branch and open a PR.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Trade-off matrix</strong></p>
+<table>
+<thead>
+<tr>
+<th>Strategy</th>
+<th>Infra cost</th>
+<th>Rollback speed</th>
+<th>Dual-version risk</th>
+<th>Operational complexity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Big Bang</td>
+<td>low</td>
+<td>very slow</td>
+<td>none</td>
+<td>very low</td>
+</tr>
+<tr>
+<td>Rolling</td>
+<td>low</td>
+<td>moderate</td>
+<td>high</td>
+<td>medium</td>
+</tr>
+<tr>
+<td>Blue-green</td>
+<td>high (double footprint)</td>
+<td>instantaneous</td>
+<td>none (but see data divergence)</td>
+<td>medium</td>
+</tr>
+<tr>
+<td>Canary</td>
+<td>low-medium</td>
+<td>fast</td>
+<td>controlled</td>
+<td>high</td>
+</tr>
+</tbody>
+</table>
+<p>AWS comparison: https://docs.aws.amazon.com/whitepapers/latest/overview-deployment-options/overview-deployment-options.html.</p>
+<h2 id="13-4-architecture-governance-automated-guardrails">13.4 Architecture governance: automated guardrails</h2>
+<p><strong>AI risk (Jekyll and Hyde):</strong> an AI assistant writes syntactically fine code but takes the path of least resistance, leaking boundaries (&quot;accidental arsonist&quot;), 10 times faster. Tired human reviewers miss structural leaks (a query creeping into a controller). Blog: https://blogs.realworldbooks.academy/the-accidental-architecture-crisis.</p>
+<p><strong>Fitness functions as unit tests</strong> (ch. 4): NetArchTest (.NET), ArchUnit (Java/TypeScript) parse compiled code into a graph. Two rules:</p>
+<ol>
+<li>Domain layer must <strong>not depend</strong> on Infrastructure.</li>
+<li>Controllers must be named <code>*Controller</code> and live in the Presentation namespace.</li>
+</ol>
+<pre class="hl"><code><span class="na">[Fact]</span><span class="w"> </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="n">DomainLayer_ShouldNot_DependOn_InfrastructureLayer</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">var</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Types</span><span class="p">.</span><span class="n">InAssembly</span><span class="p">(</span><span class="k">typeof</span><span class="p">(</span><span class="n">Domain</span><span class="p">.</span><span class="n">Order</span><span class="p">).</span><span class="n">Assembly</span><span class="p">)</span>
+<span class="w">      </span><span class="p">.</span><span class="n">That</span><span class="p">().</span><span class="n">ResideInNamespace</span><span class="p">(</span><span class="s">"ShopZilla.OrderService.Domain"</span><span class="p">)</span>
+<span class="w">      </span><span class="p">.</span><span class="n">ShouldNot</span><span class="p">().</span><span class="n">HaveDependencyOn</span><span class="p">(</span><span class="s">"ShopZilla.OrderService.Infrastructure"</span><span class="p">).</span><span class="n">GetResult</span><span class="p">();</span>
+<span class="w">  </span><span class="n">Assert</span><span class="p">.</span><span class="n">True</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="n">IsSuccessful</span><span class="p">,</span><span class="w"> </span><span class="s">"Data Isolation Error: Core Domain cannot depend on Infrastructure!"</span><span class="p">);</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>The build goes red and deployment halts.</p>
+<h3 id="expand-contract-parallel-change">Expand/Contract (parallel change)</h3>
+<p>Swapping binaries takes milliseconds; changing data shape is &quot;remodelling a house during a dinner party&quot;. Never run a raw <code>ALTER TABLE ... DROP COLUMN</code> on a live database.</p>
+<p><img src="/book-digest/grokking-software-architecture/img/expand-contract.svg" alt="Expand, transition, contract" loading="lazy" /></p>
+<p>Rename <code>customer_phone</code> to <code>phone_mobile</code>:</p>
+<ol>
+<li><strong>Expand:</strong> add the new empty column beside the old; old code still works.</li>
+<li><strong>Transition:</strong> write both (<code>INSERT INTO orders (id, customer_phone, phone_mobile) VALUES (101, '555-0199', '555-0199')</code>), backfill history. Use deterministic write ordering or optimistic locks so a v1 container does not overwrite a migrated row.</li>
+<li><strong>Contract:</strong> when analytics show 100% of instances use the new schema, release the cleanup that removes legacy code and drops the old column.</li>
+</ol>
+<p>Talk: Pramod Sadalage (https://www.youtube.com/watch?v=emgBzHZJwN4). Your service boundaries decide the pain: a shared multi-service database needs cross-team orchestration; strict database isolation keeps it contained.</p>
+<p><strong>Preventing data divergence (survival guide)</strong></p>
+<ul>
+<li><strong>Golden rule:</strong> never let two concurrent versions make incompatible structural mutations on one schema.</li>
+<li><strong>Automate with Expand/Contract</strong>, abandon destructive scripts.</li>
+<li><strong>Inversion toggle:</strong>
+<ul>
+<li>a runtime flag, separate from delivery switches, forcing the app to stop writing the new format and revert to legacy when you roll back</li>
+<li>otherwise the old version chokes on new rows.</li>
+</ul>
+</li>
+<li><strong>Deployment circuit breakers:</strong> trip when DB latency crosses the SLA during backfills or index builds (ch. 10).</li>
+<li><strong>Graceful degradation:</strong> drop to <strong>read-only mode</strong> or serve cached responses during migration locks.</li>
+</ul>
+<h3 id="common-pitfalls-with-guardrails">Common pitfalls with guardrails</h3>
+<ul>
+<li><strong>&quot;Perfect architecture&quot; trap:</strong> don't enforce everything on day one; start with one critical rule.</li>
+<li><strong>&quot;Silent killer&quot; gate:</strong> warnings that do not fail the build are ignored; guardrails must <strong>block</strong>.</li>
+<li><strong>No on-ramp:</strong>
+<ul>
+<li>use a <strong>ratchet gate</strong>. If the legacy code has 85 violations, set the ceiling at <strong>85</strong></li>
+<li>an 86th fails</li>
+<li>if someone fixes down to 78, the baseline becomes <strong>78</strong>. Pair with the <strong>Boy Scout Rule</strong> (leave code cleaner than you found it).</li>
+</ul>
+</li>
+<li>(Strangler Fig appears for the third time, ch. 5, 12.) Reference: Ford, Parsons, Kua, <em>Building Evolutionary Architectures</em>.</li>
+</ul>
+<h2 id="13-5-the-ci-cd-pipeline-conveyor-belt-of-truth">13.5 The CI/CD pipeline: conveyor belt of truth</h2>
+<p><img src="/book-digest/grokking-software-architecture/img/cicd-pipeline.svg" alt="CI/CD pipeline" loading="lazy" /></p>
+<ol>
+<li><strong>Commit trigger:</strong> a human or AI pushes; a webhook starts an ephemeral cloud runner (ch. 9).</li>
+<li><strong>Guardrail gauntlet (CI):</strong> linting and formatting; unit and integration tests; <strong>fitness functions</strong> (an unauthorised Domain-to-Presentation dependency crashes the pipeline here).</li>
+<li><strong>Assembly:</strong> build an <strong>immutable container image</strong>, tag it uniquely, store it in a private registry.</li>
+<li><strong>Zero-downtime landing (CD):</strong> per the chosen strategy (e.g. blue-green: start Green, watch health, flip routing).</li>
+</ol>
+<h3 id="roll-forward-vs-rollback">Roll forward vs rollback</h3>
+<ul>
+<li><strong>Rollback:</strong> re-point routing to the previous stable image (instant; risks dual-version and data divergence, reconcile data from the failure window).</li>
+<li><strong>Roll forward:</strong> hotfix goes through the full pipeline (v2.1 over faulty v2.0).</li>
+<li><strong>Warning:</strong>
+<ul>
+<li>roll forward only works if <strong>MTTR</strong> is low</li>
+<li>The true lead time includes:
+<ul>
+<li><strong>diagnosis and triage</strong></li>
+<li><strong>build and automated verification</strong></li>
+<li><strong>artifact baking and supply-chain tagging (SBOM, vulnerability scan)</strong></li>
+<li><strong>governance gates (approvals)</strong></li>
+<li><strong>cluster promotion and health probes</strong></li>
+</ul>
+</li>
+<li>If this takes <strong>45 minutes</strong>, users suffer 45 minutes; in finance or medical systems, <strong>instant rollback</strong> stays the default.</li>
+</ul>
+</li>
+</ul>
+<h2 id="13-6-code-github-actions-pipeline">13.6 Code: GitHub Actions pipeline</h2>
+<pre class="hl"><code><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Order Service Lifecycle Pipeline</span>
+<span class="nt">on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> push</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> branches</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"main"</span><span class="p p-Indicator">]</span><span class="w"> </span><span class="p p-Indicator">},</span><span class="nt"> pull_request</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> branches</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"main"</span><span class="p p-Indicator">]</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">     </span><span class="c1"># A: trigger on commit/PR</span>
+<span class="nt">jobs</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">verify-and-build</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">runs-on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu-latest</span><span class="w">                                                      </span><span class="c1"># B: ephemeral "cattle" runner</span>
+<span class="w">    </span><span class="nt">steps</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actions/checkout@v4</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actions/setup-dotnet@v4</span>
+<span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> dotnet-version</span><span class="p">:</span><span class="w"> </span><span class="s">'10.0.x'</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dotnet restore</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dotnet test --no-restore --configuration Release</span><span class="w">                  </span><span class="c1"># C: governance gate (unit + fitness tests)</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">if</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">github.event_name == 'push' &amp;&amp; github.ref == 'refs/heads/main'</span>
+<span class="w">        </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker/login-action@v3</span>
+<span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> registry</span><span class="p">:</span><span class="w"> </span><span class="nv">registry.shopzilla.com</span><span class="p p-Indicator">,</span>
+<span class="nt">                username</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">secrets.REGISTRY_USERNAME</span><span class="w"> </span><span class="p p-Indicator">}},</span><span class="nt"> password</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">secrets.REGISTRY_PASSWORD</span><span class="w"> </span><span class="p p-Indicator">}}</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">  </span><span class="c1"># D: secrets from the vault</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">if</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">github.event_name == 'push' &amp;&amp; github.ref == 'refs/heads/main'</span>
+<span class="w">        </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker/build-push-action@v5</span>
+<span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> context</span><span class="p">:</span><span class="w"> </span><span class="nv">.</span><span class="p p-Indicator">,</span><span class="nt"> file</span><span class="p">:</span><span class="w"> </span><span class="nv">./ShopZilla.OrderService/Dockerfile</span><span class="p p-Indicator">,</span><span class="nt"> push</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="p p-Indicator">,</span>
+<span class="nt">                tags</span><span class="p">:</span><span class="w"> </span><span class="s">"registry.shopzilla.com/order-service:latest,</span><span class="nv"> </span><span class="s">registry.shopzilla.com/order-service:${{</span><span class="nv"> </span><span class="s">github.sha</span><span class="nv"> </span><span class="s">}}"</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">  </span><span class="c1"># E</span>
+</code></pre>
+<ul>
+<li><strong>A:</strong> the pipeline runs on every commit or PR to <code>main</code>.</li>
+<li><strong>B:</strong> a fresh runner used for ~60 seconds then destroyed (cattle, ch. 9).</li>
+<li><strong>C:</strong> <code>dotnet test</code> also runs the architecture rules; a breach breaks the chain.</li>
+<li><strong>D:</strong> no hardcoded credentials (ch. 11).</li>
+<li><strong>E:</strong> double tagging: <code>latest</code> for convenience, <code>${{ github.sha }}</code> as the <strong>traceable fingerprint</strong> of the commit.</li>
+<li><strong>Takeaway:</strong> look at the <strong>shape</strong> (clean environment, automated boundaries, immutable artifact, safe push), not the YAML syntax.</li>
+</ul>
+<h2 id="13-7-environment-promotion-as-architectural-confidence">13.7 Environment promotion as architectural confidence</h2>
+<p><strong>Environment promotion:</strong> the <strong>single immutable artifact</strong>, compiled once, is promoted through a chain of environments by its <strong>SHA</strong>. Never build a &quot;similar&quot; container per environment (configuration drift).</p>
+<ol>
+<li><strong>Local sandbox:</strong> fluid; proves intent, not survival in a network (&quot;works on my machine&quot;).</li>
+<li><strong>Dev environment:</strong> shared cloud, closer to production.</li>
+<li><strong>Pre-production gateway:</strong> staging <strong>or</strong> testing in production.</li>
+</ol>
+<p><strong>The staging dilemma:</strong> a permanent physical clone of production is &quot;often a well-intentioned lie&quot;: data drifts, sizes mismatch for cost, simulated load never matches real human traffic; systems pass staging then die at real scale. You &quot;pick your pain&quot;: pay to maintain staging, or invest in <strong>testing in production</strong>:</p>
+<ul>
+<li><strong>Dark launch</strong> to live servers behind isolated routing.</li>
+<li><strong>Canary</strong> to ~1% of real sessions while watching dashboards.</li>
+<li><strong>Expand/Contract</strong> schemas and <strong>inversion flags</strong> as safety latches.</li>
+</ul>
+<p><strong>When to keep staging:</strong> compliance (banking, medical privacy) that legally mandates a partition between unreleased code and real user records; heavily coupled shared databases or legacy mainframes that cannot be isolated by toggles.</p>
+<p><strong>When to promote straight to production</strong> (all four prerequisites):</p>
+<ol>
+<li><strong>High-confidence automated testing</strong> (unit, integration, contract, fitness functions).</li>
+<li><strong>Strict service decoupling</strong> (bounded contexts).</li>
+<li><strong>Ephemeral preview environments</strong> (IaC).</li>
+<li><strong>Fine-grained production routing controls</strong> (dark launch, inversion flags, canary proxies).</li>
+</ol>
+<p>Rule of thumb: if you cannot isolate a failure to a single-digit percentage of users within milliseconds, keep staging; if you can, production is the final validation loop.</p>
+<h2 id="13-8-dora-metrics-the-architecture-s-report-card">13.8 DORA metrics: the architecture's report card</h2>
+<p>DORA (DevOps Research and Assessment) shows you need not trade speed for stability (GitLab guide: https://docs.gitlab.com/user/analytics/dora_metrics).</p>
+<table>
+<thead>
+<tr>
+<th>Axis</th>
+<th>Metric</th>
+<th>What it reveals</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Velocity</td>
+<td><strong>Deployment frequency</strong></td>
+<td>tangled monolith = once a quarter; decoupled services = many times a day</td>
+</tr>
+<tr>
+<td>Velocity</td>
+<td><strong>Lead time for changes</strong></td>
+<td>commit to production: manual provisioning = weeks; pipeline-gated containers = minutes</td>
+</tr>
+<tr>
+<td>Stability</td>
+<td><strong>Change failure rate</strong></td>
+<td>% of deployments needing intervention; symptom of poor testability (fix with fitness functions)</td>
+</tr>
+<tr>
+<td>Stability</td>
+<td><strong>Time to restore service (MTTR)</strong></td>
+<td>hidden dependency webs = hours; routing logic and runtime toggles = seconds</td>
+</tr>
+</tbody>
+</table>
+<h2 id="13-9-the-dork-side-knight-capital-s-440m-deployment-error">13.9 The Dork Side: Knight Capital's $440M deployment error</h2>
+<p><strong>1 August 2012:</strong> Knight Capital, the largest US equities trader (<strong>17%</strong> of NYSE volume), was functionally bankrupt by the afternoon.</p>
+<ul>
+<li><strong>Setup:</strong>
+<ul>
+<li>for the NYSE <strong>Retail Liquidity Program</strong> (live Aug 1) Knight upgraded its <strong>SMARS</strong> trading software (it splits big orders into small ones for the best price). Engineers <strong>repurposed an old dormant flag, <code>PowerPeg</code></strong>, whose code (an old strategy that bought stock without checking total volume) sat untested for years</li>
+<li>they left the dead code rather than delete it.</li>
+</ul>
+</li>
+<li><strong>Deployment:</strong> an admin manually copied files to <strong>8 servers</strong>; on July 31 he updated servers 1 to 7 and <strong>forgot server 8</strong>. No automated verification caught it.</li>
+<li><strong>9:30 a.m. open:</strong> server 8 ran old code that interpreted the new data through the resurrected PowerPeg logic and began buying and selling <strong>millions of shares a second</strong>.</li>
+<li><strong>The fatal response:</strong> with no observability or fleet-state check, they <strong>uninstalled the new software from servers 1 to 7</strong> so all eight ran the old logic and the losses accelerated.</li>
+<li><strong>10:15 a.m.:</strong> shut down after 45 minutes; <strong>$440 million</strong> unauthorised losses; capital gone.</li>
+</ul>
+<p><strong>What was violated</strong></p>
+<ul>
+<li><strong>Primary root cause: no deployment verification</strong> (nodes' build tag checks would have blocked the rollout).</li>
+<li><strong>Manual &quot;ClickOps&quot;:</strong> automated build and deploy of one immutable image to the whole fleet makes a forgotten node impossible.</li>
+<li><strong>Blind rollback instead of routing:</strong> blue-green would have let them flip back to untouched Blue in a fraction of a second.</li>
+<li><strong>Zombie code:</strong> dead flags must be pruned and guarded (fitness functions and expiry).</li>
+</ul>
+<p><strong>Defending -ilities against &quot;ship by Friday&quot;:</strong> (1) reframe technical risk as financial and operational risk (use Knight Capital); (2) use the <strong>Tradeoff Triangle</strong>: skipping gates means accepting a higher change-failure rate and longer MTTR; (3) write an <strong>ADR</strong> recording the business's explicit risk acceptance.</p>
+<h2 id="13-10-mission-checklist-recap">13.10 Mission, checklist, recap</h2>
+<p><strong>Mission: diagram the Shop-Zilla Order Service pipeline</strong> (the team pushes to <code>main</code> with ClickOps; a column rename caused a <strong>4-hour outage</strong>). Three stages:</p>
+<ol>
+<li><strong>Gated verification belt (CI):</strong> chronological steps before an artifact is baked, showing where fitness functions block violations.</li>
+<li><strong>Progressive promotion:</strong> label environments showing one immutable image building trust while avoiding a permanent staging tier.</li>
+<li><strong>Zero-downtime release (CD):</strong> chart the backward-compatible states to rename <code>billing_address</code> to <code>address_invoice</code>, plus a checkpoint node decoupling placement from visibility (feature flag).</li>
+</ol>
+<p>(Mermaid scaffold and guided solution in Appendix A.) Next: observability (ch. 14).</p>
+<p><strong>Recap:</strong> deployability is architectural; rolling, blue-green, canary; separate deployment from release; governance as blocking code; expand/contract; immutable artifact promotion; DORA metrics.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+deployability · rolling update · blue-green · canary · session affinity · feature flag · dark launch · flag debt · fitness function · ratchet gate · Boy Scout Rule · Expand/Contract · data divergence · inversion toggle · immutable artifact · environment promotion · testing in production · roll forward vs rollback · MTTR · DORA metrics.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 13. Pre-release; no public source page found.</li>
+<li>Humble and Farley, <em>Continuous Delivery</em>; Fowler: https://martinfowler.com/bliki/CanaryRelease.html</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-12-monoliths-vs-microservices/">Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices</a> · <a href="/book-digest/grokking-software-architecture/gsa-14-quality-and-observability/">Grokking Software Architecture 14: Architecting for Quality and Observability</a> · <a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">Understanding Distributed Systems 30: Continuous delivery and deployment</a> · <a href="/book-digest/grokking-software-architecture/gsa-09-architecting-for-the-cloud/">Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</a> · <a href="/book-digest/grokking-software-architecture/gsa-04-thinking-in-layers/">Grokking Software Architecture 4: Thinking in Layers</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-12-monoliths-vs-microservices/">&larr; Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-14-quality-and-observability/">Grokking Software Architecture 14: Architecting for Quality and Observability &rarr;</a></nav></main></body></html>

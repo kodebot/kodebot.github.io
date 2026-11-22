@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 13: Docker migration tips and tricks</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-13-docker-migration-tips-and-tricks">Podman for DevOps 13: Docker migration tips and tricks</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 13. Previous: <a href="/book-digest/podman-for-devops/pfd-12-implementing-container-networking-concepts/">Podman for DevOps 12: Implementing container networking concepts</a>. Next: <a href="/book-digest/podman-for-devops/pfd-14-interacting-with-systemd-and-kubernetes/">Podman for DevOps 14: Interacting with systemd and Kubernetes</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Podman's CLI is <strong>Docker-compatible</strong>: <code>alias docker=podman</code>, or install <strong><code>podman-docker</code></strong> (a <code>docker</code> script that <code>exec</code>s Podman and links the man pages).</li>
+<li><strong>No direct container migration</strong>: recreate containers from their images and reattach volumes (or <code>docker export</code> / <code>podman import</code>; skip it if you use a registry).</li>
+<li>A few commands <strong>behave differently</strong> (<code>volume create</code> fails if it exists, <code>-v</code> fails if the path is missing, <code>--restart</code> needs <code>podman-restart.service</code>); some Docker commands are <strong>missing</strong> (<code>plugin</code>, <code>swarm</code>, <code>trust</code> becomes <code>podman image trust</code>) and Podman has extras (<code>generate</code>, <code>kube</code>, <code>pod</code>, <code>play</code>, <code>machine</code>, <code>unshare</code>, <code>volume export/import</code>...).</li>
+<li><strong>Compose:</strong> Podman 3.0's Docker-compatible socket lets the official <strong><code>docker-compose</code></strong> (Go, v2) work rootful; <strong><code>podman-compose</code></strong> (community Python wrapper) works rootless. Service names resolve via <strong>aardvark-dns</strong> (round-robin for replicas).</li>
+<li>The direction of travel: <strong>Quadlets</strong> with systemd on one host and <strong><code>podman kube</code></strong> for Kubernetes or OpenShift (next chapter).</li>
+</ul>
+</div></div>
+<h2 id="13-1-migrating-existing-images-and-playing-with-a-command-alias">13.1 Migrating existing images and playing with a command alias</h2>
+<p>Podman offers complete <strong>CLI compatibility with Docker</strong>, so Docker users switch easily.</p>
+<pre class="hl"><code><span class="c1"># alias docker=podman</span>
+<span class="c1"># docker</span>
+Error:<span class="w"> </span>missing<span class="w"> </span><span class="nb">command</span><span class="w"> </span><span class="s1">'podman COMMAND'</span>
+Try<span class="w"> </span><span class="s1">'podman --help'</span><span class="w"> </span><span class="k">for</span><span class="w"> </span>more<span class="w"> </span>information.
+</code></pre>
+<p>The output comes from Podman. <strong>Alternative: the <code>podman-docker</code> package</strong> installs a <code>docker</code> script emulating the Docker CLI on top of Podman (and links man pages, so <code>man docker</code> shows Podman's):</p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>podman-docker
+$<span class="w"> </span>cat<span class="w"> </span>/usr/bin/docker
+<span class="c1">#!/usr/bin/sh</span>
+<span class="o">[</span><span class="w"> </span>-e<span class="w"> </span>/etc/containers/nodocker<span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">XDG_CONFIG_HOME</span><span class="p">-</span><span class="nv">$HOME</span><span class="p">/.config</span><span class="si">}</span><span class="s2">/containers/nodocker"</span><span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg."</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span>
+<span class="nb">exec</span><span class="w"> </span>/usr/bin/podman<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span>
+</code></pre>
+<p>Create <code>/etc/containers/nodocker</code> to silence the message. Try it:</p>
+<pre class="hl"><code><span class="c1"># docker version                         # prints "Client: Podman Engine, Version 5.4.2 ..."</span>
+<span class="c1"># docker run --rm -it docker.io/wernight/funbox nyancat       # a running cat (Figure 13.1)</span>
+<span class="c1"># docker run -dp 80:80 docker.io/docker/getting-started       # Docker's tutorial on http://localhost (Figure 13.2)</span>
+</code></pre>
+<p>Follow the Docker Labs tutorial to check the alias at each stage, but <strong>stop before the &quot;Using Docker Compose&quot; section</strong> (covered next).</p>
+<p><strong>Migrating existing containers:</strong> there is <strong>no direct way</strong> to move running containers from Docker to Podman. Recommended: <strong>recreate</strong> them from their images and reattach volumes with Podman. Images can be exported with <code>docker export</code> (a TAR archive) and imported with <code>podman import</code>; <strong>skip this if you use a registry</strong>.</p>
+<h2 id="13-2-podman-commands-versus-docker-commands">13.2 Podman commands versus Docker commands</h2>
+<p>Many names are identical (<code>ps</code>, <code>pull</code>, <code>push</code>, <code>rename</code>, <code>restart</code>, <code>rm</code>, <code>rmi</code>, <code>run</code>), but architecture differences (no daemon) mean some behaviours differ or need workarounds.</p>
+<h3 id="behavioural-differences-intentional">Behavioural differences (intentional)</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Podman behaviour</th>
+<th>Docker behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>podman volume create</code></td>
+<td><strong>fails</strong> if the volume already exists</td>
+<td>idempotent: skips if it exists (the Podman team considers Docker's behaviour inconsistent with its other commands)</td>
+</tr>
+<tr>
+<td><code>podman run -v /tmp/noexist:/tmp</code></td>
+<td><strong>fails</strong> if the source path doesn't exist</td>
+<td>creates the folder (Podman treats that as a bug and changed it)</td>
+</tr>
+<tr>
+<td><code>podman run --restart</code></td>
+<td>older releases didn't persist restart policy across reboot; on modern Fedora and RHEL run <code>sudo systemctl enable --now podman-restart.service</code>, which scans for containers with <code>always</code> or <code>unless-stopped</code> policies at boot and starts them</td>
+<td>persists via the daemon</td>
+</tr>
+</tbody>
+</table>
+<h3 id="missing-in-podman">Missing in Podman</h3>
+<table>
+<thead>
+<tr>
+<th>Docker command</th>
+<th>Podman situation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docker plugin</code></td>
+<td><strong>no plugin support</strong> at the time of writing; the team suggests <strong>alternative OCI runtimes or OCI runtime hooks</strong></td>
+</tr>
+<tr>
+<td><code>docker swarm</code></td>
+<td><strong>Docker Swarm is not supported</strong>; for multi-node clustering and orchestration move to <strong>Kubernetes</strong> (in production the cluster typically uses a bare-bones runtime like <strong>CRI-O</strong>, not the Podman CLI)</td>
+</tr>
+<tr>
+<td><code>docker trust</code></td>
+<td>implemented as <strong><code>podman image trust</code></strong> (chapter 10)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="missing-in-docker">Missing in Docker</h3>
+<table>
+<thead>
+<tr>
+<th>Podman command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>podman generate</code></td>
+<td>structured output (e.g. YAML) for a container, pod or volume</td>
+</tr>
+<tr>
+<td><code>podman healthcheck</code></td>
+<td>manage container health checks</td>
+</tr>
+<tr>
+<td><code>podman machine</code></td>
+<td>manage Podman's VM on macOS and Windows (works on Linux but rarely useful)</td>
+</tr>
+<tr>
+<td><code>podman mount</code>, <code>podman unmount</code></td>
+<td>mount or unmount a container's root filesystem on the host</td>
+</tr>
+<tr>
+<td><code>podman play</code></td>
+<td>create containers, pods or volumes from a structured file such as YAML</td>
+</tr>
+<tr>
+<td><code>podman pod</code></td>
+<td>manage pods</td>
+</tr>
+<tr>
+<td><code>podman unshare</code></td>
+<td>run a process in a new user namespace (rootless)</td>
+</tr>
+<tr>
+<td><code>podman untag</code></td>
+<td>remove one or more tags from stored images (the book's text says &quot;removes one or more stored images&quot;)</td>
+</tr>
+<tr>
+<td><code>podman kube</code></td>
+<td>work with Kubernetes YAML: <code>podman kube play</code> launches a local pod from a manifest; <code>podman kube generate</code> exports your container configuration for a cluster</td>
+</tr>
+<tr>
+<td><code>podman volume export</code> / <code>import</code></td>
+<td>tarball a volume's contents and move it between systems or backups (Docker typically needs manual copying or scripts)</td>
+</tr>
+</tbody>
+</table>
+<p>A missing command does not mean the feature is missing from the other tool.</p>
+<h2 id="13-3-using-docker-compose-with-podman">13.3 Using Docker Compose with Podman</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-13-compose-options.svg" alt="docker-compose via the socket, or podman-compose" loading="lazy" /></p>
+<p><strong>Compose</strong> orchestrates multi-container applications on <strong>a single host</strong> from a declarative <strong>YAML</strong> file (<code>docker-compose.yaml</code>): services (and volumes) that talk to each other with transparent name resolution. Good for quick single-host testing; for production-like <strong>multi-node</strong> setups use a clustered orchestrator such as Kubernetes.</p>
+<p><strong>History:</strong> early Podman had no daemon or REST API for the original <code>docker-compose</code> to talk to. The community built <strong><code>podman-compose</code></strong>, an <strong>independent, community-maintained</strong> Python wrapper that translated Compose YAML into <code>podman</code> commands (not maintained by the core Podman team). <strong>Podman 3.0</strong> introduced a native <strong>Docker-compatible Unix socket and REST API</strong>, so the <strong>official <code>docker-compose</code> (written in Go)</strong> can talk to Podman as if it were the Docker daemon.</p>
+<h3 id="docker-compose-quick-start">Docker Compose quick start</h3>
+<p>Spec: https://docs.docker.com/reference/compose-file/; examples: https://github.com/docker/awesome-compose.</p>
+<p><strong>Single container</strong> (<code>Chapter13/registry/docker-compose.yaml</code>):</p>
+<pre class="hl"><code><span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">registry</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"5000:5000"</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">registry_volume:/var/lib/registry</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker.io/library/registry</span>
+<span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">registry_volume</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{}</span>
+</code></pre>
+<p><strong>WordPress with MySQL</strong> (<code>Chapter13/wordpress/docker-compose.yaml</code>):</p>
+<pre class="hl"><code><span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">db</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker.io/library/mysql:latest</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="s">'--default-authentication-plugin=mysql_native_password'</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">db_data:/var/lib/mysql</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">always</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MYSQL_ROOT_PASSWORD=wordpressroot</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MYSQL_DATABASE=wordpress</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MYSQL_USER=wordpress</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MYSQL_PASSWORD=wordpress</span>
+<span class="w">    </span><span class="nt">expose</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3306</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">33060</span>
+<span class="w">  </span><span class="nt">wordpress</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker.io/library/wordpress:latest</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080:80</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">always</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WORDPRESS_DB_HOST=db</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WORDPRESS_DB_USER=wordpress</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WORDPRESS_DB_PASSWORD=wordpress</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WORDPRESS_DB_NAME=wordpress</span>
+<span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">db_data</span><span class="p">:</span>
+</code></pre>
+<p>Two top-level objects: <code>services</code> (here <code>db</code> and <code>wordpress</code>) and <code>volumes</code>. Volumes can be created by Compose or reuse existing ones marked <strong>external</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Service key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>image</code></td>
+<td>image used by the container</td>
+</tr>
+<tr>
+<td><code>command</code></td>
+<td>extra arguments for the entry point</td>
+</tr>
+<tr>
+<td><code>volumes</code></td>
+<td>volumes mounted with mount points; host directories can also be bind-mounted</td>
+</tr>
+<tr>
+<td><code>restart</code></td>
+<td>restart policy on error</td>
+</tr>
+<tr>
+<td><code>expose</code></td>
+<td>ports exposed by the container</td>
+</tr>
+<tr>
+<td><code>ports</code></td>
+<td>host-to-container port mappings</td>
+</tr>
+<tr>
+<td><code>environment</code></td>
+<td>environment variables (here the WordPress DB connection parameters)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Go REST API with Redis</strong> (<code>Chapter13/golang-redis/docker-compose.yaml</code>):</p>
+<pre class="hl"><code><span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">web</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./app</span>
+<span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"com.example.description=Golang</span><span class="nv"> </span><span class="s">Redis</span><span class="nv"> </span><span class="s">App"</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"8080:8080"</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">REDIS_HOST=redis</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">redis</span>
+<span class="w">  </span><span class="nt">redis</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker.io/library/redis</span>
+<span class="w">    </span><span class="nt">deploy</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build</code></td>
+<td>the image to build, with custom labels</td>
+</tr>
+<tr>
+<td><code>context</code></td>
+<td>build path (<code>./app</code> holds the source and Dockerfile)</td>
+</tr>
+<tr>
+<td><code>labels</code></td>
+<td>labels passed as strings in the build</td>
+</tr>
+<tr>
+<td><code>depends_on</code></td>
+<td>other services this one depends on (here <code>redis</code>)</td>
+</tr>
+<tr>
+<td><code>environment</code></td>
+<td>here the <strong>name of the <code>redis</code> service</strong></td>
+</tr>
+<tr>
+<td><code>deploy</code></td>
+<td>custom parameters such as the number of <code>replicas</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Commands:</strong></p>
+<pre class="hl"><code>$<span class="w"> </span>docker-compose<span class="w"> </span>up<span class="w">               </span><span class="c1"># create the stack and volumes, print to stdout</span>
+$<span class="w"> </span>docker-compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w">            </span><span class="c1"># detached</span>
+$<span class="w"> </span>docker-compose<span class="w"> </span>up<span class="w"> </span>--build<span class="w">       </span><span class="c1"># build the images, then start</span>
+$<span class="w"> </span>docker-compose<span class="w"> </span>build<span class="w">            </span><span class="c1"># build without starting</span>
+$<span class="w"> </span>docker-compose<span class="w"> </span>down<span class="w">             </span><span class="c1"># shut down a detached stack (Ctrl+C for a foreground one)</span>
+$<span class="w"> </span>docker-compose<span class="w"> </span><span class="nb">kill</span><span class="w"> </span><span class="o">[</span>SERVICE<span class="o">]</span><span class="w">   </span><span class="c1"># kill an unresponsive container; -s SIGNAL for other signals</span>
+</code></pre>
+<h3 id="configuring-podman-to-work-with-docker-compose">Configuring Podman to work with docker-compose</h3>
+<p>Podman must expose its <strong>REST API on a local Unix socket</strong> (Docker-compatible and native libpod APIs). On Fedora:</p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>docker-compose<span class="w"> </span>podman-docker
+$<span class="w"> </span>sudo<span class="w"> </span>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>podman.socket<span class="w">       </span><span class="c1"># listens on /run/podman/podman.sock</span>
+</code></pre>
+<ul>
+<li>The <code>docker-compose</code> package on Fedora 42 installs <strong>version 2.37.3</strong> at the time of writing; <strong>v2 was rewritten in Go</strong> (1.x was Python), much faster; releases at https://github.com/docker/compose/releases.</li>
+<li><code>docker-compose</code> looks for <strong><code>/run/docker.sock</code></strong> by default; <code>podman-docker</code> creates a symlink to <code>/run/podman/podman.sock</code>:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># ls -al /run/docker.sock</span>
+lrwxrwxrwx.<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">23</span><span class="w"> </span>Feb<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">21</span>:54<span class="w"> </span>/var/run/docker.sock<span class="w"> </span>-&gt;<span class="w"> </span>/run/podman/podman.sock
+</code></pre>
+<ul>
+<li>The socket is accessible only by <strong>root</strong> by default; you could open access to all users or custom ACLs for a group, but rootless stacks are better served by <code>podman-compose</code> (below). The next examples run <strong>rootful</strong>.</li>
+</ul>
+<h3 id="running-a-compose-workload-go-and-redis">Running a Compose workload (Go and Redis)</h3>
+<p><code>Chapter13/golang-redis/Dockerfile</code> (multi-stage; the Go binary is copied into UBI minimal):</p>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/golang</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="s">builder</span>
+
+<span class="c"># Copy files for build</span>
+<span class="k">RUN</span><span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/go/src/golang-redis
+<span class="k">COPY</span><span class="w"> </span>go.mod<span class="w"> </span>main.go<span class="w"> </span>/go/src/golang-redis
+
+<span class="c"># Set the working directory</span>
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/go/src/golang-redis</span>
+
+<span class="c"># Download dependencies</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>get<span class="w"> </span>-d<span class="w"> </span>-v<span class="w"> </span>./...
+
+<span class="c"># Install the package</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>build<span class="w"> </span>-v
+
+<span class="c"># Runtime image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi9/ubi-minimal:latest</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="s">bin</span>
+<span class="k">COPY</span><span class="w"> </span>--from<span class="o">=</span>builder<span class="w"> </span>/go/src/golang-redis/golang-redis<span class="w"> </span>/usr/local/bin
+<span class="k">COPY</span><span class="w"> </span>entrypoint.sh<span class="w"> </span>/
+
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+
+<span class="k">ENTRYPOINT</span><span class="w"> </span><span class="p">[</span><span class="s2">"/entrypoint.sh"</span><span class="p">]</span>
+</code></pre>
+<p>The web front end listens on <strong>8080/tcp</strong> and has two endpoints: an HTTP <strong>POST</strong> to upload a JSON object (name, email, ID of a user) and a <strong>GET</strong> to retrieve it, stored in Redis (source: <code>Chapter13/golang-redis/app/main.go</code>).</p>
+<pre class="hl"><code><span class="c1"># cd Chapter13/golang-redis</span>
+<span class="c1"># docker-compose up --build -d</span>
+Successfully<span class="w"> </span>tagged<span class="w"> </span>localhost/golang-redis_web:latest
+Creating<span class="w"> </span>golang-redis_redis_1<span class="w"> </span>...<span class="w"> </span><span class="k">done</span>
+Creating<span class="w"> </span>golang-redis_web_1<span class="w"> </span>...<span class="w"> </span><span class="k">done</span>
+<span class="c1"># podman ps</span>
+4a5421c9e7cd<span class="w">  </span>docker.io/library/redis:latest<span class="w">      </span>redis-server<span class="w">  </span>...<span class="w">  </span>golang-redis_redis_1
+8a465d4724ab<span class="w">  </span>localhost/golang-redis_web:latest<span class="w">   </span>...<span class="w">  </span><span class="m">0</span>.0.0.0:8080-&gt;8080/tcp<span class="w">  </span>golang-redis_web_1
+</code></pre>
+<ul>
+<li>Container names follow <strong><code>&lt;project_name&gt;_&lt;service_name&gt;_&lt;instance_count&gt;</code></strong>; with <code>replicas: 3</code> the redis service gives three instances.</li>
+<li><strong>Name resolution:</strong> Compose creates a network named <strong><code>&lt;project_name&gt;_default</code></strong> and an <strong>aardvark-dns</strong> process resolves container IPs to the <strong>service names</strong>. The config file lists replicas under the same <code>redis</code> name:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>ps<span class="w"> </span>aux<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>aardvark-dns
+/usr/libexec/podman/aardvark-dns<span class="w"> </span>--config<span class="w"> </span>/run/user/1000/containers/networks/aardvark-dns<span class="w"> </span>-p<span class="w"> </span><span class="m">53</span><span class="w"> </span>run
+$<span class="w"> </span>cat<span class="w"> </span>golang-redis_default
+<span class="m">10</span>.89.5.1
+843bfd9c...<span class="w"> </span><span class="m">10</span>.89.5.2<span class="w"> </span>golang-redis-redis-1,golang-redis-redis-1,redis,843bfd9cf8f7
+776daece...<span class="w"> </span><span class="m">10</span>.89.5.3<span class="w"> </span>golang-redis-redis-2,golang-redis-redis-2,redis,776daece0e23
+adc43444...<span class="w"> </span><span class="m">10</span>.89.5.4<span class="w"> </span>golang-redis-redis-3,golang-redis-redis-3,redis,adc434444922
+</code></pre>
+<ul>
+<li>With several replicas the resolution works like <strong>round-robin DNS</strong>: a lookup of the service name returns as many IPs as there are replicas, a minimal load-balancing scheme.</li>
+<li><code>REDIS_HOST=redis</code> injected in the web container is the service name the Go app uses to connect; the container name and IP are irrelevant. Verify:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># docker-compose exec web env</span>
+<span class="nv">REDIS_HOST</span><span class="o">=</span>redis
+</code></pre>
+<blockquote>
+<p>[!note] Keep configuration out of code
+Storing configuration such as connection strings as constants in the application code is an <strong>anti-pattern</strong>, especially for cloud-native apps. Strictly separate logic from configuration: use <strong>environment variables</strong> or <strong>config/secret files injected at runtime</strong>. See the <strong>Twelve-Factor App</strong> (https://12factor.net/).</p>
+</blockquote>
+<p><strong>Test:</strong></p>
+<pre class="hl"><code>$<span class="w"> </span>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="s1">'{"name":"jim", "email":"jim@example.com", "id":"0001"}'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>localhost:8080
+$<span class="w"> </span>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="s1">'{"name":"anna", "email":"anna@example.com", "id":"0002"}'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>localhost:8080
+<span class="c1"># docker-compose logs web</span>
+<span class="m">2022</span>/02/06<span class="w"> </span><span class="m">00</span>:58:06<span class="w"> </span>Storing<span class="w"> </span>data:<span class="w"> </span><span class="o">{</span><span class="s2">"name"</span>:<span class="s2">"jim"</span>,<span class="s2">"email"</span>:<span class="s2">"jim@example.com"</span>,<span class="s2">"id"</span>:<span class="s2">"0001"</span><span class="o">}</span>
+$<span class="w"> </span>curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"id": "0001"}'</span><span class="w"> </span>localhost:8080
+<span class="o">{</span><span class="s2">"name"</span>:<span class="s2">"jim"</span>,<span class="s2">"email"</span>:<span class="s2">"jim@example.com"</span>,<span class="s2">"id"</span>:<span class="s2">"0001"</span><span class="o">}</span>
+<span class="c1"># docker-compose down</span>
+</code></pre>
+<p><code>down</code> destroys the containers and their resources <strong>including the custom network, but not volumes</strong> (add <code>-v</code> to remove volumes).</p>
+<h3 id="using-podman-compose">Using <code>podman-compose</code></h3>
+<ul>
+<li>It predates Podman 3.0 and gives rootless Compose support. Install with <code>dnf</code>, or <code>pip3</code> (broader OS support; the CLI is Python):</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>podman-compose
+$<span class="w"> </span>pip3<span class="w"> </span>install<span class="w"> </span>podman-compose
+</code></pre>
+<p><strong>Commands compatible with <code>docker-compose</code>:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>help</code>, <code>version</code></td>
+<td>help and version</td>
+</tr>
+<tr>
+<td><code>systemd</code></td>
+<td>create systemd unit files and register Compose tasks</td>
+</tr>
+<tr>
+<td><code>pull</code>, <code>push</code>, <code>build</code></td>
+<td>stack images</td>
+</tr>
+<tr>
+<td><code>up</code>, <code>down</code></td>
+<td>create and start, or tear down, the stack or services</td>
+</tr>
+<tr>
+<td><code>ps</code>, <code>images</code>, <code>config</code>, <code>port</code></td>
+<td>status, images used, show the Compose file, public port of a binding</td>
+</tr>
+<tr>
+<td><code>run</code>, <code>exec</code></td>
+<td>one-off container for a service, run a command in a running container</td>
+</tr>
+<tr>
+<td><code>start</code>, <code>stop</code>, <code>restart</code>, <code>pause</code>, <code>unpause</code>, <code>kill</code></td>
+<td>control services or containers</td>
+</tr>
+<tr>
+<td><code>logs</code>, <code>stats</code></td>
+<td>logs; CPU, memory, network I/O, block I/O, PIDs</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code>$<span class="w"> </span>podman-compose<span class="w"> </span>up
+$<span class="w"> </span>podman-compose<span class="w"> </span>up<span class="w"> </span>--build<span class="w"> </span>-d
+$<span class="w"> </span>podman-compose<span class="w"> </span>down
+</code></pre>
+<p><strong>systemd integration:</strong></p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>podman-compose<span class="w"> </span>systemd<span class="w"> </span>-a<span class="w"> </span>create-unit
+$<span class="w"> </span>sudo<span class="w"> </span>podman-compose<span class="w"> </span>systemd<span class="w"> </span>-a<span class="w"> </span>register
+</code></pre>
+<p>The first creates a template unit (the book prints <code>Sudo</code> and <code>register</code> loosely):</p>
+<pre class="hl"><code><span class="c1"># /etc/systemd/user/podman-compose@.service</span>
+<span class="k">[Unit]</span>
+<span class="na">Description</span><span class="o">=</span><span class="s">%i rootless pod (podman-compose)</span>
+
+<span class="k">[Service]</span>
+<span class="na">Type</span><span class="o">=</span><span class="s">simple</span>
+<span class="na">EnvironmentFile</span><span class="o">=</span><span class="s">%h/.config/containers/compose/projects/%i.env</span>
+<span class="na">ExecStartPre</span><span class="o">=</span><span class="s">-/usr/bin/podman-compose up --no-start</span>
+<span class="na">ExecStartPre</span><span class="o">=</span><span class="s">/usr/bin/podman pod start pod_%i</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/bin/podman-compose wait</span>
+<span class="na">ExecStop</span><span class="o">=</span><span class="s">/usr/bin/podman pod stop pod_%i</span>
+
+<span class="k">[Install]</span>
+<span class="na">WantedBy</span><span class="o">=</span><span class="s">default.target</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>systemctl<span class="w"> </span>--user<span class="w"> </span>start<span class="w"> </span><span class="s1">'podman-compose@golang-redis'</span>
+$<span class="w"> </span>systemctl<span class="w"> </span>--user<span class="w"> </span>stop<span class="w"> </span><span class="s1">'podman-compose@golang-redis'</span>
+$<span class="w"> </span>systemctl<span class="w"> </span>--user<span class="w"> </span>status<span class="w"> </span><span class="s1">'podman-compose@golang-redis'</span>
+</code></pre>
+<p><strong>Which one?</strong> <code>podman-compose</code> has unique features (automatically grouping services into <strong>Pods</strong>), but this <strong>pod-first approach can cause friction with complex Compose files designed for Docker's individual-container model</strong>. For most developers <strong><code>docker-compose</code> remains the gold standard for high-fidelity compatibility</strong> (&quot;without the debugging tax of translation layers&quot;). <code>podman-compose</code> is community-driven and Python-based, while Podman itself is moving toward <strong>Quadlets</strong> (next chapter) as the native way to manage service life cycles with systemd on one host, and <strong><code>podman kube</code></strong> towards multi-node production on OpenShift or Kubernetes.</p>
+<p><img src="/book-digest/podman-for-devops/img/pfd-13-direction-of-travel.svg" alt="Quadlets for one host, podman kube for Kubernetes" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<p>Migrating images and aliasing the CLI, a compatibility matrix with behavioural differences and missing commands, and running Compose stacks with <code>docker-compose</code> (rootful) and <code>podman-compose</code> (rootless). Next: generating systemd units and Kubernetes resources.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+<code>alias docker=podman</code> · <code>podman-docker</code> · <code>nodocker</code> · <code>docker export</code> / <code>podman import</code> · idempotent <code>volume create</code> · <code>podman-restart.service</code> · <code>podman kube play/generate</code> · Compose (services, volumes, <code>depends_on</code>, <code>deploy</code>) · <code>docker-compose</code> v2 · Podman socket and <code>/run/docker.sock</code> · <code>podman-compose</code> · round-robin DNS · Twelve-Factor App · Quadlets.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 13; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>Docker Compose file reference: https://docs.docker.com/reference/compose-file/</li>
+<li>Docker Awesome Compose: https://github.com/docker/awesome-compose</li>
+<li>Podman Compose: https://github.com/containers/podman-compose</li>
+<li>Docker Compose releases: https://github.com/docker/compose/releases</li>
+<li>Red Hat blog, Compose support in Podman: https://www.redhat.com/sysadmin/podman-docker-compose</li>
+<li>Twelve-Factor App: https://12factor.net/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-02-comparing-podman-and-docker/">Podman for DevOps 2: Comparing Podman and Docker</a> · <a href="/book-digest/podman-for-devops/pfd-12-implementing-container-networking-concepts/">Podman for DevOps 12: Implementing container networking concepts</a> · <a href="/book-digest/podman-for-devops/pfd-04-managing-running-containers/">Podman for DevOps 4: Managing running containers</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-12-implementing-container-networking-concepts/">&larr; Podman for DevOps 12: Implementing container networking concepts</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-14-interacting-with-systemd-and-kubernetes/">Podman for DevOps 14: Interacting with systemd and Kubernetes &rarr;</a></nav></main></body></html>

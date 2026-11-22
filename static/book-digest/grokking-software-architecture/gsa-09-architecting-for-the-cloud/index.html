@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-9-architecting-for-the-cloud-pets-for-cattle-concrete-for-code">Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 9. Previous: <a href="/book-digest/grokking-software-architecture/gsa-08-the-database-as-an-architectural-pillar/">Grokking Software Architecture 8: The Database as an Architectural Pillar</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-10-resilience-and-scale/">Grokking Software Architecture 10: Architecting for Resilience and Scale</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The cloud is <strong>someone else's multi-tenant computer</strong>. Moving there is an <strong>architecture change</strong>, not a relocation; otherwise you buy &quot;Very Expensive Web Hosting&quot;.</li>
+<li>Treat servers as <strong>cattle, not pets</strong>: numbered, disposable, <strong>stateless</strong> (state lives in a database or object store).</li>
+<li>The <strong>compute spectrum</strong> trades <strong>control for convenience</strong>: IaaS, CaaS, PaaS, FaaS, AIaaS.</li>
+<li>Build infrastructure with <strong>Infrastructure as Code</strong> (Terraform), never <strong>ClickOps</strong>; read the <strong>execution plan</strong>; protect the <strong>state file</strong>.</li>
+<li><strong>Immutable infrastructure</strong>: never patch a live server; build a new image, switch traffic (<strong>blue-green</strong>), destroy the old one.</li>
+<li>Cloud cost is an architectural constraint (<strong>FinOps</strong>). &quot;Friends don't let friends type in production&quot; (AWS S3 outage, 2017).</li>
+</ul>
+</div></div>
+<h2 id="9-1-the-cloud-is-not-magic">9.1 The cloud is not magic</h2>
+<ul>
+<li><strong>Multi-tenancy:</strong>
+<ul>
+<li>you share physical CPUs and cables with strangers (an apartment building)</li>
+<li><strong>Noisy neighbour:</strong> another tenant hogging bandwidth or disk slows you even if your code is perfect.</li>
+</ul>
+</li>
+<li><strong>Mindset change:</strong>
+<ul>
+<li>hardware used to be costly, permanent, fragile</li>
+<li>now it is <strong>cheap, temporary, disposable</strong>. Uploading a tightly coupled stateful app to an AWS server is &quot;Very Expensive Web Hosting&quot;.</li>
+</ul>
+</li>
+<li><strong>IaC definition:</strong> automated provisioning with <strong>version-controlled text files</strong>: consistent, repeatable, restorable (Kief Morris, <em>Infrastructure as Code</em>: https://infrastructure-as-code.com/book/).</li>
+<li><strong>Scope:</strong>
+<ul>
+<li>the book is not about being a cloud administrator (no dashboards, virtual networks, OS tweaks)</li>
+<li>But infrastructure can no longer be ignored:
+<ul>
+<li>on-premises hardware was a fixed sunk cost with a hard scalability ceiling</li>
+<li>the cloud trades that for <strong>operational complexity and cost potential</strong></li>
+</ul>
+</li>
+<li>Dropping rigid on-prem design into an elastic cloud makes the bill and the system blow up.</li>
+</ul>
+</li>
+<li><strong>How to start:</strong>
+<ul>
+<li>Install Terraform (https://developer.hashicorp.com/terraform/install), write a &quot;Hello World&quot; resource (a storage bucket) in <code>main.tf</code>.</li>
+<li>Prefer Terraform (<strong>cloud-agnostic</strong>) over CloudFormation or Azure Bicep for a first project.</li>
+<li>Practise on <strong>free tiers</strong> (12 months) or <strong>LocalStack</strong> (simulated AWS on your laptop).</li>
+<li>Delete something by mistake? Re-add it and rerun; the engine compares your file with reality.</li>
+<li><strong>Day one:</strong> set a <strong>billing alarm</strong> (e.g. $5) and always <code>terraform destroy</code> practice resources.</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-2-the-cloud-ready-diagnostic">9.2 The cloud-ready diagnostic</h2>
+<p>Kelsey Hightower (<em>Kubernetes: Up &amp; Running</em>: https://www.oreilly.com/library/view/kubernetes-up-and/9781098110192/) stresses a different mindset for state and failure. Three tests:</p>
+<table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Question</th>
+<th>A &quot;yes&quot; means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Wipeout</strong></td>
+<td>If I deleted your server now, would you lose data?</td>
+<td>stateful (images or sessions on local disk); not cloud-native</td>
+</tr>
+<tr>
+<td><strong>Midnight patch</strong></td>
+<td>Do you log in and type commands to fix vulnerabilities?</td>
+<td>manual patches, <strong>configuration drift</strong>, unreproducible servers</td>
+</tr>
+<tr>
+<td><strong>Meteor</strong></td>
+<td>Is everything in one <strong>Availability Zone</strong> (one data centre)?</td>
+<td>one power cut or lightning strike takes the business offline</td>
+</tr>
+</tbody>
+</table>
+<h2 id="9-3-pets-vs-cattle">9.3 Pets vs cattle</h2>
+<ul>
+<li><strong>Pets:</strong>
+<ul>
+<li>early servers were expensive, hand-built and named (Zeus, Apollo, Gandalf). If Zeus dies he is irreplaceable and rebuilding takes weeks</li>
+<li>pets are usually <strong>stateful</strong> (sessions, temp files, uploads on local disk).</li>
+</ul>
+</li>
+<li><strong>Cattle:</strong> you can spawn <strong>50 servers in under ten seconds</strong>. Number them (<code>web-server-001</code>...), terminate a sick <code>web-server-042</code>, and automation starts <code>043</code>.</li>
+<li><strong>The rule:</strong> <strong>do not maintain state on the local server.</strong> An auto-scaler may destroy any instance at any moment, so sessions, temp files and uploads must go to an external database or object store (S3).</li>
+</ul>
+<pre class="hl"><code><span class="c1"># Wrong (stateful): fragile local filesystem</span>
+<span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s1">'profile.jpg'</span><span class="p">,</span> <span class="s1">'wb'</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span> <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">user_upload</span><span class="p">)</span>
+<span class="c1"># Right (stateless): external S3 bucket</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">boto3</span>
+<span class="n">boto3</span><span class="o">.</span><span class="n">client</span><span class="p">(</span><span class="s1">'s3'</span><span class="p">)</span><span class="o">.</span><span class="n">put_object</span><span class="p">(</span><span class="n">Bucket</span><span class="o">=</span><span class="s1">'mybucket'</span><span class="p">,</span> <span class="n">Key</span><span class="o">=</span><span class="s1">'profile.jpg'</span><span class="p">,</span> <span class="n">Body</span><span class="o">=</span><span class="n">user_upload</span><span class="p">)</span>
+</code></pre>
+<p><strong>Statelessness is the &quot;price of admission&quot;</strong>; it levels up every earlier pattern:</p>
+<ul>
+<li><strong>-ilities (ch. 2):</strong> more scalability and reliability: add identical servers; any can die without data loss.</li>
+<li><strong>SOLID (ch. 3):</strong> loose coupling (DIP) lets you swap a local disk for a cloud bucket.</li>
+<li><strong>Layers (ch. 4):</strong> a stateless application layer can be cloned behind a <strong>load balancer</strong>.</li>
+<li><strong>Hexagonal (ch. 5):</strong> swap a &quot;Local File System Adapter&quot; for an &quot;AWS S3 Adapter&quot;.</li>
+<li><strong>APIs (ch. 6):</strong> REST's &quot;stateless&quot; fits; send a <strong>JWT</strong> per request instead of server session memory, so a gateway can route request 1 to server A and request 2 to B.</li>
+<li><strong>EDA (ch. 7):</strong> any consumer can process any message and vanish when the queue is empty.</li>
+<li><strong>Database (ch. 8):</strong> the servers have &quot;amnesia&quot;, so your database choice becomes the architectural anchor.</li>
+<li><strong>&quot;Swiftie&quot; payoff:</strong> a stateless shipping consumer lets the cloud spawn <strong>500 identical servers</strong>, drain a million messages in minutes, then delete them all.</li>
+</ul>
+<h2 id="9-4-the-compute-spectrum-control-vs-convenience">9.4 The compute spectrum: control vs convenience</h2>
+<p><img src="/book-digest/grokking-software-architecture/img/compute-spectrum.svg" alt="Compute spectrum" loading="lazy" /></p>
+<p>Left = control and grunt work; right = convenience and surrendered control.</p>
+<h3 id="1-iaas-virtual-machines-ec2-compute-engine-azure-vm">1. IaaS: virtual machines (EC2, Compute Engine, Azure VM)</h3>
+<ul>
+<li><strong>Analogy:</strong> renting an empty warehouse. Provider: hardware. You: OS, runtime, network drivers, code.</li>
+<li><strong>Pro:</strong> root access, any OS tweak, legacy software as-is.</li>
+<li><strong>Con:</strong> the <strong>3 a.m. tax</strong>: you patch; you pay 24/7 even at zero traffic.</li>
+<li><strong>Use:</strong>
+<ul>
+<li><strong>lift and shift</strong> of a big stateful &quot;pet&quot; with no budget to rewrite (you only &quot;moved the cage&quot;)</li>
+<li>COTS software needing a dedicated server</li>
+<li>custom kernel modules. Avoid for brand-new projects. (https://azure.microsoft.com/en-us/resources/cloud-computing-dictionary/what-is-iaas)</li>
+</ul>
+</li>
+</ul>
+<h3 id="2-caas-containers-docker-kubernetes-the-sweet-spot">2. CaaS: containers (Docker, Kubernetes), the &quot;sweet spot&quot;</h3>
+<ul>
+<li><strong>Analogy:</strong> the steel shipping container (<strong>1956</strong>) standardised loading; software containers standardise your code.</li>
+<li>Provider:
+<ul>
+<li>hardware and host OS. You hand over an <strong>image</strong>: app + runtime + dependencies, a frozen blueprint</li>
+<li>every container is a 100% identical clone (Docker docs: https://docs.docker.com/get-started/).</li>
+</ul>
+</li>
+<li><strong>Pro:</strong> portable; &quot;works on my machine&quot; disappears; lighter than a VM.</li>
+<li><strong>Con:</strong> <strong>orchestration overhead</strong>: 500 containers need Kubernetes (the &quot;port authority&quot;); the meter runs while they run.</li>
+<li><strong>Use:</strong> <strong>microservices</strong> (containers are the engine behind them; ch. 12), <strong>polyglot</strong> estates (Python analytics, Node frontend, Go payments), <strong>cloud agnosticism</strong>.</li>
+</ul>
+<h3 id="3-paas-heroku-aws-elastic-beanstalk-azure-app-service">3. PaaS (Heroku, AWS Elastic Beanstalk, Azure App Service)</h3>
+<ul>
+<li><strong>Analogy:</strong>
+<ul>
+<li>a furnished hotel room</li>
+<li>You hand over <strong>raw code</strong> (e.g. a GitHub repo); the provider provisions, installs the runtime, sets up the load balancer</li>
+<li>You control code, environment variables, basic scaling rules (e.g. 2 to 5 instances by CPU).</li>
+</ul>
+</li>
+<li><strong>Pro:</strong> top developer velocity; health checks, OS patches, scaling handled.</li>
+<li><strong>Con:</strong> the <strong>black box</strong>: a custom low-level library (e.g. C++ for video rendering) is impossible; lock-in.</li>
+<li><strong>Use:</strong>
+<ul>
+<li>startups/MVPs, standard stateless web apps (Spring Boot, Django, Express), zero-ops teams</li>
+<li>Rules: stateless and config separate from code: <strong>Twelve-Factor App</strong> (https://12factor.net/).</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-faas-serverless-lambda-azure-functions-cloud-functions">4. FaaS: serverless (Lambda, Azure Functions, Cloud Functions)</h3>
+<ul>
+<li><strong>Analogy:</strong> an on-demand Uber: car and driver exist only for the trip.</li>
+<li>Almost no infrastructure control. You upload one function; the provider listens for a trigger, provisions, runs, destroys.</li>
+<li><strong>Pro:</strong> idle = <strong>$0.00</strong>; 100,000 fans = 100,000 parallel clones; pay per millisecond.</li>
+<li><strong>Con:</strong> <strong>cold start</strong> (a second or two to boot after scaling to zero); time limits (usually up to ~15 minutes).</li>
+<li><strong>Use:</strong>
+<ul>
+<li>spiky traffic, event-driven glue, async background work</li>
+<li>It <strong>dictates how you write code</strong> (zero local state, strict time limit)</li>
+<li>Fowler: https://martinfowler.com/articles/serverless.html.</li>
+</ul>
+</li>
+</ul>
+<h3 id="5-aiaas-openai-anthropic-apis">5. AIaaS (OpenAI, Anthropic APIs)</h3>
+<ul>
+<li><strong>Analogy:</strong> a self-driving taxi: you give the destination, not the directions. You abstract away the <strong>logic itself</strong>.</li>
+<li><strong>Pro:</strong> instant ML, vision and NLP in an afternoon.</li>
+<li><strong>Con:</strong> <strong>non-deterministic</strong> (may hallucinate; different Tuesday vs Monday) and <strong>expensive</strong> vs a database query.</li>
+<li><strong>Use:</strong> unstructured parsing (PDFs, messy emails), natural-language interfaces, generative workflows. <strong>Never</strong> for strict mathematical business logic.</li>
+<li><strong>&quot;Confident know-it-all&quot;:</strong>
+<ul>
+<li>an LLM is a <strong>probabilistic prediction engine</strong>, not a database; it guesses the next word and sounds confident</li>
+<li><strong>Fix: RAG (Retrieval-Augmented Generation)</strong>: retrieve real facts from a database, append them to the prompt, instruct &quot;answer using ONLY this text&quot; (open-book test taker)</li>
+<li>Overview: https://aws.amazon.com/what-is/retrieval-augmented-generation/.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Cheat sheet</strong></p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>What you rent</th>
+<th>Control</th>
+<th>Best for</th>
+<th>Hidden trap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IaaS</td>
+<td>the metal</td>
+<td>high (OS)</td>
+<td>legacy, legal/compliance</td>
+<td>lift-and-shift; paying 24/7 for idle</td>
+</tr>
+<tr>
+<td>CaaS</td>
+<td>the shipping port</td>
+<td>medium (environment, runtime)</td>
+<td>portable, standardised deployments</td>
+<td>orchestration overhead (Kubernetes)</td>
+</tr>
+<tr>
+<td>PaaS</td>
+<td>the runtime</td>
+<td>medium-low (code, config)</td>
+<td>MVPs, standard web apps</td>
+<td>black box; vendor lock-in</td>
+</tr>
+<tr>
+<td>FaaS</td>
+<td>the millisecond</td>
+<td>low (code only)</td>
+<td>spiky traffic, new startups</td>
+<td>cold starts; hard time limits</td>
+</tr>
+<tr>
+<td>AIaaS</td>
+<td>the reasoning</td>
+<td>zero (prompts, payload)</td>
+<td>language/data processing without ML infra</td>
+<td>hallucinations: need RAG guardrails</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Quick guide:</strong> custom OS or extreme control → IaaS; avoid lock-in and want portability → CaaS; focus on code with zero infra → PaaS; unpredictable spiky traffic → FaaS.</p>
+<h2 id="9-5-spotlight-serverless-in-action">9.5 Spotlight: serverless in action</h2>
+<p>Moving a VM or container is mostly an infrastructure change; serverless <strong>dictates your code</strong>. You do not write <code>app.listen(8080)</code>; the provider listens and your function is a dormant reaction to an <strong>event</strong>:</p>
+<pre class="hl"><code><span class="kn">import</span><span class="w"> </span><span class="nn">json</span><span class="o">,</span><span class="w"> </span><span class="nn">boto3</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">lambda_handler</span><span class="p">(</span><span class="n">event</span><span class="p">,</span> <span class="n">context</span><span class="p">):</span>                           <span class="c1"># called when an event occurs (e.g. S3 upload)</span>
+    <span class="n">bucket_name</span> <span class="o">=</span> <span class="n">event</span><span class="p">[</span><span class="s1">'Records'</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s1">'s3'</span><span class="p">][</span><span class="s1">'bucket'</span><span class="p">][</span><span class="s1">'name'</span><span class="p">]</span>  <span class="c1"># stateless: context comes from the event</span>
+    <span class="n">file_name</span>   <span class="o">=</span> <span class="n">event</span><span class="p">[</span><span class="s1">'Records'</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s1">'s3'</span><span class="p">][</span><span class="s1">'object'</span><span class="p">][</span><span class="s1">'key'</span><span class="p">]</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Resizing </span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="s2"> from </span><span class="si">{</span><span class="n">bucket_name</span><span class="si">}</span><span class="s2">..."</span><span class="p">)</span>       <span class="c1"># do the work</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s1">'statusCode'</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span> <span class="s1">'body'</span><span class="p">:</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="s1">'Image successfully resized!'</span><span class="p">)}</span>
+</code></pre>
+<p><strong>Rules of the road</strong></p>
+<ul>
+<li><strong>No luggage:</strong> total amnesia each run; no local disk, no global session variables.</li>
+<li><strong>Short fuse:</strong> a hard limit (often 5 to 15 minutes); a two-hour 4K video is the wrong vehicle. Pre-cut large workloads into bite-sized pieces.</li>
+<li><strong>Fast ignition:</strong> minimise dependencies and package size; no heavy frameworks.</li>
+</ul>
+<p><strong>Sweet spots</strong></p>
+<ol>
+<li><strong>Spiky API:</strong> 10 requests/hour on weekdays, 10,000/second during a Sunday broadcast.</li>
+<li><strong>Cloud glue:</strong> webhooks and triggers (new user → welcome email).</li>
+<li><strong>Nightly janitor:</strong> a 2 a.m. cron function that runs ~30 seconds a day.</li>
+<li><strong>Shared utility:</strong> one function (e.g. state sales tax) called by five apps (even serving a shared JS UI component).</li>
+<li><strong>Compute offload:</strong> a 5 GB CSV or a heavy AI image filter out of the phone or main web server.</li>
+<li><strong>Message courier:</strong> consumers of a queue (1,000 functions drain a million ticket requests, then vanish).</li>
+</ol>
+<ul>
+<li><strong>-ilities:</strong>
+<ul>
+<li>serverless helps <strong>Usability</strong> (responsive, quiet laptop fans) and <strong>Affordability</strong> (no 24/7 servers). <strong>Cost: portability.</strong> A container moves AWS to Google in an afternoon</li>
+<li>a Lambda is tied to proprietary triggers, security roles, and per-language signatures, so moving means a painful rewrite of routing logic.</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-6-iac-defeating-clickops">9.6 IaC: defeating &quot;ClickOps&quot;</h2>
+<ul>
+<li><strong>ClickOps:</strong>
+<ul>
+<li>building through the web portal creates a <strong>snowflake server</strong>: unique, fragile, unreplicable (Fowler: https://martinfowler.com/bliki/SnowflakeServer.html)
+<ul>
+<li>Scaling to 100 servers by hand means a missed firewall port by server 47</li>
+</ul>
+</li>
+<li>docs go stale as consoles change</li>
+<li><strong>configuration drift</strong> makes staging and production diverge.</li>
+</ul>
+</li>
+<li><strong>Declarative vs imperative:</strong>
+<ul>
+<li>ClickOps tells the cloud <em>how</em> (click, wait, attach)</li>
+<li>IaC states the <em>what</em> (&quot;one database, 50 GB, two serverless functions&quot;) and the engine works out the steps. <strong>Terraform</strong> is the engine</li>
+<li><strong>HCL</strong> (HashiCorp Configuration Language) is the syntax (like Node.js vs JavaScript). Alternatives: CloudFormation, Bicep.</li>
+</ul>
+</li>
+<li><strong>Three superpowers</strong>
+<ol>
+<li><strong>Peer review for servers:</strong> infrastructure in Git; a pull request before a firewall change. <em>Win:</em> fewer self-inflicted outages.</li>
+<li><strong>Perfect replication:</strong> staging is a 1:1 clone in minutes. <em>Win:</em> speed to market.</li>
+<li><strong>Disaster recovery as a keystroke:</strong> run the pipeline and rebuild the whole estate. <em>Win:</em> ten minutes instead of ten days.</li>
+</ol>
+</li>
+</ul>
+<h2 id="9-7-iac-in-practice-terraform">9.7 IaC in practice (Terraform)</h2>
+<p><strong>Terraform is &quot;SQL for infrastructure&quot;:</strong> you declare a result and the engine plans the steps. It translates a plain-text blueprint into API calls; it relies on a <strong>state file</strong> of what it has built.</p>
+<p><strong>The monthly bill as a constraint:</strong> on-prem was a <strong>capital expense</strong> (pay once); cloud is an <strong>operating expense</strong> (a taxi meter).</p>
+<p>Examples: a dev environment upgraded for load testing and forgotten ran up <strong>$10,000</strong>; a <strong>96-core</strong> database where 2 cores suffice (&quot;renting a warehouse for one bicycle&quot;); an event-driven <strong>serverless function triggering itself in an infinite loop</strong> can cost tens of thousands in hours.</p>
+<p><strong>FinOps</strong> = cloud financial management (https://www.finops.org/).</p>
+<p><strong>Reviewing a blueprint</strong> (the questions to ask):</p>
+<pre class="hl"><code><span class="kr">provider</span><span class="w"> </span><span class="nv">"aws"</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="na">region</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"us-east-1"</span><span class="w"> </span><span class="p">}</span><span class="c1">                     # Why only one region? DR?</span>
+<span class="kr">resource</span><span class="w"> </span><span class="nc">"aws_db_instance"</span><span class="w"> </span><span class="nv">"primary_db"</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="na">identifier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"user-profile-database"</span>
+<span class="w">  </span><span class="na">engine</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"postgres"</span>
+<span class="w">  </span><span class="na">instance_class</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"db.t3.micro"</span><span class="c1">                            # Big enough for launch traffic?</span>
+<span class="w">  </span><span class="na">allocated_storage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">50</span><span class="c1">                                    # What happens when 50 GB fills?</span>
+<span class="p">}</span>
+<span class="kr">resource</span><span class="w"> </span><span class="nc">"aws_s3_bucket"</span><span class="w"> </span><span class="nv">"profile_pictures"</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="na">bucket</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"shopzilla-user-profiles-prod"</span><span class="c1">                   # Automated backups enabled?</span>
+<span class="p">}</span>
+<span class="kr">resource</span><span class="w"> </span><span class="nc">"aws_s3_bucket_public_access_block"</span><span class="w"> </span><span class="nv">"secure_pictures"</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="na">bucket</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">aws_s3_bucket.profile_pictures.id</span>
+<span class="w">  </span><span class="na">block_public_acls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="no">true</span>
+<span class="w">  </span><span class="na">block_public_policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="no">true</span><span class="c1">                                # GOOD: public access blocked</span>
+<span class="p">}</span>
+</code></pre>
+<p><strong>Identity as the boundary:</strong> with the physical perimeter gone, <strong>identity is the primary boundary</strong> (details in ch. 11). <strong>Authentication</strong> = who; <strong>authorisation</strong> = what they may touch. Rules: no hardcoded admin credentials; <strong>least privilege</strong> (an Order Service reads and writes only the Orders table); <strong>short-lived tokens or runtime roles</strong>, not static keys.</p>
+<p><strong>The execution plan (dry run):</strong> <code>+</code> create, <code>~</code> modify, <code>-</code> destroy.</p>
+<pre class="hl"><code>+ resource "aws_instance" "web_server" { ami = "..."  instance_type = "t3.micro" }
+~ resource "aws_security_group" "firewall" { description = "Allow web traffic" -&gt; "Allow web and API traffic" }
+- resource "aws_db_instance" "primary_db" { engine = "postgres" }
+Plan: 1 to add, 1 to change, 1 to destroy.
+</code></pre>
+<p>A red <code>-</code> on a critical resource like <code>primary_db</code>: <strong>stop the deployment</strong> and ask why.</p>
+<p><strong>The state file</strong></p>
+<ul>
+<li>On the Tuesday run Terraform does a <strong>three-way comparison</strong>:
+<ul>
+<li>your code (&quot;one Postgres&quot;), the state file (&quot;built one yesterday&quot;), the real cloud (&quot;it's there&quot;)</li>
+<li>Difference zero → &quot;Infrastructure is up to date.&quot; Change <code>allocated_storage</code> 50 → 100 → one API call to expand.</li>
+</ul>
+</li>
+<li><strong>Single point of failure:</strong> lose <code>terraform.tfstate</code> and Terraform forgets, builds a second database, and orphans production's.</li>
+<li><strong>Teams:</strong> use <strong>remote state</strong> (a durable bucket such as S3) with <strong>state locking</strong> (often a database table) so two developers can't deploy at once.</li>
+<li><strong>Modules:</strong> split networking, database, serverless into independent pieces (separation of concerns) so a function mistake can't touch the database module.</li>
+<li><strong>Warning:</strong> state can contain secrets (master passwords) in plain text: <code>.gitignore</code> it, use an <strong>encrypted</strong> remote backend.</li>
+</ul>
+<h2 id="9-8-the-immutable-infrastructure-mindset">9.8 The immutable infrastructure mindset</h2>
+<p><img src="/book-digest/grokking-software-architecture/img/blue-green.svg" alt="Blue-green deployment" loading="lazy" /></p>
+<ul>
+<li><strong>Mutable vs immutable:</strong>
+<ul>
+<li>a <code>var</code> can be changed anywhere (race conditions); a <code>const</code> is replaced, not modified (age 30 → create a new object with 31)</li>
+<li><strong>A server is a large, expensive variable.</strong> Mutable servers were the on-prem norm (an admin patched the live box)</li>
+<li>In the cloud <strong>forbid it</strong></li>
+<li>Bonus: it removes the nagging &quot;what if someone changed production&quot; stress.</li>
+</ul>
+</li>
+<li><strong>Analogy:</strong> a dry-erase board (edit live, smudged, no undo) vs a printed flyer (fix the source file, print 100 new copies, replace).</li>
+<li><strong>The immutable pipeline (Figure 9.6):</strong>
+<ul>
+<li>update Terraform or the Dockerfile</li>
+<li>build a <strong>new, fully patched</strong> server from scratch</li>
+<li>route traffic to it</li>
+<li>destroy the old one</li>
+<li>verify. This is <strong>Blue-Green Deployment</strong>: blue = current production, green = the new version
+<ul>
+<li>flip traffic after verification, flip back instantly if it fails (https://martinfowler.com/bliki/BlueGreenDeployment.html)</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Why architects demand it:</strong>
+<ul>
+<li><strong>Zero configuration drift</strong> (same blueprint everywhere; only sizes differ).</li>
+<li><strong>Trivial rollbacks</strong> (re-route to the old frozen server).</li>
+<li><strong>Security by destruction:</strong> servers are routinely destroyed and rebuilt, deleting any attacker's backdoor.</li>
+</ul>
+</li>
+<li><strong>The exception: stateful databases.</strong>
+<ul>
+<li>You cannot destroy and rebuild a live Postgres to patch its OS. <strong>Golden rule:</strong> the application layer is stateless and immutable</li>
+<li>the data layer needs careful persistent change management.</li>
+</ul>
+</li>
+<li><strong>&quot;Do it tomorrow&quot;:</strong> pick one QA/staging server; plan to lock out manual logins, bake updates into a fresh image or container, and force all deployments through the pipeline.</li>
+</ul>
+<h2 id="9-9-the-dork-side-the-aws-s3-outage">9.9 The Dork Side: the AWS S3 outage</h2>
+<p><strong>28 February 2017:</strong> half the internet went dark (Slack, Trello, Quora, IoT bulbs and thermostats). AWS <strong>US-EAST-1</strong> S3 failed, cascading. Cause: <strong>a typo</strong>.</p>
+<p>An authorised engineer debugging the <strong>billing system</strong> logged into a live production terminal to remove a small number of servers; the command removed a <strong>large set of core servers controlling S3 region metadata</strong>; the system obeyed; outage over <strong>four hours</strong>.</p>
+<p><strong>Lesson: not &quot;hire engineers without typos&quot; but &quot;friends don't let friends type in production&quot;</strong>: via IaC the typo is caught in review or blocked by testing. <strong>Review checkpoint:</strong> &quot;Does this plan delete any data?&quot;</p>
+<h2 id="9-10-mission-checklist-recap">9.10 Mission, checklist, recap</h2>
+<p><strong>Mission (Shop-Zilla Recommendation Engine; needs an API runtime, an in-memory cache for sessions, and a secure bucket for compiled ML models):</strong></p>
+<ol>
+<li>Choose a spot on the compute spectrum for the API and defend it.</li>
+<li>List the three Terraform resource blocks.</li>
+<li>A critical OS vulnerability appears; the CTO orders you to patch live: explain why you refuse and the exact steps you take instead (immutable pipeline). (Guided solution in Appendix A.)</li>
+</ol>
+<p><strong>Recap:</strong> pets to cattle; statelessness is the price of admission; the compute spectrum; ClickOps is dead; Terraform is the engine; FinOps; declarative blueprints and state; remote state and locking; immutable infrastructure; remove the human element; multi-tenancy and the noisy neighbour (ch. 10 builds shock absorbers).</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+multi-tenancy · noisy neighbour · IaC · ClickOps · snowflake server · configuration drift · pets vs cattle · stateless · IaaS/CaaS/PaaS/FaaS/AIaaS · container image · cold start · RAG · declarative vs imperative · Terraform / HCL · execution plan · state file · remote state and locking · module · immutable infrastructure · blue-green deployment · FinOps · least privilege.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 9. Pre-release; no public source page found.</li>
+<li>Twelve-Factor App: https://12factor.net/ · Fowler on serverless: https://martinfowler.com/articles/serverless.html</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-08-the-database-as-an-architectural-pillar/">Grokking Software Architecture 8: The Database as an Architectural Pillar</a> · <a href="/book-digest/grokking-software-architecture/gsa-10-resilience-and-scale/">Grokking Software Architecture 10: Architecting for Resilience and Scale</a> · <a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">Understanding Distributed Systems 30: Continuous delivery and deployment</a> · <a href="/book-digest/understanding-distributed-systems/uds-25-and-26-redundancy-and-fault-isolation/">Understanding Distributed Systems 25-26: Redundancy and fault isolation</a> · <a href="/book-digest/understanding-distributed-systems/uds-32-to-34-observability-manageability-final-words/">Understanding Distributed Systems 32-34: Observability, manageability, final words</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-08-the-database-as-an-architectural-pillar/">&larr; Grokking Software Architecture 8: The Database as an Architectural Pillar</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-10-resilience-and-scale/">Grokking Software Architecture 10: Architecting for Resilience and Scale &rarr;</a></nav></main></body></html>

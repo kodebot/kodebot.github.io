@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 20: Caching</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-20-caching">Understanding Distributed Systems 20: Caching</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 20. Previous: <a href="/book-digest/understanding-distributed-systems/uds-19-data-storage/">Understanding Distributed Systems 19: Data storage</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">Understanding Distributed Systems 21: Microservices</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+If a big share of requests to the data store hits a <strong>small pool of frequently accessed entries</strong>, put a <strong>cache</strong> in front. A cache is a <strong>high-speed layer that temporarily buffers responses from an origin</strong>; its state is <strong>disposable</strong> (rebuildable from the origin), so it gives only <strong>best-effort</strong> guarantees. It pays off only with a <strong>high hit ratio</strong>. It is an <strong>optimisation</strong>: if the origin cannot survive without it, you do not have a scalable architecture.</p>
+<ul>
+<li><strong>Hit ratio</strong> (share of requests served from the cache) depends on: the <strong>universe of cachable objects</strong> (fewer is better), the <strong>likelihood of repeated access</strong> (higher is better), and the <strong>cache size</strong> (larger is better).</li>
+<li><strong>Rule of thumb:</strong> the <strong>higher up the call stack</strong> you cache, the more downstream resources you save (why client-side HTTP caching came first).</li>
+<li><strong>Caching is an optimisation:</strong> if the access pattern suddenly changes (misses) or the cache is unavailable, the app must <strong>not fall over</strong>; becoming <strong>slower is okay</strong>.</li>
+</ul>
+</blockquote>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-20-cache-hit-and-miss.svg" alt="Cache hit and miss flow" loading="lazy" /></p>
+<h2 id="20-1-policies">20.1 Policies</h2>
+<p><strong>On a miss</strong> the object comes from the origin in one of two ways:</p>
+<ul>
+<li><strong>Side cache:</strong> after an &quot;object-not-found&quot; from the cache, the <strong>application</strong> requests it from the origin and <strong>updates the cache</strong>. The app treats the cache as a key-value store.</li>
+<li><strong>Inline cache:</strong> the cache talks to the origin <strong>on the app's behalf</strong>; the app only ever touches the cache (HTTP caching is an example).</li>
+</ul>
+<p><strong>Eviction policy:</strong> a limited-capacity cache must evict entries to make room; which one depends on the policy and access pattern, e.g. <strong>least recently used (LRU)</strong>.</p>
+<p><strong>Expiration policy:</strong> e.g. a <strong>TTL</strong>; an object older than its TTL expires and can be evicted. <strong>Longer expiry = higher hit ratio but more chance of stale, inconsistent data.</strong> Expiry can be <strong>deferred to the next request</strong>, which is better: if the origin is temporarily down, <strong>returning an expired object beats returning an error</strong>.</p>
+<p><strong>A TTL is a workaround for cache invalidation</strong>, &quot;very hard to implement in practice&quot; (https://en.wikipedia.org/wiki/Cache_coherence): if you cache a database query result, any change to <strong>any of the possibly thousands of records</strong> it touched would have to invalidate it.</p>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-20-local-vs-external-cache.svg" alt="Local cache versus external cache" loading="lazy" /></p>
+<h2 id="20-2-local-cache">20.2 Local cache</h2>
+<p>The simplest cache is <strong>co-located with the client</strong>: an in-memory hash table or an embeddable key-value store like <strong>RocksDB</strong> (http://rocksdb.org/).</p>
+<ul>
+<li>Each client cache is <strong>independent</strong>, so objects are <strong>duplicated</strong>: if every client has a 1 GB cache the total effective size is still 1 GB however many clients exist
+<ul>
+<li>Clients may see <strong>different versions</strong> of an object.</li>
+</ul>
+</li>
+<li>More clients mean <strong>more requests to the origin</strong>, worse when clients <strong>restart</strong> or new ones come online with empty caches: a <strong>thundering herd</strong>, a spike on the origin
+<ul>
+<li>The same happens when an unseen object suddenly becomes popular.</li>
+</ul>
+</li>
+<li><strong>Mitigation:</strong> <strong>coalesce requests</strong>: at most <strong>one outstanding request per client per object</strong>.</li>
+</ul>
+<h2 id="20-3-external-cache">20.3 External cache</h2>
+<p>A <strong>service dedicated to caching, typically in memory</strong>, shared across clients: <strong>Redis</strong> (https://redis.io/) or <strong>Memcached</strong> (https://memcached.org/), also managed on AWS and Azure. It fixes local-cache drawbacks at the cost of complexity and money.</p>
+<ul>
+<li>Unlike a local cache it can scale <strong>throughput and size</strong> by <strong>replication and partitioning</strong>: Redis can automatically partition data across nodes and replicate each partition leader-follower (https://redis.io/topics/cluster-tutorial).</li>
+<li>Shared, so there is <strong>a single version of each object</strong> (if not replicated), fewer consistency problems, and <strong>origin requests do not grow with the number of clients</strong>.</li>
+<li><strong>But</strong>
+<ul>
+<li>the load just <strong>shifts to the cache</strong>, which must be scaled out eventually</li>
+<li>When rebalancing, move or drop <strong>as little data as possible</strong> (hit ratio must not collapse): <strong>consistent hashing</strong> or similar helps.</li>
+</ul>
+</li>
+<li>Costs: <strong>another service to operate</strong>; <strong>higher latency</strong> than a local cache (a network call).</li>
+<li><strong>If the external cache is down?</strong>
+<ul>
+<li>Bypassing it and hitting the origin seems fine, but the origin may not withstand a sudden surge: the outage can <strong>cascade</strong> and take the origin down too</li>
+<li>Defence: an <strong>in-process cache</strong> in front of the external one, and an origin prepared to <strong>shed requests</strong> (see the resiliency part)</li>
+<li>Remember: <strong>the system must survive without the cache, only slower</strong>.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+cache · hit ratio · side cache · inline cache · eviction (LRU) · expiration (TTL) · cache invalidation · local (in-process) cache · thundering herd · request coalescing · external cache (Redis, Memcached) · cascading failure.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 20. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-19-data-storage/">Understanding Distributed Systems 19: Data storage</a> · <a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">Understanding Distributed Systems 21: Microservices</a> · <a href="/book-digest/understanding-distributed-systems/uds-14-and-15-http-caching-and-cdns/">Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs</a> · <a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-19-data-storage/">&larr; Understanding Distributed Systems 19: Data storage</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">Understanding Distributed Systems 21: Microservices &rarr;</a></nav></main></body></html>

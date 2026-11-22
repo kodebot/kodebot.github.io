@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 7: Event-Driven Architecture (temporal decoupling and async communication)</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-7-event-driven-architecture-temporal-decoupling-and-async-communication">Grokking Software Architecture 7: Event-Driven Architecture (temporal decoupling and async communication)</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 7. Previous: <a href="/book-digest/grokking-software-architecture/gsa-06-reliable-api-design/">Grokking Software Architecture 6: Reliable API Design (public contracts and synchronous communication)</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-08-the-database-as-an-architectural-pillar/">Grokking Software Architecture 8: The Database as an Architectural Pillar</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Temporal coupling</strong> (sender and receiver must both be up at the same instant) makes synchronous chains brittle: a <strong>distributed monolith</strong>. <strong>EDA</strong> breaks it with a <strong>broker</strong> between <strong>producer</strong> and <strong>consumer</strong>.</li>
+<li><strong>Command</strong> (imperative, one-to-one, &quot;do this&quot;) vs <strong>Event</strong> (past tense fact, one-to-many, &quot;this happened&quot;). <strong>Pub/Sub</strong> lets you add consumers without touching the producer (OCP).</li>
+<li>The price is <strong>eventual consistency</strong> (you become an <strong>AP</strong> system); fix the &quot;panic gap&quot; with an <strong>optimistic UI</strong>.</li>
+<li>Delivery is <strong>at-least-once</strong>; make consumers <strong>idempotent</strong>. Use <strong>ACKs</strong>, a <strong>Dead Letter Queue</strong>, <strong>prefetch limits</strong>, a <strong>Correlation ID</strong>, and the <strong>Outbox</strong> for atomic save and publish.</li>
+<li>AI agents are just <strong>slow consumers</strong>: never call an LLM synchronously in a controller.</li>
+</ul>
+</div></div>
+<h2 id="7-1-temporal-coupling">7.1 Temporal coupling</h2>
+<p>Order API calls Inventory, which calls Payment, which calls Shipping: if Shipping is down the user cannot buy, though stock and card are fine. <strong>Temporal coupling</strong> = components depend on time: both sides must be online and responsive <strong>at the same moment</strong>.</p>
+<p>Phone call (both on the line) vs text message (read later). The domino effect is typical of <strong>orchestration</strong> (a central conductor); <strong>choreography</strong> (ch. 12) lets services react independently. Fix: stop asking &quot;can you do this right now?&quot; and say &quot;here is what happened; deal with it when you can&quot;.</p>
+<h2 id="7-2-core-components-and-pub-sub">7.2 Core components and pub/sub</h2>
+<p>An async API with a status receipt still has a synchronous technical loop; a <strong>Message Broker</strong> removes it (services need not be online together).</p>
+<ul>
+<li><strong>Producer (publisher):</strong> creates the message and moves on, indifferent to listeners (<strong>radio DJ</strong>, e.g. &quot;Order Placed&quot;, &quot;User Registered&quot;).</li>
+<li><strong>Broker:</strong> reliable post office: receives, <strong>persists</strong>, routes by label without opening the letter (mailroom clerk): RabbitMQ, Apache Kafka, Azure Service Bus, AWS SNS/SQS.</li>
+<li><strong>Consumer (subscriber):</strong> reactive, wakes when a message arrives (the doorbell), rather than <strong>polling</strong>.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Broker</th>
+<th>Vibe</th>
+<th>Best for</th>
+<th>Trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RabbitMQ</strong> (Swiss Army knife; https://www.rabbitmq.com/getstarted.html)</td>
+<td>smart broker, dumb consumer</td>
+<td>complex routing, flexible fan-out, multiple protocols (AMQP, MQTT)</td>
+<td>very low latency but not Kafka-level scale; more ops</td>
+</tr>
+<tr>
+<td><strong>Apache Kafka</strong> (firehose; https://kafka.apache.org/quickstart)</td>
+<td>dumb broker, smart consumer</td>
+<td>massive scale, replayable history, stream processing</td>
+<td>huge throughput but higher latency from batching; high operational complexity</td>
+</tr>
+<tr>
+<td><strong>AWS SQS/SNS</strong> (serverless)</td>
+<td>&quot;set it and forget it&quot;</td>
+<td>zero-management teams; SQS queues, SNS fan-out</td>
+<td>easy scaling and no maintenance, but vendor lock-in and higher cost at scale</td>
+</tr>
+<tr>
+<td><strong>Azure Service Bus</strong> (enterprise; https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-messaging-overview)</td>
+<td>RabbitMQ's corporate cousin</td>
+<td>sessions (FIFO), transactions, duplicate detection</td>
+<td>rich features and Azure integration, but higher latency than raw open source</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Tip:</strong> start with your cloud's managed service; self-host RabbitMQ or Kafka only for ultra-complex routing or massive replay with a platform team (most use MSK, Confluent Cloud, WarpStream).</p>
+<ul>
+<li><strong>Command (&quot;the message&quot;):</strong>
+<ul>
+<li>tells a <strong>specific service</strong> to act</li>
+<li><strong>imperative</strong> names (<code>PlaceOrder</code>, <code>SendEmail</code>, <code>ChargeCreditCard</code>)</li>
+<li><strong>one-to-one</strong></li>
+<li>you expect it to happen (&quot;Waiter, bring me this burger&quot;). <strong>Event (&quot;the fact&quot;):</strong> announces something that <strong>already happened</strong></li>
+<li><strong>past tense</strong> (<code>OrderPlaced</code>, <code>EmailSent</code>, <code>CreditCardCharged</code>)</li>
+<li><strong>one-to-many</strong> broadcast</li>
+<li>zero expectations. Use commands for a specific outcome (high coupling), events to decouple. Events make strict transactions hard (&quot;you cannot roll back a sent email&quot;, ch. 12).</li>
+</ul>
+</li>
+<li><strong>Pub/Sub:</strong>
+<ul>
+<li>publishers categorise messages into <strong>topics</strong> without knowing receivers</li>
+<li>subscribers choose topics. Flow: Order Service saves the order and publishes <code>OrderPlaced</code></li>
+<li>Shipping prints a label</li>
+<li>Rewards adds points</li>
+<li>Analytics updates the dashboard
+<ul>
+<li><strong>Rewards and Analytics were added without touching Order Service code</strong> (OCP), unlike hardcoded HTTP calls</li>
+<li>Cost: instant consistency</li>
+<li>(Read models and polyglot persistence: ch. 8; sagas and the transactional outbox: ch. 12.)</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-3-eventual-consistency">7.3 Eventual consistency</h2>
+<p>After placing an order the Recent Orders page may show shipping &quot;Pending&quot; or nothing. You traded <strong>immediate consistency for availability</strong>: from <strong>ACID</strong> to <strong>BASE</strong> (&quot;Basically Available&quot;, eventually consistent; ch. 8).</p>
+<ul>
+<li>Reality is eventually consistent:
+<ul>
+<li>a cheque is reconciled days later</li>
+<li>you see the sun as it was <strong>8 minutes ago</strong>
+<ul>
+<li><strong>Eventual consistency</strong>: if no new updates, eventually all reads return the last value (Werner Vogels: https://www.allthingsdistributed.com/2008/12/eventually_consistent.html).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Coffee shop:</strong>
+<ul>
+<li>synchronous = the cashier makes your latte before the next order (100% consistent, 0% scalable)</li>
+<li>eventual = write your name on a cup, take the next order, the barista calls your name in 3 minutes (higher latency for you, massive scalability)
+<ul>
+<li>See Hohpe, &quot;Your Coffee Shop Doesn't Use Two-Phase Commit&quot; (https://www.enterpriseintegrationpatterns.com/docs/IEEE_Software_Design_2PC.pdf).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Design rule:</strong> identify what needs <strong>immediate consistency</strong> (no negative checking balance) vs what tolerates eventual (total likes). &quot;Most of your system can be eventually consistent.&quot;</li>
+<li><strong>Panic gap = read-your-writes problem:</strong>
+<ul>
+<li>user buys a $5,000 laptop, redirected to &quot;My Orders&quot;, sees &quot;No Orders Found&quot; and refreshes 50 times</li>
+<li>Fix: <strong>client-side intelligence (optimistic UI)</strong>: show a &quot;Processing...&quot; placeholder from the user's intent (&quot;We received your request&quot;).</li>
+</ul>
+</li>
+<li><strong>CAP link:</strong>
+<ul>
+<li>distributed (P) + keep accepting orders when Shipping is down (A) = you <strong>sacrifice C</strong></li>
+<li>explain it as &quot;we chose a system that never goes down over one that is always perfect&quot;.</li>
+</ul>
+</li>
+<li><strong>AI agents are just slow consumers.</strong>
+<ul>
+<li>Mistake: Controller calls OpenAI synchronously, 20 s spinner, <strong>504 Gateway Timeout</strong>, user clicks again, <strong>two LLM calls</strong>. Instead: <code>TicketCreated</code> event</li>
+<li><code>SupportBot</code> consumer pulls the text, awaits the LLM, saves the draft</li>
+<li>publishes <code>TicketDrafted</code>. The Web API returns <strong>202 Accepted</strong>. &quot;Never block a human while a robot thinks: put the LLM behind a queue.&quot;</li>
+</ul>
+</li>
+<li><strong>CAP revisited (&quot;2 of 3&quot; is mostly a lie):</strong>
+<ul>
+<li>CAP prohibits only perfect availability and consistency <strong>during partitions</strong>. Single region: partitions rare (design CA)</li>
+<li>multi-region: <strong>P mandatory</strong>
+<ul>
+<li><strong>Latency is a partition</strong> (a time bound on communication): if network latency exceeds your timeout you must make a <strong>partition decision</strong> (cancel checkout = choose C; accept and charge later = choose A)</li>
+<li><strong>PACELC</strong> (Daniel Abadi, 2012: https://www.cs.umd.edu/~abadi/papers/abadi-pacelc.pdf): if <strong>P</strong>artition, trade <strong>A</strong> vs <strong>C</strong></li>
+</ul>
+</li>
+<li><strong>E</strong>lse (healthy) trade <strong>L</strong>atency vs <strong>C</strong>onsistency
+<ul>
+<li>Modern designs use an explicit <strong>partition mode</strong> (an ATM that lets you withdraw only $200 offline) and <strong>compensation</strong> (a saga fixes it after healing)</li>
+<li>Design for recovery with a compensating transaction</li>
+<li>Brewer, &quot;CAP Twelve Years Later&quot;: https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed/.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-4-the-event-lifecycle">7.4 The event lifecycle</h2>
+<p><img src="/book-digest/grokking-software-architecture/img/event-lifecycle.svg" alt="Event lifecycle with ACK and DLQ" loading="lazy" />
+<strong>Published (created), Persisted (on disk), Consumed (read by a worker), Acknowledged (complete)</strong>; it can span seconds to days without loss. (Reactive Manifesto: Responsive, Resilient, Elastic, Message Driven: https://www.reactivemanifesto.org.)</p>
+<ul>
+<li><strong>Queue vs topic:</strong>
+<ul>
+<li><strong>Queue</strong> = point-to-point load balancing (bank teller line): one consumer from a pool takes each message (image resizing, order processing)</li>
+<li><strong>Topic</strong> = pub/sub fan-out (radio station): every subscriber gets a copy (<code>OrderPlaced</code> to Shipping, Email, Analytics).</li>
+</ul>
+</li>
+<li><strong>Four operational realities:</strong>
+<ol>
+<li><strong>Partitioning:</strong> topics are split into partitions; events with the same <strong>partition key</strong> (<code>customer_id</code>, <code>order_id</code>) go to the same partition, processed in order by one consumer.</li>
+<li><strong>Ordering:</strong> global ordering is an &quot;expensive illusion&quot;; only <strong>within a partition</strong>. <code>OrderPlaced</code> and <code>OrderCancelled</code> on different partitions may arrive reversed: include <strong>sequence numbers or timestamps</strong> and handle out-of-order events.</li>
+<li><strong>Delivery semantics:</strong> <strong>at-most-once</strong> (may lose), <strong>at-least-once</strong> (industry baseline; duplicates possible), <strong>exactly-once</strong> (complex, expensive, specialised brokers). <strong>Rule: default to at-least-once and make the consumer idempotent</strong> by checking a tracking table of processed event IDs.</li>
+<li><strong>Push vs pull and backpressure:</strong> push can choke a slow consumer; <strong>pull</strong> lets unread events buffer safely in the durable partition (Black Friday: 100,000 events/s).</li>
+</ol>
+</li>
+<li><strong>Four stages of flow:</strong>
+<ul>
+<li><strong>Publication:</strong> the broker's tiny ACK means the producer is done</li>
+<li><strong>Enqueue:</strong> persisted to disk</li>
+<li><strong>Consumption:</strong> the message is <strong>locked</strong> but not deleted</li>
+<li><strong>Acknowledgment:</strong>
+<ul>
+<li>only on success does the consumer ACK</li>
+<li>crash before ACK and the broker requeues (at-least-once). Danger: label printed but crash before ACK = <strong>a second label</strong> (fix with idempotency)</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Dead Letter Queue (DLQ):</strong>
+<ul>
+<li>a message may fail forever because of a <strong>poison pill</strong> (bad data, e.g. Order ID <code>-1</code>) or <strong>broken infrastructure</strong> (firewall rule, expired password)</li>
+<li>Endless redelivery is the &quot;spawn kill&quot; <strong>infinite death loop</strong></li>
+<li>Brokers have <strong><code>MaxDeliveryCount</code></strong> (3 or 5): after that the message moves to the DLQ (&quot;poison queue&quot;) for human inspection; fix the bug and requeue</li>
+<li>Configure it, do not hand-write loops: <code>&quot;RetryPolicy&quot;: { &quot;MaxDeliveryCount&quot;: 5, &quot;BackoffStrategy&quot;: &quot;Exponential&quot; /* 1s, 2s, 4s, 8s */, &quot;DeadLetteringOnExpiration&quot;: true }</code></li>
+<li>**Never set it to infinity</li>
+<li>Monitor the DLQ**: a growing pile means a bug, config or permissions issue.</li>
+</ul>
+</li>
+<li><strong>Fan-out storm:</strong>
+<ul>
+<li>a major tour ticket sale at midnight: <strong>100,000 &quot;Buy&quot; clicks x 10 consumers = 1,000,000 background processes</strong></li>
+<li>the database exceeds connection limits or <strong>lock contention</strong> (many processes fighting for the same seat)
+<ul>
+<li>Three fixes: <strong>prefetch limits (throttling/QoS)</strong>: cap unacknowledged messages per consumer (&quot;take only 10 at a time&quot;)</li>
+</ul>
+</li>
+<li><strong>stagger producers</strong> (batches of 50, sleep 500 ms: better 5 minutes to send than crash the DB in 5 seconds)</li>
+<li><strong>stateless horizontal scaling</strong> (spin up 500 identical consumers; ch. 9).</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-5-code-the-event-c-poco">7.5 Code: the event (C# POCO)</h2>
+<p>An event class is a <strong>payload with no logic</strong> (&quot;the envelope, not the postman&quot;). <strong>Rules:</strong> past-tense name (<code>OrderPlaced</code> not <code>CreateOrder</code>), <strong>schema version</strong> property, <strong>immutability</strong> (<code>init</code> setters).</p>
+<pre class="hl"><code><span class="k">public</span><span class="w"> </span><span class="k">record</span><span class="w"> </span><span class="n">OrderPlaced</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">IEvent</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="n">Guid</span><span class="w"> </span><span class="n">EventId</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">init</span><span class="p">;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Guid</span><span class="p">.</span><span class="n">NewGuid</span><span class="p">();</span><span class="w">     </span><span class="c1">// for idempotent consumers</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">SchemaVersion</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">init</span><span class="p">;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"1.0"</span><span class="p">;</span><span class="w">      </span><span class="c1">// contract evolution</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="n">Guid</span><span class="w"> </span><span class="n">CorrelationId</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">init</span><span class="p">;</span><span class="w"> </span><span class="p">}</span><span class="w">                 </span><span class="c1">// the thread across services</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="n">Guid</span><span class="w"> </span><span class="n">OrderId</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">init</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="n">Guid</span><span class="w"> </span><span class="n">UserId</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">init</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="kt">decimal</span><span class="w"> </span><span class="n">TotalAmount</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">init</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="n">DateTime</span><span class="w"> </span><span class="n">OccurredOn</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">init</span><span class="p">;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DateTime</span><span class="p">.</span><span class="n">UtcNow</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>Keep it minimal (not the whole customer profile; consumers look up). Broker serialises to JSON. C# <code>record</code> = immutable with value equality. Never put business logic (<code>CalculateTax()</code>) in an event.</p>
+<ul>
+<li><strong>Duplicate detection:</strong>
+<ul>
+<li>use the broker's built-in feature (Azure Service Bus, RabbitMQ): it tracks message IDs and drops repeats within a time window</li>
+<li>don't spend your &quot;complexity budget&quot; re-implementing it.</li>
+</ul>
+</li>
+<li><strong>The atomicity question (dual write):</strong>
+<ul>
+<li>saving the order and publishing the event are two actions</li>
+<li>DB save succeeds then the network drops = shipping never notified</li>
+<li>publish first then DB fails = a <strong>phantom order</strong>. Fix: <strong>Transactional Outbox Pattern</strong> (ch. 12).</li>
+</ul>
+</li>
+<li><strong>Marker interface <code>IEvent</code>:</strong> <code>Task PublishAsync&lt;T&gt;(T @event) where T : IEvent;</code> stops you publishing a <code>Customer</code> or <code>string</code>.</li>
+<li><strong>Correlation ID:</strong>
+<ul>
+<li>GUID generated when the user clicks &quot;Buy&quot;, passed API to database to event to queue to consumer</li>
+<li>without it logs are noise, with it you filter the whole request across ten servers (replaces the stack trace).</li>
+</ul>
+</li>
+<li><strong>Where EDA lives in a repo:</strong>
+<ul>
+<li><strong>shared contracts</strong> project (<code>Core.Shared</code>/<code>Contracts</code>, containing <code>OrderPlaced.cs</code>, referenced by both sides)</li>
+<li>an <strong><code>IEventPublisher</code></strong> interface instead of <code>HttpClient</code></li>
+<li><strong>handlers/consumers</strong>
+<ul>
+<li>folders: <code>public class ShippingLabelPrinter : IConsumer&lt;OrderPlaced&gt;</code> replaces the Controller action. In <strong>hexagonal</strong> terms: <code>IEventPublisher</code> is an <strong>outbound port</strong> in the Core</li>
+<li><code>RabbitMQPublisher</code> or <code>ServiceBusPublisher</code> is an infrastructure adapter. Companion repo has a full example</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-6-the-dork-side-apollo-13-and-logs">7.6 The Dork Side: Apollo 13 and logs</h2>
+<p><strong>April 13, 1970.</strong> The root cause was technical debt: years earlier the Service Module heater spec changed from <strong>28 V to 65 V</strong>; the thermostat switches in <strong>Oxygen Tank No. 2</strong> were not updated and melted shut in a pre-flight test.</p>
+<p>At 55 hours (200,000 miles out) Jack Swigert stirred the oxygen tanks; wires sparked, the tank exploded. Houston telemetry (&quot;logs&quot;): <strong>Main Bus B Undervolt, Cryo Pressure Decreasing, Fuel Cells 1 and 3 falling</strong>. Engineers first assumed an <strong>instrumentation error</strong> (denial).</p>
+<p><strong>Sy Liebergot (EECOM)</strong> correlated the oxygen pressure drop rate with the fuel-cell power loss: one bug (oxygen fed the fuel cells) and told Flight Director <strong>Gene Kranz</strong> the ship was &quot;bleeding to death&quot;: he trusted the <strong>event stream</strong>.</p>
+<ul>
+<li><strong>The hotfix:</strong>
+<ul>
+<li>the Lunar Module (designed for 2 men for 2 days, now 3 for 4) had rising CO2; the Command Module used <strong>square</strong> scrubber canisters, the Lunar Module <strong>round</strong></li>
+<li>Houston built an adapter from hoses, socks, duct tape and flight manuals and read instructions over the radio (the &quot;mailbox&quot; rig): ugly &quot;duct tape code&quot; that respected production constraints</li>
+<li>(The book frames the square/round mismatch as an ISP violation.)</li>
+</ul>
+</li>
+<li><strong>Legacy:</strong>
+<ul>
+<li><strong>telemetry is truth</strong> (observability; https://copyconstruct.medium.com/monitoring-in-the-time-of-cloud-native-c87c7a5bfa3e)</li>
+<li><strong>correlation IDs matter</strong></li>
+<li><strong>redundancy is life</strong> (the Lunar Module as backup server; in EDA the queue holds messages if the database dies).</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-7-mission-checklist-recap">7.7 Mission, checklist, recap</h2>
+<ul>
+<li><strong>Mission: Toxicity Filter.</strong>
+<ul>
+<li>Console app simulating an LLM that takes 3 s: event <code>CommentPosted</code> (<code>CorrelationId</code>, <code>CommentText</code>)</li>
+<li>broker = <code>System.Threading.Channels</code></li>
+<li>producer prints &quot;HTTP 200 OK&quot; instantly</li>
+<li>consumer waits 3 s (<code>Thread.Sleep(3000)</code>), analyses, prints result and &quot;ACK sent&quot;. <strong>Acceptance:</strong> no blocking</li>
+<li>a visible <strong>3 s gap</strong></li>
+<li>the same <strong>CorrelationId</strong> in both logs
+<ul>
+<li>Target output: <code>[T+00s] [Producer] [ID: 8f42a...] Comment 'Your code smells' dropped in channel.</code> ..</li>
+<li><code>[T+03s] [AI Consumer] Analysis Complete: TOXICITY DETECTED! Banning User.</code> (guided solution in Appendix A).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Checklist:</strong>
+<ul>
+<li>sync vs async (phone vs text)</li>
+<li>temporal decoupling</li>
+<li>producer-broker-consumer roles</li>
+<li>eventual consistency and CAP</li>
+<li>three golden rules of event design (past tense, flat structure, immutability)</li>
+<li>ACK</li>
+<li>DLQ and monitoring</li>
+<li>correlation ID.</li>
+</ul>
+</li>
+<li><strong>Recap:</strong>
+<ul>
+<li>EDA = broadcasting past-tense events instead of commands</li>
+<li>the broker is the shock absorber</li>
+<li>stop fighting the time gap and design for eventual consistency</li>
+<li>PACELC</li>
+<li>ACKs and DLQs</li>
+<li>structured logging and <strong>correlation IDs</strong> are survival</li>
+<li>mental shift from &quot;command and control&quot; to <strong>choreography</strong>.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+temporal coupling · orchestration vs choreography · producer / broker / consumer · command vs event · pub/sub · queue vs topic · eventual consistency · BASE · read-your-writes · optimistic UI · PACELC · partition mode · compensation · partition key · at-least-once · idempotent consumer · ACK · DLQ · <code>MaxDeliveryCount</code> · fan-out storm · prefetch limit · outbox · correlation ID.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 7. Pre-release; no public source page found.</li>
+<li>Abadi, PACELC (2012): https://www.cs.umd.edu/~abadi/papers/abadi-pacelc.pdf · Brewer, &quot;CAP Twelve Years Later&quot;: https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-06-reliable-api-design/">Grokking Software Architecture 6: Reliable API Design (public contracts and synchronous communication)</a> · <a href="/book-digest/grokking-software-architecture/gsa-08-the-database-as-an-architectural-pillar/">Grokking Software Architecture 8: The Database as an Architectural Pillar</a> · <a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging</a> · <a href="/book-digest/understanding-distributed-systems/uds-13-asynchronous-transactions/">Understanding Distributed Systems 13: Asynchronous transactions</a> · <a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-06-reliable-api-design/">&larr; Grokking Software Architecture 6: Reliable API Design (public contracts and synchronous communication)</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-08-the-database-as-an-architectural-pillar/">Grokking Software Architecture 8: The Database as an Architectural Pillar &rarr;</a></nav></main></body></html>

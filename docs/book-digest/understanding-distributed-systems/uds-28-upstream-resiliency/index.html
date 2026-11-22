@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 28: Upstream resiliency (and Part V intro)</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-28-upstream-resiliency-and-part-v-intro">Understanding Distributed Systems 28: Upstream resiliency (and Part V intro)</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), ch. 28 and the Part V introduction. Previous: <a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-29-testing/">Understanding Distributed Systems 29: Testing</a>.</p>
+<blockquote>
+<p>[!abstract] Takeaways
+Mechanisms protecting a service from <strong>upstream pressure</strong> (too much incoming load). (Health checks in chapter 18 were an earlier one.)</p>
+<ul>
+<li><strong>Load shedding:</strong> reject excess requests with <strong>503</strong> based on <strong>local</strong> state.</li>
+<li><strong>Load leveling:</strong> put a <strong>message channel</strong> in front; the service consumes at its own pace.</li>
+<li><strong>Rate limiting:</strong> reject over-quota requests with <strong>429</strong>, based on <strong>global</strong> state, per user, API key or IP.</li>
+<li><strong>Constant work:</strong> do the same amount of work under any load; worst case equals average case.</li>
+<li>None of these add capacity; combine with <strong>autoscaling</strong> (https://en.wikipedia.org/wiki/Autoscaling).</li>
+</ul>
+</blockquote>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-28-upstream-protection.svg" alt="Rate limiting and load shedding protect a service" loading="lazy" /></p>
+<h2 id="28-1-load-shedding">28.1 Load shedding</h2>
+<p>A server cannot control how many requests arrive. The OS keeps a <strong>per-port connection queue</strong> that rejects new connections once full, but typically under extreme load the server <strong>crawls to a halt first</strong> (out of memory, threads, sockets or files), response times climb and it becomes unavailable.</p>
+<ul>
+<li>At capacity it should <strong>reject excess requests</strong> so resources go to the ones already in progress (https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload).</li>
+<li>Implementation: a <strong>counter of concurrent requests</strong> (increment on arrival, decrement on response) compared with a <strong>threshold approximating capacity</strong>.</li>
+<li>On overload, <strong>fail fast</strong> with <strong>503 Service Unavailable</strong>.</li>
+<li>Which to reject: not necessarily arbitrary ones. Reject only <strong>low-priority</strong> requests, or the <strong>oldest first</strong> (they will time out and be retried soon, so handling them is a waste).</li>
+<li><strong>Limit:</strong>
+<ul>
+<li>rejection is not free (the server may still pay for opening a TLS connection and reading the request)</li>
+<li>If load keeps growing, the cost of rejecting eventually degrades the server.</li>
+</ul>
+</li>
+</ul>
+<h2 id="28-2-load-leveling">28.2 Load leveling</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-28-load-leveling.svg" alt="A channel smooths spikes" loading="lazy" />
+When clients <strong>do not expect a prompt response</strong>, put a <strong>messaging channel</strong> between clients and service. It <strong>decouples load from capacity</strong> so the service works at its own pace and smooths <strong>short-lived spikes</strong>. If the service never catches up, a <strong>large backlog</strong> builds (chapter 23).</p>
+<ul>
+<li>Shedding and leveling <strong>protect</strong> a service
+<ul>
+<li>they do not handle more load. To do that, <strong>scale out</strong>, hence the combination with <strong>autoscaling</strong> that detects a hot service and adds capacity.</li>
+</ul>
+</li>
+</ul>
+<h2 id="28-3-rate-limiting-throttling">28.3 Rate limiting (throttling)</h2>
+<p>Reject a request when a <strong>quota</strong> is exceeded. A service can have several quotas (requests or bytes per interval), typically per <strong>user, API key or IP</strong>.</p>
+<ul>
+<li>Example: quota 10 requests/s per API key; a key averaging 12/s gets about <strong>2/s rejected</strong>.</li>
+<li>Return a distinct error so the sender knows it is a quota: HTTP <strong>429 Too Many Requests</strong>, with details on <strong>which quota</strong> was exhausted and by how much, and optionally a <strong><code>Retry-After</code></strong> header saying how long to wait.</li>
+<li>Benefits:
+<ul>
+<li>stops non-malicious users <strong>monopolising</strong> the service by mistake</li>
+<li>guards against <strong>client bugs</strong> that repeatedly hit a service</li>
+<li>enforces <strong>pricing tiers</strong> (more use, more pay, so costs are offloaded to users).</li>
+</ul>
+</li>
+<li><strong>DDoS:</strong>
+<ul>
+<li>only partial protection</li>
+<li>Throttled clients can keep hammering after a 429, and rate-limiting is not free (to limit by API key you must open a TLS connection and read part of the request)</li>
+<li>It reduces impact only</li>
+<li><strong>Economies of scale are the only true protection</strong>: many services behind <strong>one large gateway</strong> that rejects traffic upstream, its cost amortised across them.</li>
+</ul>
+</li>
+<li><strong>vs load shedding:</strong>
+<ul>
+<li>shedding uses a process's <strong>local state</strong> (its concurrent requests)</li>
+<li>rate limiting uses <strong>global state</strong> (e.g. requests for an API key across <strong>all instances</strong>), so it needs <strong>coordination</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="28-3-1-single-process-implementation">28.3.1 Single-process implementation</h3>
+<p>Quota example: <strong>2 requests per minute per API key</strong>.</p>
+<ul>
+<li><strong>Naive:</strong>
+<ul>
+<li>a doubly-linked list per key of the last N request <strong>timestamps</strong></li>
+<li>append on arrival, periodically purge entries older than a minute, compare list length with the quota. Memory grows with the number of requests per key.</li>
+</ul>
+</li>
+<li><strong>Bucketing:</strong> divide time into <strong>fixed buckets</strong> (e.g. 1 minute), each a <strong>counter</strong>; a request at 12:00:18 increments bucket &quot;12:00&quot;. Storage no longer grows with request count.</li>
+<li><strong>Sliding window:</strong>
+<ul>
+<li>window length = the quota's time unit (1 minute)</li>
+<li>It can overlap several buckets, so the count is a <strong>weighted sum of the bucket counters</strong>, each weighted by <strong>its overlap with the window</strong></li>
+<li>An <strong>approximation</strong>, improved with finer buckets (30 s rather than 1 min).</li>
+</ul>
+</li>
+<li>Store only buckets the window can overlap: with 1-minute window and buckets, <strong>at most 2</strong>. So <strong>two counters per API key</strong>, far less than a list per key.</li>
+</ul>
+<h3 id="28-3-2-distributed-implementation">28.3.2 Distributed implementation</h3>
+<p>With many processes, the quota applies to the total across instances, so a <strong>shared data store</strong> holds the counters (two integers per key).</p>
+<ul>
+<li>Fetch-update-write per request <strong>loses updates</strong> if two processes race, so it would need a <strong>transaction</strong>: correct but slow and expensive (data store must scale linearly with requests) and the store becomes a <strong>hard dependency</strong>.</li>
+<li>Better: a single <strong>atomic get-and-increment</strong> (most stores offer it) or emulate with <strong>compare-and-swap</strong>: much faster than transactions.</li>
+<li>Better still: <strong>batch bucket updates in memory</strong> and <strong>flush asynchronously</strong> to the store: less accurate shared state, but far fewer requests to the store.</li>
+<li><strong>If the store is down</strong>
+<ul>
+<li>(CAP essence: sacrifice consistency or availability): rejecting requests just because rate-limiting state is unreachable could harm the business, so <strong>keep serving based on the last state read</strong></li>
+<li>This is <strong>static stability</strong> (chapter 22).</li>
+</ul>
+</li>
+</ul>
+<h2 id="28-4-constant-work">28.4 Constant work</h2>
+<p>When overload, config changes or faults make an app behave differently it is <strong>multi-modal</strong>: modes may trigger rare bugs, clash with happy-path assumptions, and invalidate operators' <strong>mental model</strong>. Rule of thumb: <strong>minimise the number of modes</strong>.</p>
+<ul>
+<li>Example:
+<ul>
+<li>data planes prefer <strong>simple key-value stores over relational databases</strong> for predictable performance: a relational DB has hidden optimisations so the same query may perform differently from run to run (https://blog.nelhage.com/post/some-opinionated-sql-takes/)</li>
+<li>a dumb KV store behaves predictably.</li>
+</ul>
+</li>
+<li>Overload makes systems slower exactly when worst
+<ul>
+<li>Ideal:
+<ul>
+<li><strong>worst case equals average case</strong>: the <strong>constant work</strong> pattern (https://aws.amazon.com/builders-library/reliability-and-constant-work/): <strong>the same work under high load as under average load</strong></li>
+<li>any variation under stress should be the system performing <strong>better</strong></li>
+</ul>
+</li>
+<li>Such a system is <strong>antifragile</strong>, which differs from <strong>resilient</strong> (keeps operating under extreme load, while antifragile does better).</li>
+</ul>
+</li>
+<li><strong>Application (chapter 22):</strong>
+<ul>
+<li>a config store (control plane) holds per-user settings such as the gateway's <strong>rate-limit quotas</strong></li>
+<li>Sending each change separately makes data-plane work <strong>proportional to the number of changes</strong></li>
+<li>If many settings change at once (a business decision changes quotas), every data-plane instance gets a flood of update messages.</li>
+</ul>
+</li>
+<li><strong>Fix:</strong>
+<ul>
+<li>the control plane <strong>periodically dumps all users' settings</strong> (changed or not) to a file store (Azure Storage, S3)</li>
+<li>data plane instances <strong>periodically read the dump in bulk</strong>. Work is constant however many settings change.</li>
+</ul>
+</li>
+<li><strong>Extreme form:</strong>
+<ul>
+<li><strong>pre-allocate empty config slots</strong> for the maximum number of users, so work stays stable as users grow and you can <strong>stress-test</strong> the real behaviour</li>
+<li>It caps users, but a limit exists anyway</li>
+<li>Typical of <strong>cellular architectures</strong> (26.2): fixed maximum cell size, scale out by adding cells.</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong>
+<ul>
+<li>reliable and predictable updates</li>
+<li>far simpler to implement than a delta-only mechanism</li>
+<li><strong>self-healing</strong>: a corrupted dump is fixed by the next one, a faulty update is reverted by creating a new dump and waiting, whereas individual updates need complex data-plane logic to heal.</li>
+</ul>
+</li>
+<li><strong>Cost:</strong> constant work is <strong>more expensive</strong> than the necessary work, but often worth it for reliability and simplicity.</li>
+</ul>
+<h2 id="part-iv-summary">Part IV summary</h2>
+<ul>
+<li>More components or operations means more failures; eventually anything that can happen will (&quot;cruel math&quot;, the author's team's joke).</li>
+<li>Production engineers worry more about <strong>tolerating failures</strong> than scaling further: once the architecture handles current load, faults are the main concern until the next scalability bottleneck.</li>
+<li>Failures are <strong>inevitable</strong>; when you cannot design a failure mode away (e.g. with constant work), <strong>reduce the blast radius</strong> and <strong>stop cracks propagating</strong> between components.</li>
+</ul>
+<h2 id="part-v-maintainability-introduction">Part V: Maintainability (introduction)</h2>
+<blockquote>
+<p>&quot;Everyone knows that debugging is twice as hard as writing a program in the first place. So if you're as clever as you can be when you write it, how will you ever debug it?&quot; (Brian Kernighan)</p>
+</blockquote>
+<ul>
+<li>Most of software's cost is <strong>after initial development</strong> (fixing bugs, adding features, operating), so make systems easy to <strong>modify, extend and operate</strong>.</li>
+<li><strong>Testing</strong>
+<ul>
+<li>(unit, integration, end-to-end) is the minimum to change a system without fear</li>
+<li>Then changes must be <strong>released safely</strong> without hurting availability</li>
+<li>Operators must <strong>monitor health, investigate degradations and restore service</strong>, which requires <strong>changing behaviour without code changes</strong> (feature flags, scaling by config).</li>
+</ul>
+</li>
+<li><strong>Historically</strong>
+<ul>
+<li>developers, testers (QA) and operators were separate teams handing work over</li>
+<li>being phased out. Now developers commonly <strong>test and operate what they write</strong>, needing an end-to-end view of the lifecycle.</li>
+</ul>
+</li>
+<li>Roadmap:
+<ul>
+<li>ch. 29 <strong>testing</strong> (unit, integration, end-to-end, formal verification)</li>
+<li>ch. 30 <strong>continuous delivery and deployment</strong></li>
+<li>ch. 31 <strong>monitoring</strong> (metrics, SLIs, dashboards, SLOs)</li>
+<li>ch. 32 <strong>observability</strong> (logs, traces)</li>
+<li>ch. 33 <strong>manageability</strong> (change behaviour without code).</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+upstream pressure · load shedding (503) · load leveling · autoscaling · rate limiting (429, <code>Retry-After</code>) · quota · bucketing · sliding window · atomic get-and-increment · compare-and-swap · multi-modal behaviour · constant work · antifragile · cruel math.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 28, Part IV summary, Part V intro. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency</a> · <a href="/book-digest/understanding-distributed-systems/uds-29-testing/">Understanding Distributed Systems 29: Testing</a> · <a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">Understanding Distributed Systems 22: Control planes and data planes</a> · <a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging</a> · <a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">Understanding Distributed Systems 18: Network load balancing</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">&larr; Understanding Distributed Systems 27: Downstream resiliency</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-29-testing/">Understanding Distributed Systems 29: Testing &rarr;</a></nav></main></body></html>

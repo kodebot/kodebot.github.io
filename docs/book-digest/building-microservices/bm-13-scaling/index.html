@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 13: Scaling</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-13-scaling">Building Microservices 13: Scaling</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 13. Previous: <a href="/book-digest/building-microservices/bm-12-resiliency/">Building Microservices 12: Resiliency</a>. Next: <a href="/book-digest/building-microservices/bm-14-user-interfaces/">Building Microservices 14: User Interfaces</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Scale for <strong>performance</strong> (load, latency) or <strong>robustness</strong>. Four axes: <strong>vertical</strong>, <strong>horizontal duplication</strong>, <strong>data partitioning</strong>, <strong>functional decomposition</strong>; you may combine them.</li>
+<li>Try the cheap, low-risk ones first (vertical, horizontal); decomposition is the biggest change, so exhaust the others before it unless you have other reasons.</li>
+<li><strong>Caching</strong> helps performance, scale and robustness, but cache in <strong>as few places as possible</strong>; choose an invalidation scheme (TTL, conditional GET, notification, write-through, write-behind).</li>
+<li><strong>Autoscale</strong> for failure first, then load; scale down cautiously.</li>
+<li>Start small, measure, experiment; needing to re-architect for scale &quot;is a sign of success&quot;.</li>
+</ul>
+</div></div>
+<h2 id="13-1-the-four-axes-of-scaling">13.1 The four axes of scaling</h2>
+<p>The <strong>Scale Cube</strong> (Abbott and Fisher, <em>The Art of Scalability</em>, 2nd ed., 2015) has three axes: functional decomposition, horizontal duplication, data partitioning. Newman adds a fourth, <strong>vertical scaling</strong>. Running example: <strong>FoodCo</strong> (anonymised), a food delivery firm struggling with <strong>write contention</strong> on its primary database.</p>
+<p><img src="/book-digest/building-microservices/img/bm-13-four-axes.svg" alt="The four axes" loading="lazy" /></p>
+<h3 id="vertical-scaling">Vertical scaling</h3>
+<ul>
+<li>Get a <strong>bigger machine</strong>
+<ul>
+<li>Quick and low-risk on virtualised or cloud infrastructure (an AWS <code>u-24tb1.metal</code> has 24 TB of memory)
+<ul>
+<li>resizing a VM or renting a bigger instance needs few code changes (perhaps runtime memory flags)</li>
+</ul>
+</li>
+<li>It can also make other scaling easier (a bigger database host can hold new services' databases).</li>
+</ul>
+</li>
+<li>Historically it meant buying hardware with long lead times and oversizing. If you would have to buy new kit, Newman skips to horizontal duplication.</li>
+<li><strong>Limits:</strong>
+<ul>
+<li>CPUs now gain <strong>cores, not clock speed</strong>, and software often cannot use them (4 to 8 cores may give little)</li>
+<li>it does <strong>little for robustness</strong> (a down machine is down)</li>
+<li>cost rises faster than capacity. FoodCo had already upgraded the database several times and it would not last given growth.</li>
+</ul>
+</li>
+</ul>
+<h3 id="horizontal-duplication">Horizontal duplication</h3>
+<ul>
+<li>Duplicate part of the system and <strong>distribute the work</strong>. Often tried early: run several copies of the monolith.</li>
+<li><strong>Implementations:</strong>
+<ul>
+<li><strong>Load balancer</strong> across instances (here Catalog); detects and removes bad nodes; mostly software and often client side; part of the service's logical boundary.</li>
+<li><strong>Competing consumers</strong> (Hohpe and Woolf): song uploads queue jobs and several <strong>Song Transcoder</strong> instances consume; add instances for throughput.</li>
+<li><strong>Read replicas:</strong> FoodCo offloaded read-heavy traffic from the primary, with routing <strong>internal to the microservice</strong>, freeing the primary for writes.</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong> application rarely changes; the next step if vertical is unavailable.</li>
+<li><strong>Limits:</strong>
+<ul>
+<li>more infrastructure and cost</li>
+<li>a &quot;blunt instrument&quot; (copies of a whole monolith though only part is stressed)</li>
+<li>you depend on the distribution mechanism. Needing <strong>sticky sessions</strong> (same user, same replica) causes other problems: avoid.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-13-horizontal-duplication.svg" alt="Load balancer, competing consumers and read replicas" loading="lazy" /></p>
+<h3 id="data-partitioning">Data partitioning</h3>
+<ul>
+<li>Apply a function to a <strong>key</strong> to choose a <strong>partition (shard)</strong>
+<ul>
+<li>Example: family names A to M to one database and N to Z to another (identical schemas, different rows)</li>
+<li>It can be done at the <strong>database</strong> (if natively supported) or <strong>microservice instance</strong> level (via a proxy; good with in-memory caches, scales both tiers)</li>
+<li>Consumers should not see it.</li>
+</ul>
+</li>
+<li>Also common:
+<ul>
+<li><strong>geographic</strong> partitioning</li>
+<li>FoodCo rejected per-country partitions: expansion would mean a new partition for every country, raising the cost of entering markets</li>
+<li>Cassandra partitions reads and writes across a &quot;ring&quot;, and Kafka partitions topics.</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong>
+<ul>
+<li>scales <strong>transactional workloads</strong> and writes</li>
+<li><strong>smaller maintenance impact</strong> (per-partition updates, off-peak by region)</li>
+<li><strong>data residency</strong> (EU data stays in the EU)</li>
+<li>combines with duplication.</li>
+</ul>
+</li>
+<li><strong>Limits:</strong>
+<ul>
+<li><strong>Robustness:</strong> a failed partition fails its share (one of four = 25% of requests), so combine with duplication.</li>
+<li><strong>Choosing the key:</strong>
+<ul>
+<li>surname is poor: Chinese surnames number under about 4,000, and the top 100 cover over 80% of people, skewed to N to Z in Mandarin</li>
+<li>A <strong>unique customer ID</strong> distributes evenly and survives name changes.</li>
+</ul>
+</li>
+<li><strong>Changing scheme:</strong> adding nodes is easy (Cassandra rebalances; Kafka adds partitions but existing messages stay), but fixing a bad scheme hurts (one client took production offline for <strong>three days</strong>).</li>
+<li><strong>Cross-shard queries</strong> (customers over 18) need querying every shard and joining, or an alternative <strong>read store</strong>, often asynchronous with cached results (Mongo uses map/reduce).</li>
+</ul>
+</li>
+<li>Write scaling is where databases differ most
+<ul>
+<li>changing technology is common (a bigger box meanwhile). See Sadalage and Fowler, <em>NoSQL Distilled</em> (2012). It mostly changes data, code lightly.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-13-data-partitioning.svg" alt="Poor versus better partition keys" loading="lazy" /></p>
+<h3 id="functional-decomposition">Functional decomposition</h3>
+<ul>
+<li>Extract functionality so it scales independently (the Order service from MusicCorp's system)
+<ul>
+<li>the canonical microservice move (chapter 3). FoodCo's path: vertical exhausted, duplication used, partitioning discounted, so it moves <strong>deliveries</strong> and <strong>menus</strong> out first, which also lets a growing delivery team own them.</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong>
+<ul>
+<li><strong>rightsize</strong> infrastructure (switch off rarely used parts, small machines for light loads, more for constrained ones)</li>
+<li>cost control (why SaaS providers use it)</li>
+<li>room for <strong>different technologies</strong></li>
+<li><strong>organisational scaling</strong> (chapter 15). Not robust by itself, but allows partial failure tolerance.</li>
+</ul>
+</li>
+<li><strong>Limits:</strong>
+<ul>
+<li>complex, no short-term benefit, the <strong>largest code impact</strong> (frontend and backend, plus data), and <strong>more services</strong> to run and make robust</li>
+<li>Newman exhausts other options first, unless other drivers exist (FoodCo wants to grow its team and countries).</li>
+</ul>
+</li>
+</ul>
+<h2 id="13-2-combining-models">13.2 Combining models</h2>
+<ul>
+<li>Scale along several axes:
+<ul>
+<li>extract Order, then duplicate it, then <strong>partition it by geography with duplication within each group</strong></li>
+<li>Scaling on one axis eases others: decomposing Order lets you duplicate or partition it alone, not the whole monolith</li>
+<li>The goal is not all axes, but knowing the trade-offs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="13-3-start-small">13.3 Start small</h2>
+<ul>
+<li>Knuth:
+<ul>
+<li>&quot;premature optimization is the root of all evil (or at least most of it)&quot;. Optimise for real need</li>
+<li>scaling one part adds new moving parts and new fragility (Order on its own infrastructure is another service to keep available).</li>
+</ul>
+</li>
+<li><strong>Experiment scientifically:</strong> use automated <strong>load tests</strong> for a baseline, recreate the bottleneck, change, observe.</li>
+</ul>
+<blockquote>
+<p>[!note] CQRS and event sourcing
+<strong>CQRS</strong> (Command Query Responsibility Segregation) uses <strong>separate models for reads and writes</strong>, deployable separately and scaled independently; often paired with <strong>event sourcing</strong> (derive entity state from its event history). Like read replicas in the application tier, but &quot;a complex pattern to execute well&quot;; if only read-constrained, try a read replica first. Both change how developers think. They are an <strong>internal implementation detail</strong> of a service and should be invisible to consumers.</p>
+</blockquote>
+<h2 id="13-4-caching">13.4 Caching</h2>
+<ul>
+<li>Store a previous result for reuse. Example: <strong>Recommendation</strong> keeps a local copy of stock levels from <strong>Inventory</strong> (the <strong>origin</strong>): a <strong>cache hit</strong> or a <strong>cache miss</strong> (fetch from the origin)
+<ul>
+<li>entries need <strong>invalidation</strong>.</li>
+</ul>
+</li>
+<li><strong>Why cache:</strong>
+<ul>
+<li><strong>Performance:</strong> avoids network hops and recomputation (an expensive top-sellers-by-genre join).</li>
+<li><strong>Scale:</strong> diverts reads from a contended origin (read replicas are a cache with automatic invalidation).</li>
+<li><strong>Robustness:</strong>
+<ul>
+<li>a local cache can serve if the origin is down, if you <strong>do not evict stale data</strong> automatically: you favour <strong>availability over consistency</strong></li>
+<li>The Guardian crawled the live site periodically into a <strong>static fallback</strong> version.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="where-to-cache">Where to cache</h3>
+<p>Example: <strong>Sales</strong> records item IDs and timestamps; the top ten best sellers need album names from <strong>Catalog</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>What it is</th>
+<th>Trade-offs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Client-side</strong></td>
+<td>Data cached outside the origin (an in-memory ID-to-name map in Sales; store only the fields you need)</td>
+<td>Avoids the network call; good for latency and robustness. But limited invalidation options and <strong>inconsistency between clients</strong> (Sales, Recommendation, Promotions)</td>
+</tr>
+<tr>
+<td><strong>Shared client-side</strong></td>
+<td>One Redis or memcached for several clients</td>
+<td>Consistent, fewer copies (memory is scarce), but a round trip; blurs the client/server line</td>
+</tr>
+<tr>
+<td><strong>Server-side</strong></td>
+<td>Catalog caches for its consumers (in memory, a reverse proxy, a hidden Redis, read replicas)</td>
+<td>Invisible to consumers, easier sophisticated invalidation (write-through), consistent view; but a round trip remains, so less for latency and robustness</td>
+</tr>
+<tr>
+<td><strong>Request cache</strong></td>
+<td>Cache the top ten result itself</td>
+<td>Fastest; but <strong>only that request</strong> benefits</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/building-microservices/img/bm-13-where-to-cache.svg" alt="Where to cache" loading="lazy" /></p>
+<h3 id="invalidation">Invalidation</h3>
+<p>&quot;There are only two hard things in Computer Science: cache invalidation and naming things.&quot; (Phil Karlton)</p>
+<ul>
+<li><strong>Time to live (TTL):</strong>
+<ul>
+<li>valid for a duration (5 minutes) via HTTP <code>Cache-Control</code> or timestamps via <code>Expires</code>; the origin can hint (shorter for fast-selling items)</li>
+<li>Simple but blunt: data can be stale for 4 minutes 59 seconds</li>
+<li>Start with one TTL per resource type.</li>
+</ul>
+</li>
+<li><strong>Conditional GETs:</strong>
+<ul>
+<li>an <strong>ETag</strong> identifies a resource version; send <code>If-None-Match: &lt;etag&gt;</code></li>
+<li>The server returns <strong>304 Not Modified</strong> or <strong>200</strong> with the new version and ETag</li>
+<li>It still makes a request, so it saves <strong>regeneration cost</strong>, not round trips (useful when building the response is expensive).</li>
+</ul>
+</li>
+<li><strong>Notification-based:</strong>
+<ul>
+<li>the origin emits events (Inventory's <code>Stock Change</code>) so subscribers invalidate</li>
+<li>Narrows the stale window and is elegant but more complex (a broker fits)</li>
+<li>Use a <strong>heartbeat</strong> event to know the mechanism is alive; decide whether notifications carry the state or just &quot;changed&quot; (size and sensitivity, as in chapter 4).</li>
+</ul>
+</li>
+<li><strong>Write-through:</strong> update the cache with the origin; practical <strong>server-side</strong> (same transaction), vague elsewhere; nearly removes staleness.</li>
+<li><strong>Write-behind:</strong> write the cache first, the origin later: faster but risks <strong>data loss</strong> and blurs the <strong>source of truth</strong>; rare in microservices.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-13-cache-invalidation.svg" alt="Invalidation options" loading="lazy" /></p>
+<blockquote>
+<p>[!warning] The golden rule of caching
+Be careful about caching in too many places. Inventory caching with a 1 minute TTL and Recommendation caching with 1 minute can leave data up to <strong>2 minutes</strong> old while it looks like 1. &quot;The ideal number of places to cache is zero.&quot; Treat caching as a performance optimisation and cache in as few places as possible.</p>
+</blockquote>
+<ul>
+<li><strong>Freshness versus optimisation:</strong>
+<ul>
+<li>cutting a TTL from 5 minutes to 1 shrinks staleness to a fifth but means <strong>five times the origin calls</strong></li>
+<li>Sometimes it is safest to turn off a feature if a cache fails.</li>
+</ul>
+</li>
+<li><strong>Cache poisoning (AdvertCorp again):</strong>
+<ul>
+<li>a bug skipped overriding cache headers on some proxied legacy pages that carried <strong><code>Expires: Never</code></strong></li>
+<li><strong>Squid</strong> and browsers (and CDNs, ISPs) cached them, and only changing the URLs fixed it, since browser caches cannot be cleared. Understand the full path of cached data.</li>
+</ul>
+</li>
+</ul>
+<h2 id="13-5-autoscaling">13.5 Autoscaling</h2>
+<ul>
+<li>With automated provisioning and deployment you can scale automatically: <strong>predictively</strong> (known trends, such as instances up at 8:45 and down at 17:15) or <strong>reactively</strong> (load or failure)
+<ul>
+<li>Know how fast you can scale: if you get two minutes' notice but need ten to scale, hold spare capacity</li>
+<li><strong>Load tests</strong> validate rules.</li>
+</ul>
+</li>
+<li>A news site suits both:
+<ul>
+<li>daily and weekend patterns plus unpredictable spikes</li>
+<li>In practice autoscaling is used more for <strong>failures</strong> (AWS &quot;at least five instances&quot;: the whack-a-mole during maintenance)</li>
+<li>Autoscale for failure first, and scale down cautiously: more power than needed beats too little.</li>
+</ul>
+</li>
+</ul>
+<h2 id="13-6-starting-again">13.6 Starting again</h2>
+<ul>
+<li>The first architecture may not suit later volumes
+<ul>
+<li><strong>Gilt</strong>'s Rails monolith worked for two years, then needed redesign</li>
+<li>Do not build for massive scale at the start
+<ul>
+<li>you may not know what to build or whether it will succeed (Eric Ries spent six months on a product nobody downloaded; a 404 link would have taught the same)</li>
+</ul>
+</li>
+<li>&quot;The need to change our systems to deal with scale isn't a sign of failure</li>
+<li>It is a sign of success.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Know what you need: techniques that improve latency may not help volume.</li>
+<li>Many forms of scaling add complexity, so be targeted and avoid premature optimisation.</li>
+<li>Next: the user interface.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Vertical scaling, horizontal duplication, data partitioning (shard), functional decomposition</strong>.</li>
+<li><strong>Read replica, competing consumers, sticky session, partition key</strong>.</li>
+<li><strong>CQRS, event sourcing, cache hit and miss, TTL, ETag, write-through, write-behind</strong>.</li>
+<li><strong>Autoscaling, predictive and reactive</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 13. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch13.html</li>
+<li>Martin L. Abbott and Michael T. Fisher, <em>The Art of Scalability</em>, 2nd ed. (Addison-Wesley, 2015)
+<ul>
+<li>Pramod Sadalage and Martin Fowler, <em>NoSQL Distilled</em> (2012)</li>
+<li>Donald Knuth, <em>The Art of Computer Programming</em>: as cited by the book.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-12-resiliency/">Building Microservices 12: Resiliency</a></li>
+<li><a href="/book-digest/building-microservices/bm-14-user-interfaces/">Building Microservices 14: User Interfaces</a></li>
+<li><a href="/book-digest/building-microservices/bm-03-splitting-the-monolith/">Building Microservices 3: Splitting the Monolith</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-12-resiliency/">&larr; Building Microservices 12: Resiliency</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-14-user-interfaces/">Building Microservices 14: User Interfaces &rarr;</a></nav></main></body></html>

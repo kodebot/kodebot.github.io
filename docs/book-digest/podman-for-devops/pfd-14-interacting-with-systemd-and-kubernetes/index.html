@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 14: Interacting with systemd and Kubernetes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-14-interacting-with-systemd-and-kubernetes">Podman for DevOps 14: Interacting with systemd and Kubernetes</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 14. Previous: <a href="/book-digest/podman-for-devops/pfd-13-docker-migration-tips-and-tricks/">Podman for DevOps 13: Docker migration tips and tricks</a>. Next: <a href="/book-digest/podman-for-devops/pfd-15-managing-workloads-from-a-graphical-interface/">Podman for DevOps 15: Managing containers, Kubernetes and AI workloads from a graphical interface</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong><code>podman generate systemd</code> is deprecated</strong> (static units go stale). Use <strong>Quadlets</strong>: declarative <code>.container</code> files that systemd's generator turns into services at runtime; <strong><code>podlet</code></strong> converts a <code>podman run</code> command into one.</li>
+<li>Put Quadlets in <code>/etc/containers/systemd/</code>, add <code>[Unit] Requires=</code> for ordering and <code>[Install] WantedBy=</code> for boot, then <code>systemctl daemon-reload</code>. <code>podman secret</code> holds secrets (plain text on disk).</li>
+<li><strong><code>podman kube generate</code></strong> turns containers, Pods and volumes into <strong>Kubernetes YAML</strong> (Pod, Service of type NodePort, PersistentVolumeClaim); <strong><code>podman kube play</code></strong> runs YAML in Podman (<code>--down</code> to remove).</li>
+<li><strong>Single Pod</strong> (shared <code>127.0.0.1</code>) is simple but not the Kubernetes pattern; <strong>multiple Pods</strong> on a network, where the <strong>Pod name is the service name</strong> (aardvark-dns), replace Docker Compose and stay portable.</li>
+<li>Test the full manifest (Pods, Services, PVCs) on <strong>minikube</strong> with <code>kubectl create -f</code>.</li>
+</ul>
+</div></div>
+<h2 id="14-1-setting-up-the-host-prerequisites">14.1 Setting up the host prerequisites</h2>
+<ul>
+<li>Containers can be managed like any other service through <strong>systemd</strong> and <code>systemctl</code>. <strong>systemd</strong> is the system and service manager, the first process on boot (<strong>PID 1</strong>), an init system that brings up and maintains userspace services; each logged-in user gets separate instances. It starts services with a <strong>dependency system between units</strong>; there are <strong>11 unit types</strong>. Fedora 40+ runs it by default:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># systemctl is-system-running</span>
+running
+<span class="c1"># systemctl list-units --type=service | head</span>
+</code></pre>
+<p>(systemd's internals need the Linux manual.)</p>
+<h2 id="14-2-integrating-containers-into-systemd-via-quadlets">14.2 Integrating containers into systemd via Quadlets</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-14-quadlet-flow.svg" alt="From a run command to a systemd service" loading="lazy" /></p>
+<ul>
+<li><strong>Deprecated:</strong> <code>podman generate systemd</code> produced unit files, but <strong>static unit generation was brittle</strong>: best practices evolved each release and users didn't regenerate their files, missing bug fixes and performance updates.</li>
+<li><strong>Quadlets</strong> (recommended): describe a container in a <strong>declarative format similar to systemd configuration files</strong>; <strong>systemd uses a generator to create the units at runtime</strong>. The easiest way to write one is <strong><code>podlet</code></strong>, which takes a <code>podman run</code> command and outputs Quadlet format.</li>
+<li><strong>Example:</strong> a Git service with <strong>Gitea</strong> (repository with web UI) and <strong>MariaDB</strong> (database for Gitea).</li>
+</ul>
+<h3 id="secrets">Secrets</h3>
+<pre class="hl"><code><span class="c1"># export MARIADB_PASSWORD=my-secret-pw</span>
+<span class="c1"># podman secret create MARIADB_PASSWORD --env MARIADB_PASSWORD</span>
+cb5eab6a00d2b69635a314188
+<span class="c1"># podman secret ls</span>
+ID<span class="w">                         </span>NAME<span class="w">              </span>DRIVER<span class="w">  </span>CREATED<span class="w">         </span>UPDATED
+cb5eab6a00d2b69635a314188<span class="w">  </span>MARIADB_PASSWORD<span class="w">  </span>file<span class="w">    </span><span class="m">18</span><span class="w"> </span>seconds<span class="w"> </span>ago<span class="w">  </span><span class="m">18</span><span class="w"> </span>seconds<span class="w"> </span>ago
+<span class="c1"># podman secret inspect cb5eab6a00d2b69635a314188      # driver file, path /var/lib/containers/storage/secrets/filedriver</span>
+<span class="c1"># cat /var/lib/containers/storage/secrets/filedriver/secretsdata.json</span>
+<span class="o">{</span><span class="w"> </span><span class="s2">"cb5eab6a00d2b69635a314188"</span>:<span class="w"> </span><span class="s2">"bXktc2VjcmV0LXB3"</span><span class="w"> </span><span class="o">}</span>
+<span class="c1"># ls -l /var/lib/containers/storage/secrets/filedriver/secretsdata.json</span>
+-rw-------.<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">53</span><span class="w"> </span>Aug<span class="w"> </span><span class="m">7</span><span class="w"> </span><span class="m">15</span>:18<span class="w"> </span>...
+</code></pre>
+<p><code>podman secret create</code> <strong>stores the secret in plain text</strong> (JSON with the ID and the <strong>Base64</strong> value; decoding gives <code>my-secret-pw</code>). Good enough here because the containers run as root and the file has <strong>root-only permissions</strong>.</p>
+<h3 id="mariadb-first-the-dependency-run-standalone-to-check">MariaDB first (the dependency), run standalone to check</h3>
+<pre class="hl"><code><span class="c1"># mkdir -p /opt/var/lib/mariadb</span>
+<span class="c1"># podman run -d --network host --name mariadb -v \</span>
+<span class="w">    </span>/opt/var/lib/mariadb:/var/lib/mysql:Z<span class="w"> </span>-e<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="nv">MARIADB_DATABASE</span><span class="o">=</span>gitea<span class="w"> </span>-e<span class="w"> </span><span class="nv">MARIADB_USER</span><span class="o">=</span>gitea<span class="w"> </span>-e<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="nv">MARIADB_RANDOM_ROOT_PASSWORD</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--secret<span class="o">=</span>MARIADB_PASSWORD,type<span class="o">=</span>env<span class="w"> </span>docker.io/mariadb:latest
+</code></pre>
+<p>Detached; name <code>mariadb</code>; <strong>host network for simplicity</strong> (could be restricted); local directory mapped with <code>:Z</code> for SELinux; environment variables, with the password via <code>--secret</code>. Check with <code>podman ps</code>. Install and run podlet:</p>
+<pre class="hl"><code><span class="c1"># dnf install -y podlet          # podlet-0.3.0 on Fedora 40</span>
+<span class="c1"># podlet podman run -d --network host --name mariadb -v /opt/var/lib/mariadb:/var/lib/mysql:Z -e MARIADB_DATABASE=gitea -e MARIADB_USER=gitea -e MARIADB_RANDOM_ROOT_PASSWORD=true --secret=MARIADB_PASSWORD,type=env docker.io/mariadb:latest</span>
+<span class="c1"># mariadb.container</span>
+<span class="o">[</span>Container<span class="o">]</span>
+<span class="nv">ContainerName</span><span class="o">=</span>mariadb
+<span class="nv">Environment</span><span class="o">=</span><span class="nv">MARIADB_DATABASE</span><span class="o">=</span>gitea<span class="w"> </span><span class="nv">MARIADB_USER</span><span class="o">=</span>gitea<span class="w"> </span><span class="nv">MARIADB_RANDOM_ROOT_PASSWORD</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">Image</span><span class="o">=</span>docker.io/mariadb:latest
+<span class="nv">Network</span><span class="o">=</span>host
+<span class="nv">Secret</span><span class="o">=</span>MARIADB_PASSWORD,type<span class="o">=</span>env
+<span class="nv">Volume</span><span class="o">=</span>/opt/var/lib/mariadb:/var/lib/mysql:Z
+</code></pre>
+<p>Just put <code>podlet</code> in front of the <code>podman run</code> command.</p>
+<h3 id="gitea">Gitea</h3>
+<pre class="hl"><code><span class="c1"># mkdir -p /opt/var/lib/gitea/data</span>
+<span class="c1"># podman run -d --network host --name gitea \</span>
+<span class="w">    </span>-v<span class="w"> </span>/opt/var/lib/gitea/data:/data:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker.io/gitea/gitea:latest
+<span class="c1"># podman logs gitea       # "Starting Gitea ... Listen: http://0.0.0.0:3000" (Gitea 1.24.4)</span>
+</code></pre>
+<p>Browse to <code>http://localhost:3000</code> and complete the install page (database type, address, user and password; Figures 14.1 and 14.2). Then generate the Quadlet files into the systemd directory (the book's second command uses <code>gitea/gitea:latest-rootless</code>; its redirection to the file is cut in the printed text):</p>
+<pre class="hl"><code><span class="c1"># podlet podman run -d --network host --name mariadb -v /opt/var/lib/mariadb:/var/lib/mysql:Z -e MARIADB_DATABASE=gitea -e MARIADB_USER=gitea -e MARIADB_RANDOM_ROOT_PASSWORD=true --secret=MARIADB_PASSWORD,type=env docker.io/mariadb:latest &gt; /etc/containers/systemd/mariadb.container</span>
+<span class="c1"># podlet podman run -d --network host --name gitea -v /opt/var/lib/gitea/data:/data:Z docker.io/gitea/gitea:latest-rootless &gt; /etc/containers/systemd/gitea.container</span>
+</code></pre>
+<p>Edit the Gitea file to order startup with <strong><code>Requires</code></strong> so systemd starts MariaDB first:</p>
+<pre class="hl"><code><span class="c1"># gitea.container</span>
+<span class="k">[Unit]</span>
+<span class="na">Requires</span><span class="o">=</span><span class="s">mariadb.container</span>
+
+<span class="k">[Container]</span>
+<span class="na">ContainerName</span><span class="o">=</span><span class="s">gitea</span>
+<span class="na">Image</span><span class="o">=</span><span class="s">docker.io/gitea/gitea:latest-rootless</span>
+<span class="na">Network</span><span class="o">=</span><span class="s">host</span>
+<span class="na">Volume</span><span class="o">=</span><span class="s">/opt/var/lib/gitea/data:/data:Z</span>
+</code></pre>
+<p>Stop the standalone containers (data persists in the mapped volumes), reload systemd, start by unit:</p>
+<pre class="hl"><code><span class="c1"># podman stop mariadb gitea</span>
+<span class="c1"># systemctl daemon-reload</span>
+<span class="c1"># systemctl start mariadb</span>
+<span class="c1"># systemctl status mariadb</span>
+Loaded:<span class="w"> </span>loaded<span class="w"> </span><span class="o">(</span>/etc/containers/systemd/mariadb.container<span class="p">;</span><span class="w"> </span>generated<span class="o">)</span>
+Active:<span class="w"> </span>active<span class="w"> </span><span class="o">(</span>running<span class="o">)</span><span class="w"> </span>since<span class="w"> </span>Thu<span class="w"> </span><span class="m">2025</span>-08-07<span class="w"> </span><span class="m">16</span>:11:15<span class="w"> </span>UTC
+<span class="c1"># systemctl start gitea</span>
+</code></pre>
+<p>The status shows the unit as <strong>generated</strong> from the <code>.container</code> file. <strong>Start at boot</strong> by adding to both files:</p>
+<pre class="hl"><code><span class="k">[Install]</span>
+<span class="c1"># Start by default on boot</span>
+<span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target default.target</span>
+</code></pre>
+<p><strong><code>podman quadlet</code></strong> inspects and manages Quadlets without digging through <code>/etc/</code> or <code>/run/</code>; <strong><code>podman quadlet -v</code></strong> lists, verbosely, all files the systemd generator processed.</p>
+<h2 id="14-3-generating-kubernetes-yaml-resources">14.3 Generating Kubernetes YAML resources</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-14-kube-generate-and-play.svg" alt="Generate Kubernetes YAML and run it in Podman or Kubernetes" loading="lazy" /></p>
+<ul>
+<li>Kubernetes is the de facto standard for <strong>multi-node orchestration</strong>: Pods scheduled across nodes by load, labels, capabilities, hardware (GPUs). A <strong>Pod</strong> is a group of containers sharing network, IPC and optionally PID namespaces (a sandbox), started, stopped and paused together.</li>
+<li>Podman reads the configuration of containers or Pods and generates <strong>API-compliant Pod resources</strong>, plus <strong>Service</strong> and <strong>PersistentVolumeClaim (PVC)</strong> resources for ports and volumes. Use them in Podman itself (an alternative to Compose) or apply them to a cluster.</li>
+<li>Kubernetes runs workloads as <strong>Deployments, StatefulSets, DaemonSets, Jobs, CronJobs</strong>; <strong>a Pod is the minimal unit in all of them</strong>, so a generated Pod can be adapted into a <strong>Deployment</strong> (replicas and rollouts) or a <strong>DaemonSet</strong> (one Pod per node).</li>
+</ul>
+<h3 id="generate-a-pod-from-a-running-container">Generate a Pod from a running container</h3>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>generate<span class="w"> </span><span class="o">[</span>options<span class="o">]</span><span class="w"> </span><span class="o">{</span>CONTAINER<span class="p">|</span>POD<span class="p">|</span>VOLUME<span class="o">}</span>
+</code></pre>
+<p>Options: <strong><code>-s, --service</code></strong> (also generate Services), <strong><code>-f, --filename</code></strong> (write to a file; default stdout).</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:80<span class="w"> </span>--name<span class="w"> </span>nginx<span class="w"> </span>docker.io/library/nginx
+$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>generate<span class="w"> </span>nginx
+<span class="c1"># Created with podman-5.2.5</span>
+apiVersion:<span class="w"> </span>v1
+kind:<span class="w"> </span>Pod
+metadata:
+<span class="w">  </span>creationTimestamp:<span class="w"> </span><span class="s2">"2025-08-07T16:19:45Z"</span>
+<span class="w">  </span>labels:
+<span class="w">    </span>app:<span class="w"> </span>nginx-pod
+<span class="w">  </span>name:<span class="w"> </span>nginx-pod
+spec:
+<span class="w">  </span>containers:
+<span class="w">    </span>-<span class="w"> </span>args:
+<span class="w">        </span>-<span class="w"> </span>nginx
+<span class="w">        </span>-<span class="w"> </span>-g
+<span class="w">        </span>-<span class="w"> </span>daemon<span class="w"> </span>off<span class="p">;</span>
+<span class="w">      </span>image:<span class="w"> </span>docker.io/library/nginx:latest
+<span class="w">      </span>name:<span class="w"> </span>nginx
+<span class="w">      </span>ports:
+<span class="w">        </span>-<span class="w"> </span>containerPort:<span class="w"> </span><span class="m">80</span>
+<span class="w">          </span>hostPort:<span class="w"> </span><span class="m">8080</span>
+</code></pre>
+<p>(The printed YAML has lost its indentation; restored here.) Every Kubernetes resource has at least four fields:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion</code></td>
+<td>API schema version (Pod is <code>v1</code>, the core API)</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>resource kind (Pod)</td>
+</tr>
+<tr>
+<td><code>metadata</code></td>
+<td>name, namespace, labels, annotations, plus runtime values (<code>creationTimestamp</code>, <code>resourceVersion</code>, <code>uid</code>)</td>
+</tr>
+<tr>
+<td><code>spec</code></td>
+<td>the specification; for a Pod, the containers with arguments, volumes, ports, security contexts</td>
+</tr>
+</tbody>
+</table>
+<p>A fifth <strong><code>status</code></strong> field appears at runtime. The <code>ports</code> entry (<code>containerPort: 80</code>, <code>hostPort: 8080</code>) is used later by <code>podman kube play</code>. Save with <code>podman kube generate nginx -f nginx-pod.yaml</code>, or apply straight to a cluster: <code>podman kube generate nginx | kubectl create -f -</code>.</p>
+<h3 id="pods-and-services">Pods and Services</h3>
+<ul>
+<li>Pod IPs are on the cluster's software-defined network and <strong>not routed externally</strong>; a <strong>Service</strong> gives a stable name and IP, balancing replicas. Cluster DNS is <strong>CoreDNS</strong> (started with the control plane; resolves internal names and forwards external ones).</li>
+<li><strong>Service types:</strong> <strong>ClusterIP</strong> (default; IP local to the cluster), <strong>NodePort</strong> (NAT maps the service VIP and port to a port on the worker nodes, 30000 or higher, for external access), <strong>LoadBalancer</strong> (cloud provider balances ingress). <strong>Podman generates NodePort Services</strong> and doesn't support LoadBalancer (it is a single-node engine). <code>podman kube generate</code> is meant as a <strong>starting point</strong> you extend.</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>generate<span class="w"> </span>-s<span class="w"> </span>nginx
+apiVersion:<span class="w"> </span>v1
+kind:<span class="w"> </span>Service
+metadata:
+<span class="w">  </span>labels:
+<span class="w">    </span>app:<span class="w"> </span>nginxpod
+<span class="w">  </span>name:<span class="w"> </span>nginx_pod
+spec:
+<span class="w">  </span>ports:
+<span class="w">    </span>-<span class="w"> </span>name:<span class="w"> </span><span class="s2">"80"</span>
+<span class="w">      </span>nodePort:<span class="w"> </span><span class="m">30582</span>
+<span class="w">      </span>port:<span class="w"> </span><span class="m">80</span>
+<span class="w">      </span>targetPort:<span class="w"> </span><span class="m">80</span>
+<span class="w">  </span>selector:
+<span class="w">    </span>app:<span class="w"> </span>nginxpod
+<span class="w">  </span>type:<span class="w"> </span>NodePort
+---
+apiVersion:<span class="w"> </span>v1
+kind:<span class="w"> </span>Pod
+metadata:
+<span class="w">  </span>labels:
+<span class="w">    </span>app:<span class="w"> </span>nginxpod
+<span class="w">  </span>name:<span class="w"> </span>nginx_pod
+spec:
+<span class="w">  </span>containers:
+<span class="w">    </span>-<span class="w"> </span>args:<span class="w"> </span><span class="o">[</span>nginx,<span class="w"> </span>-g,<span class="w"> </span>daemon<span class="w"> </span>off<span class="p">;</span><span class="o">]</span>
+<span class="w">      </span>image:<span class="w"> </span>docker.io/library/nginx:latest
+<span class="w">      </span>name:<span class="w"> </span>nginx
+<span class="w">      </span>ports:
+<span class="w">        </span>-<span class="w"> </span>containerPort:<span class="w"> </span><span class="m">80</span>
+<span class="w">          </span>hostPort:<span class="w"> </span><span class="m">8080</span>
+<span class="w">      </span>securityContext:
+<span class="w">        </span>capabilities:
+<span class="w">          </span>drop:
+<span class="w">            </span>-<span class="w"> </span>CAP_MKNOD
+<span class="w">            </span>-<span class="w"> </span>CAP_NET_RAW
+<span class="w">            </span>-<span class="w"> </span>CAP_AUDIT_WRITE
+</code></pre>
+<p>(The book's example output carries an older &quot;podman-4.0.0-rc4&quot; banner.) The <strong>selector</strong> matches Pods labelled <code>app: nginxpod</code>; in a cluster the Service gets an internal non-routed VIP, and a <strong>DNAT</strong> rule forwards traffic on port <strong>30582</strong> on every node to the service IP. Container port 80 maps to node port 30582. The point: port a workload to Kubernetes with little effort.</p>
+<h3 id="composite-application-in-a-single-pod">Composite application in a single Pod</h3>
+<p>Advantages: the Pod is one unit and resource sharing is simple. Scripts and YAML: https://github.com/PacktPublishing/Podman-for-DevOps-Second-Edition/tree/main/Chapter14/kube. Examples are rootless but apply to rootful too.</p>
+<pre class="hl"><code>$<span class="w"> </span><span class="k">for</span><span class="w"> </span>vol<span class="w"> </span><span class="k">in</span><span class="w"> </span>dbvol<span class="w"> </span>wpvol<span class="p">;</span><span class="w"> </span><span class="k">do</span><span class="w"> </span>podman<span class="w"> </span>volume<span class="w"> </span>create<span class="w"> </span><span class="nv">$vol</span><span class="p">;</span><span class="w"> </span><span class="k">done</span>
+$<span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>wordpress-pod<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:80
+$<span class="w"> </span>podman<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--pod<span class="w"> </span>wordpress-pod<span class="w"> </span>--name<span class="w"> </span>db<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>dbvol:/var/lib/mysql<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">MYSQL_ROOT_PASSWORD</span><span class="o">=</span>myrootpasswd<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">MYSQL_DATABASE</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">MYSQL_USER</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">MYSQL_PASSWORD</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker.io/library/mysql
+$<span class="w"> </span>podman<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--pod<span class="w"> </span>wordpress-pod<span class="w"> </span>--name<span class="w"> </span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>wpvol:/var/www/html<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">WORDPRESS_DB_HOST</span><span class="o">=</span><span class="m">127</span>.0.0.1<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">WORDPRESS_DB_USER</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">WORDPRESS_DB_PASSWORD</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">WORDPRESS_DB_NAME</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker.io/library/wordpress
+$<span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>start<span class="w"> </span>wordpress-pod
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w">              </span><span class="c1"># infra + db + wordpress; http://localhost:8080 shows the WordPress setup (Figure 14.3)</span>
+</code></pre>
+<p><code>WORDPRESS_DB_HOST=127.0.0.1</code> because both containers share the Pod's network namespace.</p>
+<blockquote>
+<p>[!note] The infra container
+The Pod also starts a third <strong>infra</strong> container that initialises the network and IPC namespaces. Its image is built locally the first time a Pod is created and runs <strong><code>catatonit</code></strong>, an init micro container written in C that handles signals and reaps zombie processes (https://github.com/openSUSE/catatonit). The behaviour comes from the Kubernetes Pod life cycle (https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/).</p>
+</blockquote>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>generate<span class="w"> </span>wordpress-pod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-f<span class="w"> </span>wordpress-single-pod.yaml
+</code></pre>
+<p>The generated Pod (condensed; the printed listing shows only the wordpress container although the Pod holds both, and notes the env and volumes are preserved):</p>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wordpress-pod</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wordpress-pod</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">args</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apache2-foreground</span>
+<span class="w">      </span><span class="nt">env</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WORDPRESS_DB_HOST</span>
+<span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">127.0.0.1</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WORDPRESS_DB_PASSWORD</span>
+<span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wordpress</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WORDPRESS_DB_NAME</span>
+<span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wordpress</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WORDPRESS_DB_USER</span>
+<span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wordpress</span>
+<span class="w">      </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker.io/library/wordpress:latest</span>
+<span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wordpress</span>
+<span class="w">      </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<span class="w">          </span><span class="nt">hostPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">      </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/www/html</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wpvol-pvc</span>
+<span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wpvol-pvc</span>
+<span class="w">      </span><span class="nt">persistentVolumeClaim</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">claimName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wpvol</span>
+</code></pre>
+<ul>
+<li>Volumes map to <strong>PVC</strong> objects. A <strong>PVC</strong> claims a storage volume of given capacity and access modes; the bound storage is a <strong>PersistentVolume (PV)</strong>, created manually or automatically by a <strong>StorageClass</strong> using a <strong>CSI</strong>-compliant driver. This decouples requesting from provisioning, making storage more portable.</li>
+<li><strong>PVCs are not exported by default</strong>: name the volumes: <code>podman kube generate wordpress-pod wpvol dbvol</code>. A PVC looks like:</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PersistentVolumeClaim</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">volume.podman.io/driver</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">local</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dbvol</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">accessModes</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ReadWriteOnce</span>
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">storage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1Gi</span>
+<span class="nt">status</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{}</span>
+</code></pre>
+<p>PVC definitions are needed to recreate the app in Kubernetes but not in Podman (a missing volume is created empty). Export everything: <code>$ podman kube generate -s wordpress-pod wpvol dbvol</code>.</p>
+<p><strong>Single Pod: pros and cons.</strong> Pro: one network namespace, no dedicated Podman network. Con: it <strong>doesn't reflect the Kubernetes pattern</strong>: you would normally split WordPress and MySQL into separate Pods with their own Services, for independent management and updates.</p>
+<h3 id="composite-application-with-multiple-pods">Composite application with multiple Pods</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-14-multiple-pods.svg" alt="Pods on a network find each other by Pod name" loading="lazy" /></p>
+<p>The Podman community's view: standardise on <strong>Kubernetes YAML</strong> for complex workloads. This approach can <strong>fully replace Docker Compose while giving Kubernetes portability</strong>. Clean up the previous Pod and volumes first (see the repository's <code>AdditionalMaterial</code>).</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>network<span class="w"> </span>create<span class="w"> </span>kubenet
+$<span class="w"> </span><span class="k">for</span><span class="w"> </span>vol<span class="w"> </span><span class="k">in</span><span class="w"> </span>wpvol<span class="w"> </span>dbvol<span class="p">;</span><span class="w"> </span><span class="k">do</span><span class="w"> </span>podman<span class="w"> </span>volume<span class="w"> </span>create<span class="w"> </span><span class="nv">$vol</span><span class="p">;</span><span class="w"> </span><span class="k">done</span>
+$<span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>create<span class="w"> </span>-p<span class="w"> </span><span class="m">3306</span>:3306<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--network<span class="w"> </span>kubenet<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--name<span class="w"> </span>mysql-pod
+$<span class="w"> </span>podman<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>db<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--pod<span class="w"> </span>mysql-pod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>dbvol:/var/lib/mysql<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">MYSQL_ROOT_PASSWORD</span><span class="o">=</span>myrootpasswd<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">MYSQL_DATABASE</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">MYSQL_USER</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">MYSQL_PASSWORD</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker.io/library/mysql
+$<span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>create<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:80<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--network<span class="w"> </span>kubenet<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--name<span class="w"> </span>wordpress-pod
+$<span class="w"> </span>podman<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--pod<span class="w"> </span>wordpress-pod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>wpvol:/var/www/html<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">WORDPRESS_DB_HOST</span><span class="o">=</span>mysql-pod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">WORDPRESS_DB_USER</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">WORDPRESS_DB_PASSWORD</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">WORDPRESS_DB_NAME</span><span class="o">=</span>wordpress<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker.io/library/wordpress
+$<span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>start<span class="w"> </span>mysql-pod<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>start<span class="w"> </span>wordpress-pod
+</code></pre>
+<p><strong>Key:</strong> <code>WORDPRESS_DB_HOST=mysql-pod</code>. <strong>The Pod's name acts as the service name</strong>, resolved by the network's DNS (aardvark-dns): a perfect Compose replacement. The <code>3306</code> mapping lets a client reach MySQL and supplies the port for the later Service.</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>generate<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-f<span class="w"> </span>wordpress-multi-pod-basic.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>wordpress-pod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>mysql-pod
+</code></pre>
+<p>The file holds just the <strong>two Pod resources</strong> (wordpress-pod with <code>WORDPRESS_DB_HOST: mysql-pod</code>, <code>hostPort: 8080</code>, volume <code>wpvol-pvc</code>; mysql-pod with <code>args: [mysqld]</code>, <code>hostPort: 3306</code>, volume <code>dbvol-pvc</code>; both with <code>restartPolicy: Never</code> and a <code>securityContext</code> dropping <code>CAP_MKNOD</code>, <code>CAP_NET_RAW</code>, <code>CAP_AUDIT_WRITE</code>). Source: https://github.com/PacktPublishing/Podman-for-DevOps-Second-Edition/blob/main/Chapter14/kube/wordpress-multi-pod-basic.yaml. It is enough to recreate the app on Podman from scratch; <strong>version it in Git</strong>. The full export adds Services and PVCs (for Kubernetes):</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>generate<span class="w"> </span>-s<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-f<span class="w"> </span>wordpress-multi-pod-full.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>wordpress-pod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>mysql-pod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>dbvol<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>wpvol
+</code></pre>
+<p>(Full file: .../Chapter14/kube/wordpress-multi-pod-full.yaml.)</p>
+<h2 id="14-4-running-kubernetes-resource-files-in-podman">14.4 Running Kubernetes resource files in Podman</h2>
+<p><strong><code>podman kube play</code></strong> runs the manifests (an easy interface for complex stacks):</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>play<span class="w"> </span>wordpress-single-pod.yaml
+$<span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>ps
+POD<span class="w"> </span>ID<span class="w">        </span>NAME<span class="w">           </span>STATUS<span class="w">   </span>CREATED<span class="w">         </span>INFRA<span class="w"> </span>ID<span class="w">      </span><span class="c1"># OF CONTAINERS</span>
+5f8ecfe66acd<span class="w">  </span>wordpress-pod<span class="w">  </span>Running<span class="w">  </span><span class="m">4</span><span class="w"> </span>minutes<span class="w"> </span>ago<span class="w">   </span>46b4bdfe6a08<span class="w">  </span><span class="m">3</span>
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w">            </span><span class="c1"># infra (podman-pause) + wordpress-pod-db + wordpress-pod-wordpress</span>
+$<span class="w"> </span>podman<span class="w"> </span>volume<span class="w"> </span>ls<span class="w">     </span><span class="c1"># dbvol, wpvol created</span>
+</code></pre>
+<p>Clean up with <strong><code>--down</code></strong> (stops and removes the Pods):</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>play<span class="w"> </span>--down<span class="w"> </span>wordpress-single-pod.yaml
+</code></pre>
+<p><strong>Volumes are not removed by default</strong> (safe against data loss); use <code>podman volume prune</code> for unused ones. Multi-Pod run needs the <strong>network named explicitly</strong>, since the Kubernetes YAML has no Podman network info:</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>kube<span class="w"> </span>play<span class="w"> </span>--network<span class="w"> </span>kubenet<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>wordpress-multi-pod-basic.yaml
+$<span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>ps<span class="w">         </span><span class="c1"># mysql-pod and wordpress-pod, 2 containers each (counting infra)</span>
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>--format<span class="w"> </span><span class="s2">"{{.Image }} {{.Names}}"</span>
+</code></pre>
+<p><strong>DNS:</strong> Podman 4+ uses <strong>aardvark-dns</strong> for custom networks (Podman 3 used dnsmasq). Rootless records: <code>/run/user/&lt;UID&gt;/containers/networks/aardvark-dns/&lt;NETWORK_NAME&gt;</code>:</p>
+<pre class="hl"><code>$<span class="w"> </span>cat<span class="w"> </span>/run/user/1000/containers/networks/aardvark-dns/kubenet
+<span class="m">10</span>.89.0.1
+0c52ee13...<span class="w"> </span><span class="m">10</span>.89.0.4<span class="w"> </span>wordpress-pod,0c52ee133f0f
+71c93fa6...<span class="w"> </span><span class="m">10</span>.89.0.5<span class="w"> </span>mysql-pod,71c93fa6080b
+</code></pre>
+<p>Name resolution works <strong>at the Pod level</strong>, not the container level, because the Pod initialised the namespaces: <strong>a Pod name is a service name in Podman</strong>. Generated Kubernetes manifests thus make a portable replacement for Docker Compose.</p>
+<h2 id="14-5-testing-the-results-in-kubernetes">14.5 Testing the results in Kubernetes</h2>
+<p>Use <strong>minikube</strong> (lowercase) for a local all-in-one cluster on Linux, Windows or macOS: a VM via host virtualisation (KVM, VirtualBox, Hyper-V, Parallels, VMware) or a control plane in a container (Docker or Podman); add-ons for ingress, service meshes, registries, logging. An alternative is <strong>KinD</strong> (Kubernetes in Docker, https://kind.sigs.k8s.io/), not covered. Skip this setup if you already have a cluster.</p>
+<pre class="hl"><code>$<span class="w"> </span>curl<span class="w"> </span>-LO<span class="w"> </span>https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+$<span class="w"> </span>sudo<span class="w"> </span>install<span class="w"> </span>minikube-linux-amd64<span class="w"> </span>/usr/local/bin/minikube
+</code></pre>
+<p><strong>KVM driver:</strong></p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>@virtualization
+$<span class="w"> </span>sudo<span class="w"> </span>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>libvirtd
+$<span class="w"> </span>sudo<span class="w"> </span>usermod<span class="w"> </span>-aG<span class="w"> </span>libvirt<span class="w"> </span><span class="k">$(</span>whoami<span class="k">)</span><span class="w">           </span><span class="c1"># needs a new login</span>
+$<span class="w"> </span>minikube<span class="w"> </span>config<span class="w"> </span><span class="nb">set</span><span class="w"> </span>driver<span class="w"> </span>kvm2
+</code></pre>
+<p><strong>Podman driver:</strong> the cluster must run in a <strong>rootful</strong> container, so the user needs <strong>passwordless sudo for Podman</strong> (<code>sudo visudo</code>, add <code>&lt;username&gt; ALL=(ALL) NOPASSWD: /usr/bin/podman</code>), then:</p>
+<pre class="hl"><code>$<span class="w"> </span>minikube<span class="w"> </span>config<span class="w"> </span><span class="nb">set</span><span class="w"> </span>driver<span class="w"> </span>podman
+</code></pre>
+<p>(If the host is a KVM VM with Podman installed, minikube picks the podman driver automatically.) Install <code>kubectl</code>:</p>
+<pre class="hl"><code>$<span class="w"> </span><span class="nv">version</span><span class="o">=</span><span class="k">$(</span>curl<span class="w"> </span>-L<span class="w"> </span>-s<span class="w"> </span>https://dl.k8s.io/release/stable.txt<span class="k">)</span>
+$<span class="w"> </span>curl<span class="w"> </span>-LO<span class="w"> </span><span class="s2">"https://dl.k8s.io/release/</span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="s2">/bin/linux/amd64/kubectl"</span>
+$<span class="w"> </span>sudo<span class="w"> </span>install<span class="w"> </span>-o<span class="w"> </span>root<span class="w"> </span>-g<span class="w"> </span>root<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-m<span class="w"> </span><span class="m">0755</span><span class="w"> </span>kubectl<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/usr/local/bin/kubectl
+</code></pre>
+<p>Start minikube with the <strong>CRI-O</strong> runtime:</p>
+<pre class="hl"><code>$<span class="w"> </span>minikube<span class="w"> </span>start<span class="w"> </span>--driver<span class="o">=</span>kvm2<span class="w"> </span>--container-runtime<span class="o">=</span>cri-o
+$<span class="w"> </span>minikube<span class="w"> </span>start<span class="w"> </span>--driver<span class="o">=</span>podman<span class="w"> </span>--container-runtime<span class="o">=</span>cri-o
+$<span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-A<span class="w">       </span><span class="c1"># coredns, etcd, kube-apiserver, kube-controller-manager, kube-proxy, kube-scheduler, storage-provisioner all Running</span>
+</code></pre>
+<p>(<code>--driver</code> is optional if already configured. Wait if some are <code>ContainerCreating</code>. With the Podman driver an extra <code>kindnet</code> Pod handles CNI networking.)</p>
+<h3 id="running-the-generated-files-in-kubernetes">Running the generated files in Kubernetes</h3>
+<p>Services provide <strong>name resolution and internal load balancing</strong>; PVCs request storage. In minikube automatic provisioning uses the <strong><code>minikube-hostpath</code></strong> StorageClass (local directories bind-mounted into containers).</p>
+<pre class="hl"><code>$<span class="w"> </span>kubectl<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>wordpress-multi-pod-full.yaml<span class="w">      </span><span class="c1"># default namespace</span>
+$<span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods
+mysql-pod<span class="w">      </span><span class="m">1</span>/1<span class="w">  </span>Running
+wordpress-pod<span class="w">  </span><span class="m">1</span>/1<span class="w">  </span>Running
+$<span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc
+kubernetes<span class="w">     </span>ClusterIP<span class="w">  </span><span class="m">10</span>.96.0.1<span class="w">      </span>&lt;none&gt;<span class="w">  </span><span class="m">443</span>/TCP
+mysql-pod<span class="w">      </span>NodePort<span class="w">   </span><span class="m">10</span>.108.34.77<span class="w">   </span>&lt;none&gt;<span class="w">  </span><span class="m">3306</span>:30284/TCP
+wordpress-pod<span class="w">  </span>NodePort<span class="w">   </span><span class="m">10</span>.96.63.142<span class="w">   </span>&lt;none&gt;<span class="w">  </span><span class="m">80</span>:30408/TCP
+$<span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>endpoints<span class="w">          </span><span class="c1"># mysql-pod 10.244.0.5:3306, wordpress-pod 10.244.0.6:80</span>
+$<span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>pvc<span class="w">                </span><span class="c1"># dbvol and wpvol Bound, 1Gi RWO, storageclass standard</span>
+$<span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>pv<span class="w">                 </span><span class="c1"># two dynamically provisioned PVs (Reclaim Delete)</span>
+</code></pre>
+<ul>
+<li>Services are <strong>NodePort</strong> (30000 or higher). Pods are matched to Services by <strong>label selector</strong>; matching Pods become the service's <strong>endpoints</strong>. PVs remain while PVCs exist, even if Pods are recreated. (The <code>kubernetes</code> service is for internal API access; ignore it.)</li>
+<li>minikube has <strong>no ingress controller by default</strong> (<code>minikube addons enable ingress</code> adds one), so test via NodePort at the minikube IP:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>minikube<span class="w"> </span>ip
+<span class="m">10</span>.88.0.6
+<span class="c1"># browse http://10.88.0.6:30408   -&gt; WordPress first setup screen</span>
+$<span class="w"> </span>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>wordpress-multi-pod-full.yaml<span class="w">      </span><span class="c1"># removes all resources, including generated PVs</span>
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<p>Containerised services under systemd with Quadlets (the book's summary still speaks of &quot;generating systemd unit files&quot;), generating Kubernetes resources with single-Pod and multi-Pod approaches (the latter a Kubernetes-compliant Compose alternative), and testing on Podman and minikube. Next: Podman Desktop and AI workloads.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+systemd unit · <code>podman generate systemd</code> (deprecated) · Quadlet (<code>.container</code>) · <code>podlet</code> · <code>/etc/containers/systemd/</code> · <code>Requires</code>, <code>WantedBy</code> · <code>podman secret</code> · <code>podman kube generate/play</code> · Pod, Service (ClusterIP, NodePort, LoadBalancer), PVC, PV, StorageClass, CSI · Deployment, DaemonSet · infra container, catatonit · Pod name as service name · minikube · <code>kubectl</code>.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 14; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>Book code: https://github.com/PacktPublishing/Podman-for-DevOps-Second-Edition/tree/main/Chapter14/kube</li>
+<li>catatonit: https://github.com/openSUSE/catatonit</li>
+<li>Kubernetes PersistentVolumes: https://kubernetes.io/docs/concepts/storage/persistent-volumes/</li>
+<li>minikube: https://minikube.sigs.k8s.io/ ; KinD: https://kind.sigs.k8s.io/</li>
+<li>Podman community: https://podman.io/community/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-13-docker-migration-tips-and-tricks/">Podman for DevOps 13: Docker migration tips and tricks</a> · <a href="/book-digest/podman-for-devops/pfd-12-implementing-container-networking-concepts/">Podman for DevOps 12: Implementing container networking concepts</a> · <a href="/book-digest/podman-for-devops/pfd-04-managing-running-containers/">Podman for DevOps 4: Managing running containers</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-13-docker-migration-tips-and-tricks/">&larr; Podman for DevOps 13: Docker migration tips and tricks</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-15-managing-workloads-from-a-graphical-interface/">Podman for DevOps 15: Managing containers, Kubernetes and AI workloads from a graphical interface &rarr;</a></nav></main></body></html>

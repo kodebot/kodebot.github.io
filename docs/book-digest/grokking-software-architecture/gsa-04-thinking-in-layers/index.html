@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 4: Thinking in Layers</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-4-thinking-in-layers">Grokking Software Architecture 4: Thinking in Layers</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 4. Previous: <a href="/book-digest/grokking-software-architecture/gsa-03-principles-of-sound-structure/">Grokking Software Architecture 3: The Principles of Sound Structure</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-05-hexagonal-architecture/">Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters)</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Layered architecture = Separation of Concerns scaled to the whole application</strong>: horizontal layers, each depending <strong>only on the layer directly beneath</strong>.</li>
+<li>Modern four layers: <strong>Presentation, Application, Domain, Infrastructure</strong>. The golden rule is the <strong>Downward Dependency Rule</strong>: commands and source dependencies go down; <strong>data</strong> may flow both ways.</li>
+<li><strong>Layers are logical (code structure); tiers are physical (deployment).</strong></li>
+<li>Handle <strong>cross-cutting concerns</strong> (logging, auth, caching) by <strong>injecting abstractions</strong>, not static calls.</li>
+<li>Classic trap: <strong>Fat Controller + Anemic Domain Model</strong>; fix with a <strong>Rich Domain, thin controller and service</strong>.</li>
+<li>Enforce with <strong>separate projects</strong> (compiler stops violations) and <strong>fitness functions</strong>.</li>
+</ul>
+</div></div>
+<h2 id="4-2-layered-architecture">4.2 Layered architecture</h2>
+<p><img src="/book-digest/grokking-software-architecture/img/layered-architecture.svg" alt="Four layers, downward dependencies, cross-cutting bar" loading="lazy" /></p>
+<ul>
+<li><strong>Command flow</strong>
+<ul>
+<li>(top to bottom: Presentation commands Application, which commands Domain...) vs <strong>data flow</strong> (both ways: input goes down, results come back up)</li>
+<li>The source-code dependency never points up: the business layer returns data to the UI but never knows the UI exists.</li>
+</ul>
+</li>
+<li><strong>Classic 3 layers:</strong> Presentation (UI), Business Logic, Data Access.</li>
+<li><strong>Evolution to 4 (or 5) layers.</strong>
+<ul>
+<li>Split a layer when you see: the <strong>junk-drawer effect</strong> (one layer mixing workflows and low-level rules)</li>
+<li><strong>team scaling</strong> (developers colliding in the same files)</li>
+<li><strong>blurry boundaries</strong> (cannot say where a tax calculation belongs).</li>
+</ul>
+<ol>
+<li><strong>Presentation:</strong> shows information and captures input (web pages, API responses/requests); knows how to show, not the rules.</li>
+<li><strong>Application (service layer):</strong> <strong>orchestrates use cases</strong> (&quot;Create New Order&quot;), coordinates domain objects/services, handles transactions; contains no core business rules.</li>
+<li><strong>Domain (business logic):</strong> core knowledge, rules, state: <strong>entities</strong> (Order, Customer), value objects, domain services; independent of presentation and storage.</li>
+<li><strong>Infrastructure:</strong> the &quot;how&quot; of external concerns: database (ORM like Entity Framework or SQL), email, third-party APIs, log files, message queues; implements interfaces defined above it.</li>
+</ol>
+<ul>
+<li>Very large systems may split Infrastructure into a <strong>Data Access Layer</strong> and an Infrastructure layer as <strong>siblings</strong> (not vertical pass-through).</li>
+</ul>
+</li>
+<li><strong>Layers vs tiers:</strong>
+<ul>
+<li>layers = logical separation (departments in one building)</li>
+<li>tiers = physical (separate buildings: web server, app server, database server)
+<ul>
+<li>A 3-layer app can sit on one tier or three</li>
+<li><strong>Scaling is not tiering</strong>: presentation on 10 servers is one tier scaled horizontally</li>
+</ul>
+</li>
+<li>a new tier appears only when you cross a network boundary.</li>
+</ul>
+</li>
+<li><strong>Newer patterns that challenge strict horizontal slicing:</strong>
+<ul>
+<li>Hexagonal (ch. 5), Clean, Onion (dependencies point inward to the domain)</li>
+<li>also <strong>Vertical Slice Architecture</strong> (group by feature, like pizza slices, though layers persist inside slices)</li>
+<li>micro-frontends in ch. 12.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-3-the-downward-dependency-rule">4.3 The Downward Dependency Rule</h2>
+<p>An upper layer may depend on layers below; <strong>a lower layer must never depend on one above</strong>. Org chart analogy: CEO (Presentation) commands VP (Application), who commands Manager (Domain), who commands Team Lead (Infrastructure); never the reverse. Why it matters:</p>
+<ol>
+<li><strong>Lower complexity, better maintainability:</strong> an Infrastructure developer needs no UI knowledge; a lower layer's implementation can be rewritten (SQL to Mongo) if its contract holds.</li>
+<li><strong>Testability:</strong> test Domain with fake Infrastructure interfaces.</li>
+<li><strong>Replaceability:</strong> swap web UI for mobile/desktop (Domain and Application do not know Presentation); with DIP, Application depends on <code>IOrderRepository</code>, so <code>SqlOrderRepository</code> can become <code>MongoOrderRepository</code>.</li>
+<li><strong>Minimised blast radius:</strong> a UI bug is unlikely to break database code.</li>
+</ol>
+<pre class="hl"><code><span class="kd">class</span><span class="w"> </span><span class="nx">OrderService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kr">constructor</span><span class="p">(</span><span class="nx">repo</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">                 </span><span class="c1">// depends on an abstraction</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">repo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">repo</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="nx">saveOrder</span><span class="p">(</span><span class="nx">order</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">                  </span><span class="c1">// doesn't know how save works</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="nx">repo</span><span class="p">.</span><span class="nx">save</span><span class="p">(</span><span class="nx">order</span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">class</span><span class="w"> </span><span class="nx">SqlOrderRepository</span><span class="w"> </span><span class="p">{</span><span class="w">            </span><span class="c1">// knows nothing about OrderService</span>
+<span class="w">  </span><span class="nx">save</span><span class="p">(</span><span class="nx">order</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* SQL */</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>&quot;Garbage in, garbage out&quot;:</strong> layering protects source code, not data; <strong>every layer should validate input</strong>; the Domain is the final line of defence.</li>
+<li><strong>Closed vs open layers:</strong>
+<ul>
+<li>in strict layering every layer is <strong>closed</strong> (requests pass through all layers)</li>
+<li><strong>open layers (layer bridging)</strong>
+<ul>
+<li>let upper layers bypass one for high-speed <strong>read-only</strong> queries (e.g. a public product catalogue querying a read-only view repository)</li>
+<li><strong>Closed layers enforce business rules, security, transaction boundaries</strong> (new orders must pass the Application layer)</li>
+<li>Open layers cut boilerplate but risk abuse for writes</li>
+</ul>
+</li>
+<li><strong>default to closed</strong>, open only when performance data justifies.</li>
+</ul>
+</li>
+<li><strong>Violation 1: upward dependency.</strong>
+<ul>
+<li><code>SomeRepository</code> grabs <code>PresentationLayer.instance</code> and calls <code>updateStatusLabel(&quot;Data saved!&quot;)</code></li>
+<li>Consequences: spaghetti code, <strong>lost replaceability</strong>, untestable, <strong>circular dependencies</strong></li>
+<li>Fix: the repository <strong>returns data</strong> (boolean or saved object) to the Application service, which decides how to notify the UI: data flows up without the source dependency pointing up.</li>
+</ul>
+</li>
+<li><strong>Violation 2: skipping layers downward.</strong>
+<ul>
+<li><code>ProductController</code> does <code>new SqlProductRepository()</code> and <code>GetProductsSql()</code> directly
+<ul>
+<li>Bypasses business logic (a &quot;filter out Discontinued Products&quot; rule), <strong>security</strong> (user permissions), caching</li>
+</ul>
+</li>
+<li>the UI breaks if SQL becomes Mongo.</li>
+</ul>
+</li>
+<li><strong>AOP &quot;weaving&quot;:</strong>
+<ul>
+<li>frameworks insert cross-cutting calls (e.g. &quot;before any public method in <code>OrderService</code>, call <code>_logger.Log()</code>&quot;) at compile or run time
+<ul>
+<li>Caveats: <strong>uniform not contextual</strong> (knows &quot;Executing SaveOrder&quot;, not &quot;User #12 saved Order #456&quot;)</li>
+</ul>
+</li>
+<li><strong>performance</strong> overhead</li>
+<li>in cloud/microservices these concerns often move out of code to <strong>sidecars, API gateways, service meshes</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-4-physically-structuring-layers">4.4 Physically structuring layers</h2>
+<p>Make the architecture obvious and the wrong thing hard.</p>
+<ul>
+<li><strong>Folders (Python/JavaScript):</strong>
+<ul>
+<li><code>/app</code> (Presentation), <code>/api</code> (controllers, routes) and <code>/services</code> (<code>orderService.js</code>) = Application, <code>/domain</code> (<code>order.js</code>) = Domain, <code>/repositories</code> and <code>/lib</code> (<code>emailClient.js</code>) = Infrastructure</li>
+<li>Keep <strong>siblings decoupled</strong> (SqlDatabase and EmailService must not depend on each other; the Application layer coordinates).</li>
+</ul>
+</li>
+<li><strong>Separate projects (Java/C#):</strong> <code>MySolution.Domain</code>, <code>.Application</code>, <code>.Infrastructure</code>, <code>.Presentation</code>, with references only downward: the <strong>compiler enforces</strong> it (a controller in Domain does not compile).</li>
+<li><strong>Fitness functions</strong>
+<ul>
+<li>(Neal Ford, Rebecca Parsons, Patrick Kua, <em>Building Evolutionary Architectures</em>: https://nealford.com/books/buildingevolutionaryarchitectures.html): <strong>automated checks of the code's structure</strong> (&quot;does the UI layer respect the database boundary?&quot;)
+<ul>
+<li>Tools: <strong>dependency-cruiser</strong> (JS/TS)</li>
+</ul>
+</li>
+<li><strong>NetArchTest</strong> or <strong>NDepend</strong> (.NET), Pyright rules (Python)</li>
+<li><strong>ArchUnit</strong> (Java), run locally or in CI/CD.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-5-cross-cutting-concerns">4.5 Cross-cutting concerns</h2>
+<p>Logging, authentication, caching, error handling serve many layers (electricity serving every room). Problems:</p>
+<ul>
+<li><strong>Tangling</strong> (SRP violation): <code>StaticFileLogger.log(&quot;Saving order...&quot;)</code> before and after <code>repo.save(order)</code>.</li>
+<li><strong>Scattering:</strong> the same logging calls in hundreds of methods across layers; switching to a cloud logger means hunting them all.</li>
+<li><strong>Solution:</strong>
+<ul>
+<li>invert the dependency; <code>OrderService</code> takes a <code>logger</code> in its constructor and calls <code>logger.Log(...)</code></li>
+<li>Gains: DIP, swap <code>FileLogger</code> for <code>CloudLogger</code> in one registration place, <strong>fake logger in tests</strong>, SRP</li>
+<li>The <strong>Four-Layer diagram</strong>: four horizontal layers, downward arrows only, and a <strong>vertical Cross-Cutting Concerns bar</strong> accessible to all layers.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-7-anti-patterns">4.7 Anti-patterns</h2>
+<p>An <strong>anti-pattern</strong> is a common, well-intentioned solution that consistently backfires (catalogues: Fowler's <em>Refactoring</em>; Brown et al. <em>AntiPatterns</em>). The two most common, almost always together:</p>
+<ul>
+<li><strong>Fat Controller / bloated service:</strong>
+<ul>
+<li><code>createOrder</code> in a controller does validation, <code>new MyDbContext()</code> lookups, total calculation, a <strong>magic-number Gold discount</strong> (<code>total *= 0.9</code>), persistence with a random id, <code>new SmtpEmailService().Send(...)</code></li>
+<li><strong>At least five responsibilities</strong> (HTTP, validation, totals, saving, email): untestable discount logic (needs a web server, DB, email), huge blast radius, no replaceability</li>
+<li>A tool measuring <strong>cyclomatic complexity</strong> (number of paths:
+<ul>
+<li>each <code>if</code>, <code>while</code>, <code>for</code>, <code>case</code> adds one</li>
+<li>1 to 5 good, <strong>20+</strong> red flag</li>
+<li>use SonarQube or NDepend</li>
+<li>show on the dashboard</li>
+<li>a <strong>smoke alarm, not dogma</strong>) flags it.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Anemic domain model:</strong>
+<ul>
+<li><code>Order</code> has only <code>id</code>, <code>total</code>, <code>customerEmail</code>, <code>items</code> set from anywhere (<code>order.total = -100</code>): <strong>violates encapsulation</strong>, zero cohesion</li>
+<li>behaviour (<code>calculateTotal</code>, <code>validate</code>) is scattered.</li>
+</ul>
+</li>
+<li><strong>After (C#): rich domain, thin orchestration.</strong>
+<ul>
+<li><strong>Rich <code>Order</code>:</strong>
+<ul>
+<li><code>GOLD_DISCOUNT_RATE = 0.9m</code></li>
+<li><code>Total { get; private set; }</code></li>
+<li><code>Customer</code> set once in the constructor (<code>ArgumentNullException</code> if null)</li>
+<li>private <code>_items</code> exposed as <code>IReadOnlyList&lt;Item&gt;</code></li>
+<li><code>IsEligibleForDiscount =&gt; Customer.Type == &quot;Gold&quot;</code></li>
+<li><strong>calculated property</strong> <code>TotalPrice =&gt; _items.Sum(price*quantity) * (eligible ? 0.9 : 1)</code> (an &quot;atomic truth&quot;: cannot be out of sync)</li>
+<li><code>AddItem</code> rejects non-positive prices.</li>
+</ul>
+</li>
+<li><strong>Contracts in the Domain layer:</strong> <code>IOrderRepository</code>, <code>ICustomerRepository</code>, <code>IItemRepository</code>, <code>IEmailService</code>.</li>
+<li><strong>Infrastructure implements them:</strong> <code>SqlOrderRepository</code>, <code>SqlCustomerRepository</code>, <code>SqlItemRepository</code>, <code>SmtpEmailService</code>.</li>
+<li><strong>Thin <code>OrderService.CreateOrder</code>:</strong>
+<ul>
+<li>get customer, <code>new Order(customer)</code>, for each item <strong>fetch the real price from the database, not the user JSON</strong> (secure lookup), <code>AddItem</code>, save, send email, return an <code>OrderResponse</code> DTO</li>
+<li>catch, log and throw <code>ApplicationException(&quot;Order creation failed...&quot;)</code>. <strong>Thin <code>OrderController</code></strong> calls <code>_orderService.CreateOrder(request)</code> only.</li>
+</ul>
+</li>
+<li><strong>The paradox:</strong>
+<ul>
+<li><code>IOrderRepository</code> lives in the Domain, so Infrastructure imports from Domain: <strong>source dependencies point up (inward), control flow points down</strong></li>
+<li>Both Application and Infrastructure point <strong>inward to the Domain</strong>: the breakthrough that leads to <strong>Hexagonal Architecture</strong> (ch. 5).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>The mandate:</strong>
+<ul>
+<li>ask not &quot;how do I write this?&quot; but &quot;<strong>where does this code belong?</strong>&quot;: core rules in Domain, orchestration in Application, HTTP in Presentation, database and email in Infrastructure</li>
+<li><strong>Entropy</strong> erodes boundaries, so enforce with fitness functions (&quot;trust, but verify&quot;).</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-8-the-dork-side-the-7-layer-sandwich-osi">4.8 The Dork Side: the 7-layer sandwich (OSI)</h2>
+<p>1970s networking was a Tower of Babel: an IBM machine could not talk to a DEC machine; applications had to know everything from meaning to cable voltage (the ultimate fat controller).</p>
+<p><strong>ISO's 7-layer OSI model</strong> applied SoC (&quot;Grandma's letter&quot;): <strong>7 Application</strong> (you write the letter), <strong>6 Presentation</strong> (translate to Polish, standard envelope), <strong>5 Session</strong> (&quot;Dear Grandma&quot;/&quot;Love, Archie&quot;, manages the conversation), <strong>4 Transport (TCP)</strong> (10 numbered postcards, resend lost #4), <strong>3 Network (IP)</strong> (address and global route), <strong>2 Data Link</strong> (local hop, the mail truck), <strong>1 Physical</strong> (paper, ink, tyres; in networks: electrical signals, radio waves, light pulses).</p>
+<p>Point: <strong>replaceability</strong>: swap copper for fibre and no other layer changes, like swapping <code>MockOrderRepository</code> for <code>SqlWidgetRepository</code>. (See also <a href="/book-digest/understanding-distributed-systems/uds-02-reliable-links/">Understanding Distributed Systems 2: Reliable links</a> for the network stack in UDS.)</p>
+<h2 id="4-9-mission-checklist-recap">4.9 Mission, checklist, recap</h2>
+<ul>
+<li><strong>Mission (5 min):</strong>
+<ul>
+<li>sketch the four layers for a <strong>blog</strong> (list posts; submit a comment), at least two components per layer, asking &quot;How (Infrastructure) or Why (Domain)?&quot;</li>
+<li>Extra credit: a <strong>banking transfer system</strong> (overdraft protection, currency conversion, international gateways: a high-stakes rich domain)</li>
+<li>Guided solution in Appendix A.</li>
+</ul>
+</li>
+<li><strong>Lingering problem:</strong> in classic layering the core still points down at the database (&quot;Infrastructure Anchor&quot;). Ch. 5 flips it: an &quot;architectural airlock&quot;.</li>
+<li><strong>Recap:</strong>
+<ul>
+<li>layered = SoC for the application</li>
+<li>four layers</li>
+<li>downward rule is golden</li>
+<li>layers logical vs tiers physical</li>
+<li>cross-cutting by injected abstractions</li>
+<li>avoid Fat Controller + Anemic Domain</li>
+<li>use a Rich Domain</li>
+<li>the idea mirrors OSI.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+layered architecture · command flow vs data flow · Presentation / Application / Domain / Infrastructure · layer vs tier · Downward Dependency Rule · closed vs open layers · layer bridging · cross-cutting concern · code tangling and scattering · AOP · fitness function · anti-pattern · Fat Controller · Anemic Domain Model · Rich Domain Model · cyclomatic complexity · OSI model.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 4. Pre-release; no public source page found.</li>
+<li>Ford, Parsons, Kua, <em>Building Evolutionary Architectures</em>: https://nealford.com/books/buildingevolutionaryarchitectures.html</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-03-principles-of-sound-structure/">Grokking Software Architecture 3: The Principles of Sound Structure</a> · <a href="/book-digest/grokking-software-architecture/gsa-05-hexagonal-architecture/">Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters)</a> · <a href="/book-digest/understanding-distributed-systems/uds-02-reliable-links/">Understanding Distributed Systems 2: Reliable links</a> · <a href="/book-digest/domain-driven-design-quickly/ddd-03-model-driven-design-and-building-blocks/">DDD Quickly 3: Model-driven design and its building blocks</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-03-principles-of-sound-structure/">&larr; Grokking Software Architecture 3: The Principles of Sound Structure</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-05-hexagonal-architecture/">Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters) &rarr;</a></nav></main></body></html>

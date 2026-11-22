@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Ch 9: Using the Spring web scopes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/spring-start-here/">Spring Start Here</a></div>
+<main>
+<h1 id="ch-9-using-the-spring-web-scopes">Ch 9: Using the Spring web scopes</h1>
+<p>Source: Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 9. Previous: <a href="/book-digest/spring-start-here/ch08-web-apps-with-spring-boot-and-spring-mvc/">Ch 8: Implementing web apps with Spring Boot and Spring MVC</a>. Book projects: <code>ssh_ch9_ex1</code> to <code>ssh_ch9_ex3</code>. Builds on bean scopes from <a href="/book-digest/spring-start-here/ch05-spring-context-scopes-and-lifecycle/">Ch 5: The Spring context, bean scopes and life cycle</a>.</p>
+<blockquote>
+<p>[!abstract] Takeaways
+Beyond singleton and prototype, web apps get three <strong>web scopes</strong> that use the HTTP request as the reference point:</p>
+<ul>
+<li><strong>Request scope</strong> (<code>@RequestScope</code>): a new instance per HTTP request. Safe from threading problems.</li>
+<li><strong>Session scope</strong> (<code>@SessionScope</code>): one instance per client's HTTP session, shared by that client's requests.</li>
+<li><strong>Application scope</strong> (<code>@ApplicationScope</code>): one instance for the whole app, shared by everyone. Avoid it.</li>
+</ul>
+<p>The chapter builds a login in three steps, one scope per step: request (credentials), session (logged-in user), application (login counter).</p>
+<p><img src="/book-digest/spring-start-here/img/web-scopes.svg" alt="Lifetime of each web scope" loading="lazy" /></p>
+</blockquote>
+<h2 id="9-1-request-scope">9.1 Request scope</h2>
+<p>A request-scoped bean is created fresh for each HTTP request (from any client) and usable only by that request; afterwards it is garbage-collected.</p>
+<p><strong>Table 9.1: key aspects</strong></p>
+<table>
+<thead>
+<tr>
+<th>Fact</th>
+<th>Consequence</th>
+<th>To consider</th>
+<th>To avoid</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>New instance per HTTP request from any client</td>
+<td>Many instances created over the app's life</td>
+<td>Usually not a problem: they are short-lived and collected after the request</td>
+<td>Slow creation logic (database or network calls). No logic in the constructor or <code>@PostConstruct</code> of request-scoped beans</td>
+</tr>
+<tr>
+<td>Only one request uses an instance</td>
+<td>No multithreading issues: one thread (the request's) touches it</td>
+<td>You can store per-request data in its attributes</td>
+<td>Do not synchronise its attributes: redundant and hurts performance</td>
+</tr>
+</tbody>
+</table>
+<h3 id="login-example-ssh-ch9-ex1">Login example (<code>ssh_ch9_ex1</code>)</h3>
+<p>Warning from the author: a hand-made login is only for teaching. <strong>In real apps use Spring Security</strong> (part of the Spring ecosystem); it avoids vulnerabilities you would introduce yourself. He recommends his book <em>Spring Security in Action</em>, 2nd ed. (Manning, 2024). Here the credentials are baked in (user <code>natalie</code>, password <code>password</code>); real apps keep users in a database and encrypt passwords.</p>
+<p>Dependencies: <code>spring-boot-starter-thymeleaf</code> and <code>spring-boot-starter-webmvc</code>.</p>
+<p><code>resources/templates/login.html</code>:</p>
+<pre class="hl"><code><span class="cp">&lt;!DOCTYPE html&gt;</span>
+<span class="p">&lt;</span><span class="nt">html</span> <span class="na">lang</span><span class="o">=</span><span class="s">"en"</span> <span class="na">xmlns:th</span><span class="o">=</span><span class="s">"http://www.thymeleaf.org"</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">head</span><span class="p">&gt;&lt;</span><span class="nt">meta</span> <span class="na">charset</span><span class="o">=</span><span class="s">"UTF-8"</span><span class="p">&gt;&lt;</span><span class="nt">title</span><span class="p">&gt;</span>Login<span class="p">&lt;/</span><span class="nt">title</span><span class="p">&gt;&lt;/</span><span class="nt">head</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">body</span><span class="p">&gt;</span>
+  <span class="p">&lt;</span><span class="nt">form</span> <span class="na">action</span><span class="o">=</span><span class="s">"/"</span> <span class="na">method</span><span class="o">=</span><span class="s">"post"</span><span class="p">&gt;</span>
+     Username: <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">"text"</span> <span class="na">name</span><span class="o">=</span><span class="s">"username"</span> <span class="p">/&gt;&lt;</span><span class="nt">br</span> <span class="p">/&gt;</span>
+     Password: <span class="p">&lt;</span><span class="nt">input</span> <span class="na">type</span><span class="o">=</span><span class="s">"password"</span> <span class="na">name</span><span class="o">=</span><span class="s">"password"</span> <span class="p">/&gt;&lt;</span><span class="nt">br</span> <span class="p">/&gt;</span>
+     <span class="p">&lt;</span><span class="nt">button</span> <span class="na">type</span><span class="o">=</span><span class="s">"submit"</span><span class="p">&gt;</span>Log in<span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+  <span class="p">&lt;/</span><span class="nt">form</span><span class="p">&gt;</span>
+  <span class="p">&lt;</span><span class="nt">p</span> <span class="na">th:text</span><span class="o">=</span><span class="s">"${message}"</span><span class="p">&gt;&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">body</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="nt">html</span><span class="p">&gt;</span>
+</code></pre>
+<p>Controller (first version: no logic yet, <code>loggedIn</code> always false). Returning <code>&quot;login.html&quot;</code> from the POST keeps the user on the same page:</p>
+<pre class="hl"><code><span class="nd">@Controller</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">LoginController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@GetMapping</span><span class="p">(</span><span class="s">"/"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">loginGet</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"login.html"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">loginPost</span><span class="p">(</span><span class="nd">@RequestParam</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="p">,</span>
+<span class="w">                            </span><span class="nd">@RequestParam</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">password</span><span class="p">,</span>
+<span class="w">                            </span><span class="n">Model</span><span class="w"> </span><span class="n">model</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kt">boolean</span><span class="w"> </span><span class="n">loggedIn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">loggedIn</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="n">model</span><span class="p">.</span><span class="na">addAttribute</span><span class="p">(</span><span class="s">"message"</span><span class="p">,</span><span class="w"> </span><span class="s">"You are now logged in."</span><span class="p">);</span>
+<span class="w">      </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="n">model</span><span class="p">.</span><span class="na">addAttribute</span><span class="p">(</span><span class="s">"message"</span><span class="p">,</span><span class="w"> </span><span class="s">"Login failed!"</span><span class="p">);</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="s">"login.html"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Where is the request scope? The controller is a singleton and stores nothing, so it is fine. But the <strong>login logic</strong> holds credentials, which (1) are sensitive, so should not live in memory longer than the request, and (2) differ between users logging in at the same time. A bean for that logic must be <strong>per request</strong>.</p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="nd">@RequestScope</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">LoginProcessor</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">password</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">login</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="na">getUsername</span><span class="p">();</span>
+<span class="w">      </span><span class="n">String</span><span class="w"> </span><span class="n">password</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="na">getPassword</span><span class="p">();</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="s">"natalie"</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">username</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="s">"password"</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">password</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">      </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">          </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// getters, setters</span>
+<span class="p">}</span>
+</code></pre>
+<p>(The book's text writes &quot;<code>@RequestScoped</code>&quot;, the code uses <code>@RequestScope</code>.) The controller injects it by constructor and calls it:</p>
+<pre class="hl"><code><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">LoginProcessor</span><span class="w"> </span><span class="n">loginProcessor</span><span class="p">;</span>
+<span class="kd">public</span><span class="w"> </span><span class="nf">LoginController</span><span class="p">(</span><span class="n">LoginProcessor</span><span class="w"> </span><span class="n">loginProcessor</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">this</span><span class="p">.</span><span class="na">loginProcessor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">loginProcessor</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">loginPost</span><span class="p">(</span><span class="nd">@RequestParam</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="p">,</span><span class="w"> </span><span class="nd">@RequestParam</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">password</span><span class="p">,</span><span class="w"> </span><span class="n">Model</span><span class="w"> </span><span class="n">model</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">loginProcessor</span><span class="p">.</span><span class="na">setUsername</span><span class="p">(</span><span class="n">username</span><span class="p">);</span>
+<span class="w">  </span><span class="n">loginProcessor</span><span class="p">.</span><span class="na">setPassword</span><span class="p">(</span><span class="n">password</span><span class="p">);</span>
+<span class="w">  </span><span class="kt">boolean</span><span class="w"> </span><span class="n">loggedIn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">loginProcessor</span><span class="p">.</span><span class="na">login</span><span class="p">();</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">loggedIn</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">model</span><span class="p">.</span><span class="na">addAttribute</span><span class="p">(</span><span class="s">"message"</span><span class="p">,</span><span class="w"> </span><span class="s">"You are now logged in."</span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">model</span><span class="p">.</span><span class="na">addAttribute</span><span class="p">(</span><span class="s">"message"</span><span class="p">,</span><span class="w"> </span><span class="s">"Login failed!"</span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="s">"login.html"</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="9-2-session-scope">9.2 Session scope</h2>
+<p>A session-scoped bean is created when the client's HTTP session is created and <strong>reused for all that client's requests</strong> while the session is active. Each user has their own session and instance.</p>
+<p>Typical uses: remembering the <strong>logged-in user</strong> while they browse, an <strong>online shopping cart</strong>.</p>
+<p><strong>Table 9.2: key aspects</strong></p>
+<table>
+<thead>
+<tr>
+<th>Fact</th>
+<th>Consequence</th>
+<th>To consider</th>
+<th>To avoid</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Instance lives for the whole HTTP session</td>
+<td>Longer life, collected less often</td>
+<td>Data stays in memory longer</td>
+<td>Too much data in the session (performance). <strong>Never store sensitive data</strong> (passwords, private keys, secrets) in session bean attributes</td>
+</tr>
+<tr>
+<td>Several requests can share one instance</td>
+<td>If one client sends concurrent requests that change data, race conditions</td>
+<td>Synchronise only as a last resort</td>
+<td></td>
+</tr>
+<tr>
+<td>It is a way to share data between requests, kept server side</td>
+<td>Requests become dependent on each other</td>
+<td>Stateful data ties clients to that app instance</td>
+<td>Consider storing shared data in a <strong>database</strong> so requests stay independent</td>
+</tr>
+</tbody>
+</table>
+<h3 id="extend-the-app-ssh-ch9-ex2">Extend the app (<code>ssh_ch9_ex2</code>)</h3>
+<p>Steps: (1) session bean for the logged-in user, (2) a page only logged-in users can reach, (3) block access without login, (4) redirect after login.</p>
+<pre class="hl"><code><span class="nd">@Service</span>
+<span class="nd">@SessionScope</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">LoggedUserManagementService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// getters, setters</span>
+<span class="p">}</span>
+</code></pre>
+<p><code>LoginProcessor</code> stays <strong>request-scoped</strong> (credentials needed only during the request) and, on success, stores the username in the session bean:</p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="nd">@RequestScope</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">LoginProcessor</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">LoggedUserManagementService</span><span class="w"> </span><span class="n">loggedUserManagementService</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">password</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">LoginProcessor</span><span class="p">(</span><span class="n">LoggedUserManagementService</span><span class="w"> </span><span class="n">loggedUserManagementService</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="na">loggedUserManagementService</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">loggedUserManagementService</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">login</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="na">getUsername</span><span class="p">();</span>
+<span class="w">      </span><span class="n">String</span><span class="w"> </span><span class="n">password</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="na">getPassword</span><span class="p">();</span>
+<span class="w">      </span><span class="kt">boolean</span><span class="w"> </span><span class="n">loginResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="s">"natalie"</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">username</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="s">"password"</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">password</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">loginResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">        </span><span class="n">loggedUserManagementService</span><span class="p">.</span><span class="na">setUsername</span><span class="p">(</span><span class="n">username</span><span class="p">);</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">loginResult</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>You need not worry about several users being logged in: the framework links each HTTP request to the right session.</p>
+<table>
+<thead>
+<tr>
+<th>Bean</th>
+<th>Scope</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LoginController</code></td>
+<td>singleton</td>
+<td>no state</td>
+</tr>
+<tr>
+<td><code>LoginProcessor</code></td>
+<td>request</td>
+<td>username and password, gone after the request</td>
+</tr>
+<tr>
+<td><code>LoggedUserManagementService</code></td>
+<td>session</td>
+<td>the logged-in username for this client</td>
+</tr>
+<tr>
+<td><code>LoginCountService</code></td>
+<td>application</td>
+<td>login attempts from everybody</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Redirect:</strong> return the string <code>&quot;redirect:&quot;</code> followed by a path.</p>
+<pre class="hl"><code><span class="nd">@Controller</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">MainController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">LoggedUserManagementService</span><span class="w"> </span><span class="n">loggedUserManagementService</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">MainController</span><span class="p">(</span><span class="n">LoggedUserManagementService</span><span class="w"> </span><span class="n">loggedUserManagementService</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nd">@GetMapping</span><span class="p">(</span><span class="s">"/main"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">home</span><span class="p">(</span><span class="nd">@RequestParam</span><span class="p">(</span><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">)</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">logout</span><span class="p">,</span><span class="w"> </span><span class="n">Model</span><span class="w"> </span><span class="n">model</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">logout</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">loggedUserManagementService</span><span class="p">.</span><span class="na">setUsername</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span><span class="w">          </span><span class="c1">// log out</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">      </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">loggedUserManagementService</span><span class="p">.</span><span class="na">getUsername</span><span class="p">();</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">username</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"redirect:/"</span><span class="p">;</span><span class="w">                                    </span><span class="c1">// not logged in</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">      </span><span class="n">model</span><span class="p">.</span><span class="na">addAttribute</span><span class="p">(</span><span class="s">"username"</span><span class="p">,</span><span class="w"> </span><span class="n">username</span><span class="p">);</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="s">"main.html"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><code>main.html</code>:</p>
+<pre class="hl"><code><span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Welcome, <span class="p">&lt;</span><span class="nt">span</span> <span class="na">th:text</span><span class="o">=</span><span class="s">"${username}"</span><span class="p">&gt;&lt;/</span><span class="nt">span</span><span class="p">&gt;&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">"/main?logout"</span><span class="p">&gt;</span>Log out<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+</code></pre>
+<p>After a successful login, redirect to the main page:</p>
+<pre class="hl"><code><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">loginPost</span><span class="p">(</span><span class="nd">@RequestParam</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">username</span><span class="p">,</span><span class="w"> </span><span class="nd">@RequestParam</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">password</span><span class="p">,</span><span class="w"> </span><span class="n">Model</span><span class="w"> </span><span class="n">model</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">loginProcessor</span><span class="p">.</span><span class="na">setUsername</span><span class="p">(</span><span class="n">username</span><span class="p">);</span>
+<span class="w">  </span><span class="n">loginProcessor</span><span class="p">.</span><span class="na">setPassword</span><span class="p">(</span><span class="n">password</span><span class="p">);</span>
+<span class="w">  </span><span class="kt">boolean</span><span class="w"> </span><span class="n">loggedIn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">loginProcessor</span><span class="p">.</span><span class="na">login</span><span class="p">();</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">loggedIn</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="s">"redirect:/main"</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="n">model</span><span class="p">.</span><span class="na">addAttribute</span><span class="p">(</span><span class="s">"message"</span><span class="p">,</span><span class="w"> </span><span class="s">"Login failed!"</span><span class="p">);</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="s">"login.html"</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<p>Behaviour: correct login goes to the main page; the logout link returns you to login; opening <code>/main</code> unauthenticated redirects to login.</p>
+<p><img src="/book-digest/spring-start-here/img/login-redirect.svg" alt="Login and redirect flow" loading="lazy" /></p>
+<h2 id="9-3-application-scope-ssh-ch9-ex3">9.3 Application scope (<code>ssh_ch9_ex3</code>)</h2>
+<p>All requests from all clients share one instance. It is like a singleton, except (the book says) the context cannot hold several instances of the same type. The lifecycle is described with the HTTP request as reference point.</p>
+<ul>
+<li>Same concurrency problem as a mutable singleton: keep attributes immutable. But immutable means you can simply use a singleton.</li>
+<li><strong>Author's advice: avoid it.</strong> Use a persistence layer (a database) for shared data.</li>
+</ul>
+<p>Example: count login attempts from every user.</p>
+<pre class="hl"><code><span class="nd">@Service</span>
+<span class="nd">@ApplicationScope</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">LoginCountService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">count</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">increment</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">count</span><span class="o">++</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">getCount</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">count</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>(Notice the unsynchronised <code>count++</code>: exactly the race-condition risk the author warns about.)</p>
+<p><code>LoginProcessor.login()</code> now calls <code>loginCountService.increment()</code> first (the service is injected by constructor next to <code>LoggedUserManagementService</code>). <code>MainController</code> sends the count to the view:</p>
+<pre class="hl"><code><span class="kt">int</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">loginCountService</span><span class="p">.</span><span class="na">getCount</span><span class="p">();</span>
+<span class="n">model</span><span class="p">.</span><span class="na">addAttribute</span><span class="p">(</span><span class="s">"loginCount"</span><span class="p">,</span><span class="w"> </span><span class="n">count</span><span class="p">);</span>
+</code></pre>
+<pre class="hl"><code><span class="p">&lt;</span><span class="nt">h1</span><span class="p">&gt;</span>Welcome, <span class="p">&lt;</span><span class="nt">span</span> <span class="na">th:text</span><span class="o">=</span><span class="s">"${username}"</span><span class="p">&gt;&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>!<span class="p">&lt;/</span><span class="nt">h1</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">h2</span><span class="p">&gt;</span>Your login number is <span class="p">&lt;</span><span class="nt">span</span> <span class="na">th:text</span><span class="o">=</span><span class="s">"${loginCount}"</span><span class="p">&gt;&lt;/</span><span class="nt">span</span><span class="p">&gt;&lt;/</span><span class="nt">h2</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">"/main?logout"</span><span class="p">&gt;</span>Log out<span class="p">&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>
+</code></pre>
+<p>Book typo to know: listing 9.15 declares <code>public LoginController(...)</code> inside <code>MainController</code> and omits the <code>LoggedUserManagementService</code> field it uses.</p>
+<p>Closing thought: HTTP is often used between services too, and frontends and backends talk through endpoints designed in the <strong>REST</strong> style: next chapter.</p>
+<h2 id="chapter-summary-book">Chapter summary (book)</h2>
+<ul>
+<li>Three web scopes: <strong>request</strong> (one instance per HTTP request), <strong>session</strong> (one per HTTP session, shared by that client's requests), <strong>application</strong> (one for the whole app).</li>
+<li>Request scope: usually no concurrency worry; short-lived. Avoid costly constructor or <code>@PostConstruct</code> logic.</li>
+<li>Session scope shares data across a client's requests, but the same client can send concurrent requests, so changing session bean data can race; avoid it or synchronise.</li>
+<li>Application scope: shared by everyone; avoid for mutable data (writes need synchronisation, hurting performance; data stays in memory for the app's life). Prefer a database.</li>
+<li>Session and application scopes make the app <strong>stateful</strong>: requests depend on data the app stores. Stateful apps are harder to design and scale, so consider alternatives when possible.</li>
+</ul>
+<h2 id="terms-to-carry-forward">Terms to carry forward</h2>
+<p>web scope · <code>@RequestScope</code> · <code>@SessionScope</code> · <code>@ApplicationScope</code> · HTTP session · stateful app · <code>redirect:</code> · Spring Security · <code>LoginProcessor</code> / <code>LoggedUserManagementService</code> / <code>LoginCountService</code>.</p>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 9. https://www.manning.com/books/spring-start-here-second-edition (unverified)</li>
+<li>Laurentiu Spilca, <em>Spring Security in Action</em>, 2nd ed. (Manning, 2024), cited by the book.</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/spring-start-here/ch05-spring-context-scopes-and-lifecycle/">Ch 5: The Spring context, bean scopes and life cycle</a> · <a href="/book-digest/spring-start-here/ch08-web-apps-with-spring-boot-and-spring-mvc/">Ch 8: Implementing web apps with Spring Boot and Spring MVC</a> · <a href="/book-digest/spring-start-here/ch10-rest-endpoints/">Ch 10: Implementing REST endpoints</a></p>
+<nav class="pager"><a href="/book-digest/spring-start-here/ch08-web-apps-with-spring-boot-and-spring-mvc/">&larr; Ch 8: Implementing web apps with Spring Boot and Spring MVC</a><a href="/book-digest/spring-start-here/">Contents</a><a href="/book-digest/spring-start-here/ch10-rest-endpoints/">Ch 10: Implementing REST endpoints &rarr;</a></nav></main></body></html>

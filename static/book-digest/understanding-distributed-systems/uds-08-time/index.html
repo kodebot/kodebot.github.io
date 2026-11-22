@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 8: Time</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-8-time">Understanding Distributed Systems 8: Time</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 8. Previous: <a href="/book-digest/understanding-distributed-systems/uds-06-and-07-system-models-and-failure-detection/">Understanding Distributed Systems 6 and 7: Part II intro, system models, failure detection</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-09-leader-election/">Understanding Distributed Systems 9: Leader election</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+Time matters for TTLs, timeouts and, above all, <strong>ordering events</strong>. A single-threaded program runs operations one after another; a distributed system has <strong>no shared global clock</strong> and processes run concurrently. <strong>Physical clocks drift and get corrected by jumps</strong>, so they cannot reliably order events across nodes. <strong>Logical clocks</strong> track <strong>causality</strong> instead: a <strong>Lamport clock</strong> (smaller timestamp is consistent with happened-before) and a <strong>vector clock</strong> (can tell happened-before from <strong>concurrent</strong>).</p>
+</blockquote>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-08-kinds-of-clocks.svg" alt="Physical, logical and vector clocks" loading="lazy" /></p>
+<h2 id="8-1-physical-clocks">8.1 Physical clocks</h2>
+<ul>
+<li>
+<p>A process has a <strong>wall-time clock</strong>, most commonly a <strong>vibrating quartz crystal</strong>: cheap, not very accurate</p>
+<ul>
+<li>Manufacturing differences and temperature make one run slightly faster or slower than another</li>
+<li>The rate is <strong>clock drift</strong>; the difference between two clocks at a point in time is <strong>clock skew</strong>.</li>
+</ul>
+</li>
+<li>
+<p>Quartz clocks must be <strong>synced periodically</strong> with machines that have higher-accuracy clocks like <strong>atomic clocks</strong> (time from quantum-mechanical properties of atoms, far more expensive, <strong>accurate to 1 second in 3 million years</strong>; https://en.wikipedia.org/wiki/Atomic_clock).</p>
+</li>
+<li>
+<p>Sync uses a protocol; the challenge is the network's <strong>unpredictable latency</strong></p>
+<ul>
+<li>The most common is <strong>NTP</strong> (RFC 5905: https://datatracker.ietf.org/doc/html/rfc5905): the client estimates <strong>clock skew</strong> from a server timestamp corrected by the estimated network latency, then adjusts its clock</li>
+<li>That makes the clock <strong>jump forward or backward</strong>, which breaks timestamp comparison: <strong>an operation that ran after another could get an earlier timestamp</strong> because the clock jumped back between them.</li>
+</ul>
+</li>
+<li>
+<p><strong>Monotonic clock:</strong></p>
+<ul>
+<li>offered by most OSs, unaffected by jumps: it measures <strong>seconds elapsed since an arbitrary point (e.g. boot)</strong> and <strong>only moves forward</strong>
+<ul>
+<li>Good for <strong>elapsed time between two timestamps on the same node</strong></li>
+</ul>
+</li>
+<li><strong>useless for comparing different nodes</strong>.</li>
+</ul>
+</li>
+<li>
+<p>Since wall clocks cannot be perfectly synchronised, <strong>do not rely on them to order operations across nodes</strong></p>
+<ul>
+<li>New angle: in a single-threaded process one of two operations must come first</li>
+<li>That <strong>happened-before</strong> relationship is a <strong>causal bond</strong>: the first can have side effects that affect the second</li>
+<li>Build a clock that captures causality rather than physical time: a <strong>logical clock</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-2-logical-clocks">8.2 Logical clocks</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-08-lamport-clock-rules.svg" alt="The Lamport clock rules" loading="lazy" /></p>
+<p>A logical clock measures time in <strong>logical operations</strong>, not wall-clock time. The simplest is a <strong>counter incremented before each operation</strong>: operations on one process get distinct, ordered timestamps.</p>
+<p>Across processes: sending an email creates a <strong>synchronisation point</strong>. Whatever you did before sending (drinking coffee) must have happened before what your friend did after receiving it. So when one process sends a message to another, <strong>the sender's earlier operations happened before the receiver's later ones</strong>.</p>
+<p><strong>Lamport clock</strong> (Lamport's paper &quot;Time, Clocks, and the Ordering of Events in a Distributed System&quot;: http://lamport.azurewebsites.net/pubs/time-clocks.pdf). Each process has a local counter:</p>
+<ol>
+<li>Initialised to <strong>0</strong>.</li>
+<li><strong>Increment by 1 before an operation.</strong></li>
+<li><strong>Sending:</strong> increment by 1 and send a copy of the counter in the message.</li>
+<li><strong>Receiving:</strong> set the counter to the <strong>maximum of the received and local</strong> counter, then <strong>increment by 1</strong>.</li>
+</ol>
+<ul>
+<li>It assumes <strong>crash-stop</strong>; crash-recovery can be supported by e.g. <strong>persisting the clock's state on disk</strong>.</li>
+<li><strong>Guarantee:</strong> if O1 happened-before O2, then ts(O1) &lt; ts(O2). (Book example: D happened-before F with timestamps 4 and 5.)</li>
+<li><strong>Limitations:</strong>
+<ul>
+<li><strong>unrelated operations can share a timestamp</strong> (A and E both equal 1)</li>
+<li>To get a <strong>strict total order</strong>, break ties arbitrarily, e.g</li>
+<li>by process ID (then E's timestamp exceeds A's)</li>
+<li>Even so, <strong>timestamp order does not imply causality</strong>: E did not happen-before C even though the timestamps seem to say so</li>
+<li>To guarantee that, use a <strong>vector clock</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-3-vector-clocks">8.3 Vector clocks</h2>
+<p>A vector clock guarantees that <strong>if one timestamp is less than another, the former must have happened-before the latter</strong> (paper: https://fileadmin.cs.lth.se/cs/Personal/Amr_Ergawy/dist-algos-papers/4.pdf).</p>
+<ul>
+<li>It is an <strong>array of counters, one per process</strong>, each process holding its own copy
+<ul>
+<li>Three processes P1, P2, P3: each keeps <code>[C_P1, C_P2, C_P3]</code>; the first counter belongs to P1, and so on</li>
+<li>(Real implementations use a <strong>dictionary</strong> rather than an array.)</li>
+</ul>
+</li>
+</ul>
+<p><strong>Rules:</strong></p>
+<ol>
+<li>Initially all counters are 0.</li>
+<li>On an operation, the process increments <strong>its own</strong> counter.</li>
+<li>On sending, increment its own counter and send <strong>a copy of the array</strong>.</li>
+<li>On receiving, merge the array with the local one by <strong>element-wise maximum</strong>, then increment its own counter.</li>
+</ol>
+<p><strong>Comparison</strong> (partial order: in a total order every pair is comparable; in a partial order some pairs are not).</p>
+<p>Given timestamps T1 (of O1) and T2 (of O2): if <strong>every counter in T1 is &lt;= the matching counter in T2 and at least one is strictly &lt;</strong>, then <strong>O1 happened-before O2</strong> (book: B happened-before C in its Figure 8.2).</p>
+<p>If <strong>neither</strong> happened-before the other, the timestamps cannot be ordered and the operations are <strong>concurrent</strong> (E and C in the figure).</p>
+<p>Illustration of the rule (my own numbers, not from the book): <code>[2,1,0]</code> vs <code>[3,1,0]</code>: all counters &lt;=, one strictly &lt;, so the first happened-before the second. <code>[2,0,0]</code> vs <code>[1,1,0]</code>: each is larger somewhere, so they are concurrent.</p>
+<ul>
+<li><strong>Drawback:</strong>
+<ul>
+<li>storage per process <strong>grows linearly with the number of processes</strong>, a problem for apps with many clients</li>
+<li>Other clocks fix this, such as <strong>dotted version vectors</strong> (&quot;Why Logical Clocks are Easy&quot;: https://queue.acm.org/detail.cfm?id=291775).</li>
+</ul>
+</li>
+</ul>
+<p><strong>Takeaway.</strong> Logical clocks may feel abstract; the book returns to practical uses later. In general <strong>physical clocks cannot accurately derive the order of events on different processes</strong>. Sometimes they are good enough, e.g. timestamping logs used only for debugging.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+quartz / atomic clock · clock drift · clock skew · NTP · monotonic clock · happened-before · logical clock · Lamport clock · vector clock · total vs partial order · concurrent operations · dotted version vectors.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 8. https://understandingdistributed.systems/</li>
+<li>Leslie Lamport, &quot;Time, Clocks, and the Ordering of Events in a Distributed System&quot;: http://lamport.azurewebsites.net/pubs/time-clocks.pdf (cited by the book).</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-06-and-07-system-models-and-failure-detection/">Understanding Distributed Systems 6 and 7: Part II intro, system models, failure detection</a> · <a href="/book-digest/understanding-distributed-systems/uds-09-leader-election/">Understanding Distributed Systems 9: Leader election</a> · <a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">Understanding Distributed Systems 4: Discovery</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-06-and-07-system-models-and-failure-detection/">&larr; Understanding Distributed Systems 6 and 7: Part II intro, system models, failure detection</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-09-leader-election/">Understanding Distributed Systems 9: Leader election &rarr;</a></nav></main></body></html>

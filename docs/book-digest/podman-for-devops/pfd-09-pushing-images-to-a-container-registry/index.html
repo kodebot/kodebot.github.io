@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 9: Pushing images to a container registry</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-9-pushing-images-to-a-container-registry">Podman for DevOps 9: Pushing images to a container registry</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 9. Previous: <a href="/book-digest/podman-for-devops/pfd-08-choosing-the-container-base-image/">Podman for DevOps 8: Choosing the container base image</a>. Next: <a href="/book-digest/podman-for-devops/pfd-10-securing-containers/">Podman for DevOps 10: Securing containers</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>registry</strong> is a collection of image repositories with five features: <strong>repository management, pushing, tag management, pulling, authentication</strong>. Push uploads <strong>blobs first, manifest last</strong>; pull fetches the <strong>manifest first</strong> (strict order).</li>
+<li><strong>On-premises</strong> (Docker Registry, Harbor, GitLab, Artifactory, Quay) vs <strong>cloud</strong> (Docker Hub, Quay.io): Docker Hub limits pulls (10 per hour anonymous, 40 free account); Quay.io's free tier has no pull limit and adds builds linked to Git plus <strong>security scans</strong>.</li>
+<li><strong>Skopeo</strong> (not for running or building) manages images: <strong><code>copy</code></strong> (many transports), <strong><code>inspect</code></strong> (no pull), <strong><code>list-tags</code></strong>, <strong><code>sync</code></strong> (YAML-driven mirroring), <strong><code>delete</code></strong>, <code>login</code>.</li>
+<li>Run a local registry as <code>registry:2</code> on <strong>5000/tcp</strong>; by default it has <strong>no auth, no TLS and no deletion</strong>; a custom <code>config.yml</code> enables <strong>delete, htpasswd auth and TLS</strong>.</li>
+<li>Deleting only removes manifests: run <strong><code>registry garbage-collect</code></strong> to reclaim blobs.</li>
+</ul>
+</div></div>
+<h2 id="9-1-what-is-a-container-registry">9.1 What is a container registry?</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-09-push-and-pull-order.svg" alt="Push uploads blobs then manifest; pull fetches manifest then blobs" loading="lazy" /></p>
+<p>A <strong>container registry</strong> is a collection of image repositories, used by systems that pull and run images dynamically. Main features:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Repository management</strong></td>
+<td>a web UI or CLI to create a &quot;folder&quot; (repository) for images. Under the <strong>OCI Distribution Specification</strong> [1], images are organised in a repository <strong>identified by name</strong>, usually <code>user-or-organisation/image</code> (<code>myorganization/mycontainerimage</code>), matching the regex <code>[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*</code></td>
+</tr>
+<tr>
+<td><strong>Pushing</strong></td>
+<td>done by your container tool following the spec: <strong>blobs are uploaded first, usually the manifest last</strong>; the order is not mandatory, but a registry may refuse a manifest that references unknown blobs. You give the repository name and the tag</td>
+</tr>
+<tr>
+<td><strong>Tag management</strong></td>
+<td>images are a name plus a <strong>tag</strong>, so several versions can live in the local cache or registry; the registry should expose <strong>content discovery</strong> (list of tags) so users can choose</td>
+</tr>
+<tr>
+<td><strong>Pulling</strong></td>
+<td>the client requests the <strong>manifest first</strong> to learn which blobs to fetch: the order is strict because without the manifest it cannot know what to request; use the fully qualified name (repository and tag)</td>
+</tr>
+<tr>
+<td><strong>Authentication</strong></td>
+<td>public registries often allow anonymous pull and discovery but <strong>require authentication to push</strong>; the client stores a token and reuses it</td>
+</tr>
+</tbody>
+</table>
+<p>The OCI Distribution Specification also defines <strong>conformance tests</strong> anyone can run against a registry (https://github.com/opencontainers/distribution-spec/tree/main/conformance).</p>
+<h2 id="9-2-cloud-based-and-on-premises-registries">9.2 Cloud-based and on-premises registries</h2>
+<h3 id="on-premises-registries">On-premises registries</h3>
+<p><strong>Use cases:</strong> distribute images in a private or isolated network; deploy an image at scale over many machines; keep sensitive data in your data centre; faster push and pull over an internal network. They require skills for availability, monitoring, logging and security.</p>
+<table>
+<thead>
+<tr>
+<th>Registry</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Docker Registry</strong></td>
+<td>Docker's project (version 2); basic features; run in section 9.4</td>
+</tr>
+<tr>
+<td><strong>Harbor</strong></td>
+<td>VMware open source; high availability, image auditing, authentication integration</td>
+</tr>
+<tr>
+<td><strong>GitLab Container Registry</strong></td>
+<td>integrated with GitLab, minimal setup, depends on the main project</td>
+</tr>
+<tr>
+<td><strong>JFrog Artifactory</strong></td>
+<td>manages any artifact, not only containers</td>
+</tr>
+<tr>
+<td><strong>Quay</strong></td>
+<td>open source distribution of Red Hat's Quay: full web UI, vulnerability scanning, data storage and protection</td>
+</tr>
+</tbody>
+</table>
+<p>Choose by your use case and support needs; many have support plans or enterprise editions that &quot;could easily save your skin in the event of a disaster&quot;.</p>
+<h3 id="cloud-based-registries">Cloud-based registries</h3>
+<p>The fastest start, a managed service. The book covers Docker Hub and Quay.io only (cloud-provider and distribution registries are excluded: distribution ones are pull-only, loaded by maintainers).</p>
+<p><strong>Docker Hub</strong> (born with Docker; key to giving containers attention):</p>
+<table>
+<thead>
+<tr>
+<th>Plan</th>
+<th>Limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Anonymous</td>
+<td><strong>10 image pulls per IP address per hour</strong></td>
+</tr>
+<tr>
+<td>Registered, free</td>
+<td><strong>40 pulls per hour</strong>; public repositories and <strong>one private repository</strong></td>
+</tr>
+<tr>
+<td>Pro, Team, Business</td>
+<td>thousands of pulls per day, automated builds, support</td>
+</tr>
+</tbody>
+</table>
+<p>Log in at least with a free account (web portal and <code>podman login</code>) to avoid the strict limits.</p>
+<p><strong>Quay.io</strong> is Red Hat's on-premises registry as <strong>SaaS</strong>. Free tier:</p>
+<ul>
+<li>builds from a Dockerfile, manually uploaded or linked through GitHub, Bitbucket, GitLab or any Git repository</li>
+<li><strong>security scans</strong> of pushed images</li>
+<li>usage and auditing logs</li>
+<li><strong>robot accounts and tokens</strong> for external software</li>
+<li><strong>five private repositories</strong>; <strong>no pull limit</strong></li>
+</ul>
+<p>Paid plans add more private repositories and team permissions.</p>
+<p><strong>Walkthrough: a public repo linked to GitHub</strong> (figures 9.1 to 9.8):</p>
+<ol>
+<li>Log in at https://quay.io; click <strong>+ Create New Repository</strong>.</li>
+<li>Give a name (<code>ubi8-httpd</code>), description, public or private (public for a free account) and how to initialise; choose <strong>link to a GitHub repository push</strong>.</li>
+<li>Authorise on GitHub and select the organisation and repository holding the Dockerfile (https://github.com/PacktPublishing/Podman-for-DevOps-Second-Edition/tree/main/Chapter09/ubi8-httpd; fork it to get your own copy with write access).</li>
+<li>Keep the default <strong>build trigger</strong>: a new build on every push to any branch or tag.</li>
+<li>The empty repository page appears; the <strong>Build</strong> section (fourth icon on the left) shows builds triggered by pushes; a build's detail shows it fetched the Dockerfile, built, and pushed automatically.</li>
+<li>The <strong>Tags</strong> page (second icon) has a <strong>SECURITY SCAN</strong> column (e.g. &quot;Passed&quot;) with details on click.</li>
+</ol>
+<p>Managed services reduce operational skills but are not always right for every project or company.</p>
+<h2 id="9-3-managing-container-images-with-skopeo">9.3 Managing container images with Skopeo</h2>
+<p>Jobs like moving an image from a registry to a mirror, <strong>inspecting a remote image without pulling it</strong>, or signing images are handled by the third tool from the same community, <strong>Skopeo</strong> (https://github.com/containers/skopeo): an image and registry manipulation tool, <strong>not for running containers (Podman) or building images (Buildah)</strong>.</p>
+<h3 id="installing-skopeo">Installing Skopeo</h3>
+<p>A Go binary, packaged for many distributions:</p>
+<table>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fedora, RHEL 8/9, CentOS 8, CentOS Stream 8/9</td>
+<td><code>$ sudo dnf -y install skopeo</code></td>
+</tr>
+<tr>
+<td>Debian (Bullseye, Testing, Sid)</td>
+<td><code>$ sudo apt-get update</code> then <code>$ sudo apt-get -y install skopeo</code></td>
+</tr>
+<tr>
+<td>Ubuntu 20.10+</td>
+<td><code>$ sudo apt-get -y update</code> then <code>$ sudo apt-get -y install skopeo</code></td>
+</tr>
+<tr>
+<td>Arch Linux</td>
+<td><code>$ sudo pacman -S skopeo</code></td>
+</tr>
+<tr>
+<td>openSUSE</td>
+<td><code>$ sudo zypper install skopeo</code></td>
+</tr>
+<tr>
+<td>macOS</td>
+<td><code>$ brew install skopeo</code></td>
+</tr>
+<tr>
+<td>From source</td>
+<td>https://github.com/containers/skopeo/blob/main/install.md#building-from-source</td>
+</tr>
+<tr>
+<td>As a container</td>
+<td><code>$ podman run quay.io/skopeo/stable:latest &lt;command&gt; &lt;options&gt;</code></td>
+</tr>
+<tr>
+<td>Windows</td>
+<td>no build at the time of writing; install inside <strong>WSL</strong> according to its distribution</td>
+</tr>
+</tbody>
+</table>
+<p>Skopeo uses the same configuration files as Podman and Buildah. Verify with <code>skopeo -h</code>. <strong>Commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>copy</code></td>
+<td>copy an image across locations and transports (Docker Registry, directories, OCI, tarballs, OSTree, OCI archives)</td>
+</tr>
+<tr>
+<td><code>delete</code></td>
+<td>delete an image from a target location</td>
+</tr>
+<tr>
+<td><code>generate-sigstore-key</code></td>
+<td>generate a sigstore key pair</td>
+</tr>
+<tr>
+<td><code>inspect</code></td>
+<td>metadata, tags and configuration of an image in a location</td>
+</tr>
+<tr>
+<td><code>list-tags</code></td>
+<td>tags of a repository</td>
+</tr>
+<tr>
+<td><code>login</code>, <code>logout</code></td>
+<td>authenticate to or leave a registry</td>
+</tr>
+<tr>
+<td><code>manifest-digest</code></td>
+<td>manifest digest for a file</td>
+</tr>
+<tr>
+<td><code>standalone-sign</code>, <code>standalone-verify</code></td>
+<td>debugging tools to sign and verify an image using local files</td>
+</tr>
+<tr>
+<td><code>sync</code></td>
+<td>synchronise images across locations</td>
+</tr>
+</tbody>
+</table>
+<h3 id="copying-images-across-locations">Copying images across locations</h3>
+<p>With Podman or Docker you need <strong>two commands (pull then push)</strong> and the local store fills up. <code>skopeo copy [command options] SOURCE-IMAGE DESTINATION-IMAGE</code> does it in one. <strong>Transports:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Transport</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docker://docker-reference</code></td>
+<td>registries implementing Docker Registry HTTP API V2; uses <code>registries.conf</code>; reference <code>name[:tag|@digest]</code></td>
+</tr>
+<tr>
+<td><code>containers-storage:[[storage-specifier]]{image-id|docker-reference[@image-id]}</code></td>
+<td>local container storage; specifier <code>[[driver@]root[+run-root][:options]]</code></td>
+</tr>
+<tr>
+<td><code>dir:path</code></td>
+<td>local directory with manifests, layers (tarballs) and signatures</td>
+</tr>
+<tr>
+<td><code>docker-archive:path[:{docker-reference|@source-index}]</code></td>
+<td>archive from <code>docker save</code> or <code>podman save</code></td>
+</tr>
+<tr>
+<td><code>docker-daemon:docker-reference|algo:digest</code></td>
+<td>the Docker daemon's storage</td>
+</tr>
+<tr>
+<td><code>oci:path[:tag]</code></td>
+<td>local path in OCI layout</td>
+</tr>
+<tr>
+<td><code>oci-archive:path[:tag]</code></td>
+<td>OCI layout as a tarball</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://docker.io/library/nginx:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://private-registry.example.com/lab/nginx:latest
+
+<span class="c1"># with credentials (clear text, avoid)</span>
+$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--src-creds<span class="w"> </span>USERNAME:PASSWORD<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--dest-creds<span class="w"> </span>USERNAME:PASSWORD<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://registry1.example.com/mirror/nginx:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://registry2.example.com/lab/nginx:latest
+
+<span class="c1"># better: log in first</span>
+$<span class="w"> </span>skopeo<span class="w"> </span>login<span class="w"> </span>private-registry.example.com
+$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://docker.io/library/nginx:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://private-registry.example.com/lab/nginx:latest
+</code></pre>
+<ul>
+<li><strong>Auth files:</strong> tokens persist in an auth file; the default is <strong><code>${XDG_RUNTIME_DIR}/containers/auth.json</code></strong>; an earlier Docker setup used <code>${HOME}/.docker/config.json</code> (a JSON object with a token per registry). <strong>Once one tool logs in, all tools can use the token</strong> (<code>podman login</code> lets <code>skopeo copy</code> and <code>buildah push</code> access the registry):</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--authfile<span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/.docker/config.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://docker.io/library/nginx:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://private-registry.example.com/lab/nginx:latest
+</code></pre>
+<ul>
+<li><strong>TLS:</strong> for private registries without a known CA or without HTTPS, <code>--src-tls-verify</code> and <code>--dest-tls-verify</code> (Boolean) skip verification, fine only in a lab: <code>--dest-tls-verify false</code>.</li>
+<li><strong>Push a local image</strong> to a public registry (Skopeo as a push/pull tool in pipelines; each of Podman, Buildah and Skopeo doing the job it was designed for):</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>images
+&lt;namespace&gt;/python_httpd<span class="w">  </span>latest<span class="w">  </span>4067fa24786a<span class="w">  </span><span class="m">12</span><span class="w"> </span>days<span class="w"> </span>ago<span class="w">  </span><span class="m">318</span><span class="w"> </span>MB
+$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--authfile<span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/.docker/config.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>containers-storage:quay.io/&lt;namespace&gt;/python_httpd<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://quay.io/&lt;namespace&gt;/python_httpd:latest
+</code></pre>
+<ul>
+<li><strong>Pull to an OCI layout</strong> (expands the image tarball for easy inspection):</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--authfile<span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/.docker/config.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://docker.io/library/nginx:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>oci:/tmp/nginx
+$<span class="w"> </span>tree<span class="w"> </span>/tmp/nginx
+/tmp/nginx/
+├─<span class="w"> </span>blobs
+│<span class="w">  </span>└─<span class="w"> </span>sha256
+│<span class="w">     </span>├─<span class="w"> </span>21e0df283cd68384e5e8dff7e6be1774c86ea3110c1b1e932<span class="o">[</span>...<span class="o">]</span>
+│<span class="w">     </span>└─<span class="w"> </span>...<span class="w"> </span><span class="o">(</span>eight<span class="w"> </span>blobs:<span class="w"> </span>the<span class="w"> </span>manifest<span class="w"> </span><span class="k">in</span><span class="w"> </span>JSON<span class="w"> </span>and<span class="w"> </span>the<span class="w"> </span>layers<span class="w"> </span>as<span class="w"> </span>compressed<span class="w"> </span>tarballs<span class="o">)</span>
+├─<span class="w"> </span>index.json
+└─<span class="w"> </span>oci-layout
+</code></pre>
+<ul>
+<li><strong>Podman can run directly from that folder</strong>; the <code>oci:</code> prefix says the path is OCI compliant. Podman copies and extracts the blobs into its local store (rootless: <code>$HOME/.local/share/containers/storage</code>):</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>oci:/tmp/nginx
+</code></pre>
+<h3 id="inspecting-remote-images">Inspecting remote images</h3>
+<p><code>skopeo inspect docker://docker.io/library/nginx</code> verifies configuration, tags and metadata <strong>without pulling</strong>. The JSON has:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Name</code></td>
+<td>repository name</td>
+</tr>
+<tr>
+<td><code>Digest</code></td>
+<td>SHA256 digest</td>
+</tr>
+<tr>
+<td><code>RepoTags</code></td>
+<td>all tags in the repository (<strong>empty for local transports</strong> such as <code>containers-storage:</code> or <code>oci:</code>)</td>
+</tr>
+<tr>
+<td><code>Created</code></td>
+<td>creation date</td>
+</tr>
+<tr>
+<td><code>DockerVersion</code></td>
+<td>Docker version used; <strong>empty for images built with Podman, Buildah or others</strong></td>
+</tr>
+<tr>
+<td><code>Labels</code></td>
+<td>labels applied at build time</td>
+</tr>
+<tr>
+<td><code>Architecture</code></td>
+<td>target architecture (<code>amd64</code> for x86-64)</td>
+</tr>
+<tr>
+<td><code>Os</code></td>
+<td>target operating system</td>
+</tr>
+<tr>
+<td><code>Layers</code></td>
+<td>layers with SHA256 digests</td>
+</tr>
+<tr>
+<td><code>Env</code></td>
+<td>environment variables defined at build time</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>inspect<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--authfile<span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/.docker/config.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--tls-verify<span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>registry.example.com/library/test-image
+$<span class="w"> </span>skopeo<span class="w"> </span>inspect<span class="w"> </span>oci:/tmp/custom_image<span class="w">                       </span><span class="c1"># empty RepoTags</span>
+$<span class="w"> </span>skopeo<span class="w"> </span>inspect<span class="w"> </span>--no-tags<span class="w"> </span>docker://docker.io/library/nginx<span class="w">  </span><span class="c1"># skip tags</span>
+$<span class="w"> </span>skopeo<span class="w"> </span>list-tags<span class="w"> </span>docker://docker.io/library/nginx<span class="w">          </span><span class="c1"># only the tags</span>
+</code></pre>
+<h3 id="synchronising-registries-and-local-directories">Synchronising registries and local directories</h3>
+<p>For <strong>disconnected environments</strong>: <code>skopeo sync</code> synchronises a whole repository (all tags) or a single tag between source and destination.</p>
+<pre class="hl"><code>$<span class="w"> </span>mkdir<span class="w"> </span>/tmp/images
+$<span class="w"> </span>skopeo<span class="w"> </span>sync<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--src<span class="w"> </span>docker<span class="w"> </span>--dest<span class="w"> </span>dir<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>registry.example.com/lab/busybox<span class="w"> </span>/tmp/images
+</code></pre>
+<ul>
+<li><code>--src</code> and <code>--dest</code> set the transport. <strong>Source:</strong> <code>docker</code>, <code>dir</code>, <code>yaml</code>. <strong>Destination:</strong> <code>docker</code>, <code>dir</code>. The target directory must already exist.</li>
+<li>By default the repository content syncs <strong>without the full source path</strong>; add <strong><code>--scoped</code></strong> to keep the full path (registry and namespace), with a folder per tag, which avoids clashes between same-named repositories from different sources:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>sync<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--src<span class="w"> </span>docker<span class="w"> </span>--dest<span class="w"> </span>dir<span class="w"> </span>--scoped<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>registry.example.com/lab/busybox<span class="w"> </span>/tmp/images
+$<span class="w"> </span>ls<span class="w"> </span>-A1<span class="w"> </span>/tmp/images/docker.io/library/
+busybox:1
+busybox:1.21.0-ubuntu
+busybox:1.23
+busybox:1-glibc
+busybox:1-musl
+<span class="o">[</span>...omitted<span class="w"> </span>output...<span class="o">]</span>
+<span class="c1"># a single tag</span>
+$<span class="w"> </span>skopeo<span class="w"> </span>sync<span class="w"> </span>--src<span class="w"> </span>docker<span class="w"> </span>--dest<span class="w"> </span>dir<span class="w"> </span>docker.io/library/busybox:latest<span class="w"> </span>/tmp/images
+</code></pre>
+<ul>
+<li><strong>Registry to registry</strong> (both <code>docker</code>): useful in disconnected environments where systems reach only a local mirror registry; schedule it periodically.</li>
+</ul>
+<blockquote>
+<p>[!warning] Docker Hub rate limits
+Unauthenticated pulls hit strict limits (&quot;Too Many Requests&quot;). The book recommends <strong>images hosted on Quay</strong>, which has a more generous unauthenticated public path.</p>
+</blockquote>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>sync<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--src<span class="w"> </span>docker<span class="w"> </span>--dest<span class="w"> </span>docker<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--dest-tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>registry.access.redhat.com/ubi9<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>mirror-registry.example.com
+</code></pre>
+<p><strong>A YAML source</strong> mirrors many registries, repositories and images in one run, with <strong>regular expressions</strong> to select tags (<code>Chapter09/example_sync.yaml</code>; spacing restored where the page text had stray spaces):</p>
+<pre class="hl"><code><span class="nt">docker.io</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">tls-verify</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">alpine</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+<span class="w">    </span><span class="nt">nginx</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"latest"</span>
+<span class="w">  </span><span class="nt">images-by-tag-regex</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">httpd</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^2\.4\.[0-9]*-alpine$</span>
+<span class="nt">quay.io</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">tls-verify</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">fedora/fedora</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">latest</span>
+<span class="nt">registry.access.redhat.com</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">tls-verify</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">ubi9</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"9.4"</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"9.5"</span>
+</code></pre>
+<p>It pulls the whole <code>alpine</code> repository, <code>nginx:latest</code>, httpd tags matching Alpine-based <strong>2.4.z</strong>, <code>fedora/fedora:latest</code> from Quay, and <code>ubi9</code> 9.4 and 9.5 from Red Hat. Run with:</p>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>sync<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--src<span class="w"> </span>yaml<span class="w"> </span>--dest<span class="w"> </span>dir<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--scoped<span class="w"> </span>example_sync.yaml<span class="w"> </span>/tmp/images
+</code></pre>
+<p><strong>Larger use: mirror an OpenShift release</strong> for an air-gapped install. <code>openshift_sync.yaml</code> selects all 4.17.z x86_64 release images:</p>
+<pre class="hl"><code><span class="nt">quay.io</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">tls-verify</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">images-by-tag-regex</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">openshift-release-dev/ocp-release</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^4\.17\..*-x86_64$</span>
+</code></pre>
+<p>(The <strong>z stream</strong> is the patch number in x.y.z: bug fixes and minor improvements, backward compatible.)</p>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>sync<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--src<span class="w"> </span>yaml<span class="w"> </span>--dest<span class="w"> </span>docker<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--dest-tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--src-authfile<span class="w"> </span>pull_secret.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>openshift_sync.yaml<span class="w"> </span>mirror-registry.example.com:5000
+</code></pre>
+<p><code>--src-authfile</code> supplies a <strong>pull secret</strong> to authenticate on the Quay public registry.</p>
+<h3 id="deleting-images">Deleting images</h3>
+<ul>
+<li>A registry is a specialised object store with HTTP APIs; the <strong>Docker Registry v2 protocol</strong> [3] is widely adopted, so any HTTP client (e.g. <code>curl</code>) can drive it, and engines use HTTP client libraries underneath. It supports remote deletion:</li>
+</ul>
+<pre class="hl"><code>DELETE /v2/&lt;name&gt;/manifests/&lt;reference&gt;
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>curl<span class="w"> </span>-v<span class="w"> </span>--silent<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-H<span class="w"> </span><span class="s2">"Accept: application/vnd.docker.distribution.manifest.v2+json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-X<span class="w"> </span>DELETE<span class="w"> </span>http://127.0.0.1:5000/v2/&lt;name&gt;/manifests/sha256:&lt;image_tag_digest&gt;
+</code></pre>
+<p>(Authorisation tokens omitted for readability.) Podman and Docker do not expose remote delete; <strong>Skopeo does</strong>:</p>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>delete<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://mirror-registry.example.com:5000/foo:bar
+</code></pre>
+<p>It deletes the tag references immediately, <strong>but deletion must be enabled in the registry</strong> (section 9.4). Signing is covered in chapter 10.</p>
+<h2 id="9-4-running-a-local-container-registry">9.4 Running a local container registry</h2>
+<p>Enterprise registries add RBAC, vulnerability scanning, mirroring, geo-replication and high availability. A <strong>simple local registry</strong> suits development, training labs, and mirroring in disconnected environments.</p>
+<h3 id="running-a-containerised-registry">Running a containerised registry</h3>
+<p>The most used solution is the official <strong>Docker Registry 2.0</strong> image (<code>registry:2</code>). Define a destination directory for layers and metadata (volume at <code>/var/lib/registry</code>):</p>
+<pre class="hl"><code><span class="c1"># podman volume create registry_data</span>
+<span class="c1"># podman run -d \</span>
+<span class="w">    </span>--name<span class="w"> </span>local_registry<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-p<span class="w"> </span><span class="m">5000</span>:5000<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>registry_data:/var/lib/registry:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--restart<span class="o">=</span>always<span class="w"> </span>registry:2
+</code></pre>
+<ul>
+<li>Reachable on <strong>5000/tcp</strong> (default) at <code>localhost:5000</code>, or by IP or FQDN (e.g. <code>10.10.2.30:5000</code>, <code>registry.example.com:5000</code>). <strong>Open the port in local or corporate firewalls</strong> to expose it.</li>
+<li>Build a test image (<code>Chapter09/local_registry/minimal_httpd/Containerfile</code>):</li>
+</ul>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi8:latest</span>
+<span class="k">RUN</span><span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>httpd<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>dnf<span class="w"> </span>clean<span class="w"> </span>all<span class="w"> </span>-y
+<span class="k">COPY</span><span class="w"> </span>index.html<span class="w"> </span>/var/www/html
+<span class="k">RUN</span><span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>git<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>dnf<span class="w"> </span>clean<span class="w"> </span>all<span class="w"> </span>-y
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/usr/sbin/httpd"</span><span class="p">,</span><span class="w"> </span><span class="s2">"-DFOREGROUND"</span><span class="p">]</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>buildah<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>minimal_httpd<span class="w"> </span>.
+$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span>--dest-tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>containers-storage:localhost/minimal_httpd<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://localhost:5000/minimal_httpd
+</code></pre>
+<ul>
+<li>With Skopeo the image name need not be scoped with the registry name. <code>--dest-tls-verify=false</code> is needed because the default registry speaks <strong>plain HTTP</strong> (no TLS).</li>
+<li><strong>Limitation:</strong> deleting fails:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>delete<span class="w"> </span>--tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span>docker://localhost:5000/minimal_httpd
+FATA<span class="o">[</span><span class="m">0000</span><span class="o">]</span><span class="w"> </span>Failed<span class="w"> </span>to<span class="w"> </span>delete<span class="w"> </span>/v2/minimal_httpd/manifests/sha256:f8c0c374...:<span class="w"> </span><span class="o">{</span><span class="s2">"errors"</span>:<span class="o">[{</span><span class="s2">"code"</span>:<span class="s2">"UNSUPPORTED"</span>,<span class="s2">"message"</span>:<span class="s2">"The operation is unsupported."</span><span class="o">}]}</span>
+<span class="o">(</span><span class="m">405</span><span class="w"> </span>Method<span class="w"> </span>Not<span class="w"> </span>Allowed<span class="o">)</span>
+</code></pre>
+<h3 id="customising-the-registry-configuration">Customising the registry configuration</h3>
+<p>The default <code>/etc/docker/registry/config.yml</code> is <strong>extremely basic: no authentication, no deletion, no TLS</strong> (full options: https://docs.docker.com/registry/configuration/):</p>
+<pre class="hl"><code><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.1</span>
+<span class="nt">log</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">fields</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">service</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">registry</span>
+<span class="nt">storage</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">cache</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">blobdescriptor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">inmemory</span>
+<span class="w">  </span><span class="nt">filesystem</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">rootdirectory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/lib/registry</span>
+<span class="nt">http</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">addr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">:5000</span>
+<span class="w">  </span><span class="nt">headers</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">X-Content-Type-Options</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">nosniff</span><span class="p p-Indicator">]</span>
+<span class="nt">health</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">storagedriver</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10s</span>
+<span class="w">    </span><span class="nt">threshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+</code></pre>
+<p>The custom version (<code>Chapter09/local_registry/customizations/config.yml</code>) adds <strong>image deletion</strong> (disabled by default), <strong>basic authentication with htpasswd</strong> (fine for development and labs; <strong>token-based auth with an external issuer</strong> fits production) and <strong>HTTPS with self-signed certificates</strong>:</p>
+<pre class="hl"><code><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.1</span>
+<span class="nt">log</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">fields</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">service</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">registry</span>
+<span class="nt">storage</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">cache</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">blobdescriptor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">inmemory</span>
+<span class="w">  </span><span class="nt">filesystem</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">rootdirectory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/lib/registry</span>
+<span class="w">  </span><span class="nt">delete</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="nt">auth</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">htpasswd</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">realm</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">basic-realm</span>
+<span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/lib/htpasswd</span>
+<span class="nt">http</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">addr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">:5000</span>
+<span class="w">  </span><span class="nt">headers</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">X-Content-Type-Options</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">nosniff</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">certificate</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/pki/certs/tls.crt</span>
+<span class="w">    </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/pki/certs/tls.key</span>
+<span class="nt">health</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">storagedriver</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10s</span>
+<span class="w">    </span><span class="nt">threshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+</code></pre>
+<p><strong>Create the htpasswd file</strong> (<code>-c</code> create, <code>-B</code> bcrypt [2], <code>-b</code> batch/non-interactive):</p>
+<pre class="hl"><code>htpasswd<span class="w"> </span>-cBb<span class="w"> </span>./htpasswd<span class="w"> </span>admin<span class="w"> </span>p0dman4Dev0ps#
+</code></pre>
+<p><strong>Create a self-signed certificate</strong> (CN <code>localhost</code>; for a registry exposed externally CN and <code>subjectAltName</code> must match the host FQDN and alternates):</p>
+<pre class="hl"><code>$<span class="w"> </span>mkdir<span class="w"> </span>certs
+$<span class="w"> </span>openssl<span class="w"> </span>req<span class="w"> </span>-newkey<span class="w"> </span>rsa:4096<span class="w"> </span>-x509<span class="w"> </span>-sha256<span class="w"> </span>-nodes<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-days<span class="w"> </span><span class="m">365</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-out<span class="w"> </span>certs/tls.crt<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-keyout<span class="w"> </span>certs/tls.key<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-subj<span class="w"> </span><span class="s1">'/CN=localhost'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-addext<span class="w"> </span><span class="s2">"subjectAltName=DNS:localhost"</span>
+$<span class="w"> </span>openssl<span class="w"> </span>x509<span class="w"> </span>-in<span class="w"> </span>certs/tls.crt<span class="w"> </span>-text<span class="w"> </span>-noout<span class="w">      </span><span class="c1"># human-readable dump</span>
+</code></pre>
+<ul>
+<li>4096-bit RSA key, valid for <strong>1 year</strong>. <strong>Avoid self-signed certificates in production;</strong> <strong>Let's Encrypt</strong> (https://letsencrypt.org/) offers a free CA.</li>
+</ul>
+<p>Stop the previous instance and run the custom registry with bind mounts for the htpasswd file, config, store and certificates:</p>
+<pre class="hl"><code><span class="c1"># podman stop local_registry &amp;&amp; podman rm local_registry</span>
+<span class="c1"># podman volume create registry_data</span>
+<span class="c1"># podman run -d --name local_registry \</span>
+<span class="w">    </span>-p<span class="w"> </span><span class="m">5000</span>:5000<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="nv">$PWD</span>/htpasswd:/var/lib/htpasswd:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="nv">$PWD</span>/config.yml:/etc/docker/registry/config.yml:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>registry_data:/var/lib/registry:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="nv">$PWD</span>/certs:/etc/pki/certs:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--restart<span class="o">=</span>always<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>registry:2
+$<span class="w"> </span>skopeo<span class="w"> </span>login<span class="w"> </span>-u<span class="w"> </span>admin<span class="w"> </span>-p<span class="w"> </span>p0dman4Dev0ps#<span class="w"> </span>--tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span>localhost:5000
+Login<span class="w"> </span>Succeeded!
+</code></pre>
+<p><code>--tls-verify=false</code> avoids the <code>x509: certificate signed by unknown authority</code> error with a self-signed certificate. <strong>Now the delete succeeds</strong> because it is enabled in the config.</p>
+<h3 id="using-a-local-registry-to-sync-repositories">Using a local registry to sync repositories</h3>
+<p>Mirroring to a local registry helps disconnected environments and <strong>keeps an async copy so you can still pull during public outages</strong>:</p>
+<pre class="hl"><code>$<span class="w"> </span>skopeo<span class="w"> </span>sync<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--src<span class="w"> </span>yaml<span class="w"> </span>--dest<span class="w"> </span>docker<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--dest-tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>kube_sync.yaml<span class="w"> </span>localhost:5000
+</code></pre>
+<p><code>kube_sync.yaml</code> lists the images of a Kubernetes control plane for a release, with regexes (<code>Chapter09/kube_sync.yaml</code>; the book's printed regexes have stray spaces, restored here as best read):</p>
+<pre class="hl"><code><span class="nt">k8s.gcr.io</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">tls-verify</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">images-by-tag-regex</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">kube-apiserver</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^v1\.32\..*</span>
+<span class="w">    </span><span class="nt">kube-controller-manager</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^v1\.32\..*</span>
+<span class="w">    </span><span class="nt">kube-proxy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^v1\.32\..*</span>
+<span class="w">    </span><span class="nt">kube-scheduler</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^v1\.32\..*</span>
+<span class="w">    </span><span class="nt">coredns/coredns</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^v1\.9\..*</span>
+<span class="w">    </span><span class="nt">etcd</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3\.5\.[0-9]*-[0-9]*</span>
+</code></pre>
+<p>Syncing mirrors many layers, so <strong>monitor the registry storage</strong> (<code>/var/lib/registry</code>) to avoid filling the filesystem.</p>
+<h3 id="registry-garbage-collection">Registry garbage collection</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-09-registry-garbage-collection.svg" alt="Deleting removes manifests; garbage collection reclaims blobs" loading="lazy" /></p>
+<ul>
+<li>Deleting an image removes only the <strong>manifests</strong>; the <strong>blobs</strong> (layers or further manifests) stay on disk. Unreferenced blobs become eligible for <strong>garbage collection</strong>, run <strong>manually or scheduled</strong> with <code>registry garbage-collect</code> inside the container (not automatic). <code>--dry-run</code> only lists eligible blobs:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># podman exec -it local_registry \</span>
+<span class="w">    </span>registry<span class="w"> </span>garbage-collect<span class="w"> </span>--dry-run<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/etc/docker/registry/config.yml
+<span class="c1"># podman exec -it local_registry \</span>
+<span class="w">    </span>registry<span class="w"> </span>garbage-collect<span class="w"> </span>/etc/docker/registry/config.yml
+</code></pre>
+<ul>
+<li><strong>Caveat:</strong> an unreferenced blob might be reused by a future image; if deleted it may need re-uploading.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<p>Registries (public cloud vs private on-premises), Skopeo to copy, inspect, sync and delete, and a local Docker Registry v2 with authentication, deletion and HTTPS plus garbage collection. This completes the basic container-management tasks; next is securing containers.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+OCI Distribution Specification · repository name regex · blob vs manifest push/pull order · Docker Hub rate limits · Quay.io robot accounts · Skopeo transports (<code>docker://</code>, <code>containers-storage:</code>, <code>dir:</code>, <code>oci:</code>, <code>oci-archive:</code>) · <code>auth.json</code> · <code>--authfile</code> · <code>--tls-verify</code> · <code>skopeo sync</code> (<code>--scoped</code>, YAML, regex) · <code>registry:2</code> · htpasswd · <code>delete.enabled</code> · <code>registry garbage-collect</code>.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 9; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>[1] OCI Distribution Specification: https://github.com/opencontainers/distribution-spec/blob/main/spec.md</li>
+<li>[2] Bcrypt: https://en.wikipedia.org/wiki/Bcrypt</li>
+<li>[3] Docker Registry v2 API specification: https://docs.docker.com/registry/spec/api/</li>
+<li>Skopeo: https://github.com/containers/skopeo</li>
+<li>Registry configuration: https://docs.docker.com/registry/configuration/</li>
+<li>Let's Encrypt: https://letsencrypt.org/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-08-choosing-the-container-base-image/">Podman for DevOps 8: Choosing the container base image</a> · <a href="/book-digest/podman-for-devops/pfd-06-meet-buildah-building-containers-from-scratch/">Podman for DevOps 6: Meet Buildah, building containers from scratch</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-08-choosing-the-container-base-image/">&larr; Podman for DevOps 8: Choosing the container base image</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-10-securing-containers/">Podman for DevOps 10: Securing containers &rarr;</a></nav></main></body></html>

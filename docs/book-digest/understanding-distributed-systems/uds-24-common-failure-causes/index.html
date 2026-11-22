@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 24: Part IV intro and common failure causes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-24-part-iv-intro-and-common-failure-causes">Understanding Distributed Systems 24: Part IV intro and common failure causes</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), Part IV introduction and ch. 24. Previous: <a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-25-and-26-redundancy-and-fault-isolation/">Understanding Distributed Systems 25-26: Redundancy and fault isolation</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>More moving parts (the price of scalability) means more failures: &quot;anything that can go wrong will go wrong&quot; (Murphy's law). Higher nines mean you must <strong>detect, react and repair faster</strong>.</li>
+<li>Real causes are mostly <strong>mundane</strong>: bad error handling, config changes, SPOFs (humans, DNS, expiring certs), slow network calls, resource leaks, load surges, and <strong>cascading, self-sustaining (metastable) failures</strong>.</li>
+<li>Do not fix everything: rank faults by <strong>probability x impact</strong> (risk score), then reduce probability or impact.</li>
+</ul>
+</div></div>
+<h2 id="part-iv-resiliency-introduction">Part IV: Resiliency (introduction)</h2>
+<blockquote>
+<p>&quot;Anything that can go wrong will go wrong.&quot; (Murphy's law)</p>
+</blockquote>
+<ul>
+<li>Part III's patterns (decomposition, partitioning, replication) all <strong>add moving parts</strong>
+<ul>
+<li>each can fail, so overall failure chance rises: power outages, hardware faults, crashes, memory leaks.</li>
+</ul>
+</li>
+<li><strong>Nines in time:</strong>
+<ul>
+<li>two nines allows about <strong>15 minutes of downtime a day</strong></li>
+<li>three nines about <strong>43 minutes a month</strong>. Too little for manual action, so systems must detect and repair automatically.</li>
+</ul>
+</li>
+<li>Roadmap:
+<ul>
+<li>ch. 24 failure causes</li>
+<li>ch. 25 <strong>redundancy</strong> (only works if failures are <strong>not correlated</strong>)</li>
+<li>ch. 26 <strong>fault isolation</strong> (shuffle sharding, cellular architecture)</li>
+<li>ch. 27 <strong>downstream</strong> resiliency (timeouts, retries, circuit breaker)</li>
+<li>ch. 28 <strong>upstream</strong> resiliency (load shedding, rate limiting).</li>
+</ul>
+</li>
+</ul>
+<h2 id="terms">Terms</h2>
+<ul>
+<li><strong>Failure:</strong>
+<ul>
+<li>the system no longer provides a service that meets its specification (https://resources.sei.cmu.edu/asset_files/TechnicalReport/1992_005_001_16112.pdf)</li>
+<li>A failure is caused by a <strong>fault</strong>: failure of an internal component or an external dependency</li>
+<li>Some faults are tolerated invisibly; others become failures.</li>
+</ul>
+</li>
+</ul>
+<h2 id="24-1-hardware-faults">24.1 Hardware faults</h2>
+<p>Any physical part can fail: HDDs, memory, power supplies, motherboards, SSDs, NICs, CPUs; failures can <strong>corrupt data</strong>; whole <strong>data centres</strong> fail from power cuts or disasters. Largely addressable with <strong>redundancy</strong>. But hardware is <strong>not</strong> the main cause of distributed-app failures; mundane reasons are.</p>
+<h2 id="24-2-incorrect-error-handling">24.2 Incorrect error handling</h2>
+<p>A 2014 study of user-reported failures in five popular distributed data stores found that <strong>most catastrophic failures came from incorrect handling of non-fatal errors</strong> (&quot;Simple Testing Can Prevent Most Critical Failures&quot;: https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-yuan.pdf). Simple tests would have caught most:</p>
+<ul>
+<li>handlers that <strong>ignored errors</strong> entirely;</li>
+<li>handlers catching an <strong>overly generic exception</strong> (Java's <code>Exception</code>) and <strong>aborting the whole process</strong> for no reason;</li>
+<li><strong>half-implemented</strong> handlers with <code>FIXME</code> and <code>TODO</code> comments.
+Error handling is an afterthought (Go stresses it heavily for that reason). Testing: chapter 29.</li>
+</ul>
+<h2 id="24-3-configuration-changes">24.3 Configuration changes</h2>
+<p>A <strong>leading root cause of catastrophic failures</strong> (post-mortems: https://github.com/danluu/post-mortems#config-errors). Not only misconfigurations: <strong>valid changes enabling rarely-used features</strong> that no longer work (or never did).</p>
+<ul>
+<li>Dangerous because effects can be <strong>delayed</strong>: a value read only when needed may bite <strong>hours or days</strong> later, escaping early detection (https://www.usenix.org/system/files/conference/osdi16/osdi16-xu.pdf).</li>
+<li>So <strong>version-control, test and release config like code</strong>, and <strong>validate preventively at change time</strong>. Safe release practices: chapter 30.</li>
+</ul>
+<h2 id="24-4-single-points-of-failure-spofs">24.4 Single points of failure (SPOFs)</h2>
+<p>A component whose failure brings down the whole system. A system can have several.</p>
+<ul>
+<li><strong>Humans</strong> are great SPOFs: manual steps in a specific order without mistakes will eventually go wrong. <strong>Automate</strong> wherever possible.</li>
+<li><strong>DNS</strong>
+<ul>
+<li>(&quot;it's always DNS&quot;: https://twitter.com/ahidalgosre/status/1315345619926609920): if clients cannot resolve the name they cannot connect</li>
+<li>Causes range from <strong>expired domain registrations</strong> (Foursquare: https://techcrunch.com/2010/03/27/foursquare-offline) to <strong>whole TLDs going down</strong> (https://hackernoon.com/stop-using-io-domain-names-for-production-traffic-b6aa17eeac20).</li>
+</ul>
+</li>
+<li><strong>TLS certificate:</strong> if it expires clients cannot open a secure connection (Microsoft Teams, after Microsoft forgot to renew one: https://www.theverge.com/2020/2/3/21120248/microsoft-teams-down-outage-certificate-issue-status).</li>
+<li><strong>Find SPOFs at design time:</strong>
+<ul>
+<li>examine every component and ask what happens if it fails</li>
+<li>Some can be <strong>architected away</strong> with redundancy; otherwise <strong>reduce the blast radius</strong> (the damage when it fails)</li>
+<li>Many later patterns exist to shrink blast radius.</li>
+</ul>
+</li>
+</ul>
+<h2 id="24-5-network-faults">24.5 Network faults</h2>
+<p>A client waiting on a server can <strong>keep waiting</strong> or <strong>fail with a timeout</strong> (chapter 7). Reasons for no prompt response: slow or crashed server, packet loss causing retransmissions.</p>
+<ul>
+<li><strong>Slow network calls are the silent killers of distributed systems</strong>
+<ul>
+<li>(fallacies of distributed computing: https://en.wikipedia.org/wiki/Fallacies_of_distributed_computing)</li>
+<li>The client may wait long, or forever, causing hard-to-debug degradation.</li>
+</ul>
+</li>
+<li>This is a <strong>gray failure</strong>: so subtle it cannot be detected quickly or accurately, and it can bring a whole system to its knees (&quot;Gray Failure: The Achilles' Heel of Cloud-Scale Systems&quot;: https://www.microsoft.com/en-us/research/wp-content/uploads/2017/06/paper-1.pdf).</li>
+</ul>
+<h2 id="24-6-resource-leaks">24.6 Resource leaks</h2>
+<p>To an observer a <strong>very slow process</strong> is no different from a dead one. Leaks are a top cause of slowness.</p>
+<ul>
+<li><strong>Memory:</strong>
+<ul>
+<li>steady growth</li>
+<li><strong>even garbage-collected languages leak</strong> (a kept reference prevents collection). As memory runs low the OS <strong>swaps aggressively</strong> and the GC runs often, burning CPU</li>
+<li>eventually allocation fails and most operations fail.</li>
+</ul>
+</li>
+<li><strong>Thread pools:</strong> a thread making a <strong>synchronous blocking HTTP call with no timeout</strong> that never returns is never given back; the pool (bounded) runs dry.</li>
+<li><strong>Async does not save you:</strong> modern HTTP clients use <strong>socket pools</strong> (chapter 2); a request without a timeout never returns its connection, so the pool empties.</li>
+<li>Libraries you use hit the same limits on the same memory, threads and sockets.</li>
+</ul>
+<h2 id="24-7-load-pressure">24.7 Load pressure</h2>
+<p>Every system has a <strong>capacity</strong>. <strong>Organic growth</strong> lets you scale out; a <strong>sudden flood</strong> does not. Load shifts by:</p>
+<ul>
+<li><strong>seasonality</strong> (e.g. users in different countries by hour);</li>
+<li><strong>expensive requests</strong> that abuse the system (scrapers slurping data at super-human speed);</li>
+<li><strong>malicious</strong> requests (DDoS to saturate bandwidth).
+Some surges are met by <strong>autoscaling</strong>; others require <strong>rejecting requests</strong> to shield the system (chapter 28).</li>
+</ul>
+<h2 id="24-8-cascading-failures">24.8 Cascading failures</h2>
+<p>Faults can <strong>spread virally</strong>: with interdependent components, one failure raises the failure probability of others. Worked example: two database replicas A and B behind a load balancer, each at ~50 transactions per second.</p>
+<ol>
+<li>B becomes unavailable (network fault); the balancer removes it.</li>
+<li>A now carries <strong>double</strong> the load and struggles; clients see <strong>timeouts and retry</strong>, adding even more load.</li>
+<li>A times out on most requests; the balancer <strong>removes A too</strong>. The original fault in B cascaded into A.</li>
+<li>B comes back and is the only replica in the pool: it is <strong>flooded</strong>, overloads, and is removed again.</li>
+<li>The loop continues <strong>after the network fault is gone</strong>: a feedback loop moving load from replica to replica. Such failures are <strong>metastable</strong> (https://sigops.org/s/conferences/hotos/2021/papers/hotos21-s11-bronson.pdf).</li>
+</ol>
+<ul>
+<li>Breaking it usually needs a <strong>big corrective action</strong> (e.g. temporarily block traffic to the replicas). They are very hard to mitigate once started
+<ul>
+<li><strong>prevention</strong> means stopping faults spreading between components.</li>
+</ul>
+</li>
+</ul>
+<h2 id="24-9-managing-risk">24.9 Managing risk</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-24-risk-ranking.svg" alt="Rank faults by probability times impact" loading="lazy" />
+Accept that faults are inevitable and be ready to <strong>detect, react to and repair</strong> them. But not every possible fault needs action: weigh <strong>probability</strong> it happens and <strong>impact</strong> on users; <strong>probability x impact = risk score</strong> (risk matrix: https://en.wikipedia.org/wiki/Risk_matrix).</p>
+<p>Very likely and high impact: tackle head on. Low likelihood and low impact: can wait. Once chosen, <strong>reduce the probability and/or the impact</strong>: the next chapters.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+fault vs failure · SPOF · blast radius · gray failure · resource leak · cascading failure · metastable failure · risk score · risk matrix.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), Part IV intro and ch. 24. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging</a> · <a href="/book-digest/understanding-distributed-systems/uds-25-and-26-redundancy-and-fault-isolation/">Understanding Distributed Systems 25-26: Redundancy and fault isolation</a> · <a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency</a> · <a href="/book-digest/understanding-distributed-systems/uds-28-upstream-resiliency/">Understanding Distributed Systems 28: Upstream resiliency (and Part V intro)</a> · <a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">&larr; Understanding Distributed Systems 23: Messaging</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-25-and-26-redundancy-and-fault-isolation/">Understanding Distributed Systems 25-26: Redundancy and fault isolation &rarr;</a></nav></main></body></html>

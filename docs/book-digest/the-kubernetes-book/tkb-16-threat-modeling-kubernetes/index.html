@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 16: Threat Modeling Kubernetes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-16-threat-modeling-kubernetes">The Kubernetes Book 16: Threat Modeling Kubernetes</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 16. Previous: <a href="/book-digest/the-kubernetes-book/tkb-15-the-kubernetes-api/">The Kubernetes Book 15: The Kubernetes API</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-17-real-world-kubernetes-security/">The Kubernetes Book 17: Real-World Kubernetes Security</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Threat modelling</strong> identifies vulnerabilities so you can prevent and mitigate them; the chapter applies <strong>STRIDE</strong>: Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege.</li>
+<li>No model covers every threat, one threat often leads to another, and one threat has several mitigations: <strong>defence in depth</strong> is the key tactic.</li>
+<li>Spoofing: protect the <strong>CA</strong> behind mTLS; set <code>automountServiceAccountToken: false</code> where a Pod does not need the API server.</li>
+<li>Information disclosure: <strong>encrypt Secrets</strong> with <strong>KMS v2</strong> envelope encryption so a node snapshot is not enough to read them.</li>
+<li>Elevation of privilege: run non-root, drop <strong>capabilities</strong>, filter <strong>syscalls</strong> (seccomp), use <strong>MAC</strong> (AppArmor, SELinux), block privilege escalation, and enforce with <strong>Pod Security Admission</strong>.</li>
+</ul>
+</div></div>
+<h2 id="16-1-threat-modeling">16.1 Threat modeling</h2>
+<ul>
+<li><strong>Threat modelling</strong> is the process of identifying vulnerabilities so you can put measures in place to prevent and mitigate them.</li>
+<li><strong>STRIDE</strong> defines six threat categories:
+<ul>
+<li>Spoofing</li>
+<li>Tampering</li>
+<li>Repudiation</li>
+<li>Information disclosure</li>
+<li>Denial of service</li>
+<li>Elevation of privilege</li>
+</ul>
+</li>
+<li>STRIDE is structured but &quot;no model guarantees to cover all threats&quot;. For each category the chapter gives a description and some Kubernetes-specific angles
+<ul>
+<li>the aim is ideas, not completeness.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-16-stride-categories.svg" alt="Six STRIDE categories with the main Kubernetes controls for each" loading="lazy" /></p>
+<h2 id="16-2-spoofing">16.2 Spoofing</h2>
+<p><strong>Spoofing</strong> is pretending to be somebody else to gain extra privileges.</p>
+<h3 id="securing-communications-with-the-api-server">Securing communications with the API server</h3>
+<ul>
+<li>Kubernetes has many components (API server, controller manager, scheduler, cluster store, kubelet, container runtime), each with its own privileges
+<ul>
+<li>Even with least privilege, <strong>spoofing any of them causes problems</strong>.</li>
+</ul>
+</li>
+<li>All components authenticate with <strong>cryptographically signed certificates (mTLS)</strong>, and Kubernetes rotates certificates automatically. Caveats:
+<ul>
+<li>A typical install auto-generates a <strong>self-signed CA</strong> that issues all component certificates: better than nothing, <strong>not enough for production alone</strong>.</li>
+<li><strong>mTLS is only as secure as the CA</strong>: compromising the CA can defeat the whole mTLS layer, so keep it secure.</li>
+</ul>
+</li>
+<li>Good practice: certificates from the internal CA are <strong>used and trusted only inside the cluster</strong>.
+<ul>
+<li>Approve certificate signing requests carefully.</li>
+<li>Never add the Kubernetes CA as a trusted CA for systems outside the cluster.</li>
+</ul>
+</li>
+<li>Use <strong>two trusted key pairs</strong> for the API server:
+<ul>
+<li>one authenticating <strong>internal</strong> systems (issued by the cluster's self-signed CA)</li>
+<li>one authenticating <strong>external</strong> systems (trust one or more third-party CAs)</li>
+</ul>
+</li>
+</ul>
+<h3 id="securing-pod-communications">Securing Pod communications</h3>
+<ul>
+<li>A Pod can spoof another Pod. Every Pod has a <strong>ServiceAccount</strong> giving it an identity, via a <strong>service account token mounted automatically as a Secret</strong>.</li>
+<li>That token allows access to the API server, and most Pods do not need that, so set <code>automountServiceAccountToken: false</code> for those that do not:</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">service-account-example-pod</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">serviceAccountName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">some-service-account</span>
+<span class="w">  </span><span class="nt">automountServiceAccountToken</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">     </span><span class="c1"># this line</span>
+<span class="c1"># &lt;Snip&gt;</span>
+</code></pre>
+<p>If a Pod does need the API server, consider the non-default <code>expirationSeconds</code> and <code>audience</code> settings. This example (inspired by the official docs) expires the token after one hour and restricts it to the <code>vault</code> audience, in a projected volume:</p>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/run/secrets/tokens</span>
+<span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vault-token</span>
+<span class="w">  </span><span class="nt">serviceAccountName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-pod</span>
+<span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vault-token</span>
+<span class="w">    </span><span class="nt">projected</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">sources</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">serviceAccountToken</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vault-token</span>
+<span class="w">          </span><span class="nt">expirationSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3600</span><span class="w">    </span><span class="c1"># this line</span>
+<span class="w">          </span><span class="nt">audience</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vault</span><span class="w">            </span><span class="c1"># and this one</span>
+</code></pre>
+<h2 id="16-3-tampering">16.3 Tampering</h2>
+<p><strong>Tampering</strong> is changing something maliciously to cause:</p>
+<ul>
+<li><strong>Denial of service</strong>: make the resource unusable.</li>
+<li><strong>Elevation of privilege</strong>: gain extra privileges.</li>
+</ul>
+<p>It is hard to avoid, so a common countermeasure is to <strong>make it obvious</strong> (the book's analogy: tamper-proof seals on medication).</p>
+<h3 id="tampering-with-kubernetes-components">Tampering with Kubernetes components</h3>
+<p>Targets:</p>
+<ul>
+<li>etcd</li>
+<li>configuration files for the API server, controller manager, scheduler, etcd and kubelet</li>
+<li>container runtime binaries</li>
+<li>container images</li>
+<li>Kubernetes binaries</li>
+</ul>
+<p>Tampering happens <strong>in transit</strong> (over the network) or <strong>at rest</strong> (in memory or on disk).</p>
+<ul>
+<li><strong>In transit:</strong> TLS has built-in integrity guarantees that warn you of tampering.</li>
+<li><strong>At rest:</strong> recommendations (not exhaustive):
+<ul>
+<li>restrict access to servers running Kubernetes components, especially the control plane</li>
+<li>restrict access to repositories storing Kubernetes configuration files</li>
+<li>do remote bootstrapping only over SSH (and protect the keys)</li>
+<li>always run <strong>SHA-2 checksums</strong> on downloads</li>
+<li>restrict access to your image registry and its repositories</li>
+</ul>
+</li>
+<li>Also configure <strong>auditing and alerting</strong> on important binaries and config files
+<ul>
+<li>Example using the Linux audit daemon to watch the <code>docker</code> binary and attempts to change its file attributes:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>auditctl<span class="w"> </span>-w<span class="w"> </span>/usr/bin/docker<span class="w"> </span>-p<span class="w"> </span>wxa<span class="w"> </span>-k<span class="w"> </span>audit-docker
+</code></pre>
+<p>(The chapter refers back to this example under repudiation.)</p>
+<h3 id="tampering-with-applications">Tampering with applications</h3>
+<ul>
+<li>Make live Pod filesystems <strong>read-only</strong> in the <code>securityContext</code>: <code>readOnlyRootFilesystem: true</code> for the root filesystem, and <code>allowedHostPaths</code> for others
+<ul>
+<li>Here anything mounted below <code>/test</code> is read-only:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">readonly-test</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">securityContext</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">readOnlyRootFilesystem</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">     </span><span class="c1"># read-only root filesystem</span>
+<span class="w">    </span><span class="nt">allowedHostPaths</span><span class="p">:</span><span class="w">                </span><span class="c1"># make anything below</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">pathPrefix</span><span class="p">:</span><span class="w"> </span><span class="s">"/test"</span><span class="w">            </span><span class="c1"># this mount point</span>
+<span class="w">      </span><span class="nt">readOnly</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                 </span><span class="c1"># read-only</span>
+<span class="c1"># &lt;Snip&gt;</span>
+</code></pre>
+<h2 id="16-4-repudiation">16.4 Repudiation</h2>
+<ul>
+<li><strong>Repudiation</strong> creates doubt about something; <strong>non-repudiation</strong> provides proof. In security: proving certain individuals did certain things.</li>
+<li>Non-repudiation covers: what, when, who, where, <strong>why</strong> and <strong>how</strong> happened. The last two are hardest and usually need <strong>correlating several events over time</strong>.</li>
+<li><strong>API server audit events</strong> help (auditing may need enabling). An example event:</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Event"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"apiVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"audit.k8s.io/v1"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"metadata"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"creationTimestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2022-11-11T10:10:00Z"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"level"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Metadata"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2022-11-11T10:10:00Z"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"auditID"</span><span class="p">:</span><span class="w"> </span><span class="s2">"7e0cbccf-8d8a-4f5f-aefb-60b8af2d2ad5"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"stage"</span><span class="p">:</span><span class="w"> </span><span class="s2">"RequestReceived"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"requestURI"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/api/v1/namespaces/default/persistentvolumeclaims"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"verb"</span><span class="p">:</span><span class="w"> </span><span class="s2">"list"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"user"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"username"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fname.lname@example.com"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"groups"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="s2">"system:authenticated"</span><span class="w"> </span><span class="p">]</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"sourceIPs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="s2">"123.45.67.123"</span><span class="w"> </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"objectRef"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"persistentvolumeclaims"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"default"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"apiVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"v1"</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"requestReceivedTimestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2022-11-11T10:10:00.123456Z"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"stageTimestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2022-11-11T10:10:00.123456Z"</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Audit more than the API server: <strong>container runtimes, kubelets, applications</strong> and non-Kubernetes infrastructure such as network firewalls.</li>
+<li>With several sources you need a <strong>central, secure log store</strong>, commonly fed by an agent on every node deployed as a <strong>DaemonSet</strong>
+<ul>
+<li>If the store is not secure, the logs can themselves be repudiated.</li>
+</ul>
+</li>
+<li>To prove tampering with binaries and config files, use an audit daemon watching writes on control plane and worker nodes
+<ul>
+<li>With the earlier <code>docker</code> rule, <code>docker run</code> generates an event like this (as printed, trimmed):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>type=SYSCALL msg=audit(1234567890.123:12345): arch=abc123 syscall=59 success=yes \
+exit=0 a0=12345678abca1=0 a2=abc12345678 a3=a items=1 ppid=1234 pid=12345 auid=0 \
+uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=pts0 ses=1 comm="docker" \
+exe="/usr/bin/docker" subj=system_u:object_r:container_runtime_exec_t:s0 \
+key="audit-docker" type=CWD msg=audit(1234567890.123:12345): cwd="/home/firstname"\
+type=PATH msg=audit(1234567890.123:12345): item=0 name="/usr/bin/docker"\
+inode=123456 dev=fd:00 mode=0100600 ouid=0 ogid=0 rdev=00:00...
+</code></pre>
+<p>Combined and correlated with Kubernetes audit logs, these give &quot;a comprehensive and trustworthy picture that cannot be repudiated&quot;.</p>
+<h2 id="16-5-information-disclosure">16.5 Information disclosure</h2>
+<p><strong>Information disclosure</strong> is leaking sensitive data (hacked data stores, APIs that expose too much).</p>
+<h3 id="protecting-cluster-data">Protecting cluster data</h3>
+<ul>
+<li>The whole cluster configuration lives in the <strong>cluster store (etcd)</strong>: network and storage config, passwords, the cluster CA. It is a prime target.</li>
+<li>At minimum <strong>limit and audit access to nodes hosting the cluster store</strong>; node access can bypass some security layers.</li>
+<li><strong>Secret encryption</strong> arrived in Kubernetes 1.7 but is <strong>not on by default</strong>, and the <strong>data encryption key (DEK) sits on the same node as the Secret</strong>, so node access bypasses it (worst on etcd nodes).</li>
+<li><strong>KMS v1</strong> (beta in 1.11) stored <strong>key encryption keys (KEK)</strong> outside the cluster. KEKs encrypt and decrypt DEKs; this is <strong>envelope encryption</strong>.</li>
+<li><strong>KMS v2</strong> (redesigned, <strong>GA since 1.29</strong>) improves on it:
+<ul>
+<li>a <strong>new DEK for every write</strong>, encrypted at rest with the KEK</li>
+<li>cache size limited only by control plane node resources, so earlier DEKs are cached in memory for speed</li>
+<li><strong>zero-downtime re-encryption</strong> after key rotation, with no API server downtime or Pod restarts</li>
+</ul>
+</li>
+<li>KMS plugins run on <strong>control plane nodes</strong> and talk to the API server over <strong>Unix sockets</strong>, then to an external KMS provider that encrypts and decrypts DEKs.</li>
+<li>Result: attackers must compromise <strong>both the control plane and the external KMS</strong>; a control plane snapshot is not enough to read a Secret.</li>
+</ul>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-16-envelope-encryption.svg" alt="KMS v2 envelope encryption: DEK per write, KEK in an external KMS or HSM" loading="lazy" /></p>
+<ul>
+<li>Consider storing KEKs in <strong>Hardware Security Modules (HSM)</strong> or cloud <strong>Key Management Stores</strong>
+<ul>
+<li>Follow &quot;trust but verify&quot;: check the encryption works and plan for a <strong>lost KEK</strong> or lost connectivity to the KMS.</li>
+</ul>
+</li>
+</ul>
+<h3 id="protecting-data-in-pods">Protecting data in Pods</h3>
+<ul>
+<li><strong>Secrets</strong>
+<ul>
+<li>are the preferred way to store sensitive data such as passwords</li>
+<li>Example: a front-end container reading an encrypted database can have the decryption key mounted as a Secret, far better than a plain-text file or environment variable.</li>
+</ul>
+</li>
+<li>Data in Persistent Volumes and ConfigMaps, if encrypted, should have its keys in Secrets.</li>
+<li>Remember the caveats above about where Secret encryption keys live: &quot;locking the house but leaving the keys in the door&quot;.</li>
+</ul>
+<h2 id="16-6-denial-of-service">16.6 Denial of service</h2>
+<p><strong>Denial of service (DoS)</strong> makes something unavailable. A well-known form is overload. Example: overloading the API server halts cluster operations (even internal systems use it).</p>
+<h3 id="protecting-cluster-resources">Protecting cluster resources</h3>
+<ul>
+<li>Replicate essential services for <strong>HA</strong>:
+<ul>
+<li>multiple control plane nodes, replicated <strong>across availability zones</strong>, so one zone's network DoS cannot take down the whole control plane</li>
+<li>Same for worker nodes, letting the scheduler spread apps across zones.</li>
+</ul>
+</li>
+<li>Set limits for:
+<ul>
+<li>memory</li>
+<li>CPU</li>
+<li>storage</li>
+</ul>
+</li>
+<li><strong>Limit Kubernetes objects</strong> per Namespace (ReplicaSets, Pods, Services, Secrets, ConfigMaps). This ResourceQuota caps Pods in Namespace <code>skippy</code> at 100:</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ResourceQuota</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pod-quota</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">skippy</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">hard</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">pods</span><span class="p">:</span><span class="w"> </span><span class="s">"100"</span>
+</code></pre>
+<ul>
+<li><strong><code>podPidsLimit</code></strong>
+<ul>
+<li>caps the processes a Pod can create</li>
+<li>Against a <strong>fork bomb</strong>, the Pod is confined and cannot exhaust the node's PID range (kubelet included); Kubernetes normally restarts a Pod that exhausts it</li>
+<li>Setting the right value needs an estimate of how many Pods run per node, or you over- or under-allocate.</li>
+</ul>
+</li>
+</ul>
+<h3 id="protecting-the-api-server">Protecting the API server</h3>
+<p>It exposes a RESTful interface over a TCP socket, a target for <strong>botnet DoS</strong>. Helpful measures:</p>
+<ul>
+<li><strong>HA control plane</strong>: several API server replicas across nodes and zones</li>
+<li><strong>monitoring and alerting</strong> on request rates with sane thresholds</li>
+<li><strong>firewalls</strong> limiting exposure to the internet</li>
+<li>Safeguard <strong>high-privilege accounts</strong>: an attacker may spoof a user or control plane service to overload it, despite strong RBAC.</li>
+</ul>
+<h3 id="protecting-the-cluster-store">Protecting the cluster store</h3>
+<ul>
+<li>Run an <strong>HA etcd cluster of 3 or 5 nodes</strong>.</li>
+<li>Monitor and alert on etcd requests (log entries are a good start).</li>
+<li><strong>Isolate etcd at the network level</strong> so only control plane members reach it.</li>
+<li>Default installs put etcd on the control plane servers (fine for dev and test)
+<ul>
+<li>large production clusters should consider a <strong>dedicated etcd cluster</strong> for performance and resilience. etcd is the <strong>most common choking point</strong> for large clusters, and a poorly performing etcd can be as bad as one under DoS.</li>
+</ul>
+</li>
+</ul>
+<h3 id="protecting-application-components">Protecting application components</h3>
+<ul>
+<li>Most Pods expose a network service, so anyone on the network can DoS them. Use <strong>Pod resource limits</strong>, plus:
+<ul>
+<li><strong>Network Policies</strong> limiting Pod-to-Pod and Pod-to-external communication</li>
+<li><strong>mutual TLS and API token authentication</strong>, rejecting unauthenticated requests</li>
+<li><strong>application-layer authorisation</strong> with least privilege, for defence in depth</li>
+</ul>
+</li>
+</ul>
+<p>Figure 16.1 combines them:</p>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-16-dos-defence-layers.svg" alt="Layers that make a DoS against an application harder" loading="lazy" /></p>
+<h2 id="16-7-elevation-of-privilege">16.7 Elevation of privilege</h2>
+<p><strong>Privilege escalation</strong> is gaining higher access than granted, to cause damage or gain unauthorised access.</p>
+<h3 id="protecting-the-api-server">Protecting the API server</h3>
+<p>Authorisation modes (run <strong>several at once</strong>, for example RBAC plus Node):</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>What it does</th>
+<th>Caveat</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RBAC</strong></td>
+<td>Restricts API operations to subsets of users (regular accounts or system services); every request is authenticated then authorised. Example: authN proves it is Mia; authZ decides whether Mia can create Pods.</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Webhook</strong></td>
+<td>Offloads authorisation to an external REST policy engine</td>
+<td>You must build and maintain it, and it becomes a <strong>single point of failure</strong> for every API request, so vet it rigorously</td>
+</tr>
+<tr>
+<td><strong>Node</strong></td>
+<td>Authorises API requests made by <strong>kubelets</strong> (Nodes), which differ from users' requests</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="protecting-pods">Protecting Pods</h3>
+<p>Four techniques (a Pod is only an execution environment for containers; the terms are often used interchangeably):</p>
+<ol>
+<li>Prevent processes running as root.</li>
+<li>Drop capabilities.</li>
+<li>Filter syscalls.</li>
+<li>Prevent privilege escalation.</li>
+</ol>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-16-pod-hardening-layers.svg" alt="The layers around a container, from Pod Security Admission down to a non-root process" loading="lazy" /></p>
+<h4 id="do-not-run-processes-as-root">Do not run processes as root</h4>
+<ul>
+<li>Root is <strong>UID 0</strong>, the most powerful Linux user
+<ul>
+<li>Running app processes as root grants full access to the container, and a container's root sometimes has <strong>unrestricted root access to the host</strong>.</li>
+</ul>
+</li>
+<li>Force a non-root user with <code>runAsUser</code>, one of many <code>PodSecurityContext</code> (<code>spec.securityContext</code>) settings. This runs <strong>all containers</strong> in the Pod as UID 1000:</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">securityContext</span><span class="p">:</span><span class="w">        </span><span class="c1"># applies to all containers in this Pod</span>
+<span class="w">    </span><span class="nt">runAsUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span><span class="w">       </span><span class="c1"># non-root user</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example.io/simple:1.0</span>
+</code></pre>
+<ul>
+<li>Two Pods with the <strong>same UID</strong> share a security context and possibly resources. Fine for replicas of one Pod
+<ul>
+<li>otherwise risky: two containers with R/W access to one volume can <strong>corrupt data</strong>, and a compromised container can tamper with data it should not reach.</li>
+</ul>
+</li>
+<li>Set <code>runAsUser</code> per container instead; it <strong>overrides</strong> the Pod level. Here the <code>demo</code> container runs as 2000 and other containers in the Pod use 1000:</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">securityContext</span><span class="p">:</span><span class="w">        </span><span class="c1"># applies to all containers in this Pod</span>
+<span class="w">    </span><span class="nt">runAsUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span><span class="w">       </span><span class="c1"># non-root user</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example.io/simple:1.0</span>
+<span class="w">    </span><span class="nt">securityContext</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">runAsUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2000</span><span class="w">     </span><span class="c1"># overrides the Pod-level setting</span>
+</code></pre>
+<ul>
+<li>Other ways around UID clashes: <strong>user namespaces</strong> (a process is UID 0 inside the container but UID 1000, say, on the host; check support in your Kubernetes version and runtime) and <strong>maintaining a map of UID usage</strong>.</li>
+</ul>
+<h4 id="capability-dropping">Capability dropping</h4>
+<ul>
+<li>Root's power is a combination of many small privileges called <strong>capabilities</strong>. Examples: <code>SYS_TIME</code> sets the system clock
+<ul>
+<li><code>NET_ADMIN</code> does network operations such as changing routes and interfaces. Root holds all of them.</li>
+</ul>
+</li>
+<li>Capabilities let you grant the <strong>exact set</strong> a process needs. There are <strong>over 30</strong>, so runtimes ship sensible defaults, often <strong>not good enough for production</strong>.</li>
+<li>Find the minimum set:
+<ul>
+<li>run the app in test with <strong>all capabilities dropped</strong>, read the logs of missing permissions, map them to capabilities, add them to the Pod spec, and repeat until it runs</li>
+<li>Caveats:</li>
+<li>extensive testing is needed per app, or a production edge case can crash it</li>
+<li><strong>every application revision</strong> needs the same testing, so you need test procedures and release processes that handle it</li>
+</ul>
+</li>
+<li>Kubernetes uses your runtime's default set (for example containerd's); override it in <code>securityContext</code>:</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">capability-test</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example.io/simple:1.0</span>
+<span class="w">    </span><span class="nt">securityContext</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">capabilities</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">add</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"NET_ADMIN"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"CHOWN"</span><span class="p p-Indicator">]</span>
+</code></pre>
+<h4 id="filter-syscalls-seccomp">Filter syscalls (seccomp)</h4>
+<ul>
+<li><strong>seccomp</strong>
+<ul>
+<li>(secure computing) filters <strong>syscalls</strong> (how an app asks the kernel to do something) rather than capabilities</li>
+<li>Apply least privilege: only the syscalls a container needs</li>
+<li>It went <strong>GA in Kubernetes 1.19</strong>.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Non-blocking</strong></td>
+<td>Allows the Pod but <strong>records every syscall</strong> to an audit log; use extensively in dev and test, then build a custom profile from the log</td>
+</tr>
+<tr>
+<td><strong>Blocking</strong></td>
+<td>Blocks all syscalls: extremely secure, but the Pod can do nothing useful</td>
+</tr>
+<tr>
+<td><strong>Runtime Default</strong></td>
+<td>Uses the container runtime's profile, a balance of usable and secure, thoroughly tested; a common place to start</td>
+</tr>
+<tr>
+<td><strong>Custom</strong></td>
+<td>Allows only the syscalls the app needs and blocks everything else; <strong>preferred</strong> for security. Danger: edge cases missed in testing can fail in production when an uncaptured syscall is needed</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-16-seccomp-profiles.svg" alt="How a custom seccomp profile is built from a non-blocking test run" loading="lazy" /></p>
+<h4 id="mandatory-access-controls">Mandatory Access Controls</h4>
+<ul>
+<li>Beyond seccomp and capabilities, <strong>MAC</strong> systems such as <strong>AppArmor</strong> and <strong>SELinux</strong> (Linux-only) are configured at node level and applied to Pods through Pod Security Contexts
+<ul>
+<li>They control how processes interact with system resources and are hard to configure, though tools can generate profiles from audit logs.</li>
+</ul>
+</li>
+<li>They are <strong>mandatory</strong> once enabled, unlike seccomp and capabilities, which are <strong>voluntary</strong>.</li>
+<li>Some runtimes apply a default SELinux profile to all containers; override it in the Pod's <code>securityContext</code>.</li>
+<li>Caution: powerful, and they can stop apps working if misconfigured, so test extensively first.</li>
+</ul>
+<h4 id="prevent-privilege-escalation-by-containers">Prevent privilege escalation by containers</h4>
+<ul>
+<li>A Linux process is created when a parent clones itself and loads new instructions into the child
+<ul>
+<li>By default <strong>a child may claim more privileges than its parent</strong>, usually a bad idea, especially for containers whose security configuration is defined against the <strong>initial</strong> configuration.</li>
+</ul>
+</li>
+<li>Block it per container:</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example.io/simple:1.0</span>
+<span class="w">    </span><span class="nt">securityContext</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">allowPrivilegeEscalation</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">     </span><span class="c1"># this line</span>
+</code></pre>
+<h3 id="standardising-pod-security-with-pss-and-psa">Standardising Pod security with PSS and PSA</h3>
+<p>Two technologies work together: you choose the <strong>PSS</strong> policies and <strong>PSA</strong> enforces them.</p>
+<ul>
+<li><strong>Pod Security Standards (PSS)</strong>: policies specifying required Pod security settings.</li>
+<li><strong>Pod Security Admission (PSA)</strong>: enforces one or more PSS policies when Pods are created.</li>
+</ul>
+<h4 id="pod-security-standards">Pod Security Standards</h4>
+<p>Every cluster gets three community-maintained policies:</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Privileged</strong></td>
+<td>Wide-open allow-all</td>
+</tr>
+<tr>
+<td><strong>Baseline</strong></td>
+<td>Sensible defaults; more secure than privileged, less than restricted</td>
+</tr>
+<tr>
+<td><strong>Restricted</strong></td>
+<td>The gold standard of current best practice; very strict, many Pods will fail it</td>
+</tr>
+</tbody>
+</table>
+<p>At the time of writing you <strong>cannot modify these, import others or create your own</strong>.</p>
+<h4 id="pod-security-admission">Pod Security Admission</h4>
+<ul>
+<li>Works <strong>per Namespace</strong> and is a <strong>validating admission controller</strong>, so it <strong>cannot modify Pods</strong> and has <strong>no effect on running Pods</strong>.</li>
+<li>Three modes:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Warn</strong></td>
+<td>Allows violating Pods, issues a user-facing warning</td>
+</tr>
+<tr>
+<td><strong>Audit</strong></td>
+<td>Allows violating Pods, logs an audit event</td>
+</tr>
+<tr>
+<td><strong>Enforce</strong></td>
+<td>Rejects violating Pods</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Good practice:
+<ul>
+<li>give every Namespace at least <strong>baseline in warn or audit</strong> to see which Pods fail and why</li>
+<li>then <strong>enforce baseline</strong> and <strong>warn and audit on restricted</strong>. A Namespace with no Pod Security configuration is a <strong>gap</strong>: attach a policy soon, even if only warn and audit.</li>
+</ul>
+</li>
+<li>Label format <code>&lt;prefix&gt;/&lt;mode&gt;: &lt;policy&gt;</code>, prefix always <code>pod-security.kubernetes.io</code>, mode <code>warn</code>, <code>audit</code> or <code>enforce</code>, policy <code>privileged</code>, <code>baseline</code> or <code>restricted</code>. Example (baseline, warn):</li>
+</ul>
+<pre class="hl"><code>pod-security.kubernetes.io/warn: baseline
+</code></pre>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-16-pod-security-admission.svg" alt="Policies, the PSA admission controller and the three modes" loading="lazy" /></p>
+<h4 id="psa-examples">PSA examples</h4>
+<p>Steps:</p>
+<ol>
+<li>Create Namespace <code>psa-test</code>.</li>
+<li>Label it to enforce <code>baseline</code>.</li>
+<li>Try a privileged container (fails).</li>
+<li>Fix the Pod so it conforms (works).</li>
+<li>Test the effect of switching to <code>restricted</code>.</li>
+<li>Switch to <code>restricted</code>.</li>
+<li>Check the impact on existing Pods.</li>
+</ol>
+<p>Needs <code>kubectl</code>, a cluster and the book's repo; run from the <code>psa</code> directory:</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>create<span class="w"> </span>ns<span class="w"> </span>psa-test
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>label<span class="w"> </span>--overwrite<span class="w"> </span>ns<span class="w"> </span>psa-test<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>pod-security.kubernetes.io/enforce<span class="o">=</span>baseline
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>ns<span class="w"> </span>psa-test
+<span class="go">Name:         psa-test</span>
+<span class="go">Labels:       kubernetes.io/metadata.name=psa-test</span>
+<span class="go">              pod-security.kubernetes.io/enforce=baseline     # label correctly applied</span>
+<span class="go">Annotations:  &lt;none&gt;</span>
+<span class="go">Status:       Active</span>
+</code></pre>
+<p><code>psa-pod.yml</code> violates baseline with a privileged container:</p>
+<pre class="hl"><code><span class="c1"># psa-pod.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">psa-pod</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">psa-test</span><span class="w">        </span><span class="c1"># deploy to the new psa-test Namespace</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">psa-ctr</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">securityContext</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">privileged</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">       </span><span class="c1"># violates the baseline policy</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>psa-pod.yml
+<span class="go">Error from server (Forbidden): error when creating "psa-pod.yml": pods "psa-pod" is</span>
+<span class="go">forbidden: violates PodSecurity "baseline:latest": privileged (container "psa-ctr"</span>
+<span class="go">must not set securityContext.privileged=true)</span>
+</code></pre>
+<p>Change <code>privileged</code> to <code>false</code>:</p>
+<pre class="hl"><code><span class="c1"># psa-pod.yml (edited)</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="c1"># &lt;Snip&gt;</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">psa-ctr</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">securityContext</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">privileged</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">      </span><span class="c1"># changed from true to false</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>psa-pod.yml
+<span class="go">pod/psa-pod created</span>
+</code></pre>
+<p>Test the impact of <code>restricted</code> without applying it, using <code>--dry-run=server</code>:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>label<span class="w"> </span>--dry-run<span class="o">=</span>server<span class="w"> </span>--overwrite<span class="w"> </span>ns<span class="w"> </span>psa-test<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>pod-security.kubernetes.io/enforce<span class="o">=</span>restricted
+<span class="go">Warning: existing pods in namespace "psa-test" violate the new PodSecurity enforce</span>
+<span class="go">level "restricted:latest"</span>
+<span class="go">Warning: psa-pod: allowPrivilegeEscalation != false, unrestricted capabilities,</span>
+<span class="go">runAsNonRoot != true, seccompProfile</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p><code>psa-pod</code> fails four requirements:</p>
+<ul>
+<li><code>allowPrivilegeEscalation</code> is not <code>false</code></li>
+<li>it runs unrestricted capabilities</li>
+<li><code>runAsNonRoot</code> is not <code>true</code></li>
+<li>it fails the <code>seccompProfile</code> test</li>
+</ul>
+<p>Apply it for real and check the existing Pod:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>label<span class="w"> </span>--overwrite<span class="w"> </span>ns<span class="w"> </span>psa-test<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>pod-security.kubernetes.io/enforce<span class="o">=</span>restricted
+<span class="go">Warning: existing pods in namespace "psa-test" violate the new PodSecurity enforce level</span>
+<span class="go">"restricted:latest"</span>
+<span class="go">Warning: psa-pod: allowPrivilegeEscalation != false, unrestricted capabilities,</span>
+<span class="go">runAsNonRoot != true, seccompProfile</span>
+<span class="go">namespace/psa-test labeled</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>--namespace<span class="w"> </span>psa-test
+<span class="go">NAME      READY   STATUS    RESTARTS   AGE</span>
+<span class="go">psa-pod   1/1     Running   0          3m9s</span>
+</code></pre>
+<p>Same warning, but the Pod keeps running: PSA is an admission controller, so it acts only when Pods are <strong>created or modified</strong>. Multiple policies and modes can combine on one Namespace, a common pattern: <strong>enforce baseline, warn and audit on restricted</strong>, to prepare for restricted:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>label<span class="w"> </span>--overwrite<span class="w"> </span>ns<span class="w"> </span>psa-test<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>pod-security.kubernetes.io/enforce<span class="o">=</span>baseline<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>pod-security.kubernetes.io/warn<span class="o">=</span>restricted<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>pod-security.kubernetes.io/audit<span class="o">=</span>restricted
+</code></pre>
+<p>Verify with <code>kubectl describe ns psa-test</code>.</p>
+<h4 id="alternatives-to-pod-security-admission">Alternatives to Pod Security Admission</h4>
+<p>PSS and PSA are limited: validating only, and no custom or imported policies. Third-party options include:</p>
+<ul>
+<li><strong>OPA Gatekeeper</strong></li>
+<li><strong>Kubewarden</strong></li>
+<li><strong>Kyverno</strong></li>
+</ul>
+<h2 id="16-8-towards-a-more-secure-kubernetes">16.8 Towards a more secure Kubernetes</h2>
+<p>Kubernetes is on a continual journey towards better security:</p>
+<ul>
+<li><strong>v1.26:</strong> all binary artifacts and container images used to build clusters are <strong>cryptographically signed</strong>.</li>
+<li>An official feed of publicly announced <strong>CVEs</strong>; since <strong>v1.27</strong> a <strong>JSON and RSS</strong> feed refreshes when a new CVE is announced.</li>
+<li><strong>v1.27:</strong> containers inherit a <strong>default seccomp profile</strong> from the runtime; this needs <code>--seccomp-default</code> on every kubelet.</li>
+<li>Many clouds offer <strong>confidential computing</strong> (confidential VMs and containers) that Kubernetes can use to encrypt memory for container workloads (data in use)
+<ul>
+<li>some offer it in hosted Kubernetes.</li>
+</ul>
+</li>
+<li>A third-party <strong>security audit</strong> of Kubernetes, published <strong>April 2023</strong> on Kubernetes 1.24, the second after the original in <strong>2019</strong>.</li>
+<li>The <strong>Cloud Native Security Whitepaper</strong> is recommended for a holistic view.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>STRIDE structures threat modelling of Kubernetes into six categories; one threat can lead to another and several mitigations can address one threat, so use defence in depth.</li>
+<li>Pod Security Admission is the preferred way to implement Pod security defaults.</li>
+<li>The next chapter covers best practices and lessons from running Kubernetes in production.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>STRIDE</strong>: Spoofing, Tampering, Repudiation, Information disclosure, DoS, Elevation of privilege.</li>
+<li><strong>mTLS / CA</strong>: component authentication and the single point it depends on.</li>
+<li><strong>Non-repudiation / audit events</strong>: proof of what, when, who, where, why, how.</li>
+<li><strong>DEK / KEK / envelope encryption / KMS v2</strong>: per-write data key wrapped by an external key.</li>
+<li><strong>ResourceQuota / podPidsLimit</strong>: caps on objects and processes.</li>
+<li><strong>Capabilities, seccomp, MAC (AppArmor, SELinux)</strong>: privilege splitting, syscall filter, mandatory controls.</li>
+<li><strong><code>allowPrivilegeEscalation: false</code></strong>.</li>
+<li><strong>PSS (Privileged, Baseline, Restricted) / PSA (warn, audit, enforce)</strong>.</li>
+<li><strong>OPA Gatekeeper, Kubewarden, Kyverno</strong>: third-party policy engines.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 16. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap17.xhtml</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+<li>Kubernetes CVE feed, third-party audit (April 2023) and Cloud Native Security Whitepaper: named in the chapter, no links given.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-14-api-security-and-rbac/">The Kubernetes Book 14: API Security and RBAC</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-12-configmaps-and-secrets/">The Kubernetes Book 12: ConfigMaps and Secrets</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-17-real-world-kubernetes-security/">The Kubernetes Book 17: Real-World Kubernetes Security</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-15-the-kubernetes-api/">&larr; The Kubernetes Book 15: The Kubernetes API</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-17-real-world-kubernetes-security/">The Kubernetes Book 17: Real-World Kubernetes Security &rarr;</a></nav></main></body></html>

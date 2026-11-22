@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 13: StatefulSets</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-13-statefulsets">The Kubernetes Book 13: StatefulSets</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 13. Previous: <a href="/book-digest/the-kubernetes-book/tkb-12-configmaps-and-secrets/">The Kubernetes Book 12: ConfigMaps and Secrets</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-14-api-security-and-rbac/">The Kubernetes Book 14: API Security and RBAC</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>StatefulSet</strong> manages stateful apps (databases, key-value stores, session stores) and gives Pods a <strong>sticky ID</strong>: a predictable, persistent name, DNS name and volume binding.</li>
+<li>Pods are named <code>&lt;StatefulSetName&gt;-&lt;ordinal&gt;</code> (<code>tkb-sts-0</code>, <code>tkb-sts-1</code>...), created <strong>one at a time in order</strong>, each waiting for the previous to be running and ready.</li>
+<li>Each Pod gets its own PVC from <code>volumeClaimTemplates</code>; <strong>scale-down deletes Pods but never PVCs</strong>, so scale-up reattaches the same volumes.</li>
+<li>A <strong>headless Service</strong> (<code>clusterIP: None</code>) named as the <strong>governing Service</strong> creates DNS records for every Pod so clients can reach specific Pods.</li>
+<li><strong>Scale to zero before deleting</strong> a StatefulSet, because deleting it does not terminate Pods in order. StatefulSets are only a framework; apps must be designed to use them.</li>
+</ul>
+</div></div>
+<h2 id="13-1-statefulset-theory">13.1 StatefulSet theory</h2>
+<p>The chapter defines a <strong>stateful application</strong> as one that creates and saves valuable data: databases, key-value stores, apps that store client session data for later sessions.</p>
+<p>StatefulSets and Deployments are both API resources using the controller pattern (reconciliation loops) and both add self-healing, scaling and rollouts. StatefulSets add three things Deployments do not:</p>
+<ol>
+<li>Predictable and persistent Pod names and DNS names.</li>
+<li>Predictable and persistent volume bindings.</li>
+<li>Predictable startup and shutdown order.</li>
+</ol>
+<p>Points 1 and 2 form a Pod's <strong>state</strong>, or <strong>sticky ID</strong>. They persist across failures, scaling and other scheduling events.</p>
+<ul>
+<li>A failed StatefulSet Pod is replaced by a new Pod with the <strong>same name, same DNS hostname and same volumes</strong>, even on a different node.</li>
+<li>Same after a scale-down then scale-up.</li>
+</ul>
+<p>A simple StatefulSet <code>tkb-sts</code>, three <code>mongo:latest</code> replicas:</p>
+<pre class="hl"><code><span class="c1"># StatefulSet tkb-sts (excerpt)</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">StatefulSet</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb-sts</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mongo</span>
+<span class="w">  </span><span class="nt">serviceName</span><span class="p">:</span><span class="w"> </span><span class="s">"tkb-sts"</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mongo</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ctr-mongo</span>
+<span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mongo:latest</span>
+<span class="nn">...</span>
+</code></pre>
+<h3 id="statefulset-pod-naming">StatefulSet Pod naming</h3>
+<ul>
+<li>Format <code>&lt;StatefulSetName&gt;-&lt;Integer&gt;</code>, a <strong>zero-based index ordinal</strong>: <code>tkb-sts-0</code>, <code>tkb-sts-1</code>, <code>tkb-sts-2</code>.</li>
+<li>Names drive how StatefulSets start, self-heal, scale, delete Pods and connect them to volumes.</li>
+<li>The StatefulSet name also forms each replica's DNS name, so avoid exotic characters that make invalid DNS names.</li>
+</ul>
+<h3 id="ordered-creation-and-deletion">Ordered creation and deletion</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-13-ordered-scaling-and-pvcs.svg" alt="Ordered creation, reverse-order scale-down, PVCs surviving" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Controller</th>
+<th>How Pods start</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>StatefulSet</td>
+<td>One at a time, waiting for each to be <strong>running and ready</strong> before the next</td>
+</tr>
+<tr>
+<td>Deployment (via ReplicaSet)</td>
+<td>All at once, which can cause race conditions</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Figure 13.1: <code>tkb-sts-0</code> starts first, then <code>-1</code>, then <code>-2</code>. &quot;Running and ready&quot; means all containers in the Pod run and the Pod can serve requests.</li>
+<li>Scaling 3 to 5 starts <code>tkb-sts-3</code>, waits for it, then <code>tkb-sts-4</code>.</li>
+<li>Scaling down is the reverse: terminate the <strong>highest ordinal</strong> first and wait for it to terminate fully before the next.</li>
+<li>Guaranteed order and no parallel termination matter for stateful apps; a clustered app can lose data if several replicas stop together.</li>
+<li>The StatefulSet controller does its <strong>own</strong> self-healing and scaling, unlike Deployments, which use the ReplicaSet controller.</li>
+</ul>
+<h3 id="deleting-statefulsets">Deleting StatefulSets</h3>
+<ol>
+<li>Deleting a StatefulSet object does <strong>not</strong> terminate its Pods in order, so <strong>scale to zero replicas first</strong>.</li>
+<li>Use <code>terminationGracePeriodSeconds</code> to control Pod termination; commonly <strong>at least 10 seconds</strong> so apps can flush buffers and commit in-flight writes.</li>
+</ol>
+<h3 id="statefulsets-and-volumes">StatefulSets and volumes</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-13-statefulset-sticky-identity.svg" alt="Each StatefulSet Pod has a stable name, DNS name and its own PVC" loading="lazy" /></p>
+<ul>
+<li>Volumes are part of the sticky ID
+<ul>
+<li>The controller creates the volumes Pods need and gives them special names linking them to the right Pods (Figure 13.2: <code>tkb-sts</code> with three Pods, one volume each).</li>
+</ul>
+</li>
+<li>Volumes stay decoupled through the regular <strong>PVC</strong> system, so they have <strong>separate lifecycles</strong> and survive Pod failure and termination
+<ul>
+<li>Replacement Pods reconnect to the surviving volumes and data, even on another node.</li>
+</ul>
+</li>
+<li>The same applies to scaling: a scale-up attaches new Pods to surviving volumes. This can save you if you accidentally delete a Pod, even the last replica.</li>
+</ul>
+<h3 id="handling-failures">Handling failures</h3>
+<ul>
+<li><strong>Pod failure:</strong> with five replicas and <code>tkb-sts-3</code> failing, the controller starts a new Pod with the same name and attaches it to the surviving volumes.</li>
+<li><strong>Node failure</strong>
+<ul>
+<li>is harder, and some older versions needed manual intervention to replace Pods on failed nodes</li>
+<li>Reason: Kubernetes cannot always tell a genuinely failed node from one rebooting after a transient event</li>
+<li>If a &quot;failed&quot; node recovers after its Pods were replaced, <strong>identical Pods might write to the same volume and corrupt data</strong></li>
+<li>Newer versions handle this better.</li>
+</ul>
+</li>
+</ul>
+<h3 id="network-id-and-headless-services">Network ID and headless Services</h3>
+<ul>
+<li>For apps needing predictable, long-lived Pods (for example, an external app that reconnects to the same Pod), a StatefulSet uses a <strong>headless Service</strong> instead of a load-balancing one: it creates predictable DNS names per Pod so apps query DNS (the service registry) for the Pod list and connect to specific Pods directly.</li>
+<li>A <strong>headless Service</strong> is a regular Service with <strong>no ClusterIP</strong> (<code>spec.clusterIP: None</code>). Listing it in the StatefulSet's <code>spec.serviceName</code> makes it the <strong>governing Service</strong>.</li>
+</ul>
+<pre class="hl"><code><span class="c1"># headless Service plus StatefulSet (excerpt, one file)</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span><span class="w">                  </span><span class="c1"># Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mongo-prod</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">clusterIP</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">None</span><span class="w">              </span><span class="c1"># make it a headless Service</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mongo</span>
+<span class="w">    </span><span class="nt">env</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">StatefulSet</span><span class="w">              </span><span class="c1"># StatefulSet</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sts-mongo</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">serviceName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mongo-prod</span><span class="w">      </span><span class="c1"># governing Service</span>
+</code></pre>
+<ul>
+<li>The headless Service creates DNS <strong>SRV and A records</strong> for every Pod matching its label selector, so other apps can query DNS for all Pod names and IPs
+<ul>
+<li><strong>Developers must code their apps to query DNS like this.</strong></li>
+</ul>
+</li>
+</ul>
+<h2 id="13-2-hands-on-with-statefulsets">13.2 Hands-on with StatefulSets</h2>
+<p>Tested on LKE and a local Docker Desktop multi-node cluster; other clouds need a different StorageClass (the book says when). Clone the repo, branch <code>2025</code>, run from the <code>statefulsets</code> folder:</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+</code></pre>
+<p>Three objects to deploy: a StorageClass, a headless Service and a StatefulSet. They are deployed one by one for clarity, though they can be combined in <code>app.yml</code>.</p>
+<h3 id="deploy-the-storageclass">Deploy the StorageClass</h3>
+<p>StatefulSets need a StorageClass and a PVC to create volumes dynamically. <code>lke-sc.yml</code> defines class <code>block</code> (LKE block storage CSI driver). For Docker Desktop multi-node use <code>dd-kind-sc.yml</code> instead. On another cloud: create your own class named <code>block</code> (set provisioner and parameters), or reuse an existing class and change the name in the PVC later.</p>
+<pre class="hl"><code><span class="c1"># lke-sc.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">storage.k8s.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">StorageClass</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">block</span><span class="w">                              </span><span class="c1"># the PVC will reference this name</span>
+<span class="nt">provisioner</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">linodebs.csi.linode.com</span><span class="w">       </span><span class="c1"># LKE block storage CSI plugin</span>
+<span class="nt">allowVolumeExpansion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="nt">volumeBindingMode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WaitForFirstConsumer</span>
+<span class="nt">reclaimPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Delete</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>lke-sc.yml
+<span class="go">storageclass.storage.k8s.io/block created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>sc
+<span class="go">NAME    PROVISIONER               RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUME EXPANSION</span>
+<span class="go">block   linodebs.csi.linode.com   Delete          WaitForFirstConsumer   true</span>
+</code></pre>
+<h3 id="create-a-governing-headless-service">Create a governing headless Service</h3>
+<p>Picture a Service with a <strong>head</strong> (the stable ClusterIP) and a <strong>tail</strong> (the Pods it forwards to). A headless Service has <strong>no head</strong>. Its main purpose is to create <strong>DNS SRV records</strong> for StatefulSet Pods, so clients look up individual Pods and talk to them directly instead of via a ClusterIP.</p>
+<pre class="hl"><code><span class="c1"># headless-svc.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span><span class="w">                  </span><span class="c1"># normal Kubernetes Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dullahan</span><span class="w">               </span><span class="c1"># only valid DNS characters in the name</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web</span>
+<span class="w">  </span><span class="nt">clusterIP</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">None</span><span class="w">              </span><span class="c1"># make this a headless Service</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web</span>
+</code></pre>
+<p>The only difference from a regular Service is <code>clusterIP: None</code>.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>headless-svc.yml
+<span class="go">service/dullahan created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc
+<span class="go">NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE</span>
+<span class="go">dullahan   ClusterIP   None         &lt;none&gt;        80/TCP    31s</span>
+</code></pre>
+<h3 id="deploy-the-statefulset">Deploy the StatefulSet</h3>
+<pre class="hl"><code><span class="c1"># sts.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">StatefulSet</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb-sts</span><span class="w">                </span><span class="c1"># call the StatefulSet "tkb-sts"</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span><span class="w">                  </span><span class="c1"># deploy three replicas</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web</span>
+<span class="w">  </span><span class="nt">serviceName</span><span class="p">:</span><span class="w"> </span><span class="s">"dullahan"</span><span class="w">      </span><span class="c1"># make this the governing Service</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">terminationGracePeriodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ctr-web</span>
+<span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx:latest</span>
+<span class="w">        </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">80</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web</span>
+<span class="w">        </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">webroot</span><span class="w">                       </span><span class="c1"># mount this volume</span>
+<span class="w">          </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/usr/share/nginx/html</span>
+<span class="w">  </span><span class="nt">volumeClaimTemplates</span><span class="p">:</span><span class="w">                       </span><span class="c1"># dynamically create a 10GB volume</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">metadata</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">webroot</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">accessModes</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">"ReadWriteOnce"</span><span class="w"> </span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="nt">storageClassName</span><span class="p">:</span><span class="w"> </span><span class="s">"block"</span><span class="w">               </span><span class="c1"># via the "block" storage class</span>
+<span class="w">      </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">storage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10Gi</span>
+</code></pre>
+<ul>
+<li><code>tkb-sts</code> is the base name for every replica and volume.</li>
+<li><code>replicas: 3</code> creates <code>tkb-sts-0</code>, <code>-1</code>, <code>-2</code> in order, each running and ready before the next.</li>
+<li><code>serviceName</code> designates the <strong>governing Service</strong>: it is in charge of the StatefulSet's <strong>DNS subdomain</strong>.</li>
+<li><code>spec.template</code> is the Pod template (image, ports).</li>
+<li><code>volumeClaimTemplates</code> creates a unique PVC per Pod: three Pods from the template and three PVCs from the claim template, with linked names
+<ul>
+<li>The claim template <code>webroot</code> asks for 10GB from class <code>block</code>.</li>
+</ul>
+</li>
+<li>On another cloud using its own class, edit <code>storageClassName</code> in <code>sts.yml</code> (fine if you created your own class called <code>block</code>).</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>sts.yml
+<span class="go">statefulset.apps/tkb-sts created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>sts<span class="w"> </span>--watch
+<span class="go">NAME      READY   AGE</span>
+<span class="go">tkb-sts   0/3     14s</span>
+<span class="go">tkb-sts   1/3     30s</span>
+<span class="go">tkb-sts   2/3     60s</span>
+<span class="go">tkb-sts   3/3     90s</span>
+</code></pre>
+<p>Each replica took about 30 seconds: the controller starts each in turn and waits until it is running and ready. Check the PVCs:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pvc
+<span class="go">NAME                STATUS   VOLUME          CAPACITY   MODES   STORAGECLASS   AGE</span>
+<span class="go">webroot-tkb-sts-0   Bound    pvc-1146...f274 10Gi       RWO     block          100s</span>
+<span class="go">webroot-tkb-sts-1   Bound    pvc-3026...6bcb 10Gi       RWO     block          70s</span>
+<span class="go">webroot-tkb-sts-2   Bound    pvc-2ce7...e56d 10Gi       RWO     block          40s</span>
+</code></pre>
+<p>Each PVC was created with its Pod. PVC names combine the claim template name, the StatefulSet and the Pod:</p>
+<table>
+<thead>
+<tr>
+<th>volumeClaimTemplate</th>
+<th>Pod</th>
+<th>PVC</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>webroot</code></td>
+<td><code>tkb-sts-0</code></td>
+<td><code>webroot-tkb-sts-0</code></td>
+</tr>
+<tr>
+<td><code>webroot</code></td>
+<td><code>tkb-sts-1</code></td>
+<td><code>webroot-tkb-sts-1</code></td>
+</tr>
+<tr>
+<td><code>webroot</code></td>
+<td><code>tkb-sts-2</code></td>
+<td><code>webroot-tkb-sts-2</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="testing-peer-discovery">Testing peer discovery</h3>
+<p>Names live in the cluster address space, usually the <code>cluster.local</code> domain. Pod DNS names follow:</p>
+<pre class="hl"><code>&lt;object-name&gt;.&lt;service-name&gt;.&lt;namespace&gt;.svc.cluster.local
+</code></pre>
+<p>So the three Pods (in <code>default</code>, governed by <code>dullahan</code>) get predictable FQDNs:</p>
+<ul>
+<li><code>tkb-sts-0.dullahan.default.svc.cluster.local</code></li>
+<li><code>tkb-sts-1.dullahan.default.svc.cluster.local</code></li>
+<li><code>tkb-sts-2.dullahan.default.svc.cluster.local</code></li>
+</ul>
+<p>The headless Service registers these Pods and IPs against <code>dullahan.default.svc.cluster.local</code>. Test from a jump Pod with <code>dig</code>:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>jump-pod.yml
+<span class="go">pod/jump-pod created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>jump-pod<span class="w"> </span>--<span class="w"> </span>bash
+<span class="gp">root@jump-pod:/# </span>dig<span class="w"> </span>SRV<span class="w"> </span>dullahan.default.svc.cluster.local
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">;; QUESTION SECTION:</span>
+<span class="go">;dullahan.default.svc.cluster.local. IN SRV</span>
+<span class="go">;; ANSWER SECTION:</span>
+<span class="go">dullahan.default.svc.cluster.local. 30 IN SRV... tkb-sts-1.dullahan.default.svc.cluster.local.</span>
+<span class="go">dullahan.default.svc.cluster.local. 30 IN SRV... tkb-sts-0.dullahan.default.svc.cluster.local.</span>
+<span class="go">dullahan.default.svc.cluster.local. 30 IN SRV... tkb-sts-2.dullahan.default.svc.cluster.local.</span>
+<span class="go">;; ADDITIONAL SECTION:</span>
+<span class="go">tkb-sts-0.dullahan.default.svc.cluster.local. 30 IN A 10.60.0.5</span>
+<span class="go">tkb-sts-2.dullahan.default.svc.cluster.local. 30 IN A 10.60.1.7</span>
+<span class="go">tkb-sts-1.dullahan.default.svc.cluster.local. 30 IN A 10.60.2.12</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<ul>
+<li>QUESTION SECTION: what the client asked.</li>
+<li>ANSWER SECTION: maps the Service name to the three Pod names.</li>
+<li>ADDITIONAL SECTION: maps each Pod name to its IP.</li>
+</ul>
+<p>Type <code>exit</code> to leave the jump Pod.</p>
+<h3 id="scaling-statefulsets">Scaling StatefulSets</h3>
+<ul>
+<li><strong>Scale-up</strong> creates new Pods <strong>and</strong> PVCs. <strong>Scale-down</strong> terminates Pods only, so later scale-ups only create Pods and reattach them to the original PVCs.</li>
+<li>Edit <code>sts.yml</code> to <code>replicas: 2</code> and re-post:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>sts.yml
+<span class="go">statefulset.apps/tkb-sts configured</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>sts<span class="w"> </span>tkb-sts
+<span class="go">NAME      READY   AGE</span>
+<span class="go">tkb-sts   2/2     12h</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods
+<span class="go">NAME        READY   STATUS    RESTARTS   AGE</span>
+<span class="go">tkb-sts-0   1/1     Running   0          12h</span>
+<span class="go">tkb-sts-1   1/1     Running   0          12h</span>
+</code></pre>
+<p>The highest ordinal was deleted, yet all three PVCs remain:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pvc
+<span class="go">NAME                STATUS   VOLUME          CAPACITY   MODES   STORAGECLASS   AGE</span>
+<span class="go">webroot-tkb-sts-0   Bound    pvc-5955...d71c 10Gi       RWO     block          12h</span>
+<span class="go">webroot-tkb-sts-1   Bound    pvc-d62c...v701 10Gi       RWO     block          12h</span>
+<span class="go">webroot-tkb-sts-2   Bound    pvc-2e2f...5f95 10Gi       RWO     block          12h</span>
+</code></pre>
+<p><code>webroot-tkb-sts-2</code> is still Bound; <code>kubectl describe</code> shows <code>Used by: &lt;none&gt;</code>. Set replicas back to 3 and re-apply:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>sts.yml
+<span class="go">statefulset.apps/tkb-sts configured</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>sts<span class="w"> </span>tkb-sts
+<span class="go">NAME      READY   AGE</span>
+<span class="go">tkb-sts   3/3     12h</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>tkb-sts-2<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>ClaimName
+<span class="go">ClaimName:  webroot-tkb-sts-2</span>
+</code></pre>
+<p>(Windows: replace <code>grep ClaimName</code> with <code>Select-String -Pattern 'ClaimName'</code>.) The new Pod mounted the right volume.</p>
+<ul>
+<li>Kubernetes <strong>puts scale-down on hold if any Pod is failed</strong>, to protect resilience and data integrity.</li>
+<li><strong><code>spec.podManagementPolicy</code></strong> changes start and stop behaviour:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OrderedReady</code> (default)</td>
+<td>One Pod at a time, waiting for the previous to be running and ready</td>
+</tr>
+<tr>
+<td><code>Parallel</code></td>
+<td>Like a Deployment: create and delete in parallel (2 to 5 creates the three new Pods at once; 5 to 2 deletes three in parallel)</td>
+</tr>
+</tbody>
+</table>
+<p>Naming rules still apply; the setting affects <strong>scaling only</strong>, not rollouts and rollbacks.</p>
+<h3 id="rollouts">Rollouts</h3>
+<ul>
+<li>Update the image in the YAML and re-post
+<ul>
+<li>The controller replaces Pods <strong>from the highest ordinal downwards, one at a time</strong>, waiting for each new Pod to be ready before replacing the next-lowest.</li>
+</ul>
+</li>
+<li>More: <code>kubectl explain sts.spec.updateStrategy</code>.</li>
+</ul>
+<h3 id="test-a-pod-failure">Test a Pod failure</h3>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods
+<span class="go">NAME        READY   STATUS    AGE</span>
+<span class="go">tkb-sts-0   1/1     Running   12h</span>
+<span class="go">tkb-sts-1   1/1     Running   12h</span>
+<span class="go">tkb-sts-2   1/1     Running   9m49s</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>tkb-sts-0
+<span class="go">pod "tkb-sts-0" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>--watch
+<span class="go">NAME        READY   STATUS              RESTARTS   AGE</span>
+<span class="go">tkb-sts-0   1/1     Running             0          12h</span>
+<span class="go">tkb-sts-1   1/1     Running             0          12h</span>
+<span class="go">tkb-sts-2   1/1     Running             0          10m</span>
+<span class="go">tkb-sts-0   0/1     Terminating         0          12h</span>
+<span class="go">tkb-sts-0   0/1     Pending             0          0s</span>
+<span class="go">tkb-sts-0   0/1     ContainerCreating   0          0s</span>
+<span class="go">tkb-sts-0   1/1     Running             0          8s</span>
+</code></pre>
+<p>A clean failure: the replacement has the same name. Same PVC?</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>tkb-sts-0<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>ClaimName
+<span class="go">ClaimName:  webroot-tkb-sts-0</span>
+</code></pre>
+<h3 id="test-a-node-failure">Test a node failure</h3>
+<p>More complex and version-dependent: modern clusters replace Pods from failed nodes automatically, older ones may need manual help (to avoid misreading transient events as node failure).</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-o<span class="w"> </span>wide
+<span class="go">NAME        READY   STATUS    RESTARTS   AGE   IP          NODE</span>
+<span class="go">tkb-sts-0   1/1     Running   0          11m   10.2.0.132  lke343745-544835-5547cbe00000</span>
+<span class="go">tkb-sts-1   1/1     Running   0          12h   10.2.0.3    lke343745-544835-1fbc7b870000</span>
+<span class="go">tkb-sts-2   1/1     Running   0          21m   10.2.1.7    lke343745-544835-2b6286320000</span>
+</code></pre>
+<p>Each replica is on a different node. Simulate failure for the node running <code>tkb-sts-0</code>:</p>
+<ul>
+<li><strong>LKE</strong>: in cloud.linode.com open the Kubernetes tab, your cluster, scroll to the Node Pool and <strong>Recycle</strong> a node running a replica (deletes and replaces it) (Figure 13.3).</li>
+<li><strong>Docker Desktop multi-node (kind)</strong>:
+<ul>
+<li>only works for kind clusters (not the single-node kubeadm one), and you must delete and recreate the cluster afterwards to get three nodes back. Nodes run as containers named <code>desktop-control-plane</code>, <code>desktop-worker</code>, <code>desktop-worker2</code></li>
+<li>in the Containers tab click the trash icon on the worker running a replica (Figure 13.4 shows <code>desktop-worker2</code>).</li>
+</ul>
+</li>
+</ul>
+<p>Watch recovery (a minute or two):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-o<span class="w"> </span>wide<span class="w"> </span>--watch
+<span class="go">NAME        READY   STATUS              RESTARTS   AGE    IP          NODE</span>
+<span class="go">tkb-sts-0   1/1     Running             0          14m    10.2.0.132  lke343745...cbe00000</span>
+<span class="go">tkb-sts-1   1/1     Running             0          12h    10.2.0.3    lke343745...7b870000</span>
+<span class="go">tkb-sts-2   1/1     Running             0          30m    10.2.1.7    lke343745...86320000</span>
+<span class="go">tkb-sts-0   1/1     Terminating         0          14m    10.2.0.132  lke343745...cbe00000</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">tkb-sts-0   0/1     Completed           0          14m    10.2.0.132  lke343745...cbe00000</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">tkb-sts-0   0/1     Pending             0          0s     &lt;none&gt;      &lt;none&gt;</span>
+<span class="go">tkb-sts-0   0/1     Pending             0          0s     &lt;none&gt;      lke343745...7b870000</span>
+<span class="go">tkb-sts-0   0/1     ContainerCreating   0          0s     &lt;none&gt;      lke343745...7b870000</span>
+<span class="go">tkb-sts-0   0/1     ContainerCreating   0          110s   &lt;none&gt;      lke343745...7b870000</span>
+<span class="go">tkb-sts-0   1/1     Running             0          111s   10.2.0.4    lke343745...7b870000</span>
+</code></pre>
+<p>Reading it: the Pod goes Terminating, Completed, Pending (the scheduler is placing it), ContainerCreating (image pulled, container started), then Running.</p>
+<ul>
+<li>Kubernetes notices the missing node, the StatefulSet drops to two, and the controller recreates <code>tkb-sts-0</code>.</li>
+<li>It may appear to hang in ContainerCreating while Kubernetes <strong>releases the previous PVC attachment</strong> before binding the PVC to the new Pod.</li>
+<li>The replacement landed on a different node, since the old one is gone. On LKE a new node replaces the recycled one, but Kubernetes does <strong>not rebalance</strong> existing replicas onto it.</li>
+</ul>
+<h3 id="deleting-statefulsets">Deleting StatefulSets</h3>
+<p>Deleting does not stop Pods in order, so for order-sensitive apps and data, <strong>scale to zero first</strong>:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>scale<span class="w"> </span>sts<span class="w"> </span>tkb-sts<span class="w"> </span>--replicas<span class="o">=</span><span class="m">0</span>
+<span class="go">statefulset.apps/tkb-sts scaled</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>sts<span class="w"> </span>tkb-sts
+<span class="go">NAME      READY   AGE</span>
+<span class="go">tkb-sts   0/0     13h</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>sts<span class="w"> </span>tkb-sts
+<span class="go">statefulset.apps "tkb-sts" deleted</span>
+</code></pre>
+<p>(You can <code>dig</code> again from <code>jump-pod</code> to see the SRV records gone, if the Pod still exists.)</p>
+<h2 id="13-3-clean-up">13.3 Clean up</h2>
+<p>The jump Pod, headless Service, volumes and StorageClass still exist. <strong>Not deleting the volumes incurs cloud costs.</strong></p>
+<pre class="hl"><code>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>jump-pod
+kubectl<span class="w"> </span>delete<span class="w"> </span>svc<span class="w"> </span>dullahan
+kubectl<span class="w"> </span>delete<span class="w"> </span>pvc<span class="w"> </span>webroot-tkb-sts-0<span class="w"> </span>webroot-tkb-sts-1<span class="w"> </span>webroot-tkb-sts-2
+kubectl<span class="w"> </span>delete<span class="w"> </span>sc<span class="w"> </span>flash
+</code></pre>
+<p>(The book's last command deletes a class named <code>flash</code>, although the class created above is <code>block</code>; shown as printed.) Deleting the PVCs also deletes the PVs and Linode backend storage; with your own StorageClass confirm the external volumes are gone. If you deleted a kind node, rebuild the cluster to the desired node count.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>StatefulSets deploy and manage apps with persistent data and state; they self-heal, scale and roll out; <strong>rollbacks require manual attention</strong>.</li>
+<li>Each Pod has a predictable, persistent name, DNS hostname and its own volumes for its whole lifecycle, including failures, restarts and scaling
+<ul>
+<li>names are integral to scaling and to connecting the right volumes.</li>
+</ul>
+</li>
+<li>StatefulSets are only a framework: <strong>design applications to take advantage of them</strong>.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Sticky ID</strong>: persistent Pod name, DNS name and volume binding.</li>
+<li><strong>Ordinal</strong>: zero-based index in the Pod name.</li>
+<li><strong>Headless Service / governing Service</strong>: <code>clusterIP: None</code>, set in <code>spec.serviceName</code>; creates SRV and A records per Pod.</li>
+<li><strong>volumeClaimTemplates</strong>: per-Pod PVC template.</li>
+<li><strong>podManagementPolicy</strong>: <code>OrderedReady</code> or <code>Parallel</code>.</li>
+<li><strong>Running and ready</strong>: all containers up and able to serve.</li>
+<li><strong>terminationGracePeriodSeconds</strong>: shutdown grace for flushing writes.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 13. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap14.xhtml</li>
+<li>Linode cloud console: cloud.linode.com</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-06-kubernetes-deployments/">The Kubernetes Book 6: Kubernetes Deployments</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-11-kubernetes-storage/">The Kubernetes Book 11: Kubernetes Storage</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-14-api-security-and-rbac/">The Kubernetes Book 14: API Security and RBAC</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-12-configmaps-and-secrets/">&larr; The Kubernetes Book 12: ConfigMaps and Secrets</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-14-api-security-and-rbac/">The Kubernetes Book 14: API Security and RBAC &rarr;</a></nav></main></body></html>

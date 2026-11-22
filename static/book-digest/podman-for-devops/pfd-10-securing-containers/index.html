@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 10: Securing containers</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-10-securing-containers">Podman for DevOps 10: Securing containers</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 10 (last chapter of Part 2). Previous: <a href="/book-digest/podman-for-devops/pfd-09-pushing-images-to-a-container-registry/">Podman for DevOps 9: Pushing images to a container registry</a>. Next: <a href="/book-digest/podman-for-devops/pfd-11-troubleshooting-and-monitoring-containers/">Podman for DevOps 11: Troubleshooting and monitoring containers</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Rootless containers</strong> map the user to UID 0 in a user namespace via <code>/etc/subuid</code> and <code>/etc/subgid</code> (default 65,536 IDs): an escaped process gets only that user's privileges.</li>
+<li><strong>Don't run as UID 0 inside the container</strong> either: use <code>USER</code> in the Containerfile and fix permissions (ports below 1024 are not allowed for unprivileged users).</li>
+<li><strong>Sign images</strong> (Sigstore with <strong>Cosign</strong> keys, or GPG), store signatures as OCI artifacts in the registry (Podman 5.x), and enforce with <code>policy.json</code> (<code>sigstoreSigned</code>, <code>signedBy</code>); the default <code>insecureAcceptAnything</code> accepts everything. <strong>Rekor</strong> adds a public transparency log.</li>
+<li><strong>Capabilities</strong> split root into units; Podman gives containers a default set; tune with <code>--cap-add</code> and <code>--cap-drop</code> (dropping <code>CHOWN</code> breaks nginx).</li>
+<li><strong>SELinux:</strong> container processes run as <code>container_t</code>; Udica generates a <strong>custom profile</strong> from a container's spec instead of relabelling directories or going permissive.</li>
+</ul>
+</div></div>
+<h2 id="10-1-running-rootless-containers-with-podman">10.1 Running rootless containers with Podman</h2>
+<p>Rootless containers (standard users without administrative privileges) bring:</p>
+<ul>
+<li><strong>An extra security layer</strong> against attackers trying to gain root on the host <strong>even if the engine, runtime or orchestrator is compromised</strong>. A <strong>container escape</strong> (any flaw letting a process leave its security constraints) in a rootless container yields only <strong>non-root user privileges</strong>.</li>
+<li><strong>Many unprivileged users running containers on the same host</strong>, useful for high-performance computing environments.</li>
+</ul>
+<p>The same least-privilege logic as services: installing Apache normally creates a dedicated <code>apache</code> user. Podman is <strong>daemonless</strong>, so it just creates a child process, with no extra privilege escalation.</p>
+<h3 id="subuid-and-subgid">subuid and subgid</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-10-rootless-uid-mapping.svg" alt="Rootless user namespace mapping" loading="lazy" /></p>
+<p>Modern shadow-utils use <strong><code>/etc/subuid</code> and <code>/etc/subgid</code></strong> to decide which UIDs and GIDs can be mapped into a user namespace; the <strong>default allocation is 65,536 UIDs and 65,536 GIDs per user</strong>.</p>
+<pre class="hl"><code>$<span class="w"> </span>id
+<span class="nv">uid</span><span class="o">=</span><span class="m">1000</span><span class="o">(</span>alex<span class="o">)</span><span class="w"> </span><span class="nv">gid</span><span class="o">=</span><span class="m">1000</span><span class="o">(</span>alex<span class="o">)</span><span class="w"> </span><span class="nv">groups</span><span class="o">=</span><span class="m">1000</span><span class="o">(</span>alex<span class="o">)</span>,10<span class="o">(</span>wheel<span class="o">)</span>
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>alpine<span class="w"> </span>cat<span class="w"> </span>/proc/self/uid_map<span class="w"> </span>/proc/self/gid_map
+<span class="m">0</span><span class="w">       </span><span class="m">1000</span><span class="w">          </span><span class="m">1</span>
+<span class="m">1</span><span class="w">     </span><span class="m">100000</span><span class="w">      </span><span class="m">65536</span>
+<span class="m">0</span><span class="w">       </span><span class="m">1000</span><span class="w">          </span><span class="m">1</span>
+<span class="m">1</span><span class="w">     </span><span class="m">100000</span><span class="w">      </span><span class="m">65536</span>
+</code></pre>
+<ul>
+<li>Container UID/GID <strong>0 maps to the current user (1000)</strong>; UID/GID 1 onward map from <strong>100000 to 165536</strong> (start plus range 65,536).</li>
+<li><strong>Compare with the host:</strong></li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>cat<span class="w"> </span>/proc/self/uid_map<span class="w"> </span>/proc/self/gid_map
+<span class="m">0</span><span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">4294967295</span>
+<span class="m">0</span><span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">4294967295</span>
+</code></pre>
+<p>Start 0 on both sides covering the full 32-bit range (4294967295): <strong>no translation</strong>, UID 1000 on the host is 1000 to the process.</p>
+<h2 id="10-2-avoiding-running-containers-with-uid-0">10.2 Avoiding running containers with UID 0</h2>
+<ul>
+<li>Runtimes can run the container process as a user other than the one that created it. A vulnerability in the <strong>engine or kernel</strong> could let <strong>UID 0 in the container break out and become UID 0 on the host</strong>; a <strong>non-zero UID</strong> limits privilege escalation inside and outside the container.</li>
+<li>Containerfiles default to root (UID 0). Use the <strong><code>USER</code></strong> instruction (e.g. <code>USER 1001</code>). In the worst case an escape reaches the files and resources of the <strong>host user with that same UID</strong>. Forcing a UID means adjusting permissions of any file, folder or mount you use.</li>
+</ul>
+<p><strong>Worked example: adapt nginx to run as a normal user.</strong></p>
+<pre class="hl"><code><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">default_type</span><span class="w"> </span><span class="s">text/plain</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">expires</span><span class="w"> </span><span class="s">-1</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">return</span><span class="w"> </span><span class="mi">200</span><span class="w"> </span><span class="s">'Hello</span><span class="w"> </span><span class="s">Podman</span><span class="w"> </span><span class="s">user!\nServer</span><span class="w"> </span><span class="s">address:</span><span class="w"> </span><span class="nv">$server_addr:$server_port\n'</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><code>Dockerfile</code> (root version), built as <code>nginx-root</code>:</p>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/nginx:mainline-alpine</span>
+<span class="k">RUN</span><span class="w"> </span>rm<span class="w"> </span>/etc/nginx/conf.d/*
+<span class="k">ADD</span><span class="w"> </span>hello-podman.conf<span class="w"> </span>/etc/nginx/conf.d/
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>buildah<span class="w"> </span>bud<span class="w"> </span>-t<span class="w"> </span>nginx-root:latest<span class="w"> </span>-f<span class="w"> </span>.
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--name<span class="w"> </span>myrootnginx<span class="w"> </span>-p<span class="w"> </span><span class="m">127</span>.0.0.1::80<span class="w"> </span>-d<span class="w"> </span>nginx-root
+$<span class="w"> </span>podman<span class="w"> </span>port<span class="w"> </span>myrootnginx<span class="w"> </span><span class="m">80</span>
+<span class="m">127</span>.0.0.1:38029
+$<span class="w"> </span>curl<span class="w"> </span>localhost:38029
+Hello<span class="w"> </span>Podman<span class="w"> </span>user!
+Server<span class="w"> </span>address:<span class="w"> </span><span class="m">10</span>.0.2.100:80
+$<span class="w"> </span>podman<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>364ec7f5979a<span class="w"> </span>id
+<span class="nv">uid</span><span class="o">=</span><span class="m">0</span><span class="o">(</span>root<span class="o">)</span><span class="w"> </span><span class="nv">gid</span><span class="o">=</span><span class="m">0</span><span class="o">(</span>root<span class="o">)</span>
+</code></pre>
+<p>The container runs as <strong>root</strong>. Now the fix, step by step:</p>
+<ol>
+<li><strong>Change the port to 8080</strong> in the config (<code>listen 8080;</code>): unprivileged users <strong>cannot bind ports below 1024</strong>.</li>
+<li>Edit the Dockerfile: fix permissions of the main folder and PID file, expose 8080, set the user:</li>
+</ol>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/nginx:mainline-alpine</span>
+<span class="k">RUN</span><span class="w"> </span>rm<span class="w"> </span>/etc/nginx/conf.d/*
+<span class="k">ADD</span><span class="w"> </span>hello-podman.conf<span class="w"> </span>/etc/nginx/conf.d/
+
+<span class="k">RUN</span><span class="w"> </span>chmod<span class="w"> </span>-R<span class="w"> </span>a+w<span class="w"> </span>/var/cache/nginx/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="o">&amp;&amp;</span><span class="w"> </span>touch<span class="w"> </span>/var/run/nginx.pid<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="o">&amp;&amp;</span><span class="w"> </span>chmod<span class="w"> </span>a+w<span class="w"> </span>/var/run/nginx.pid
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+<span class="k">USER</span><span class="w"> </span><span class="s">nginx</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>buildah<span class="w"> </span>bud<span class="w"> </span>-t<span class="w"> </span>nginx-user:latest<span class="w"> </span>-f<span class="w"> </span>.
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--name<span class="w"> </span>myusernginx<span class="w"> </span>-p<span class="w"> </span><span class="m">127</span>.0.0.1::8080<span class="w"> </span>-d<span class="w"> </span>nginx-user
+$<span class="w"> </span>podman<span class="w"> </span>port<span class="w"> </span>myusernginx<span class="w"> </span><span class="m">8080</span>
+<span class="m">127</span>.0.0.1:42209
+$<span class="w"> </span>curl<span class="w"> </span><span class="m">127</span>.0.0.1:42209
+Hello<span class="w"> </span>Podman<span class="w"> </span>user!
+Server<span class="w"> </span>address:<span class="w"> </span><span class="m">10</span>.0.2.100:8080
+$<span class="w"> </span>podman<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>299e0fb727f3<span class="w"> </span>id
+<span class="nv">uid</span><span class="o">=</span><span class="m">101</span><span class="o">(</span>nginx<span class="o">)</span><span class="w"> </span><span class="nv">gid</span><span class="o">=</span><span class="m">101</span><span class="o">(</span>nginx<span class="o">)</span><span class="w"> </span><span class="nv">groups</span><span class="o">=</span><span class="m">101</span><span class="o">(</span>nginx<span class="o">)</span>
+</code></pre>
+<p>The process now runs as the unprivileged <code>nginx</code> user. Ready-made example: https://github.com/PacktPublishing/Podman-for-DevOps.</p>
+<h2 id="10-3-signing-our-container-images">10.3 Signing our container images</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-10-image-signing-flow.svg" alt="Sign and publish, then verify at pull time" loading="lazy" /></p>
+<ul>
+<li>Pulling from external registries exposes you to attack tactics against containers (see MITRE ATT&amp;CK [1]), notably <strong>masquerading</strong> (manipulating image components to look legitimate) and <strong>man-in-the-middle (MITM)</strong> attacks over the wire.</li>
+<li>Best mitigation: a <strong>detached image signature</strong> to trust the provider and guarantee reliability. When pulling, Podman can verify signatures and <strong>reject images without valid ones</strong>.</li>
+</ul>
+<h3 id="signing-with-sigstore-and-podman">Signing with Sigstore and Podman</h3>
+<p><strong>Key pair recap:</strong> a private key (never shared) signs; the public key (shared) verifies that the image was <strong>not tampered with and truly came from the sender</strong>. The image owner pushes to the registry and stores the <strong>detached signature</strong> where users can fetch it; the registry holds image blobs, the signature store holds signatures.</p>
+<p><strong>Cosign</strong> is a lightweight tool for signing and verifying container images, following OCI standards. Install on a Fedora-like system:</p>
+<pre class="hl"><code>$<span class="w"> </span><span class="nv">LATEST_VERSION</span><span class="o">=</span><span class="k">$(</span>curl<span class="w"> </span>https://api.github.com/repos/sigstore/cosign/releases/latest<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>tag_name<span class="w"> </span><span class="p">|</span><span class="w"> </span>cut<span class="w"> </span>-d<span class="w"> </span>:<span class="w"> </span>-f2<span class="w"> </span><span class="p">|</span><span class="w"> </span>tr<span class="w"> </span>-d<span class="w"> </span><span class="s2">"v\", "</span><span class="k">)</span>
+$<span class="w"> </span>curl<span class="w"> </span>-O<span class="w"> </span>-L<span class="w"> </span><span class="s2">"https://github.com/sigstore/cosign/releases/latest/download/cosign-</span><span class="si">${</span><span class="nv">LATEST_VERSION</span><span class="si">}</span><span class="s2">-1.x86_64.rpm"</span>
+$<span class="w"> </span>sudo<span class="w"> </span>rpm<span class="w"> </span>-ivh<span class="w"> </span>cosign-<span class="si">${</span><span class="nv">LATEST_VERSION</span><span class="si">}</span>-1.x86_64.rpm
+$<span class="w"> </span>cosign<span class="w"> </span>version<span class="w">        </span><span class="c1"># example output: GitVersion v3.0.4, GoVersion go1.25.5, linux/amd64</span>
+</code></pre>
+<p>Generate a key pair (it asks for a passphrase; unlike GPG it just writes <strong>two files in the current directory</strong>, already in <strong>PEM</strong> format):</p>
+<pre class="hl"><code>$<span class="w"> </span>cosign<span class="w"> </span>generate-key-pair
+Private<span class="w"> </span>key<span class="w"> </span>written<span class="w"> </span>to<span class="w"> </span>cosign.key
+Public<span class="w"> </span>key<span class="w"> </span>written<span class="w"> </span>to<span class="w"> </span>cosign.pub
+</code></pre>
+<p><code>cosign.pub</code> goes into the verification policy; <strong><code>cosign.key</code> must be kept secure</strong> (it signs your pushes).</p>
+<p>Run a plain local registry to push test images (as root):</p>
+<pre class="hl"><code>$<span class="w"> </span>mkdir<span class="w"> </span>./registry_data
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--name<span class="w"> </span>local_registry<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-p<span class="w"> </span><span class="m">5000</span>:5000<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>./registry_data:/var/lib/registry:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--restart<span class="o">=</span>always<span class="w"> </span>registry:2
+</code></pre>
+<p>The registry itself is unaware of detached signatures. Podman writes them to a <strong>staging sigstore</strong> configured in <code>/etc/containers/registries.d/default.yaml</code>:</p>
+<pre class="hl"><code><span class="nt">default-docker</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># sigstore: file:///var/lib/containers/sigstore</span>
+<span class="w">  </span><span class="nt">sigstore-staging</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">file:///var/lib/containers/sigstore</span>
+<span class="w">  </span><span class="nt">use-sigstore-attachments</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre>
+<ul>
+<li><code>sigstore-staging</code> must be a <strong>writable folder</strong> (customisable); <strong><code>use-sigstore-attachments: true</code></strong> lets Podman upload signatures as <strong>sidecar files in OCI artifact format</strong>. Rootless users set a custom path in <code>$HOME/.config/containers/registries.d/default.yaml</code>.</li>
+<li><strong>Podman 5.x:</strong> the preferred method stores signatures <strong>directly in the registry as OCI artifacts</strong>, so no separate sigstore directory or cross-user permission worries; rootless users can sign and push as long as they can read <code>cosign.key</code>.</li>
+</ul>
+<p>The example image (<code>Chapter11/image_signature/Dockerfile</code>, a path the book prints for this chapter):</p>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi9</span>
+<span class="c"># Update image and install httpd</span>
+<span class="k">RUN</span><span class="w"> </span>yum<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>httpd<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>yum<span class="w"> </span>clean<span class="w"> </span>all
+<span class="c"># Expose the default httpd port 80</span>
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">80</span>
+<span class="c"># Run the httpd</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/usr/sbin/httpd"</span><span class="p">,</span><span class="w"> </span><span class="s2">"-DFOREGROUND"</span><span class="p">]</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span><span class="nb">cd</span><span class="w"> </span>Chapter11/image_signature
+$<span class="w"> </span>podman<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>custom_httpd<span class="w"> </span>.
+$<span class="w"> </span>podman<span class="w"> </span>tag<span class="w"> </span>custom_httpd<span class="w"> </span>localhost:5000/custom_httpd
+$<span class="w"> </span>podman<span class="w"> </span>push<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--sign-by-sigstore-private-key<span class="w"> </span>./cosign.key<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>localhost:5000/custom_httpd
+Creating<span class="w"> </span>signature:<span class="w"> </span>Signing<span class="w"> </span>image<span class="w"> </span>using<span class="w"> </span>a<span class="w"> </span>sigstore<span class="w"> </span>signature
+Storing<span class="w"> </span>signatures
+</code></pre>
+<h3 id="configuring-podman-to-pull-signed-images">Configuring Podman to pull signed images</h3>
+<p>Podman needs access to the signature (in a store, or in the registry) and to the public key. Enable sigstore attachments for the registry in <code>/etc/containers/registries.d/default.yaml</code> (the printed listing is flattened and shows a stray <code>http://localhost:8080/</code>; reconstructed here):</p>
+<pre class="hl"><code><span class="nt">docker</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">localhost:5000</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">use-sigstore-attachments</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre>
+<p>External signature stores for other registries, e.g. the public Red Hat registry:</p>
+<pre class="hl"><code><span class="nt">docker</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">registry.access.redhat.com</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">sigstore</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://access.redhat.com/webassets/docker/content/sigstore</span>
+</code></pre>
+<p>Verification rules live in <strong><code>/etc/containers/policy.json</code></strong>. This one <strong>requires a valid Sigstore signature for any image from <code>localhost:5000</code></strong> (the book prints <code>&quot; sigstoreSigned &quot;</code> with stray spaces):</p>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"default"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"insecureAcceptAnything"</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"transports"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"docker"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"localhost:5000"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sigstoreSigned"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"keyPath"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/etc/pki/containers/cosign.pub"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signedIdentity"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"matchRepository"</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"docker-daemon"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">""</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"insecureAcceptAnything"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The public key must exist at <code>keyPath</code> and be readable by Podman.</li>
+<li><strong><code>default</code> is the global fallback:</strong> with no specific rule for a registry, <strong><code>insecureAcceptAnything</code></strong> makes Podman perform <strong>no cryptographic checks</strong>: &quot;the equivalent of leaving your front door wide open and hanging a Welcome sign&quot;. Most distributions ship it for a smooth out-of-box experience.</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>pull<span class="w"> </span>--tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span>localhost:5000/custom_httpd
+Checking<span class="w"> </span><span class="k">if</span><span class="w"> </span>image<span class="w"> </span>destination<span class="w"> </span>supports<span class="w"> </span>signatures
+Writing<span class="w"> </span>manifest<span class="w"> </span>to<span class="w"> </span>image<span class="w"> </span>destination
+Storing<span class="w"> </span>signatures
+</code></pre>
+<p>Succeeds after verifying the signature; a missing or tampered signature would be rejected.</p>
+<h3 id="testing-signature-verification-failures">Testing signature verification failures</h3>
+<p>A policy is only as good as its ability to block untrusted content. First <code>podman rmi localhost:5000/custom_httpd</code> to force a pull and check.</p>
+<pre class="hl"><code><span class="c1"># unsigned image</span>
+$<span class="w"> </span>podman<span class="w"> </span>tag<span class="w"> </span>custom_httpd<span class="w"> </span>localhost:5000/custom_httpd:unsigned
+$<span class="w"> </span>podman<span class="w"> </span>push<span class="w"> </span>--tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span>localhost:5000/custom_httpd:unsigned
+$<span class="w"> </span>podman<span class="w"> </span>pull<span class="w"> </span>--tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span>localhost:5000/custom_httpd:unsigned
+Error:<span class="w"> </span>unable<span class="w"> </span>to<span class="w"> </span>copy<span class="w"> </span>from<span class="w"> </span><span class="nb">source</span><span class="w"> </span>docker://localhost:5000/custom_httpd:unsigned:<span class="w"> </span>Source<span class="w"> </span>image<span class="w"> </span>rejected:<span class="w"> </span>A<span class="w"> </span>signature<span class="w"> </span>was<span class="w"> </span>required,<span class="w"> </span>but<span class="w"> </span>no<span class="w"> </span>signature<span class="w"> </span>exists
+
+<span class="c1"># wrong public key: generate a dummy key, point keyPath at dummy.pub, pull again</span>
+$<span class="w"> </span>cosign<span class="w"> </span>generate-key-pair<span class="w"> </span>--output-key-prefix<span class="w"> </span>dummy
+$<span class="w"> </span>podman<span class="w"> </span>pull<span class="w"> </span>--tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span>localhost:5000/custom_httpd
+Error:<span class="w"> </span>Source<span class="w"> </span>image<span class="w"> </span>rejected:<span class="w"> </span>Invalid<span class="w"> </span>signature:<span class="w"> </span>key<span class="w"> </span>mismatch
+</code></pre>
+<p>These confirm Podman enforces trust, preventing MITM attacks and accidental deployment of unvetted images. <strong>Restore the valid public key in <code>policy.json</code> afterwards.</strong></p>
+<h3 id="managing-trust-with-podman-image-trust">Managing trust with <code>podman image trust</code></h3>
+<p>Hand-editing <code>policy.json</code> is error-prone and hard to automate; use <code>podman image trust</code>:</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>image<span class="w"> </span>trust<span class="w"> </span>show
+TRANSPORT<span class="w">      </span>NAME<span class="w">             </span>TYPE<span class="w">            </span>ID<span class="w">   </span>STORE
+all<span class="w">            </span>default<span class="w">          </span>accept
+repository<span class="w">     </span>localhost:5000<span class="w">   </span>sigstoreSigned<span class="w">  </span>N/A
+docker-daemon<span class="w">                   </span>accept
+</code></pre>
+<p>Add Red Hat's public GPG key to check UBI signatures:</p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>wget<span class="w"> </span>-O<span class="w"> </span>/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>https://www.redhat.com/security/data/fd431d51.txt
+$<span class="w"> </span>sudo<span class="w"> </span>podman<span class="w"> </span>image<span class="w"> </span>trust<span class="w"> </span><span class="nb">set</span><span class="w"> </span>-f<span class="w"> </span>/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat<span class="w"> </span>registry.access.redhat.com/ubi9
+</code></pre>
+<p>(Red Hat product signing keys: https://access.redhat.com/security/team/key.) The command adds an entry to <code>policy.json</code>:</p>
+<pre class="hl"><code><span class="nt">"registry.access.redhat.com/ubi9"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"signedBy"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"keyType"</span><span class="p">:</span><span class="w"> </span><span class="s2">"GPGKeys"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"keyPath"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat"</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">]</span>
+</code></pre>
+<p>The Red Hat sigstore configuration for this registry already ships in <code>/etc/containers/registries.d/registry.access.redhat.com.yaml</code> (from the Podman package; Red Hat registry files are in <code>github.com/containers/common</code>). <strong>Create per-provider files</strong> in <code>/etc/containers/registries.d/</code> (e.g. <code>redhat.yaml</code>) to keep configuration maintainable and versioned. After this, every UBI 9 pull from <code>registry.access.redhat.com</code> fetches its signature from the Red Hat store and validates it with the key.</p>
+<h3 id="managing-signatures-with-skopeo">Managing signatures with Skopeo</h3>
+<p>Skopeo uses the public key path in <code>policy.json</code> automatically, and refuses to copy an image whose signature does not match.</p>
+<pre class="hl"><code><span class="c1"># verified copy (same effect as podman pull, more control over transports)</span>
+$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span>--src-tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://localhost:5000/custom_httpd<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>containers-storage:localhost:5000/custom_httpd
+
+<span class="c1"># sign while copying</span>
+$<span class="w"> </span>skopeo<span class="w"> </span>copy<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--dest-tls-verify<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--sign-by-sigstore-private-key<span class="w"> </span>./cosign.key<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>containers-storage:localhost:5000/custom_httpd<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker://localhost:5000/custom_httpd
+</code></pre>
+<h3 id="generating-a-sigstore-key-with-skopeo">Generating a Sigstore key with Skopeo</h3>
+<pre class="hl"><code>$<span class="w"> </span>mkdir<span class="w"> </span>.skopeo
+$<span class="w"> </span>skopeo<span class="w"> </span>generate-sigstore-key<span class="w"> </span>--output-prefix<span class="w"> </span>.skopeo/sig-ubi8-httpd
+Key<span class="w"> </span>written<span class="w"> </span>to<span class="w"> </span><span class="s2">".skopeo/sig-ubi8-httpd.private"</span><span class="w"> </span>and<span class="w"> </span><span class="s2">".skopeo/sig-ubi8-httpd.pub"</span>
+</code></pre>
+<p>It asks for an optional passphrase; then follow the previous sections to sign and trust images.</p>
+<h3 id="using-rekor-and-cosign">Using Rekor and Cosign</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Cosign</strong></td>
+<td>signs and verifies container images, OCI-standard, works with popular registries</td>
+</tr>
+<tr>
+<td><strong>Rekor</strong></td>
+<td>a <strong>transparency log server</strong>: an <strong>immutable record</strong> of all signing metadata, preventing retroactive tampering or revocation</td>
+</tr>
+</tbody>
+</table>
+<p>The book uses the <strong>public Rekor server</strong> https://rekor.sigstore.dev rather than deploying one. <strong>Sign by digest</strong> (best practice, so overwriting a tag cannot cause a mismatch); the registry must handle signatures and you must be authenticated with permissions:</p>
+<pre class="hl"><code>$<span class="w"> </span>cosign<span class="w"> </span>sign<span class="w"> </span>--key<span class="w"> </span>.cosign.key<span class="w"> </span>quay.io/alezzandro/ubi9-httpd@sha256:cda838d6ef3ddf951c1c7f1086d1aa1ed895159a4e794b8629da66b35b94c83f
+tlog<span class="w"> </span>entry<span class="w"> </span>created<span class="w"> </span>with<span class="w"> </span>index:<span class="w"> </span><span class="m">165166231</span>
+Pushing<span class="w"> </span>signature<span class="w"> </span>to:<span class="w"> </span>quay.io/alezzandro/ubi9-httpd
+</code></pre>
+<p>Cosign creates the signature and a <strong>Rekor log entry</strong> with the image digest, public key and timestamp. Inspect it with the Rekor CLI:</p>
+<pre class="hl"><code>$<span class="w"> </span>curl<span class="w"> </span>-O<span class="w"> </span>-L<span class="w"> </span>https://github.com/sigstore/rekor/releases/download/v1.3.8/rekor-cli-linux-amd64
+$<span class="w"> </span>chmod<span class="w"> </span>+x<span class="w"> </span>rekor-cli-linux-amd64
+$<span class="w"> </span>./rekor-cli-linux-amd64<span class="w"> </span>get<span class="w"> </span>--log-index<span class="w"> </span><span class="m">165166231</span>
+LogID:<span class="w"> </span>c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d
+Index:<span class="w"> </span><span class="m">165166231</span>
+IntegratedTime:<span class="w"> </span><span class="m">2025</span>-01-24T11:20:22Z
+UUID:<span class="w"> </span>108e9186e8c5677af3fa03b736ca86f4605e0229fb620863ff8d0b550db9e43f0aad3b2da8c0df4f
+</code></pre>
+<p>Verify:</p>
+<pre class="hl"><code>$<span class="w"> </span>cosign<span class="w"> </span>verify<span class="w"> </span>--key<span class="w"> </span>./cosign.pub<span class="w"> </span>quay.io/alezzandro/ubi9-httpd@sha256:cda838d6ef3ddf951c1c7f1086d1aa1ed895159a4e794b8629da66b35b94c83f
+-<span class="w"> </span>The<span class="w"> </span>cosign<span class="w"> </span>claims<span class="w"> </span>were<span class="w"> </span>validated
+-<span class="w"> </span>Existence<span class="w"> </span>of<span class="w"> </span>the<span class="w"> </span>claims<span class="w"> </span><span class="k">in</span><span class="w"> </span>the<span class="w"> </span>transparency<span class="w"> </span>log<span class="w"> </span>was<span class="w"> </span>verified<span class="w"> </span>offline
+-<span class="w"> </span>The<span class="w"> </span>signatures<span class="w"> </span>were<span class="w"> </span>verified<span class="w"> </span>against<span class="w"> </span>the<span class="w"> </span>specified<span class="w"> </span>public<span class="w"> </span>key
+</code></pre>
+<p>The Rekor log is an <strong>audit trail</strong> nobody can deny involvement in; anyone can audit it independently. Integrate Cosign and Rekor in <strong>CI/CD</strong> so every image is signed and verified, strengthening the software supply chain.</p>
+<h2 id="10-4-customising-linux-kernel-capabilities">10.4 Customising Linux kernel capabilities</h2>
+<p><strong>Capabilities</strong> (introduced in <strong>Linux kernel 2.2</strong>) split elevated privileges into single units assignable to a process or thread, so you can give an unprivileged process a <strong>restricted subset</strong> instead of effective UID 0.</p>
+<h3 id="how-capabilities-work">How capabilities work</h3>
+<p>They are tied to <strong>executables through extended attributes</strong> (<code>man xattr</code>) and granted to the process on <code>execve()</code>, subject to kernel transition rules. Examples:</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Allows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CAP_CHOWN</code></td>
+<td>change a file's UID and GID</td>
+</tr>
+<tr>
+<td><code>CAP_KILL</code></td>
+<td>bypass permission checks to signal a process</td>
+</tr>
+<tr>
+<td><code>CAP_MKNOD</code></td>
+<td>create special files with <code>mknod()</code></td>
+</tr>
+<tr>
+<td><code>CAP_NET_ADMIN</code></td>
+<td>privileged network configuration: interfaces, promiscuous mode, routing tables, multicasting</td>
+</tr>
+<tr>
+<td><code>CAP_NET_RAW</code></td>
+<td>RAW and PACKET sockets (e.g. <code>ping</code> sending ICMP)</td>
+</tr>
+<tr>
+<td><code>CAP_SYS_CHROOT</code></td>
+<td><code>chroot()</code> and <code>setns()</code></td>
+</tr>
+<tr>
+<td><code>CAP_SYS_ADMIN</code></td>
+<td><strong>near-total root</strong>: mount filesystems, bypass container isolation; effectively full control of the host kernel</td>
+</tr>
+<tr>
+<td><code>CAP_DAC_OVERRIDE</code></td>
+<td>bypass discretionary access control checks on files</td>
+</tr>
+<tr>
+<td><code>CAP_BPF</code></td>
+<td>privileged BPF operations (kernel 5.8)</td>
+</tr>
+</tbody>
+</table>
+<p>(<code>man capabilities</code> has the full list.) Assign with <code>setcap</code> (<code>+p</code> = Permitted) and read with <code>getcap</code>:</p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>setcap<span class="w"> </span><span class="s1">'cap_net_admin,cap_net_raw+p'</span><span class="w"> </span>/usr/bin/ping
+$<span class="w"> </span>getcap<span class="w"> </span>/usr/bin/ping
+/usr/bin/ping<span class="w"> </span>cap_net_admin,cap_net_raw<span class="o">=</span>p
+</code></pre>
+<p>Inspect a <strong>running process</strong> in <code>/proc/&lt;PID&gt;/status</code>:</p>
+<pre class="hl"><code>$<span class="w"> </span>ping<span class="w"> </span>example.com<span class="w"> </span>&gt;<span class="w"> </span>/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">&amp;</span>
+$<span class="w"> </span>grep<span class="w"> </span><span class="s1">'Cap.*'</span><span class="w"> </span>/proc/<span class="k">$(</span>pgrep<span class="w"> </span>ping<span class="k">)</span>/status
+CapInh:<span class="w"> </span><span class="m">0000000000000000</span>
+CapPrm:<span class="w"> </span><span class="m">0000000000003000</span>
+CapEff:<span class="w"> </span><span class="m">0000000000000000</span>
+CapBnd:<span class="w"> </span>000000ffffffffff
+CapAmb:<span class="w"> </span><span class="m">0000000000000000</span>
+$<span class="w"> </span>capsh<span class="w"> </span>--decode<span class="o">=</span><span class="m">0000000000003000</span>
+<span class="nv">0x0000000000003000</span><span class="o">=</span>cap_net_admin,cap_net_raw
+</code></pre>
+<p><code>CapPrm</code> (permitted) decodes with <code>capsh</code>; it matches <code>getcap</code>, showing the file's permitted capabilities propagated to the process. The constants: https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h.</p>
+<blockquote>
+<p>[!tip] Ping without capabilities
+Older RHEL and CentOS used file capabilities (or setuid 0) so everyone could ping, an insecure approach if the binary has a bug. <strong>Fedora 31</strong> moved to the kernel parameter <strong><code>net.ipv4.ping_group_range</code></strong>, set wide so users can send ICMP without <code>CAP_NET_ADMIN</code> and <code>CAP_NET_RAW</code>; RHEL and others inherited it (https://fedoraproject.org/wiki/Changes/EnableSysctlPingGroupRange).</p>
+</blockquote>
+<h3 id="capabilities-in-containers">Capabilities in containers</h3>
+<p>By default Podman runs containers with the set in <code>/usr/share/containers/containers.conf</code> (commented defaults at the time of writing):</p>
+<pre class="hl"><code><span class="c1">#default_capabilities = [</span>
+<span class="c1">#    "CHOWN",</span>
+<span class="c1">#    "DAC_OVERRIDE",</span>
+<span class="c1">#    "FOWNER",</span>
+<span class="c1">#    "FSETID",</span>
+<span class="c1">#    "KILL",</span>
+<span class="c1">#    "NET_BIND_SERVICE",</span>
+<span class="c1">#    "SETFCAP",</span>
+<span class="c1">#    "SETGID",</span>
+<span class="c1">#    "SETPCAP",</span>
+<span class="c1">#    "SETUID",</span>
+<span class="c1">#    "SYS_CHROOT"</span>
+<span class="c1">#]</span>
+</code></pre>
+<p>Check on nginx's PID 1:</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>cap_test<span class="w"> </span>docker.io/library/nginx
+$<span class="w"> </span>podman<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>cap_test<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'grep Cap /proc/1/status'</span>
+CapInh:<span class="w"> </span><span class="m">0000000000000000</span>
+CapPrm:<span class="w"> </span>00000000800405fb
+CapEff:<span class="w"> </span>00000000800405fb
+CapBnd:<span class="w"> </span>00000000800405fb
+CapAmb:<span class="w"> </span><span class="m">0000000000000000</span>
+$<span class="w"> </span>capsh<span class="w"> </span>--decode<span class="o">=</span>00000000800405fb
+<span class="nv">0x00000000800405fb</span><span class="o">=</span>cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_sys_chroot,cap_setfcap
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CapInh</code> (inheritable)</td>
+<td>preserved across <code>execve</code>; zero means nothing inherited by children unless configured</td>
+</tr>
+<tr>
+<td><code>CapPrm</code> (permitted)</td>
+<td>the limiting set: the maximum the process can use; capabilities move from it into effective</td>
+</tr>
+<tr>
+<td><code>CapEff</code> (effective)</td>
+<td>what the kernel actually checks (e.g. <code>CAP_SYS_TIME</code> to change the clock)</td>
+</tr>
+<tr>
+<td><code>CapBnd</code> (bounding)</td>
+<td>limits what a process can ever gain; you cannot promote into permitted what isn't in bounding</td>
+</tr>
+<tr>
+<td><code>CapAmb</code> (ambient)</td>
+<td>added in Linux 4.3; preserves capabilities for non-root users running programs that are not setuid</td>
+</tr>
+</tbody>
+</table>
+<p>The list equals Podman's default and applies in rootless and rootful modes; the container runtime (runc or crun) sets them up.</p>
+<h3 id="customising-a-container-s-capabilities">Customising a container's capabilities</h3>
+<p>Static: edit <code>default_capabilities</code> in <code>containers.conf</code>. Runtime: <strong><code>--cap-add</code></strong> and <strong><code>--cap-drop</code></strong> (repeatable):</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>cap_test2<span class="w"> </span>--cap-drop<span class="o">=</span>DAC_OVERRIDE<span class="w"> </span>docker.io/library/nginx
+$<span class="w"> </span>podman<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>cap_test2<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'grep Cap /proc/1/status'</span><span class="w">     </span><span class="c1"># CapPrm: 00000000800405f9</span>
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>cap_test3<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--cap-drop<span class="o">=</span>KILL<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--cap-drop<span class="o">=</span>DAC_OVERRIDE<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--cap-add<span class="o">=</span>NET_RAW<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--cap-add<span class="o">=</span>NET_ADMIN<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>docker.io/library/nginx
+</code></pre>
+<p><strong>Be careful dropping defaults:</strong> dropping <code>CHOWN</code> breaks nginx:</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--name<span class="w"> </span>cap_test4<span class="w"> </span>--cap-drop<span class="o">=</span>CHOWN<span class="w"> </span>docker.io/library/nginx
+<span class="o">[</span>emerg<span class="o">]</span><span class="w"> </span><span class="m">1</span><span class="c1">#1: chown("/var/cache/nginx/client_temp", 101) failed (1: Operation not permitted)</span>
+</code></pre>
+<p><strong>Rootless containers get namespaced capabilities</strong>, more limited and unable to change the host: <code>--cap-add=MKNOD</code> in a rootless busybox container still fails, but as root it works:</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--cap-add<span class="o">=</span>MKNOD<span class="w"> </span>docker.io/library/busybox<span class="w"> </span>/bin/sh
+/<span class="w"> </span><span class="c1"># mkdir -p /test/dev</span>
+/<span class="w"> </span><span class="c1"># mknod -m 666 /test/dev/urandom c 1 8</span>
+mknod:<span class="w"> </span>/test/dev/urandom:<span class="w"> </span>Operation<span class="w"> </span>not<span class="w"> </span>permitted
+<span class="c1"># podman run -it --cap-add=MKNOD docker.io/library/busybox /bin/sh      # as root</span>
+/<span class="w"> </span><span class="c1"># mknod -m 666 /test/dev/urandom c 1 8                                # succeeds</span>
+</code></pre>
+<blockquote>
+<p>[!tip] Keep the defaults
+Adding capabilities enlarges the attack surface. If unnecessary, keep the defaults and <strong>drop the unwanted ones only after analysing side effects</strong>.</p>
+</blockquote>
+<h2 id="10-5-understanding-selinux-interaction-with-containers">10.5 Understanding SELinux interaction with containers</h2>
+<p>SELinux works in kernel space with a <strong>least-privilege</strong> model, using <strong>labels</strong> to define types. By default it is in <strong>Enforcing</strong> mode (deny except as policy allows); <strong>Permissive</strong> only audits violations.</p>
+<blockquote>
+<p>[!warning] Don't switch to Permissive or disable SELinux
+It exposes you to threats; <strong>create custom policies for the needed exceptions</strong> instead.</p>
+</blockquote>
+<ul>
+<li>The default policy type is <strong>targeted</strong> (confines specific object types: processes, files, devices).</li>
+<li><strong>Access control kinds:</strong></li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Type Enforcement (TE)</strong></td>
+<td>access by <strong>process type (domain) and file type</strong>; the main use</td>
+</tr>
+<tr>
+<td><strong>Role-Based Access Control (RBAC)</strong></td>
+<td>SELinux users (mappable to system users) and roles</td>
+</tr>
+<tr>
+<td><strong>Multi-Level Security (MLS)</strong></td>
+<td>all processes at the same sensitivity level get read/write</td>
+</tr>
+<tr>
+<td><strong>Multi-Category Security (MCS)</strong></td>
+<td>plain-text <strong>categories</strong> make compartments; only processes in the same category access the resource (chapter 5)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>TE:</strong> files get <strong>types</strong>, processes <strong>domains</strong>. Example: Apache's <code>httpd_t</code> domain can access <code>httpd_sys_content_t</code> files.</li>
+<li><strong>Policy pattern:</strong> <code>POLICY DOMAIN TYPE:CLASS OPERATION;</code> where POLICY is <code>allow</code>, <code>allowxperm</code>, <code>auditallow</code>, <code>neverallow</code>, <code>dontaudit</code>...; CLASS is <code>file</code>, <code>dir</code>, <code>lnk_file</code>, <code>chr_file</code>, <code>blk_file</code>, <code>sock_file</code>, <code>fifo_file</code>; OPERATION like <code>open</code>, <code>read</code>, <code>use</code>, <code>lock</code>, <code>getattr</code>, <code>revc</code> (as printed).</li>
+</ul>
+<pre class="hl"><code>allow myapp_t myapp_log_t:file { read_file_perms append_file_perms };
+</code></pre>
+<ul>
+<li><strong>Modular policies</strong>, loaded and unloaded without recompiling the whole set:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># semodule -i custompolicy.pp</span>
+<span class="c1"># semodule -l</span>
+</code></pre>
+<p>On Fedora, CentOS, RHEL the binary policy is in <code>/etc/selinux/targeted/policy</code> (the book prints <code>polixy.XX</code>), and container policies come from the <strong><code>container-selinux</code></strong> package (source https://github.com/containers/container-selinux) with three key source files:</p>
+<ul>
+<li>
+<p><code>container.fc</code>: files and directories bound to the module's types</p>
+</li>
+<li>
+<p><code>container.te</code>: policy rules, attributes, aliases</p>
+</li>
+<li>
+<p><code>container.if</code>: the module interface (public macros)</p>
+</li>
+<li>
+<p>A container process runs in the <strong><code>container_t</code></strong> domain: read/write on <strong><code>container_file_t</code></strong>, read/execute on <strong><code>container_share_t</code></strong>. While a container runs, <strong>podman, the runtime and conmon run as <code>container_runtime_t</code></strong>, allowed to transition only to types in the <strong><code>container_domain</code></strong> attribute (inspect with <code>seinfo -a container_domain -x</code> from the <code>setools-console</code> package): <code>container_t</code>, <code>container_init_t</code>, <code>container_engine_t</code>, <code>container_kvm_t</code>, <code>container_userns_t</code> and others.</p>
+</li>
+</ul>
+<pre class="hl"><code>attribute container_domain;
+attribute container_user_domain;
+attribute container_net_domain;
+typeattribute container_t container_domain, container_net_domain, container_user_domain;
+</code></pre>
+<p>This isolates processes across containers and from the host: an escaped process cannot reach host resources or other containers.</p>
+<p><strong>Labels on storage:</strong> the image's read-only <strong>LowerDirs</strong> are labelled <strong><code>container_ro_file_t</code></strong> (the container cannot write there); the <strong>MergedDir</strong> is writable, labelled <strong><code>container_file_t</code></strong>. Prove it with MCS categories:</p>
+<pre class="hl"><code><span class="c1"># podman run -d --name selinux_test1 --security-opt label=level:s0:c1,c2 nginx</span>
+<span class="c1"># find /var/lib/containers/storage/overlay -type f -context '*container_file_t:s0:c1,c2*' -printf '%-50Z%p\n'</span>
+system_u:object_r:container_file_t:s0:c1,c2<span class="w"> </span>/var/lib/containers/storage/overlay/4b14.../merged/lib/x86_64-linux-gnu/libreadline.so.8.1
+<span class="c1"># podman inspect selinux_test1 --format '{{.GraphDriver.Data.LowerDir}}'</span>
+<span class="c1"># ls -alZ /var/lib/containers/storage/overlay/2edcec35.../diff</span>
+dr-xr-xr-x.<span class="w"> </span><span class="m">21</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span>unconfined_u:object_r:container_ro_file_t:s0<span class="w"> </span><span class="m">4096</span><span class="w"> </span>Jan<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="m">23</span>:16<span class="w"> </span>.
+</code></pre>
+<p>LowerDir layers are <strong>shared</strong> across containers using the image, so <strong>no MCS categories</strong> appear there.</p>
+<p><strong>The problem:</strong> containers cannot read/write files not labelled <code>container_file_t</code>. The <code>:z</code> suffix or manual relabelling works, but <strong>relabelling <code>/home</code> or <code>/var/logs</code> is a very bad idea</strong> (other processes lose access). Hand-writing custom policies is too complex for everyday use. The tool for it is Udica.</p>
+<h3 id="udica">Udica</h3>
+<p><strong>Udica</strong> (https://github.com/containers/udica) was created by <strong>Lukas Vrabec</strong>, SELinux evangelist and team leader of the SELinux and Security Special Projects engineering teams at Red Hat. It <strong>generates SELinux profiles for containers</strong> that let them access resources the common <code>container_t</code> domain would block.</p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>udica<span class="w"> </span>setools-console<span class="w"> </span>container-selinux
+<span class="c1"># other distributions, from source:</span>
+$<span class="w"> </span>sudo<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>setools-console<span class="w"> </span>git<span class="w"> </span>container-selinux
+$<span class="w"> </span>git<span class="w"> </span>clone<span class="w"> </span>&lt;the<span class="w"> </span>Udica<span class="w"> </span>repository<span class="w"> </span>URL&gt;<span class="w">      </span><span class="c1"># the book's URL is missing here</span>
+$<span class="w"> </span><span class="nb">cd</span><span class="w"> </span>udica<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>sudo<span class="w"> </span>python3<span class="w"> </span>./setup.py<span class="w"> </span>install
+</code></pre>
+<p><strong>Demo:</strong> a container writing to the host's <code>/var/log</code> (bind-mounted). By default <code>container_t</code> cannot write to <code>var_log_t</code>. <code>Chapter10/custom_logger/logger.sh</code> loops forever writing a dated line with a counter:</p>
+<pre class="hl"><code><span class="ch">#!/bin/bash</span>
+<span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<span class="nb">trap</span><span class="w"> </span><span class="s2">"echo Exited; exit;"</span><span class="w"> </span>SIGINT<span class="w"> </span>SIGTERM
+
+<span class="c1"># Run an endless loop writing a simple log entry with date</span>
+<span class="nv">count</span><span class="o">=</span><span class="m">1</span>
+<span class="k">while</span><span class="w"> </span>true<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>date<span class="w"> </span>+%y/%m/%d_%H:%M:%S<span class="k">)</span><span class="s2"> - Line #</span><span class="nv">$count</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span>-a<span class="w"> </span>/var/log/custom.log
+<span class="w">    </span><span class="nv">count</span><span class="o">=</span><span class="k">$((</span><span class="nv">count</span><span class="o">+</span><span class="m">1</span><span class="k">))</span>
+<span class="w">    </span>sleep<span class="w"> </span><span class="m">2</span>
+<span class="k">done</span>
+</code></pre>
+<p>(<code>set -euo pipefail</code> exits on errors; <code>tee</code> writes to stdout and appends to <code>/var/log/custom.log</code>.) <code>Dockerfile</code>:</p>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/fedora</span>
+<span class="c"># Copy the logger.sh script</span>
+<span class="k">COPY</span><span class="w"> </span>--chmod<span class="o">=</span><span class="m">755</span><span class="w"> </span>logger.sh<span class="w"> </span>/
+<span class="c"># Exec the logger.sh script</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/logger.sh"</span><span class="p">]</span>
+</code></pre>
+<p><code>--chmod=755</code> gives the script execute permission at startup.</p>
+<pre class="hl"><code><span class="c1"># cd /Chapter10/custom_logger</span>
+<span class="c1"># buildah build -t custom_logger .</span>
+<span class="c1"># podman run -v /var/log:/var/log:rw \</span>
+<span class="w">    </span>--name<span class="w"> </span>custom_logger1<span class="w"> </span>custom_logger
+tee:<span class="w"> </span>/var/log/custom.log:<span class="w"> </span>Permission<span class="w"> </span>denied
+</code></pre>
+<p>Generate a profile from the container's spec:</p>
+<pre class="hl"><code><span class="c1"># podman inspect custom_logger1 &gt; container.json</span>
+<span class="c1"># udica -j container.json custom_logger</span>
+Policy<span class="w"> </span>custom_logger<span class="w"> </span>created!
+
+Please<span class="w"> </span>load<span class="w"> </span>these<span class="w"> </span>modules<span class="w"> </span>using:
+<span class="c1"># semodule -i custom_logger.cil /usr/share/udica/templates/{base_container.cil,log_container.cil}</span>
+Restart<span class="w"> </span>the<span class="w"> </span>container<span class="w"> </span>with:<span class="w"> </span><span class="s2">"--security-opt label=type:custom_logger.process"</span><span class="w"> </span>parameter
+</code></pre>
+<p>The profile is in <strong>CIL</strong> (Common Intermediate Language); the Udica <strong>templates</strong> it inherits come along. Load and rerun:</p>
+<pre class="hl"><code><span class="c1"># semodule -i custom_logger.cil /usr/share/udica/templates/{base_container.cil,log_container.cil}</span>
+<span class="c1"># podman run -v /var/log:/var/log:rw \</span>
+<span class="w">    </span>--name<span class="w"> </span>custom_logger2<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--security-opt<span class="w"> </span><span class="nv">label</span><span class="o">=</span>type:custom_logger.process<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>custom_logger
+<span class="m">22</span>/01/08_09:05:19<span class="w"> </span>-<span class="w"> </span>Line<span class="w"> </span><span class="c1">#1</span>
+...
+</code></pre>
+<p>It writes successfully. The process now has the <strong><code>custom_logger.process</code></strong> domain (a superset of the default), visible on the host:</p>
+<pre class="hl"><code><span class="c1"># ps auxZ | grep 'custom_logger.process'</span>
+system_u:system_r:custom_logger.process:s0:c159,c258<span class="w"> </span>root<span class="w"> </span><span class="m">26633</span><span class="w"> </span>...<span class="w"> </span>/bin/bash<span class="w"> </span>/logger.sh
+</code></pre>
+<p>Udica parses the JSON spec for <strong>mount points, ports and capabilities</strong>. The generated <code>custom_logger.cil</code>:</p>
+<pre class="hl"><code>(block custom_logger
+    (blockinherit container)
+    (allow process process ( capability ( chown dac_override fowner fsetid kill net_bind_service setfcap setgid setpcap setuid sys_chroot )))
+
+    (blockinherit log_rw_container)
+)
+</code></pre>
+<ul>
+<li>The profile is a <code>block</code>; the <code>allow</code> rule enables the default capabilities; <code>blockinherit</code> pulls in the <code>container</code> and <code>log_rw_container</code> blocks.</li>
+<li><strong>Templates</strong> (installed by <code>container-selinux</code> in <code>/usr/share/udica/templates/</code>): <code>base_container.cil</code> (<strong>always included</strong>), <code>config_container.cil</code>, <code>home_container.cil</code>, <code>log_container.cil</code>, <code>net_container.cil</code>, <code>tmp_container.cil</code>, <code>tty_container.cil</code>, <code>virt_container.cil</code>, <code>x_container.cil</code>; others are added according to what the container does (here <code>log_rw_container</code> from <code>log_container.cil</code>).</li>
+<li>Generated profiles can be <strong>versioned in a GitHub repository</strong> and reused for similar containers on other hosts. CIL syntax: https://github.com/SELinuxProject/cil/wiki.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<p>Rootless containers and avoiding UID 0 shrink the attack surface; signing and trusting images blocks MITM attacks; capabilities and SELinux (with Udica) fine-tune a container's privileges. Next: advanced container networking.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+rootless · <code>/etc/subuid</code>, <code>/etc/subgid</code> · <code>uid_map</code> · <code>USER</code> · detached signature · Sigstore · Cosign · Rekor · <code>policy.json</code> types (<code>insecureAcceptAnything</code>, <code>sigstoreSigned</code>, <code>signedBy</code>) · <code>registries.d</code> · <code>podman image trust</code> · capabilities (<code>CapInh/Prm/Eff/Bnd/Amb</code>) · <code>--cap-add</code>, <code>--cap-drop</code> · SELinux TE, MCS · <code>container_t</code>, <code>container_file_t</code>, <code>container_ro_file_t</code> · Udica · CIL.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 10; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>MITRE ATT&amp;CK Container Matrix: https://attack.mitre.org/matrices/enterprise/containers/</li>
+<li>Sigstore: https://docs.sigstore.dev/</li>
+<li>Podman image signing tutorial: https://github.com/containers/podman/blob/main/docs/tutorials/image_signing.md</li>
+<li>Lukas Vrabec's blog: https://lukas-vrabec.com/</li>
+<li>CIL: https://github.com/SELinuxProject/cil/wiki</li>
+<li>Udica: https://github.com/containers/udica ; intro: https://www.redhat.com/en/blog/generate-selinux-policies-containers-with-udica</li>
+<li>container-selinux: https://github.com/containers/container-selinux</li>
+<li>Fedora ping_group_range change: https://fedoraproject.org/wiki/Changes/EnableSysctlPingGroupRange</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">Podman for DevOps 5: Implementing storage for the container's data</a> · <a href="/book-digest/podman-for-devops/pfd-09-pushing-images-to-a-container-registry/">Podman for DevOps 9: Pushing images to a container registry</a> · <a href="/book-digest/podman-for-devops/pfd-01-introduction-to-container-technology/">Podman for DevOps 1: Introduction to container technology</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-09-pushing-images-to-a-container-registry/">&larr; Podman for DevOps 9: Pushing images to a container registry</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-11-troubleshooting-and-monitoring-containers/">Podman for DevOps 11: Troubleshooting and monitoring containers &rarr;</a></nav></main></body></html>

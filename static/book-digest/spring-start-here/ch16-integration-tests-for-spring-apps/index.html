@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Ch 16: Implementing integration tests for Spring apps</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/spring-start-here/">Spring Start Here</a></div>
+<main>
+<h1 id="ch-16-implementing-integration-tests-for-spring-apps">Ch 16: Implementing integration tests for Spring apps</h1>
+<p>Source: Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 16. Previous: <a href="/book-digest/spring-start-here/ch15-unit-testing-in-spring-apps/">Ch 15: Unit testing in Spring apps</a>. Uses the money transfer use case from <code>ssh_ch14_ex1</code>. Last chapter of the book (appendices follow: <a href="/book-digest/spring-start-here/appendices/">Appendices B to G: projects, HTTP, JSON, MySQL, tools, further reading</a>).</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A unit test asks &quot;does this method work alone?&quot;.</li>
+<li>An <strong>integration test</strong> asks &quot;does this part work <strong>together with what it depends on</strong>?&quot;.</li>
+<li>In Spring that means running with the <strong>Spring context</strong> (<code>@SpringBootTest</code>), optionally swapping a bean for a mock (<code>@MockitoBean</code>), or testing the web layer through <strong><code>MockMvc</code></strong>, which sends simulated HTTP requests without starting a server.</li>
+<li>Use many unit tests, fewer integration tests, and targeted controller tests.</li>
+</ul>
+</div></div>
+<h2 id="16-1-spring-integration-tests">16.1 Spring integration tests</h2>
+<p><strong>Analogy:</strong> the car dashboard again. The tank is full and works alone, but the fuel line to the engine is broken: the car will not start and the fuel indicator says nothing. Parts correct in isolation can still fail to talk to each other.</p>
+<p><strong>What can you integration-test?</strong></p>
+<ul>
+<li><strong>Two or more of your objects</strong> talking to each other (catches problems after one changes).</li>
+<li><strong>An object with a capability the framework adds</strong>
+<ul>
+<li>(transactions, DI, security, caching)</li>
+<li>Upgrade Spring and, if the capability changes, the test fails even though your code did not change.</li>
+</ul>
+</li>
+<li><strong>The app with its persistence layer</strong> (repository against a database), to detect problems after upgrading or swapping a dependency such as the JDBC driver.</li>
+</ul>
+<p>The structure is the same as a unit test (assumptions, call, validations), but you <strong>do not have to mock every dependency</strong>: you may let a real object be called when you want to test that two objects communicate (e.g. the real <code>AccountRepository</code>). You can still mock what you do not care about.</p>
+<p><strong>Note on databases:</strong> if you do not mock the repository, use an <strong>in-memory database such as H2</strong>, or <strong>Testcontainers</strong> (a containerised local database). A real external database adds latency and fails on infrastructure or network problems, and you are testing the app, not the infrastructure.</p>
+<h3 id="a-spring-integration-test">A Spring integration test</h3>
+<p>A Spring integration test lets Spring <strong>create the beans and configure the context</strong> as when the app runs.</p>
+<ul>
+<li><code>@SpringBootTest</code> starts the Spring context.</li>
+<li><code>@Autowired TransferService</code> is the <strong>real</strong> bean, built by Spring with real DI and transactions.</li>
+<li><code>@MockitoBean AccountRepository</code> is a mock registered as a bean that replaces the real repository.</li>
+<li>The test body uses given / when / verify as in a unit test.</li>
+<li>Boot 4 name: <code>@MockitoBean</code>. Before Spring Boot 4 it was <code>@MockBean</code> (same behaviour).</li>
+</ul>
+<pre class="hl"><code><span class="nd">@SpringBootTest</span>
+<span class="kd">class</span> <span class="nc">TransferServiceSpringIntegrationTests</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@MockitoBean</span><span class="w">                       </span><span class="c1">// a mock that is also a bean in the context</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">AccountRepository</span><span class="w"> </span><span class="n">accountRepository</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nd">@Autowired</span><span class="w">                         </span><span class="c1">// the real TransferService from the context</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">TransferService</span><span class="w"> </span><span class="n">transferService</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nd">@Test</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">transferServiceTransferAmountTest</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">Account</span><span class="w"> </span><span class="n">sender</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Account</span><span class="p">();</span>
+<span class="w">      </span><span class="n">sender</span><span class="p">.</span><span class="na">setId</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">      </span><span class="n">sender</span><span class="p">.</span><span class="na">setAmount</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="mi">1000</span><span class="p">));</span>
+
+<span class="w">      </span><span class="n">Account</span><span class="w"> </span><span class="n">receiver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Account</span><span class="p">();</span>
+<span class="w">      </span><span class="n">receiver</span><span class="p">.</span><span class="na">setId</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+<span class="w">      </span><span class="n">receiver</span><span class="p">.</span><span class="na">setAmount</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="mi">1000</span><span class="p">));</span>
+
+<span class="w">      </span><span class="n">when</span><span class="p">(</span><span class="n">accountRepository</span><span class="p">.</span><span class="na">findById</span><span class="p">(</span><span class="mi">1L</span><span class="p">)).</span><span class="na">thenReturn</span><span class="p">(</span><span class="n">Optional</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">sender</span><span class="p">));</span>
+<span class="w">      </span><span class="n">when</span><span class="p">(</span><span class="n">accountRepository</span><span class="p">.</span><span class="na">findById</span><span class="p">(</span><span class="mi">2L</span><span class="p">)).</span><span class="na">thenReturn</span><span class="p">(</span><span class="n">Optional</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">receiver</span><span class="p">));</span>
+
+<span class="w">      </span><span class="n">transferService</span><span class="p">.</span><span class="na">transferMoney</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="mi">100</span><span class="p">));</span>
+
+<span class="w">      </span><span class="n">verify</span><span class="p">(</span><span class="n">accountRepository</span><span class="p">).</span><span class="na">changeAmount</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="mi">900</span><span class="p">));</span>
+<span class="w">      </span><span class="n">verify</span><span class="p">(</span><span class="n">accountRepository</span><span class="p">).</span><span class="na">changeAmount</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="mi">1100</span><span class="p">));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong><code>@MockitoBean</code></strong> is like <code>@Mock</code> but also puts the mock in the Spring context so <code>@Autowired</code> works. <strong>Before Spring Boot 4 it was called <code>@MockBean</code></strong>; same behaviour.</li>
+<li>It looks like a unit test but Spring now owns the tested object: if DI broke after an upgrade, this test would fail with no change to your code
+<ul>
+<li>The same goes for transactions, security, caching.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Do not use integration tests to cover every scenario of the logic.</strong> They are slower: they start the Spring context, and each call triggers the Spring mechanisms attached to the method. Validate logic with unit tests; use integration tests to validate integration with the framework.</p>
+<h2 id="16-2-controller-integration-tests">16.2 Controller integration tests</h2>
+<p>They check how the app exposes functionality through web endpoints: not just a Java method but the <strong>endpoint contract</strong>: URL, HTTP method, request body, response status and body, headers, validation, sometimes security.</p>
+<p><strong>Why test controllers:</strong> they are the entry point of a web app. Service logic can be right while the endpoint is mapped wrong, the request body is not deserialised as expected, validation does not run, or the response shape differs from what the client expects.</p>
+<p><strong>Tools:</strong></p>
+<ul>
+<li><strong><code>MockMvc</code></strong>: calls Spring MVC controllers <strong>without starting a real HTTP server</strong>; you choose which objects in the flow are real and which mocked.</li>
+<li><strong><code>TestRestTemplate</code></strong>: sends <strong>real HTTP requests</strong> to the app started on a test port.</li>
+<li><strong><code>WebTestClient</code></strong>: commonly used with Spring WebFlux (reactive) but useful elsewhere.</li>
+</ul>
+<p><img src="/book-digest/spring-start-here/img/mockmvc-flow.svg" alt="MockMvc flow" loading="lazy" /></p>
+<p><strong>Step 1: configure MockMvc.</strong> <code>@SpringBootTest</code> starts the context; inject the <code>WebApplicationContext</code> and build the client before each test.</p>
+<pre class="hl"><code><span class="nd">@SpringBootTest</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">TransferMoneyTests</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Autowired</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">WebApplicationContext</span><span class="w"> </span><span class="n">context</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">MockMvc</span><span class="w"> </span><span class="n">mockMvc</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nd">@BeforeEach</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">setup</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="na">mockMvc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MockMvcBuilders</span><span class="p">.</span><span class="na">webAppContextSetup</span><span class="p">(</span><span class="n">context</span><span class="p">).</span><span class="na">build</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><strong>Step 2: the test.</strong> The repository is replaced with <code>@MockitoBean</code>, so the controller and web setup are real while the repository is controlled (the book simplifies; you could use H2 or Testcontainers).</p>
+<pre class="hl"><code><span class="nd">@SpringBootTest</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">TransferMoneyTests</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nd">@Autowired</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="n">WebApplicationContext</span><span class="w"> </span><span class="n">context</span><span class="p">;</span>
+<span class="w">  </span><span class="kd">private</span><span class="w"> </span><span class="n">MockMvc</span><span class="w"> </span><span class="n">mockMvc</span><span class="p">;</span>
+<span class="w">  </span><span class="nd">@MockitoBean</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="n">AccountRepository</span><span class="w"> </span><span class="n">accountRepository</span><span class="p">;</span>
+
+<span class="w">  </span><span class="nd">@BeforeEach</span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">setup</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="na">mockMvc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MockMvcBuilders</span><span class="p">.</span><span class="na">webAppContextSetup</span><span class="p">(</span><span class="n">context</span><span class="p">).</span><span class="na">build</span><span class="p">();</span>
+<span class="w">  </span><span class="p">}</span>
+
+<span class="w">  </span><span class="nd">@Test</span>
+<span class="w">  </span><span class="nd">@DisplayName</span><span class="p">(</span><span class="s">"""</span>
+<span class="s">    GIVEN Two accounts exist with IDs 1 and 2, and both have 1000 balance.</span>
+<span class="s">    WHEN A transfer of 100 is requested from account 1 to account 2.</span>
+<span class="s">    THEN The response status is OK and both accounts' balances are updated</span>
+<span class="s">   """</span><span class="p">)</span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">transferMoneySuccess</span><span class="p">()</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">Exception</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Account</span><span class="w"> </span><span class="n">sender</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Account</span><span class="p">();</span>
+<span class="w">    </span><span class="n">sender</span><span class="p">.</span><span class="na">setId</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">sender</span><span class="p">.</span><span class="na">setAmount</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="s">"1000"</span><span class="p">));</span>
+<span class="w">    </span><span class="n">Account</span><span class="w"> </span><span class="n">receiver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Account</span><span class="p">();</span>
+<span class="w">    </span><span class="n">receiver</span><span class="p">.</span><span class="na">setId</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+<span class="w">    </span><span class="n">receiver</span><span class="p">.</span><span class="na">setAmount</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="s">"1000"</span><span class="p">));</span>
+<span class="w">    </span><span class="n">given</span><span class="p">(</span><span class="n">accountRepository</span><span class="p">.</span><span class="na">findById</span><span class="p">(</span><span class="mi">1L</span><span class="p">)).</span><span class="na">willReturn</span><span class="p">(</span><span class="n">Optional</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">sender</span><span class="p">));</span>
+<span class="w">    </span><span class="n">given</span><span class="p">(</span><span class="n">accountRepository</span><span class="p">.</span><span class="na">findById</span><span class="p">(</span><span class="mi">2L</span><span class="p">)).</span><span class="na">willReturn</span><span class="p">(</span><span class="n">Optional</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">receiver</span><span class="p">));</span>
+
+<span class="w">    </span><span class="n">mockMvc</span><span class="p">.</span><span class="na">perform</span><span class="p">(</span><span class="n">post</span><span class="p">(</span><span class="s">"/transfer"</span><span class="p">)</span>
+<span class="w">           </span><span class="p">.</span><span class="na">contentType</span><span class="p">(</span><span class="n">MediaType</span><span class="p">.</span><span class="na">APPLICATION_JSON</span><span class="p">)</span>
+<span class="w">           </span><span class="p">.</span><span class="na">content</span><span class="p">(</span><span class="s">"""</span>
+<span class="s">               {</span>
+<span class="s">                 "senderAccountId": 1,</span>
+<span class="s">                 "receiverAccountId": 2,</span>
+<span class="s">                 "amount": 100</span>
+<span class="s">               }</span>
+<span class="s">               """</span><span class="p">))</span>
+<span class="w">           </span><span class="p">.</span><span class="na">andExpect</span><span class="p">(</span><span class="n">status</span><span class="p">().</span><span class="na">isOk</span><span class="p">());</span>
+
+<span class="w">    </span><span class="n">verify</span><span class="p">(</span><span class="n">accountRepository</span><span class="p">).</span><span class="na">changeAmount</span><span class="p">(</span><span class="mi">1L</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="s">"900"</span><span class="p">));</span>
+<span class="w">    </span><span class="n">verify</span><span class="p">(</span><span class="n">accountRepository</span><span class="p">).</span><span class="na">changeAmount</span><span class="p">(</span><span class="mi">2L</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BigDecimal</span><span class="p">(</span><span class="s">"1100"</span><span class="p">));</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><strong>What the call does:</strong></p>
+<ul>
+<li><code>mockMvc.perform(post(&quot;/transfer&quot;))</code>: a simulated POST, the same contract a real client uses.</li>
+<li><code>.contentType(MediaType.APPLICATION_JSON)</code>: tells Spring the body is JSON (a real client sends <code>Content-Type: application/json</code>) so Spring can deserialise it.</li>
+<li><code>.content(...)</code>: the JSON body
+<ul>
+<li>Wrong field names, a missing required field, or JSON that cannot become the controller's object all fail the test: it validates the contract, not only the Java logic.</li>
+</ul>
+</li>
+<li><code>.andExpect(status().isOk())</code>: asserts <strong>200 OK</strong>; clients see HTTP responses, not service methods.</li>
+<li><code>verify(...)</code>: the effect on the application logic.</li>
+</ul>
+<p>MockMvc can also set <strong>path variables, request parameters, headers, cookies, authentication details</strong>. On the response you can check not just the status but the <strong>body, content type, specific JSON fields, headers, cookies, redirects, error messages</strong>. The more important the contract, the more you should validate.</p>
+<h2 id="comparing-the-three-kinds-of-tests">Comparing the three kinds of tests</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Unit test</th>
+<th>Spring integration test</th>
+<th>Controller integration test</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scope</td>
+<td>one piece of logic, in isolation</td>
+<td>logic together with Spring features</td>
+<td>the web layer / endpoint contract</td>
+</tr>
+<tr>
+<td>Starts Spring?</td>
+<td>usually no</td>
+<td>yes (context boots every time)</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Strength</td>
+<td>smallest and fastest; easy to run often and to debug; good for business rules, calculations, validations</td>
+<td>confidence it works as a <em>Spring</em> app: DI, config, transactions, repositories, services, scheduled components, event listeners</td>
+<td>tests from an API client's view; catches wrong mappings, bad JSON formats, missing validation, unexpected response structures</td>
+</tr>
+<tr>
+<td>Weakness</td>
+<td>does not prove it works when Spring wires, injects, configures, manages transactions</td>
+<td>slower; harder to maintain (more parts)</td>
+<td>specific to the web contract; more setup with security, validation, many dependencies</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Practical advice:</strong> many fast unit tests, fewer Spring integration tests for important framework interactions, and targeted controller tests for important endpoints.</p>
+<h2 id="chapter-summary-book">Chapter summary (book)</h2>
+<ul>
+<li>Integration tests validate how multiple parts of an app work together, including framework capabilities: DI, configuration, transactions, persistence, security, web endpoints.</li>
+<li>Spring integration tests start the Spring context, so they run slower than unit tests. Use <code>@SpringBootTest</code> and <code>@Autowired</code> to inject the object you test.</li>
+<li><code>@MockitoBean</code> replaces a Spring bean with a mock when you need to control that dependency.</li>
+<li>You do not always mock all dependencies; use real objects when the aim is to check how they interact.</li>
+<li>Controller integration tests validate endpoint contracts: URL, method, request data, response status and body, headers, cookies, validation behaviour.</li>
+<li>Tools: <code>MockMvc</code> (no real server), <code>TestRestTemplate</code> (real requests to a test port), <code>WebTestClient</code> (often reactive).</li>
+<li><code>MockMvc</code> lets you set content type, body, parameters, headers, cookies, then validate the response.</li>
+<li>Balanced strategy: many unit tests, fewer Spring integration tests, targeted controller tests.</li>
+</ul>
+<h2 id="terms-to-carry-forward">Terms to carry forward</h2>
+<p>integration test · Spring integration test · controller integration test · <code>@SpringBootTest</code> · <code>@MockitoBean</code> (<code>@MockBean</code> before Boot 4) · <code>@Autowired</code> in tests · H2 · Testcontainers · <code>MockMvc</code> · <code>MockMvcBuilders.webAppContextSetup()</code> · <code>WebApplicationContext</code> · <code>perform()</code> · <code>andExpect(status().isOk())</code> · <code>TestRestTemplate</code> · <code>WebTestClient</code> · endpoint contract.</p>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 16. https://www.manning.com/books/spring-start-here-second-edition (unverified)</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/spring-start-here/ch15-unit-testing-in-spring-apps/">Ch 15: Unit testing in Spring apps</a> · <a href="/book-digest/spring-start-here/ch14-data-persistence-with-spring-data/">Ch 14: Implementing data persistence with Spring Data</a> · <a href="/book-digest/spring-start-here/ch10-rest-endpoints/">Ch 10: Implementing REST endpoints</a></p>
+<nav class="pager"><a href="/book-digest/spring-start-here/ch15-unit-testing-in-spring-apps/">&larr; Ch 15: Unit testing in Spring apps</a><a href="/book-digest/spring-start-here/">Contents</a><a href="/book-digest/spring-start-here/appendices/">Appendices B to G: projects, HTTP, JSON, MySQL, tools, further reading &rarr;</a></nav></main></body></html>

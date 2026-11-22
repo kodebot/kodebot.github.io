@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 2: Reliable links</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-2-reliable-links">Understanding Distributed Systems 2: Reliable links</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 2. Previous: <a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-03-secure-links/">Understanding Distributed Systems 3: Secure links</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+IP only delivers on a best-effort basis (it may drop, duplicate or corrupt packets). <strong>TCP</strong> builds a <strong>reliable byte stream</strong> between two processes on top of it with sequence numbers, acknowledgements, retransmission and checksums, plus two <strong>stability</strong> mechanisms: <strong>flow control</strong> (do not overwhelm the receiver) and <strong>congestion control</strong> (do not flood the network). Both make new connections start slowly and make <strong>latency decide bandwidth</strong>, which is why you reuse connections and put servers near clients. <strong>UDP</strong> drops all of that for custom protocols.</p>
+</blockquote>
+<h2 id="addressing-and-routing-internet-layer">Addressing and routing (internet layer)</h2>
+<ul>
+<li>Reaching a node needs a way to <strong>address</strong> it and a way to <strong>route</strong> packets across routers.</li>
+<li><strong>IP</strong> handles addressing. Example: <strong>IPv6 has a 128-bit address space</strong>, so 2^128 addresses.</li>
+<li>A router consults a local <strong>routing table</strong> mapping a destination address to the next router on the path
+<ul>
+<li>Building and communicating the tables across routers is the job of the <strong>Border Gateway Protocol (BGP)</strong> (RFC 4271: https://datatracker.ietf.org/doc/html/rfc4271).</li>
+</ul>
+</li>
+<li>IP gives <strong>no guarantee</strong> the data arrives (e.g. an overloaded router may drop packets)
+<ul>
+<li><strong>TCP</strong> (RFC 793: https://tools.ietf.org/html/rfc793) is the transport-layer protocol that exposes a <strong>reliable channel between two processes</strong>: a stream of bytes arriving <strong>in order, without gaps, duplication or corruption</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-1-reliability">2.1 Reliability</h2>
+<p>To create the illusion of a reliable channel TCP:</p>
+<ol>
+<li><strong>Partitions the stream into segments</strong>, sequentially numbered, so the receiver detects <strong>holes and duplicates</strong>.</li>
+<li>Requires the receiver to <strong>acknowledge</strong> every segment; if no ack arrives, a <strong>timer fires</strong> on the sender and the segment is <strong>retransmitted</strong>.</li>
+<li>Uses a <strong>checksum</strong> so the receiver can verify the segment was not corrupted in transit.</li>
+</ol>
+<h2 id="2-2-connection-lifecycle">2.2 Connection lifecycle</h2>
+<p>A connection must be opened before data flows. The OS tracks connection state through a <strong>socket</strong>. High-level states: <strong>opening</strong>, <strong>established</strong> (data transfer), <strong>closing</strong> (really there are more states: https://en.wikipedia.org/wiki/Transmission_Control_Protocol).</p>
+<p>A server must be <strong>listening</strong> first. TCP opens a connection with a <strong>three-way handshake</strong>:</p>
+<p><img src="/book-digest/understanding-distributed-systems/img/tcp-handshake.svg" alt="Three-way handshake" loading="lazy" /></p>
+<ol>
+<li>Sender picks a random sequence number <strong>x</strong> and sends <strong>SYN</strong>.</li>
+<li>Receiver increments x, picks a random <strong>y</strong>, replies <strong>SYN/ACK</strong>.</li>
+<li>Sender increments both numbers and replies <strong>ACK</strong> plus the first bytes of application data.</li>
+</ol>
+<p>Sequence numbers make in-order, gap-free delivery possible.</p>
+<ul>
+<li>The handshake costs <strong>a full round trip with no application data</strong>, so bandwidth is essentially zero until the connection is open
+<ul>
+<li>The lower the round-trip time (RTT), the faster it opens: <strong>servers closer to clients cut this cold-start penalty</strong>.</li>
+</ul>
+</li>
+<li><strong>Closing</strong> releases resources on both ends and takes several round trips. If another transmission will follow soon, <strong>keep the connection open</strong> to avoid the cold-start tax again.</li>
+<li>Closing a socket does not dispose of it at once:
+<ul>
+<li>it goes to a waiting state, <strong>TIME_WAIT</strong>, lasting several minutes and discarding any segments received</li>
+<li>It stops <strong>delayed segments from a closed connection</strong> being taken as part of a new one</li>
+<li>But if many connections open and close quickly, sockets in TIME_WAIT pile up until the <strong>maximum number of sockets</strong> is reached and <strong>new connection attempts fail</strong></li>
+<li>Another reason processes use <strong>connection pools</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-3-flow-control">2.3 Flow control</h2>
+<p>A backoff mechanism that stops the sender from <strong>overwhelming the receiver</strong>.</p>
+<ul>
+<li>The receiver stores incoming segments in a <strong>receive buffer</strong> until the application processes them, and <strong>reports the buffer size to the sender</strong> in every acknowledgement (in the ack headers)
+<ul>
+<li>A well-behaved sender never sends more than fits.</li>
+</ul>
+</li>
+<li>Compared to <strong>service-level rate limiting</strong> (reject a request once a quota is exceeded, see section 28.3), except TCP rate-limits <strong>per connection</strong> instead of per API key or IP address.</li>
+</ul>
+<h2 id="2-4-congestion-control">2.4 Congestion control</h2>
+<p>TCP also guards against <strong>flooding the underlying network</strong>.</p>
+<ul>
+<li>
+<p>The sender keeps a <strong>congestion window</strong>:</p>
+<ul>
+<li>the total number of outstanding segments sendable <strong>without an acknowledgement</strong></li>
+<li>The smaller it is, the fewer bytes in flight and the less bandwidth used.</li>
+</ul>
+</li>
+<li>
+<p>At connection start the window is a system default; for each acknowledged segment it <strong>grows exponentially</strong> up to an upper limit</p>
+<ul>
+<li>So the <strong>network's full capacity cannot be used right after a connection opens</strong></li>
+<li>A shorter RTT lets the sender reach full bandwidth quicker.</li>
+</ul>
+</li>
+<li>
+<p>When the sender detects a <strong>missed acknowledgement via timeout</strong>, <strong>congestion avoidance</strong> kicks in and the window shrinks</p>
+<ul>
+<li>afterwards time grows it by some amount and timeouts shrink it (the growth function is described in the CUBIC paper cited by the book).</li>
+</ul>
+</li>
+<li>
+<p>The window is the max bytes sendable before an acknowledgement, and an ack needs a full round trip, so the theoretical maximum:</p>
+<p><strong>Bandwidth = WinSize / RTT</strong></p>
+<p>Bandwidth is a <strong>function of latency</strong> (see &quot;bandwidth-delay product&quot;: https://en.wikipedia.org/wiki/Bandwidth-delay_product). TCP tunes the window but cannot change RTT; the shorter the RTT, the better the network is used: more reason to place servers geographically close to clients.</p>
+</li>
+</ul>
+<h2 id="2-5-custom-protocols">2.5 Custom protocols</h2>
+<ul>
+<li>TCP's reliability and stability cost <strong>lower bandwidth and higher latency than the network can deliver</strong>
+<ul>
+<li>Drop them and you get <strong>UDP</strong> (User Datagram Protocol, RFC 768: https://datatracker.ietf.org/doc/html/rfc768): a <strong>connectionless</strong> transport protocol.</li>
+</ul>
+</li>
+<li>UDP has no byte-stream abstraction:
+<ul>
+<li>clients send <strong>discrete packets of limited size called datagrams</strong></li>
+<li>No sequence numbers, no acks, no flow or congestion control: &quot;lean and bare-bones&quot;</li>
+<li>It is used to bootstrap <strong>custom protocols</strong> with some but not all of TCP's guarantees</li>
+<li>(HTTP/3 is based on UDP to avoid some of TCP's shortcomings.)</li>
+</ul>
+</li>
+<li><strong>Example: multiplayer games.</strong>
+<ul>
+<li>Clients sample gamepad events several times per second and send them to a server holding the global game state</li>
+<li>the server sends snapshots back several times per second. If a snapshot is lost, <strong>retransmitting it is worthless</strong>: the game has moved on. UDP shines</li>
+<li>TCP would try to redeliver and degrade the experience.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+IP · IPv6 · routing table · BGP · TCP · segment · sequence number · acknowledgement · checksum · socket · three-way handshake (SYN, SYN/ACK, ACK) · RTT · TIME_WAIT · connection pool · receive buffer · flow control · congestion window · congestion avoidance · bandwidth = window / RTT · UDP · datagram.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 2. https://understandingdistributed.systems/</li>
+<li>RFC 4271 (BGP-4), RFC 793 (TCP), RFC 768 (UDP) as cited by the book.</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a> · <a href="/book-digest/understanding-distributed-systems/uds-03-secure-links/">Understanding Distributed Systems 3: Secure links</a> · operating-systems</p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">&larr; Understanding Distributed Systems 1: Preface and introduction</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-03-secure-links/">Understanding Distributed Systems 3: Secure links &rarr;</a></nav></main></body></html>

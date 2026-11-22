@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 7: Integrating with existing application build processes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-7-integrating-with-existing-application-build-processes">Podman for DevOps 7: Integrating with existing application build processes</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 7. Previous: <a href="/book-digest/podman-for-devops/pfd-06-meet-buildah-building-containers-from-scratch/">Podman for DevOps 6: Meet Buildah, building containers from scratch</a>. Next: <a href="/book-digest/podman-for-devops/pfd-08-choosing-the-container-base-image/">Podman for DevOps 8: Choosing the container base image</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Multistage builds</strong> keep images small: build in a first stage (compilers, source), copy only the artifact into a minimal runtime stage with <code>COPY --from=&lt;stage&gt;</code>. The Go example drops to <strong>36.1 MB</strong>.</li>
+<li><strong>Buildah native commands</strong> allow variables, conditionals, loops and steps between stages (for instance extracting an artifact into a versioned archive).</li>
+<li><strong>Buildah in a container</strong> (<code>quay.io/buildah/stable</code>, <code>--device /dev/fuse</code>) suits Kubernetes and CI; the store can be a <strong>volume</strong>, a <strong>bind mount</strong>, or a <strong>read-only shared store</strong> (<code>/var/lib/shared</code>). It trades <strong>isolation against speed</strong>.</li>
+<li>Never pass registry passwords on the command line: mount an <strong><code>auth.json</code></strong> and use <code>--authfile</code>.</li>
+<li>Buildah's <strong>Go libraries</strong> can power a <strong>custom builder</strong> (unsupported; the stable interface is the Podman REST API). Podman also underlies Quarkus native builds.</li>
+</ul>
+</div></div>
+<h2 id="7-1-multistage-container-builds">7.1 Multistage container builds</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-07-multistage-build.svg" alt="Build in one stage, ship only the artifact in a minimal stage" loading="lazy" /></p>
+<p>Image size is the result of the number of layers and the number of changed files. Small images <strong>pull faster</strong> and use less local disk. Known tricks: build from scratch, clean package-manager caches, limit <code>RUN</code>, <code>COPY</code> and <code>ADD</code>.</p>
+<ul>
+<li><strong>The problem:</strong> to build a Go app you start from a base with Go runtimes, copy the source, download packages, compile, and clean up. The final image <strong>still contains the Go toolchain</strong> from the base image.</li>
+<li><strong>Old workarounds:</strong> <em>binary builds</em> (inject an externally compiled artifact), which shrinks the image but loses the standard compiler environment; or share volumes between containers and have the final image grab the artifacts.</li>
+<li><strong>The standard answer:</strong> Docker, then the OCI specs, introduced <strong>multistage builds</strong>: several <code>FROM</code> instructions, later stages copy from earlier ones.</li>
+</ul>
+<h3 id="multistage-with-a-dockerfile-or-containerfile">Multistage with a Dockerfile or Containerfile</h3>
+<p>Each stage begins with <code>FROM</code>; use <code>--from</code> to name the source stage. Example (<code>Chapter07/http_hello_world/Dockerfile</code>):</p>
+<pre class="hl"><code><span class="c"># Builder image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/golang</span>
+
+<span class="c"># Copy files for build</span>
+<span class="k">COPY</span><span class="w"> </span>go.mod<span class="w"> </span>/go/src/hello-world/
+<span class="k">COPY</span><span class="w"> </span>main.go<span class="w"> </span>/go/src/hello-world/
+
+<span class="c"># Set the working directory</span>
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/go/src/hello-world</span>
+
+<span class="c"># Download dependencies</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>get<span class="w"> </span>-d<span class="w"> </span>-v<span class="w"> </span>./...
+
+<span class="c"># Install the package</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>build<span class="w"> </span>-v
+
+<span class="c"># Runtime image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi9/ubi-micro:latest</span>
+<span class="k">COPY</span><span class="w"> </span>--from<span class="o">=</span><span class="m">0</span><span class="w"> </span>/go/src/hello-world/hello-world<span class="w"> </span>/
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/hello-world"</span><span class="p">]</span>
+</code></pre>
+<ul>
+<li>Stage 1 copies <code>main.go</code> and <code>go.mod</code>, downloads dependencies and builds. Stage 2 copies the artifact into the new image root; <code>--from=0</code> selects the first stage.</li>
+<li>Stage 1 uses the official <code>golang</code> image; stage 2 uses <strong><code>ubi-micro</code></strong>, Red Hat's minimal image for microservices and statically linked binaries (Universal Base Image: chapter 8).</li>
+<li>The app is a Go web server on <strong>8080/tcp</strong> that answers <code>GET /</code> with an HTML page &quot;Hello World!&quot; (knowing Go is not required, but most container software, such as Podman, Docker, Buildah, Skopeo, Kubernetes and OpenShift, is written in Go):</li>
+</ul>
+<pre class="hl"><code><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s">"log"</span>
+<span class="w">    </span><span class="s">"net/http"</span>
+<span class="p">)</span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">handler</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">"%s %s %s\n"</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">RemoteAddr</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Method</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">URL</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">w</span><span class="p">.</span><span class="nx">Header</span><span class="p">().</span><span class="nx">Set</span><span class="p">(</span><span class="s">"Content-Type"</span><span class="p">,</span><span class="w"> </span><span class="s">"text/html"</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">w</span><span class="p">.</span><span class="nx">Write</span><span class="p">([]</span><span class="kt">byte</span><span class="p">(</span><span class="s">"&lt;html&gt;\n&lt;body&gt;\n"</span><span class="p">))</span>
+<span class="w">    </span><span class="nx">w</span><span class="p">.</span><span class="nx">Write</span><span class="p">([]</span><span class="kt">byte</span><span class="p">(</span><span class="s">"&lt;p&gt;Hello World!&lt;/p&gt;\n"</span><span class="p">))</span>
+<span class="w">    </span><span class="nx">w</span><span class="p">.</span><span class="nx">Write</span><span class="p">([]</span><span class="kt">byte</span><span class="p">(</span><span class="s">"&lt;/body&gt;\n&lt;/html&gt;\n"</span><span class="p">))</span>
+<span class="p">}</span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">http</span><span class="p">.</span><span class="nx">HandleFunc</span><span class="p">(</span><span class="s">"/"</span><span class="p">,</span><span class="w"> </span><span class="nx">handler</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">"Starting http server"</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">":8080"</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">))</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span><span class="nb">cd</span><span class="w"> </span>http_hello_world
+$<span class="w"> </span>buildah<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>hello-world<span class="w"> </span>.
+$<span class="w"> </span>buildah<span class="w"> </span>images<span class="w"> </span>--format<span class="w"> </span><span class="s1">'{{.Name}} {{.Size}}'</span><span class="w"> </span>localhost/hello-world
+localhost/hello-world<span class="w"> </span><span class="m">36</span>.1<span class="w"> </span>MB
+</code></pre>
+<p><strong>Named stages</strong> with <code>AS</code> (file <code>Dockerfile-builder</code>): the builder is <code>builder</code>, the final stage <code>srv</code>, and <code>COPY --from=builder</code> replaces the numeric index:</p>
+<pre class="hl"><code><span class="c"># Builder image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/golang</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="s">builder</span>
+<span class="k">COPY</span><span class="w"> </span>go.mod<span class="w"> </span>/go/src/hello-world/
+<span class="k">COPY</span><span class="w"> </span>main.go<span class="w"> </span>/go/src/hello-world/
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/go/src/hello-world</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>get<span class="w"> </span>-d<span class="w"> </span>-v<span class="w"> </span>./...
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>build<span class="w"> </span>-v<span class="w"> </span>./...
+
+<span class="c"># Runtime image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi9/ubi-micro:latest</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="s">srv</span>
+<span class="k">COPY</span><span class="w"> </span>--from<span class="o">=</span>builder<span class="w"> </span>/go/src/hello-world/hello-world<span class="w"> </span>/
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/hello-world"</span><span class="p">]</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>buildah<span class="w"> </span>build<span class="w"> </span>-f<span class="w"> </span>./Dockerfile-builder<span class="w"> </span>-t<span class="w"> </span>hello-world-v2<span class="w"> </span>.
+</code></pre>
+<p>Dockerfile builds are the most common but lack flexibility for custom workflows; native Buildah commands fill that gap.</p>
+<h3 id="multistage-with-buildah-native-commands">Multistage with Buildah native commands</h3>
+<p>Native commands allow <strong>extra steps between stages</strong>, for instance mounting the build container's overlay to extract the artifact and release alternate packages before building the runtime image. <code>buildah-commands.sh</code>:</p>
+<pre class="hl"><code><span class="ch">#!/bin/bash</span>
+<span class="c1"># Define builder and runtime images</span>
+<span class="nv">BUILDER</span><span class="o">=</span>docker.io/library/golang
+<span class="nv">RUNTIME</span><span class="o">=</span>registry.access.redhat.com/ubi9/ubi-micro:latest
+
+<span class="c1"># Create builder container</span>
+<span class="nv">container1</span><span class="o">=</span><span class="k">$(</span>buildah<span class="w"> </span>from<span class="w"> </span><span class="nv">$BUILDER</span><span class="k">)</span>
+
+<span class="c1"># Copy files from host</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-f<span class="w"> </span>go.mod<span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span>buildah<span class="w"> </span>copy<span class="w"> </span><span class="nv">$container1</span><span class="w"> </span><span class="s1">'go.mod'</span><span class="w"> </span><span class="s1">'/go/src/hello-world/'</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="k">fi</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-f<span class="w"> </span>main.go<span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span>buildah<span class="w"> </span>copy<span class="w"> </span><span class="nv">$container1</span><span class="w"> </span><span class="s1">'main.go'</span><span class="w"> </span><span class="s1">'/go/src/hello-world/'</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="k">fi</span>
+
+<span class="c1"># Configure and start build</span>
+buildah<span class="w"> </span>config<span class="w"> </span>--workingdir<span class="w"> </span>/go/src/hello-world<span class="w"> </span><span class="nv">$container1</span>
+buildah<span class="w"> </span>run<span class="w"> </span><span class="nv">$container1</span><span class="w"> </span>go<span class="w"> </span>get<span class="w"> </span>-d<span class="w"> </span>-v<span class="w"> </span>./...
+buildah<span class="w"> </span>run<span class="w"> </span><span class="nv">$container1</span><span class="w"> </span>go<span class="w"> </span>build<span class="w"> </span>-v<span class="w"> </span>./...
+
+<span class="c1"># Create runtime container</span>
+<span class="nv">container2</span><span class="o">=</span><span class="k">$(</span>buildah<span class="w"> </span>from<span class="w"> </span><span class="nv">$RUNTIME</span><span class="k">)</span>
+
+<span class="c1"># Copy files from the builder container</span>
+buildah<span class="w"> </span>copy<span class="w"> </span>--chown<span class="o">=</span><span class="m">1001</span>:1001<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--from<span class="o">=</span><span class="nv">$container1</span><span class="w"> </span><span class="nv">$container2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="s1">'/go/src/hello-world/hello-world'</span><span class="w"> </span><span class="s1">'/'</span>
+
+<span class="c1"># Configure exposed ports</span>
+buildah<span class="w"> </span>config<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span><span class="nv">$container2</span>
+
+<span class="c1"># Configure default CMD</span>
+buildah<span class="w"> </span>config<span class="w"> </span>--cmd<span class="w"> </span>/hello-world<span class="w"> </span><span class="nv">$container2</span>
+
+<span class="c1"># Configure default user</span>
+buildah<span class="w"> </span>config<span class="w"> </span>--user<span class="o">=</span><span class="m">1001</span><span class="w"> </span><span class="nv">$container2</span>
+
+<span class="c1"># Commit final image</span>
+buildah<span class="w"> </span>commit<span class="w"> </span><span class="nv">$container2</span><span class="w"> </span>helloworld
+
+<span class="c1"># Remove build containers</span>
+buildah<span class="w"> </span>rm<span class="w"> </span><span class="nv">$container1</span><span class="w"> </span><span class="nv">$container2</span>
+</code></pre>
+<ul>
+<li>Two working containers (<code>container1</code>, <code>container2</code>); <code>buildah copy --from=</code> names the source container and <code>--chown</code> sets the owner. The script adds <strong>conditionals</strong> (checking that <code>go.mod</code> and <code>main.go</code> exist).</li>
+<li><strong>Release variant</strong> (<code>buildah-commands-release.sh</code>): adds <code>RELEASE=1.0.0</code>, extracts the artifact with <strong><code>buildah unshare --mount</code></strong> (the unshare namespace lets it run rootless), writes a README, creates <code>hello-world-${RELEASE}.tar.gz</code>, then builds the runtime image and tags it with the release. The key part:</li>
+</ul>
+<pre class="hl"><code><span class="nv">RELEASE</span><span class="o">=</span><span class="m">1</span>.0.0
+<span class="c1"># ... build steps as above ...</span>
+<span class="c1"># Extract build artifact and create a version archive</span>
+buildah<span class="w"> </span>unshare<span class="w"> </span>--mount<span class="w"> </span><span class="nv">mnt</span><span class="o">=</span><span class="nv">$container1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'cp $mnt/go/src/hello-world/hello-world .'</span>
+cat<span class="w"> </span>&gt;<span class="w"> </span>README<span class="w"> </span><span class="s">&lt;&lt; EOF</span>
+<span class="s">Version $RELEASE release notes:</span>
+<span class="s">- Implement basic features</span>
+<span class="s">EOF</span>
+tar<span class="w"> </span>zcf<span class="w"> </span>hello-world-<span class="si">${</span><span class="nv">RELEASE</span><span class="si">}</span>.tar.gz<span class="w"> </span>hello-world<span class="w"> </span>README
+rm<span class="w"> </span>-f<span class="w"> </span>hello-world<span class="w"> </span>README
+<span class="c1"># ... runtime container as above ...</span>
+buildah<span class="w"> </span>commit<span class="w"> </span><span class="nv">$container2</span><span class="w"> </span>hello<span class="w"> </span>world:<span class="nv">$RELEASE</span>
+</code></pre>
+<p>(The book prints <code>hello world:$RELEASE</code> with a space, which looks like a typo for <code>helloworld:$RELEASE</code>.)</p>
+<blockquote>
+<p>[!note] Semantic versioning
+<strong>X.Y.Z</strong>: major, minor, patch (https://semver.org/).</p>
+</blockquote>
+<h2 id="7-2-running-buildah-inside-a-container">7.2 Running Buildah inside a container</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-07-buildah-store-options.svg" alt="Where a containerised Buildah keeps its store" loading="lazy" /></p>
+<ul>
+<li>Podman and Buildah's <strong>fork/exec</strong> design makes them easy to run in containers, including rootless. The common scenario: application builds on a <strong>Kubernetes</strong> cluster (a control plane scheduling containers on worker nodes whose engine implements the <strong>CRI</strong>).</li>
+<li><strong>Vanilla Kubernetes has no native build feature</strong>; solutions that appeared: OpenShift <strong>Source-to-Image</strong> and build APIs (from the Kubernetes 1.0 era), Google's <strong>kaniko</strong> (builds in user space in a cluster), <strong>Cloud Native Buildpacks</strong> (like Source-to-Image with advanced multi-process and bill-of-materials features), and your own Buildah in containers.</li>
+<li><strong>Tekton Pipelines</strong> (CNCF) runs CI/CD driven by Kubernetes custom resources; tasks come from <strong>Tekton Hub</strong> (https://hub.tekton.dev/), including Buildah (https://hub.tekton.dev/tekton/task/buildah).</li>
+<li>Focus here: builds inside containers with attention to <strong>security</strong>. The image used is <strong><code>quay.io/buildah/stable</code></strong> (latest stable Buildah).</li>
+</ul>
+<h3 id="rootless-buildah-containers-with-volume-stores">Rootless Buildah containers with volume stores</h3>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--device<span class="w"> </span>/dev/fuse<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>./http_hello_world:/build:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>storevol:/var/lib/containers<span class="w"> </span>quay.io/buildah/stable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>buildah<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>build_test1<span class="w"> </span>/build
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--device /dev/fuse</code></td>
+<td>provides the fuse device needed by <code>fuse-overlay</code> to mount the container filesystem</td>
+</tr>
+<tr>
+<td><code>-v ./http_hello_world:/build:z</code></td>
+<td>bind-mounts the source with a shared SELinux label (<code>:z</code>)</td>
+</tr>
+<tr>
+<td><code>-v storevol:/var/lib/containers</code></td>
+<td>a fresh <strong>volume</strong> on the default container store, where layers are created</td>
+</tr>
+</tbody>
+</table>
+<p>Inspect the result from another container, or the volume on the host:</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>storevol:/var/lib/containers<span class="w"> </span>quay.io/buildah/stable<span class="w"> </span>buildah<span class="w"> </span>images
+localhost/build_test1<span class="w">                      </span>latest<span class="w">  </span>3605829966b5<span class="w">  </span><span class="m">41</span><span class="w"> </span>seconds<span class="w"> </span>ago<span class="w">  </span><span class="m">33</span>.9<span class="w"> </span>MB
+registry.access.redhat.com/ubi9/ubi-micro<span class="w">  </span>latest<span class="w">  </span>e279e18c7ef8<span class="w">  </span><span class="m">3</span><span class="w"> </span>days<span class="w"> </span>ago<span class="w">      </span><span class="m">26</span>.4<span class="w"> </span>MB
+docker.io/library/golang<span class="w">                   </span>latest<span class="w">  </span>0457bb691895<span class="w">  </span><span class="m">9</span><span class="w"> </span>days<span class="w"> </span>ago<span class="w">      </span><span class="m">862</span><span class="w"> </span>MB
+$<span class="w"> </span>ls<span class="w"> </span>-alR<span class="w"> </span><span class="k">$(</span>podman<span class="w"> </span>volume<span class="w"> </span>inspect<span class="w"> </span>storevol<span class="w"> </span>--format<span class="w"> </span><span class="s1">'{{.Mountpoint}}'</span><span class="k">)</span>
+</code></pre>
+<p>Then tag, log in and push from a new container, and delete the volume (<code># podman volume rm storevol</code>):</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>storevol:/var/lib/containers<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>quay.io/buildah/stable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'buildah tag build_test1 \</span>
+<span class="s1">    registry.example.com/build_test1 \</span>
+<span class="s1">    &amp;&amp; buildah login -u=&lt;USERNAME&gt; -p=&lt;PASSWORD&gt; \</span>
+<span class="s1">    registry.example.com &amp;&amp; \</span>
+<span class="s1">    buildah push registry.example.com/build_test1'</span>
+</code></pre>
+<p><strong>Limits and fixes</strong></p>
+<ul>
+<li>The volume store is <strong>not isolated</strong>: any container can read it. Use <strong>SELinux MCS</strong> with <code>:Z</code> so only the running container can access it. A second container would run with different categories, so pass the volume's categories: <code>--security-opt label=level:s0:&lt;CAT1&gt;,&lt;CAT2&gt;</code>.</li>
+<li><strong>Or</strong> do build, tag and push <strong>in one container</strong>:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--device<span class="w"> </span>/dev/fuse<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>~/build:/build<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>secure_storevol:/var/lib/containers:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>quay.io/buildah/stable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'buildah build -t test2 /build &amp;&amp; \</span>
+<span class="s1">    buildah tag test2 registry.example.com/build_test2 &amp;&amp; \</span>
+<span class="s1">    buildah login -u=&lt;USERNAME&gt; -p=&lt;PASSWORD&gt; registry.example.com &amp;&amp; \</span>
+<span class="s1">    buildah push registry.example.com/build_test2'</span>
+</code></pre>
+<blockquote>
+<p>[!warning] Passwords on the command line are not acceptable practice
+Mount the authentication file with a session token instead:</p>
+</blockquote>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--device<span class="w"> </span>/dev/fuse<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>~/build:/build<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/run/user/&lt;UID&gt;/containers/auth.json:/auth.json:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>secure_storevol:/var/lib/containers:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>quay.io/buildah/stable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'buildah build -t test3 /build &amp;&amp; \</span>
+<span class="s1">    buildah tag test3 registry.example.com/build_test3 &amp;&amp; \</span>
+<span class="s1">    buildah push --authfile /auth.json \</span>
+<span class="s1">    registry.example.com/build_test3'</span>
+</code></pre>
+<ul>
+<li>Authenticate on the host first: <code>$ podman login -u &lt;USERNAME&gt; -p &lt;PASSWORD&gt; &lt;REGISTRY&gt;</code>; the token is stored in <code>/run/user/&lt;UID&gt;/containers/auth.json</code> (a <code>tmpfs</code>), a JSON object <code>{&quot;auths&quot;: {&quot;registry.example.com&quot;: {&quot;auth&quot;: &quot;&lt;base64_encoded_token&gt;&quot;}}}</code>.</li>
+<li><strong>Security alert:</strong> if that file has records for several registries, <strong>all of them are exposed</strong> inside the build container, which could then authenticate to each.</li>
+<li>The volume approach costs a little performance versus a native host build, but gives better isolation, a smaller attack surface (rootless) and a <strong>standardised build environment</strong> across hosts.</li>
+</ul>
+<h3 id="bind-mounted-stores">Bind-mounted stores</h3>
+<p>Highest isolation (zero trust): <strong>every build container has its own store</strong>, created for the build and destroyed after, with SELinux MCS. Create a unique store (run as root):</p>
+<pre class="hl"><code><span class="c1"># BUILD_STORE=/var/lib/containers-$(echo $RANDOM | md5sum | head -c 8)</span>
+<span class="c1"># mkdir $BUILD_STORE</span>
+<span class="c1"># podman run --device /dev/fuse \</span>
+<span class="w">    </span>-v<span class="w"> </span>./build:/build:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="nv">$BUILD_STORE</span>:/var/lib/containers:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/run/containers/0/auth.json:/auth.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>quay.io/buildah/stable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'set -euo pipefail; \</span>
+<span class="s1">    buildah build -t registry.example.com/test4 /build; \</span>
+<span class="s1">    buildah push --authfile /auth.json \</span>
+<span class="s1">    registry.example.com/test4'</span>
+</code></pre>
+<p>Best isolation, <strong>slowest</strong> (base-image layers are re-pulled on every build, never cached).</p>
+<p>The opposite, <strong>fastest and least isolated</strong>: mount the host store itself, and disable SELinux separation for the container:</p>
+<pre class="hl"><code><span class="c1"># podman run --device /dev/fuse \</span>
+<span class="w">    </span>-v<span class="w"> </span>./build:/build:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/var/lib/containers:/var/lib/containers<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--security-opt<span class="w"> </span><span class="nv">label</span><span class="o">=</span>disable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/run/containers/0/auth.json:/auth.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>quay.io/buildah/stable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'set -euo pipefail; \</span>
+<span class="s1">    buildah build -t registry.example.com/test5 /build; \</span>
+<span class="s1">    buildah push --authfile /auth.json \</span>
+<span class="s1">    registry.example.com/test5'</span>
+</code></pre>
+<p><strong>Compromise: a secondary read-only image store.</strong> Buildah supports several image stores; the stable image's <code>/etc/containers/storage.conf</code> already points <code>additionalimagestores</code> at <code>/var/lib/shared</code>:</p>
+<pre class="hl"><code><span class="c1"># AdditionalImageStores is used to pass paths to additional Read/Only image stores</span>
+<span class="c1"># Must be comma separated list.</span>
+<span class="n">additionalimagestores</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">"/var/lib/shared"</span><span class="p">,</span>
+<span class="p">]</span>
+</code></pre>
+<p>Bind-mount the host store there read-only: good isolation plus cached images. The store can be <strong>pre-populated with the most used images</strong> or mounted from a <strong>network share</strong>:</p>
+<pre class="hl"><code><span class="c1"># podman run --device /dev/fuse \</span>
+<span class="w">    </span>-v<span class="w"> </span>./build:/build:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="nv">$BUILD_STORE</span>:/var/lib/containers:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/var/lib/containers/storage:/var/lib/shared:ro<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/run/containers/0/auth.json:/auth.json:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>quay.io/buildah/stable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'set -euo pipefail; \</span>
+<span class="s1">    buildah build -t registry.example.com/test6 /build; \</span>
+<span class="s1">    buildah push --authfile /auth.json \</span>
+<span class="s1">    registry.example.com/test6'</span>
+</code></pre>
+<p>The examples draw on an article by <strong>Dan Walsh</strong> (one of the Buildah and Podman project leads) on the Red Hat Developer blog (link in Further reading).</p>
+<table>
+<thead>
+<tr>
+<th>Store approach</th>
+<th>Isolation</th>
+<th>Speed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Per-build bind-mounted store with <code>:Z</code></td>
+<td>highest</td>
+<td>slowest (re-pulls base layers)</td>
+</tr>
+<tr>
+<td>Host store with <code>label=disable</code></td>
+<td>lowest</td>
+<td>fastest (cached layers)</td>
+</tr>
+<tr>
+<td>Per-build store plus read-only <code>/var/lib/shared</code></td>
+<td>good</td>
+<td>good</td>
+</tr>
+</tbody>
+</table>
+<h3 id="native-buildah-commands-inside-containers">Native Buildah commands inside containers</h3>
+<pre class="hl"><code><span class="c1"># BUILD_STORE=/var/lib/containers-$(echo $RANDOM | md5sum | head -c 8)</span>
+<span class="c1"># mkdir $BUILD_STORE</span>
+<span class="c1"># podman run --device /dev/fuse \</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">REGISTRY</span><span class="o">=</span>&lt;USER_DEFINED_REGISTRY:PORT&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--security-opt<span class="w"> </span><span class="nv">label</span><span class="o">=</span>disable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="nv">$BUILD_STORE</span>:/var/lib/containers:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/var/lib/containers/storage:/var/lib/shared:ro<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/run/containers/0:/run/containers/0<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>quay.io/buildah/stable<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'set -euo pipefail; \</span>
+<span class="s1">    container=$(buildah from fedora); \</span>
+<span class="s1">    buildah run $container dnf install -y python3 python3; \</span>
+<span class="s1">    buildah commit $container $REGISTRY/python_demo; \</span>
+<span class="s1">    buildah push --authfile \</span>
+<span class="s1">    /run/containers/0/auth.json $REGISTRY/python_demo'</span>
+</code></pre>
+<p>(The book prints <code>-authfile</code> with one dash and <code>python3 python3</code>, apparently typos.) For many commands, put them in a script and <strong>inject it with a volume</strong>:</p>
+<pre class="hl"><code><span class="c1"># BUILD_STORE=/var/lib/containers-$(echo $RANDOM | md5sum | head -c 8)</span>
+<span class="c1"># PATH_TO_SCRIPT=/path/to/script</span>
+<span class="c1"># REGISTRY=&lt;USER_DEFINED_REGISTRY:PORT&gt;</span>
+<span class="c1"># mkdir $BUILD_STORE</span>
+<span class="c1"># podman run --device /dev/fuse \</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="nv">$BUILD_STORE</span>:/var/lib/containers:Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/var/lib/containers/storage:/var/lib/shared:ro<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/run/containers/0:/run/containers/0<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="nv">$PATH_TO_SCRIPT</span>:/root:z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>quay.io/buildah/stable<span class="w"> </span>/root/build.sh
+</code></pre>
+<h2 id="7-3-integrating-buildah-with-custom-builders">7.3 Integrating Buildah with custom builders</h2>
+<p>Podman inherits Buildah's build capabilities through <code>podman build</code>; likewise you can <strong>embed Buildah's interfaces and engine in your own builder</strong>, easiest in <strong>Go</strong> (the language of Podman, Buildah and most of the ecosystem).</p>
+<blockquote>
+<p>[!warning] Unsupported scenario
+Stability of the Buildah Go APIs (deprecations, changes) is not guaranteed. For supported, stable use cases, use the <strong>Podman REST APIs</strong>.</p>
+</blockquote>
+<h3 id="including-buildah-in-a-go-build-tool">Including Buildah in a Go build tool</h3>
+<p>Prepare the environment and project:</p>
+<pre class="hl"><code><span class="c1"># dnf install -y golang git go-md2man btrfs-progs-devel gpgme-devel device-mapper-devel</span>
+$<span class="w"> </span>mkdir<span class="w"> </span>~/custombuilder
+$<span class="w"> </span><span class="nb">cd</span><span class="w"> </span>~/custombuilder
+<span class="o">[</span>custombuilder<span class="o">]</span>$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">GOPATH</span><span class="o">=</span><span class="sb">`</span><span class="nb">pwd</span><span class="sb">`</span>
+</code></pre>
+<p>Get the code from https://github.com/PacktPublishing/Podman-for-DevOps (<code>git clone</code>), copy <code>Chapter07/*</code> into <code>~/custombuilder/</code>. The module directory <code>~/custombuilder/src/builder</code> contains <code>custombuilder.go</code>, <code>go.mod</code>, <code>go.sum</code> and <code>script.js</code>. Fetch dependencies:</p>
+<pre class="hl"><code>$<span class="w"> </span>go<span class="w"> </span>mod<span class="w"> </span>tidy<span class="w"> </span>-v
+go:<span class="w"> </span>finding<span class="w"> </span>module<span class="w"> </span><span class="k">for</span><span class="w"> </span>package<span class="w"> </span>github.com/containers/storage/pkg/unshare
+go:<span class="w"> </span>finding<span class="w"> </span>module<span class="w"> </span><span class="k">for</span><span class="w"> </span>package<span class="w"> </span>github.com/containers/image/v5/storage<span class="o">[</span>...omitted<span class="w"> </span>output...<span class="o">]</span>
+</code></pre>
+<p>(It downloads modules from the internet, so be patient.) On Fedora 40 you may also need <code>btrfs-progs-devel</code> and <code>libgpgme-devel</code>; see https://podman.io/docs/installation#build-and-run-dependencies.</p>
+<p><strong>Key parts of <code>custombuilder.go</code>:</strong></p>
+<ol>
+<li><strong>Rootless support</strong> at the start of <code>main</code> (Go <code>unshare</code> package, <code>github.com/containers/storage/pkg/unshare</code>):</li>
+</ol>
+<pre class="hl"><code><span class="k">if</span><span class="w"> </span><span class="nx">buildah</span><span class="p">.</span><span class="nx">InitReexec</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span>
+<span class="p">}</span>
+<span class="nx">unshare</span><span class="p">.</span><span class="nx">MaybeReexecUsingUserNamespace</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
+</code></pre>
+<ol start="2">
+<li><strong>A store</strong> (<code>storage.Store</code> from <code>github.com/containers/storage</code>) holds intermediate and result images:</li>
+</ol>
+<pre class="hl"><code><span class="nx">buildStoreOptions</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">storage</span><span class="p">.</span><span class="nx">DefaultStoreOptions</span><span class="p">()</span>
+<span class="nx">buildStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">storage</span><span class="p">.</span><span class="nx">GetStore</span><span class="p">(</span><span class="nx">buildStoreOptions</span><span class="p">)</span>
+</code></pre>
+<ol start="3">
+<li><strong><code>BuilderOptions</code></strong>: starting image <code>node:23-alpine</code> (a Node.js app simulation), <strong>chroot isolation</strong> (&quot;less isolation but fewer requirements&quot;), default build, network and system contexts (<code>SystemContext</code> carries values from configuration files):</li>
+</ol>
+<pre class="hl"><code><span class="nx">builderOpts</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">buildah</span><span class="p">.</span><span class="nx">BuilderOptions</span><span class="p">{</span>
+<span class="w">    </span><span class="nx">FromImage</span><span class="p">:</span><span class="w">        </span><span class="s">"node:23-alpine"</span><span class="p">,</span><span class="w">      </span><span class="c1">// Starting image</span>
+<span class="w">    </span><span class="nx">Isolation</span><span class="p">:</span><span class="w">        </span><span class="nx">define</span><span class="p">.</span><span class="nx">IsolationChroot</span><span class="p">,</span><span class="w"> </span><span class="c1">// Isolation environment</span>
+<span class="w">    </span><span class="nx">CommonBuildOpts</span><span class="p">:</span><span class="w">  </span><span class="o">&amp;</span><span class="nx">define</span><span class="p">.</span><span class="nx">CommonBuildOptions</span><span class="p">{},</span>
+<span class="w">    </span><span class="nx">ConfigureNetwork</span><span class="p">:</span><span class="w"> </span><span class="nx">define</span><span class="p">.</span><span class="nx">NetworkDefault</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">SystemContext</span><span class="p">:</span><span class="w">    </span><span class="o">&amp;</span><span class="nx">types</span><span class="p">.</span><span class="nx">SystemContext</span><span class="p">{},</span>
+<span class="p">}</span>
+<span class="nx">builder</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">buildah</span><span class="p">.</span><span class="nx">NewBuilder</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">TODO</span><span class="p">(),</span><span class="w"> </span><span class="nx">buildStore</span><span class="p">,</span><span class="w"> </span><span class="nx">builderOpts</span><span class="p">)</span>
+</code></pre>
+<ol start="4">
+<li><strong>Add the application file</strong> (a JavaScript file kept next to the module) into <code>/home/node/</code>, the default location the base image expects, and set the command:</li>
+</ol>
+<pre class="hl"><code><span class="nx">err</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">builder</span><span class="p">.</span><span class="nx">Add</span><span class="p">(</span><span class="s">"/home/node/"</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nx">buildah</span><span class="p">.</span><span class="nx">AddAndCopyOptions</span><span class="p">{},</span><span class="w"> </span><span class="s">"script.js"</span><span class="p">)</span>
+<span class="nx">builder</span><span class="p">.</span><span class="nx">SetCmd</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">"node"</span><span class="p">,</span><span class="w"> </span><span class="s">"/home/node/script.js"</span><span class="p">})</span>
+</code></pre>
+<p><code>script.js</code>: an HTTP server on 8080 returning the Node.js version:</p>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="nx">http</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">require</span><span class="p">(</span><span class="s2">"http"</span><span class="p">);</span>
+<span class="nx">http</span><span class="p">.</span><span class="nx">createServer</span><span class="p">(</span><span class="kd">function</span><span class="p">(</span><span class="nx">request</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">response</span><span class="p">.</span><span class="nx">writeHead</span><span class="p">(</span><span class="mf">200</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s2">"Content-Type"</span><span class="o">:</span><span class="w"> </span><span class="s2">"text/plain"</span><span class="p">});</span>
+<span class="w">    </span><span class="nx">response</span><span class="p">.</span><span class="nx">write</span><span class="p">(</span><span class="s2">"Hello Podman and Buildah friends. This page is provided to you through a container running Node.js version: "</span><span class="p">);</span>
+<span class="w">    </span><span class="nx">response</span><span class="p">.</span><span class="nx">write</span><span class="p">(</span><span class="nx">process</span><span class="p">.</span><span class="nx">version</span><span class="p">);</span>
+<span class="w">    </span><span class="nx">response</span><span class="p">.</span><span class="nx">end</span><span class="p">();</span>
+<span class="p">}).</span><span class="nx">listen</span><span class="p">(</span><span class="mf">8080</span><span class="p">);</span>
+</code></pre>
+<ol start="5">
+<li><strong>Commit</strong> with an image reference and name:</li>
+</ol>
+<pre class="hl"><code><span class="nx">imageRef</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">is</span><span class="p">.</span><span class="nx">Transport</span><span class="p">.</span><span class="nx">ParseStoreReference</span><span class="p">(</span><span class="nx">buildStore</span><span class="p">,</span><span class="w"> </span><span class="s">"podmanbook/nodejs-welcome"</span><span class="p">)</span>
+<span class="nx">imageId</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">builder</span><span class="p">.</span><span class="nx">Commit</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">TODO</span><span class="p">(),</span><span class="w"> </span><span class="nx">imageRef</span><span class="p">,</span><span class="w"> </span><span class="nx">define</span><span class="p">.</span><span class="nx">CommitOptions</span><span class="p">{})</span>
+<span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">"Image built! %s\n"</span><span class="p">,</span><span class="w"> </span><span class="nx">imageId</span><span class="p">)</span>
+</code></pre>
+<p>Run and test:</p>
+<pre class="hl"><code><span class="o">[</span>builder<span class="o">]</span>$<span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>custombuilder.go
+Image<span class="w"> </span>built!<span class="w"> </span>e60fa98051522a51f4585e46829ad6a18df704dde774634dbc010baae4404849
+<span class="o">[</span>builder<span class="o">]</span>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-dt<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:8080/tcp<span class="w"> </span>podmanbook/nodejs-welcome:latest
+<span class="o">[</span>builder<span class="o">]</span>$<span class="w"> </span>curl<span class="w"> </span>localhost:8080
+Hello<span class="w"> </span>Podman<span class="w"> </span>and<span class="w"> </span>Buildah<span class="w"> </span>friends.<span class="w"> </span>This<span class="w"> </span>page<span class="w"> </span>is<span class="w"> </span>provided<span class="w"> </span>to<span class="w"> </span>you<span class="w"> </span>through<span class="w"> </span>a<span class="w"> </span>container<span class="w"> </span>running<span class="w"> </span>Node.js<span class="w"> </span>version:<span class="w"> </span>v23.1.0
+</code></pre>
+<p>(<code>-d</code> detached, <code>-t</code> pseudo-TTY, <code>-p</code> publish the port.) More in the Go docs: https://pkg.go.dev/github.com/containers/buildah.</p>
+<h3 id="running-quarkus-native-executables-in-containers">Running Quarkus native executables in containers</h3>
+<ul>
+<li><strong>Quarkus</strong> is a Kubernetes-native Java stack built on <strong>OpenJDK</strong> and <strong>GraalVM</strong> (a JVM that compiles Java apps for fast startup and low memory). Its native-image tutorial uses a Maven wrapper that calls Podman:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>./mvnw<span class="w"> </span>package<span class="w"> </span>-Pnative<span class="w"> </span>-Dquarkus.native.container-build<span class="o">=</span><span class="nb">true</span><span class="w"> </span>-Dquarkus.native.container-runtime<span class="o">=</span>podman
+</code></pre>
+<ul>
+<li>The wrapper invokes a <strong>Podman build</strong> with a preconfigured Quarkus environment and your binary. It works because <code>podman build</code> vendors Buildah's logic (chapter 6). Guide: https://quarkus.io/guides/building-native-image.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<p>Multistage builds (Dockerfile and native Buildah), containerised Buildah with volume and bind-mounted stores and the isolation versus performance trade-off, and Buildah's Go libraries for custom builders. Next: choosing the container base image.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+multistage build · <code>COPY --from</code> · <code>AS</code> stage name · <code>ubi-micro</code> · <code>buildah unshare --mount</code> · semantic versioning · <code>quay.io/buildah/stable</code> · <code>--device /dev/fuse</code> · <code>additionalimagestores</code> · <code>--authfile</code> · <code>auth.json</code> · MCS isolation · <code>BuilderOptions</code> · chroot isolation · Quarkus native.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 7; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>Book code: https://github.com/PacktPublishing/Podman-for-DevOps</li>
+<li>Semantic versioning: https://semver.org/</li>
+<li>CNCF landscape: https://landscape.cncf.io/</li>
+<li>Best practices for running Buildah in a container (Dan Walsh): https://developers.redhat.com/blog/2019/08/14/best-practices-for-running-buildah-in-a-container</li>
+<li>Buildah Go module: https://pkg.go.dev/github.com/containers/buildah</li>
+<li>Quarkus native executables: https://quarkus.io/guides/building-native-image</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-06-meet-buildah-building-containers-from-scratch/">Podman for DevOps 6: Meet Buildah, building containers from scratch</a> · <a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">Podman for DevOps 5: Implementing storage for the container's data</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-06-meet-buildah-building-containers-from-scratch/">&larr; Podman for DevOps 6: Meet Buildah, building containers from scratch</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-08-choosing-the-container-base-image/">Podman for DevOps 8: Choosing the container base image &rarr;</a></nav></main></body></html>

@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 12: Resiliency</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-12-resiliency">Building Microservices 12: Resiliency</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 12. Previous: <a href="/book-digest/building-microservices/bm-11-security/">Building Microservices 11: Security</a>. Next: <a href="/book-digest/building-microservices/bm-13-scaling/">Building Microservices 13: Scaling</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Resilience</strong> has four parts (David Woods): <strong>robustness, rebound, graceful extensibility, sustained adaptability</strong>. Microservices mostly help robustness; the rest depends on people and culture.</li>
+<li>Assume <strong>failure is everywhere</strong>; set requirements (latency, availability, durability) with the business and <strong>degrade functionality</strong> gracefully.</li>
+<li>Stability patterns: <strong>timeouts</strong>, <strong>retries</strong>, <strong>bulkheads</strong>, <strong>circuit breakers</strong>, <strong>isolation</strong>, <strong>redundancy</strong>, <strong>middleware</strong>, <strong>idempotency</strong>, <strong>spreading risk</strong>.</li>
+<li><strong>CAP theorem</strong>: in a partition choose consistency (CP) or availability (AP); CA does not exist over a network. Per capability, AP is often right.</li>
+<li><strong>Chaos engineering</strong>, <strong>game days</strong> and <strong>blameless post-mortems</strong> build the learning culture resilience needs.</li>
+</ul>
+</div></div>
+<h2 id="12-1-what-is-resiliency">12.1 What is resiliency?</h2>
+<p>Drawing on resilience engineering (firefighting, air traffic control, operating theatres), David D. Woods (&quot;Four Concepts for Resilience...&quot;, <em>Reliability Engineering &amp; System Safety</em>, 2015) names four concepts:</p>
+<table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>Meaning</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Robustness</strong></td>
+<td>Absorb <strong>expected</strong> perturbation</td>
+<td>Spin up a replacement host, retry calls, backup on-call person</td>
+</tr>
+<tr>
+<td><strong>Rebound</strong></td>
+<td>Recover after a traumatic event</td>
+<td>Tested backups; a <strong>playbook</strong> (roles, point person, how fast and how to tell users)</td>
+</tr>
+<tr>
+<td><strong>Graceful extensibility</strong></td>
+<td>Cope with <strong>surprise</strong></td>
+<td>Flatter organisations with distributed responsibility</td>
+</tr>
+<tr>
+<td><strong>Sustained adaptability</strong></td>
+<td>Keep adapting to changing environments and demands</td>
+<td>Not complacent; chaos engineering, enabling teams</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Robustness</strong>
+<ul>
+<li>needs prior knowledge (foresight or hindsight) and <strong>adds complexity</strong> (moving to Kubernetes adds new pain points), so weigh the result, not only cost and benefit</li>
+<li>It covers people too.</li>
+</ul>
+</li>
+<li><strong>Rebound:</strong>
+<ul>
+<li>many teams try to eliminate outages and are unprepared when one happens</li>
+<li>at scale elimination is unsustainable. Agree a plan beforehand, since thinking clearly mid-outage is hard.</li>
+</ul>
+</li>
+<li><strong>Graceful extensibility:</strong>
+<ul>
+<li>brittle systems fail at the edge of what you expected</li>
+<li>Optimisation can increase brittleness: <strong>automation cannot handle surprise</strong>, and cutting staff because of it removes the skilled people who can.</li>
+</ul>
+</li>
+<li><strong>Sustained adaptability:</strong>
+<ul>
+<li>Woods: &quot;No matter how good we have done before..</li>
+<li>the future could be different.&quot; It needs a <strong>holistic view</strong> (a risk of small autonomous teams losing sight of the whole; chapter 15's stream-aligned and <strong>enabling teams</strong>), a culture where people share information <strong>without fear of retribution</strong>, and continued investment.</li>
+</ul>
+</li>
+<li><strong>Microservices:</strong> they help with robustness, but resilience is &quot;a property not of the software itself but of the people building and running the system&quot;.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-12-four-concepts.svg" alt="The four concepts of resilience" loading="lazy" /></p>
+<h2 id="12-2-failure-is-everywhere">12.2 Failure is everywhere</h2>
+<ul>
+<li>Hard disks fail and networks are unreliable
+<ul>
+<li>at scale <strong>failure is a statistical certainty</strong>. Embrace it: if you handle a service failing gracefully, in-place upgrades become easier (a planned outage beats an unplanned one).</li>
+</ul>
+</li>
+<li>Spend less effort stopping the inevitable and more on <strong>recovering</strong>
+<ul>
+<li>Google's servers: a local power supply per server, and Velcro-mounted drives (chapter 10)</li>
+<li>If a failing server is tolerated, expensive hardware has <strong>diminishing returns</strong>: many cheap machines can beat a few costly ones.</li>
+</ul>
+</li>
+</ul>
+<h3 id="how-much-is-too-much">How much is too much?</h3>
+<ul>
+<li>Requirements drive the techniques:
+<ul>
+<li>autoscaling is overkill for a report run twice a month; zero-downtime deployment is overkill for an intranet knowledge base but sensible for e-commerce</li>
+<li>Define general cross-functional requirements and override per service</li>
+<li>Ask users, who may not articulate them.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Response time/latency</strong></td>
+<td>Measure at different loads; set a <strong>percentile</strong> target with concurrency, e.g. &quot;90th-percentile 2 s at 200 concurrent connections&quot;</td>
+</tr>
+<tr>
+<td><strong>Availability</strong></td>
+<td>Is it 24/7? Downtime percentages matter more for history than for a caller who needs reliability</td>
+</tr>
+<tr>
+<td><strong>Durability of data</strong></td>
+<td>How much loss is acceptable and how long to keep data (session logs a year, financial records many years)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Express them as <strong>SLOs</strong> (chapter 10).</li>
+</ul>
+<h3 id="degrading-functionality">Degrading functionality</h3>
+<ul>
+<li>Spreading a page over several services (item details, price and stock, cart): if one failure takes down the whole page, you are <strong>less</strong> resilient than with one dependency
+<ul>
+<li>Decide per outage what to degrade, with the business:
+<ul>
+<li>stock unavailable, still sell and sort it out later</li>
+<li>cart down, show the listing and hide the cart or show &quot;Be Back Soon!&quot; or a phone number</li>
+</ul>
+</li>
+<li>It is a <strong>business</strong> decision</li>
+<li>For every UI or service ask &quot;what happens if this is down?&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-3-stability-patterns">12.3 Stability patterns</h2>
+<blockquote>
+<p>[!note] The AdvertCorp story (details changed)
+A classified-ads company used a <strong>strangler fig</strong> to move ad types onto a new system while the rest were served by older applications (6,000 to 7,000 requests per second at peak, mostly cached except uncached <strong>search</strong>). Before the lunchtime peak, application nodes hit <strong>100% CPU</strong> and the site went down. A minor downstream service (the &quot;turnip ads&quot; system), used by under 5% of customers and generating less revenue, had become <strong>very slow</strong>.</p>
+<ul>
+<li>A <strong>slow</strong> failure is worse than a clean one: waiting slows everything and causes <strong>cascading failure</strong>. &quot;In a distributed system, latency kills.&quot;</li>
+<li>Causes: the <strong>HTTP connection pool</strong> had a timeout on calls but its <strong>timeout for waiting for a worker was disabled by default</strong>, so threads piled up (normally 40 connections, about <strong>800</strong> within five minutes); <strong>one shared pool</strong> let one slow service exhaust all workers; and traffic kept flowing to an unhealthy service, giving it no chance to recover.</li>
+<li>Fixes: correct <strong>timeouts</strong>, <strong>bulkheads</strong>, <strong>circuit breakers</strong>.</li>
+</ul>
+</blockquote>
+<h3 id="timeouts">Timeouts</h3>
+<ul>
+<li>Too long slows the system
+<ul>
+<li>too short fails calls that would succeed</li>
+<li>none can hang everything
+<ul>
+<li>AdvertCorp had a missing worker-wait timeout and a <strong>30 second</strong> call timeout, though users refresh long before (spawning more requests)</li>
+<li>Normal response was well under a second and the page target was 4 to 6 seconds, so they set <strong>1 s</strong> for the call and <strong>1 s</strong> to wait for a worker (about 2 s worst case).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Put timeouts on <strong>all out-of-process calls</strong>, with a default; log them and tune from normal healthy times.</li>
+<li>Also set a <strong>timeout for the overall operation</strong> and pass the remaining budget downstream: if a page has 1,000 ms and 300 ms are gone when calling turnip, wait at most 700 ms.</li>
+</ul>
+<h3 id="retries">Retries</h3>
+<ul>
+<li>Some failures are transient; refreshing a page is a retry. Use response codes: 404 will not help; <strong>503</strong> or <strong>504</strong> might. Add a <strong>delay</strong> so you do not bombard a struggling service.</li>
+<li>Account for retries in the budget:
+<ul>
+<li>a 500 ms timeout with three retries a second apart can wait <strong>3.5 seconds</strong></li>
+<li>skip later retries when the overall budget is gone (a non-user-facing job can wait longer).</li>
+</ul>
+</li>
+</ul>
+<h3 id="bulkheads">Bulkheads</h3>
+<ul>
+<li>Michael Nygard's <em>Release It!</em> (2nd ed., 2018): like a ship's sealed compartment
+<ul>
+<li>AdvertCorp should have had <strong>a connection pool per downstream service</strong></li>
+<li>Splitting functionality into separate microservices is also a bulkhead.</li>
+</ul>
+</li>
+<li>Bulkheads are arguably <strong>most important</strong>:
+<ul>
+<li>timeouts and breakers free resources once constrained, while bulkheads stop them becoming constrained</li>
+<li>They also enable <strong>load shedding</strong> (rejecting requests to avoid saturation).</li>
+</ul>
+</li>
+</ul>
+<h3 id="circuit-breakers">Circuit breakers</h3>
+<ul>
+<li>Like the home fuse:
+<ul>
+<li>after a number of failures (timeouts or a subset of 5XX), the breaker <strong>blows (opens)</strong> and requests <strong>fail fast</strong></li>
+<li>after a period a few requests are tried and, if healthy enough, the breaker <strong>resets</strong>
+<ul>
+<li>It protects the caller and gives the downstream service room to recover</li>
+<li>Newman would <strong>mandate them for all synchronous downstream calls</strong></li>
+</ul>
+</li>
+<li>implementations are widely available. Pick sensible defaults and tune.</li>
+</ul>
+</li>
+<li>When open: queue for later (asynchronous jobs), or fail fast and <strong>degrade</strong> (AdvertCorp updated the site to say turnip ads were unavailable, with <strong>one breaker per legacy system</strong>, matching the worker pools).</li>
+<li>Use them <strong>manually</strong> for maintenance: open upstream breakers so callers fail fast while a service is offline, then close them. Check breaker state before starting an operation.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-12-advertcorp-bulkheads.svg" alt="Shared pool versus bulkheads, timeouts and breakers" loading="lazy" /></p>
+<p><img src="/book-digest/building-microservices/img/bm-12-circuit-breaker-states.svg" alt="Circuit breaker states" loading="lazy" /></p>
+<h3 id="isolation">Isolation</h3>
+<ul>
+<li>The more service A depends on B, the more B's health affects A
+<ul>
+<li>buffering (middleware) lets downstream be offline. Isolation also <strong>reduces coordination</strong> between teams, so more <strong>autonomy</strong>.</li>
+</ul>
+</li>
+<li>Physical coupling hides in logical isolation:
+<ul>
+<li>two unrelated services on the <strong>same host</strong> (one hogs the CPU), or two logically separate databases on the <strong>same database infrastructure</strong>. Use independent hosts, VMs or containers</li>
+<li>but isolation costs infrastructure, tooling and complexity (a broker to run).</li>
+</ul>
+</li>
+</ul>
+<h3 id="redundancy">Redundancy</h3>
+<ul>
+<li>More of something improves robustness (more than one person who knows the production database; more than one instance)
+<ul>
+<li>Decide how much from failure modes, impact and cost</li>
+<li>On AWS there is <strong>no SLA for a single EC2 instance or a single availability zone</strong>, so use several instances across zones.</li>
+</ul>
+</li>
+</ul>
+<h3 id="middleware">Middleware</h3>
+<ul>
+<li>Brokers give <strong>guaranteed delivery</strong> by implementing retries and timeouts well
+<ul>
+<li>For AdvertCorp request-response it would not have helped (the customer still gets no answer; stale requests pile up in the broker; the other route, having turnip broadcast ads, still fails if turnip is down)</li>
+<li>Useful, but not always.</li>
+</ul>
+</li>
+</ul>
+<h3 id="idempotency">Idempotency</h3>
+<ul>
+<li>An <strong>idempotent</strong> operation has the same outcome however many times it is applied, so you can <strong>replay messages</strong> safely
+<ul>
+<li>Crediting points (&quot;100 to account 1234&quot;) is not idempotent; adding the <strong>reason</strong> (<code>forPurchase 4567</code>) lets the points bank ignore duplicates</li>
+<li>It also guards against two workers seeing one event.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="cm">&lt;!-- not idempotent: repeated calls add 100 points each time --&gt;</span>
+<span class="nt">&lt;credit&gt;</span>
+<span class="w">  </span><span class="nt">&lt;amount&gt;</span>100<span class="nt">&lt;/amount&gt;</span>
+<span class="w">  </span><span class="nt">&lt;forAccount&gt;</span>1234<span class="nt">&lt;/forAccount&gt;</span>
+<span class="nt">&lt;/credit&gt;</span>
+
+<span class="cm">&lt;!-- idempotent: one credit per purchase --&gt;</span>
+<span class="nt">&lt;credit&gt;</span>
+<span class="w">  </span><span class="nt">&lt;amount&gt;</span>100<span class="nt">&lt;/amount&gt;</span>
+<span class="w">  </span><span class="nt">&lt;forAccount&gt;</span>1234<span class="nt">&lt;/forAccount&gt;</span>
+<span class="w">  </span><span class="nt">&lt;reason&gt;</span>
+<span class="w">    </span><span class="nt">&lt;forPurchase&gt;</span>4567<span class="nt">&lt;/forPurchase&gt;</span>
+<span class="w">  </span><span class="nt">&lt;/reason&gt;</span>
+<span class="nt">&lt;/credit&gt;</span>
+</code></pre>
+<ul>
+<li>It is the <strong>business operation</strong> that is idempotent, not all system state (you still log the call and record its response time)
+<ul>
+<li>HTTP <code>GET</code> and <code>PUT</code> are idempotent only if your service implements them so.</li>
+</ul>
+</li>
+</ul>
+<h3 id="spreading-your-risk">Spreading your risk</h3>
+<ul>
+<li>Do not keep all eggs in one basket:
+<ul>
+<li>services on different hosts that are virtual hosts on <strong>one physical box</strong>, VMs whose root partition sits on one <strong>SAN</strong> (Newman has had big, expensive SANs fail at least twice in ten years), one rack or one data centre</li>
+<li>Use several.</li>
+</ul>
+</li>
+<li><strong>AWS:</strong>
+<ul>
+<li>regions are distinct clouds, each with two or more <strong>availability zones</strong></li>
+<li>the compute SLA is <strong>99.95% monthly uptime for the region as a whole</strong>, so spread across zones (some also across regions).</li>
+</ul>
+</li>
+<li>Providers <strong>limit liability</strong> under SLAs
+<ul>
+<li>know the impact of supplier failure, and have a <strong>plan B</strong> (a disaster-recovery platform with another supplier). If you need no more than four hours' downtime per quarter but your host guarantees eight, change the SLA or the solution.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-4-cap-theorem">12.4 CAP theorem</h2>
+<ul>
+<li>In a distributed system you trade <strong>consistency, availability and partition tolerance</strong>; <strong>in a failure mode you keep two</strong> (Eric Brewer's conjecture, since proved)
+<ul>
+<li><strong>Consistency</strong>: the same answer from any node</li>
+<li><strong>Availability</strong>: every request gets a response</li>
+<li><strong>Partition tolerance</strong>: coping when parts cannot communicate.</li>
+</ul>
+</li>
+<li>Example: the <strong>Inventory</strong> service in two data centres, each with a database, replicating to the other. If the link breaks, what now?
+<ul>
+<li><strong>Sacrificing consistency (AP):</strong>
+<ul>
+<li>both nodes serve requests but DC2 may be <strong>stale</strong></li>
+<li>writes must be reconciled later (harder the longer the partition). Replication is never instant, so <strong>eventual consistency</strong> is normal.</li>
+</ul>
+</li>
+<li><strong>Sacrificing availability (CP):</strong>
+<ul>
+<li>nodes cannot coordinate, so they <strong>refuse requests</strong></li>
+<li>Multinode consistency is &quot;really hard&quot; (transactional reads need locks across nodes; a lock holder that vanishes...; the same reason as distributed transactions in chapter 6)</li>
+<li>Do not invent it: use an off-the-shelf data store or lock service (for example <strong>Consul's</strong> strongly consistent key-value store)</li>
+<li>&quot;Friends don't let friends write their own distributed consistent data store.&quot;</li>
+</ul>
+</li>
+<li><strong>Sacrificing partition tolerance (CA):</strong> impossible over a network (it would be a single local process).</li>
+</ul>
+</li>
+<li><strong>AP or CP?</strong> It depends on the <strong>business impact</strong>: is a five-minute-stale inventory record fine? A bank balance? AP is simpler to build and scale.</li>
+<li><strong>Not all or nothing:</strong>
+<ul>
+<li>MusicCorp's catalogue could be AP, the inventory CP (do not sell what you lack)</li>
+<li>Even a single service: <strong>Points Balance</strong> could show stale balances (AP) but make updates consistent (CP), pushing the trade-off down to <strong>individual capabilities</strong></li>
+<li>Also a spectrum: <strong>Cassandra</strong> lets each call choose to wait for one replica, a quorum or all</li>
+<li>Claims of &quot;beating&quot; CAP just mix CP and AP.</li>
+</ul>
+</li>
+<li><strong>The real world:</strong> with 100 copies of &quot;Give Blood&quot; by the Brakes and a sale leaving 99, a dropped and broken copy makes the truth 98: no consistent system knows everything about the physical world, so <strong>AP is often the right call</strong>, with an apology later.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-12-cap-theorem.svg" alt="AP versus CP in a partition" loading="lazy" /></p>
+<h2 id="12-5-antifragility">12.5 Antifragility</h2>
+<ul>
+<li><strong>Nassim Taleb's</strong>
+<ul>
+<li>antifragile (systems that benefit from disorder) was hyped, inspiring parts of Netflix</li>
+<li>Newman now sees it as a <strong>subset</strong> of resilience (graceful extensibility and sustained adaptability), a product of thinking only about robustness and rebound.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-6-chaos-engineering">12.6 Chaos engineering</h2>
+<ul>
+<li>Named after Netflix practices
+<ul>
+<li>confusing because many proponents sell tools. Best definition he found: &quot;the discipline of experimenting on a system in order to build confidence in the system's capability to withstand turbulent conditions in production.&quot; The &quot;system&quot; includes <strong>people, processes and culture</strong>, not just software.</li>
+</ul>
+</li>
+<li><strong>Game days:</strong>
+<ul>
+<li>planned but ideally surprise exercises for people and processes (Google's <strong>DiRT</strong>, Disaster Recovery Test, even simulated earthquakes; Kripa Krishnan, &quot;Weathering the Unexpected&quot;, 2012)</li>
+<li>In Russ Miles's <em>Learning Chaos Engineering</em> example, &quot;Bob&quot; was shut in a room to test over-reliance on one person, and had to step in when the team <strong>logged into production by mistake</strong> and began destroying data.</li>
+</ul>
+</li>
+<li><strong>Production experiments (Netflix):</strong>
+<ul>
+<li><strong>Chaos Monkey</strong> turns off random machines in production hours</li>
+<li>part of the <strong>Simian Army</strong>: <strong>Chaos Gorilla</strong> (an entire availability zone), <strong>Latency Monkey</strong> (slow network).</li>
+</ul>
+</li>
+<li><strong>Beyond robustness:</strong>
+<ul>
+<li>used narrowly it improves robustness; used to keep asking &quot;what if&quot; it supports wider resilience</li>
+<li>Tools: <strong>Chaos Toolkit</strong> (open source), <strong>Reliably</strong>, <strong>Gremlin</strong></li>
+<li>&quot;Running a chaos engineering tool doesn't make you resilient.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-7-blame">12.7 Blame</h2>
+<ul>
+<li>After an incident, &quot;root cause analysis&quot; tempts us to find a human
+<ul>
+<li><strong>Telstra</strong> (Australia, 2016) outage: within hours the COO blamed a person for reconnecting customers to a malfunctioning node (&quot;an embarrassing human error&quot;)</li>
+<li>If one person can bring down a telco, that says more about the telco; blame creates a <strong>culture of fear</strong>, so people stop reporting problems and you cannot learn</li>
+<li>There were more outages afterwards, and the COO later resigned.</li>
+</ul>
+</li>
+<li>Aim for <strong>safety to admit mistakes</strong>
+<ul>
+<li>see John Allspaw, &quot;Blameless Post-Mortems and a Just Culture&quot; (Etsy's <em>Code as Craft</em>, 2012). Resiliency requires a <strong>questioning mind</strong> and a learning culture.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Resilience needs people, processes and organisation, not only software; microservices give many ways to improve <strong>robustness</strong>, none free.</li>
+<li>How much resilience you want is defined by users and business owners; talk to them often.</li>
+<li>&quot;You don't know what you don't know&quot;: keep learning and questioning.</li>
+<li>Next chapter: scaling, which also helps with redundancy.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Robustness, rebound, graceful extensibility, sustained adaptability</strong>.</li>
+<li><strong>Timeout, retry, bulkhead, circuit breaker, load shedding, isolation, redundancy</strong>.</li>
+<li><strong>Idempotency, eventual consistency, CAP, AP, CP</strong>.</li>
+<li><strong>Chaos engineering, game day, Chaos Monkey, blameless post-mortem</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 12. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch12.html</li>
+<li>David D
+<ul>
+<li>Woods, &quot;Four Concepts for Resilience and the Implications for the Future of Resilience Engineering&quot;, Reliability Engineering &amp; System Safety 141 (2015), doi.org/10.1016/j.ress.2015.03.018</li>
+<li>Michael T. Nygard, <em>Release It!</em>, 2nd ed. (Pragmatic Bookshelf, 2018)</li>
+<li>Russ Miles, <em>Learning Chaos Engineering</em> (O'Reilly, 2019)</li>
+<li>Kripa Krishnan, &quot;Weathering the Unexpected&quot; (https://oreil.ly/BCSQ7)</li>
+<li>John Allspaw, &quot;Blameless Post-Mortems and a Just Culture&quot; (https://oreil.ly/7LzmL)</li>
+<li>Newman, &quot;Telstra, Human Error and Blame Culture&quot; (https://oreil.ly/OXgUQ): as cited by the book.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-11-security/">Building Microservices 11: Security</a></li>
+<li><a href="/book-digest/building-microservices/bm-13-scaling/">Building Microservices 13: Scaling</a></li>
+<li><a href="/book-digest/building-microservices/bm-04-microservice-communication-styles/">Building Microservices 4: Microservice Communication Styles</a></li>
+<li><a href="/book-digest/building-microservices/bm-06-workflow/">Building Microservices 6: Workflow</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-11-security/">&larr; Building Microservices 11: Security</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-13-scaling/">Building Microservices 13: Scaling &rarr;</a></nav></main></body></html>

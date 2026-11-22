@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 19: Data storage</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-19-data-storage">Understanding Distributed Systems 19: Data storage</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 19. Previous: <a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">Understanding Distributed Systems 18: Network load balancing</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-20-caching/">Understanding Distributed Systems 20: Caching</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+Cruder's stateless app tier scales out, but the <strong>single relational database</strong> will hit its capacity. <strong>Replication</strong> (leader and followers) scales <strong>reads</strong> and availability but not writes, and the data must still fit on one machine. <strong>Partitioning</strong> scales reads and writes but is daunting to bolt onto a relational database. Hence <strong>NoSQL</strong>, built for scale and availability, which demands that you <strong>know your access patterns upfront and model data around them</strong>. <strong>NewSQL</strong> adds ACID back.</p>
+</blockquote>
+<h2 id="19-1-replication">19.1 Replication</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/leader-follower-replication.svg" alt="Leader-follower replication" loading="lazy" />
+<strong>Leader-follower</strong> topology: clients send <strong>writes exclusively to the leader</strong>, which persists them to its <strong>write-ahead log</strong>. <strong>Followers (replicas)</strong> connect, <strong>stream the log entries</strong> and commit them locally. Entries have <strong>sequence numbers</strong>, so a follower can disconnect and later resume by telling the leader the last number it processed.</p>
+<ul>
+<li><strong>Benefits:</strong>
+<ul>
+<li>read-only followers behind a load balancer <strong>increase read capacity</strong></li>
+<li><strong>Availability</strong> improves: the balancer removes faulty replicas, and if the leader fails a replica can take its place</li>
+<li>Followers can also <strong>isolate workloads</strong>, e.g</li>
+<li>periodic expensive analytics queries that must not hurt the leader and other replicas.</li>
+</ul>
+</li>
+<li><strong>Fully asynchronous:</strong>
+<ul>
+<li>the leader broadcasts the write and replies to the client <strong>without waiting</strong> for followers. Fast</li>
+<li><strong>not fault-tolerant</strong>: the leader may crash after acknowledging and before broadcasting</li>
+<li><strong>losing data</strong>.</li>
+</ul>
+</li>
+<li><strong>Fully synchronous:</strong>
+<ul>
+<li>the leader waits for follower acknowledgements before replying. <strong>Costly</strong>: a single slow replica slows every request, and an unreachable replica <strong>makes the store unavailable</strong></li>
+<li>it does not scale, since more followers means more chance one is slow or down.</li>
+</ul>
+</li>
+<li><strong>In practice a mix:</strong>
+<ul>
+<li>in <strong>PostgreSQL</strong> followers can individually be configured synchronous (default is asynchronous) (https://www.postgresql.org/docs/14/runtime-config-replication.html)</li>
+<li>Example: <strong>one synchronous follower as an up-to-date backup</strong>, so you can <strong>fail over without data loss</strong>.</li>
+</ul>
+</li>
+<li><strong>Failover</strong>
+<ul>
+<li>must: detect the leader's failure, <strong>promote</strong> the synchronous follower and reconfigure the others to follow it, and make sure clients send requests to the new leader</li>
+<li>Managed services (<strong>AWS RDS</strong>, <strong>Azure SQL Database</strong>) offer read replicas (https://aws.amazon.com/rds/features/read-replicas/) and automated failover (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html), plus patching and backups.</li>
+</ul>
+</li>
+<li><strong>Caveats:</strong>
+<ul>
+<li>replication scales <strong>reads, not writes</strong>, and <strong>the entire database must fit on one machine</strong>. Moving some tables to other nodes only delays the inevitable</li>
+<li>partitioning is the answer.</li>
+</ul>
+</li>
+</ul>
+<h2 id="19-2-partitioning">19.2 Partitioning</h2>
+<p>Partitioning scales <strong>reads and writes</strong>. Traditional (centralised) relational databases generally do not support it out of the box; you can do it at the <strong>application layer</strong>, but it is hard:</p>
+<ul>
+<li>decide how to partition and <strong>rebalance</strong> when a partition is too hot or big;</li>
+<li>split queries that span partitions into <strong>sub-queries</strong> and combine the results (aggregations, joins);</li>
+<li>support atomic cross-partition transactions with a <strong>distributed transaction protocol like 2PC</strong>;</li>
+<li>and combine all that with replication.</li>
+</ul>
+<p><strong>Why relational databases struggle:</strong> they were designed assuming data <strong>fits on one beefy machine</strong>, so they support features hard to scale, like <strong>ACID transactions and joins</strong>.</p>
+<p>They date from when <strong>disk was costly</strong>, so <strong>normalising</strong> to save space was a priority, at the price of <strong>joins</strong> to un-normalise at query time. Now <strong>storage is cheap and CPU time is not</strong>, so in the early 2000s large tech companies built bespoke stores for high availability and scale.</p>
+<p>(Footnote: normalisation also <strong>protects data integrity</strong>: update a datum in one place.)</p>
+<h2 id="19-3-nosql">19.3 NoSQL</h2>
+<p>Early systems lacked SQL and implemented only a fraction of relational features.</p>
+<p>White papers <strong>Bigtable</strong> (https://static.googleusercontent.com/media/research.google.com/en//archive/bigtable-osdi06.pdf) and <strong>Dynamo</strong> (section 11.3) &quot;revolutionised the industry&quot; and inspired open-source stores such as <strong>HBase</strong> and <strong>Cassandra</strong>.</p>
+<p>They were called <strong>NoSQL</strong> because they lacked SQL; <strong>today the name misleads</strong> as many support SQL dialects.</p>
+<ul>
+<li><strong>Consistency:</strong> relational supports strong models up to strict serialisability; NoSQL embraces <strong>relaxed models (eventual, causal)</strong> for availability.</li>
+<li><strong>Data model:</strong>
+<ul>
+<li>generally <strong>no joins</strong></li>
+<li>data (key-value pairs or documents such as JSON) is <strong>un-normalised</strong>
+<ul>
+<li>A <strong>key-value store</strong> maps an opaque key to an opaque value</li>
+<li>A <strong>document store</strong> maps a key to a (possibly hierarchical) document <strong>without a strictly enforced schema</strong></li>
+</ul>
+</li>
+<li>unlike key-value, documents are <strong>interpreted and indexed</strong>, so you can query by internal structure.</li>
+</ul>
+</li>
+<li><strong>Transactions:</strong> since they partition natively, support is <strong>limited</strong> (e.g. <strong>Azure Cosmos DB</strong> supports transactions scoped to a single partition); un-normalised data reduces the need.</li>
+<li>Use NoSQL <strong>correctly</strong> and it handles many relational use cases while scaling from day 1 (what works on day 1 for a relational database may not at day 10 or 100)
+<ul>
+<li><strong>Use one as a relational database and you get &quot;the worst of both worlds&quot;.</strong></li>
+</ul>
+</li>
+</ul>
+<h3 id="modelling-data-around-access-patterns-amazon-dynamodb">Modelling data around access patterns (Amazon DynamoDB)</h3>
+<p>(DynamoDB: https://aws.amazon.com/dynamodb/; deep dives: https://www.youtube.com/watch?v=HaEPXoXVf2k and https://www.youtube.com/watch?v=yvBR71D0nAQ.) The <strong>main requirement: know the access patterns upfront and model the data accordingly.</strong></p>
+<ul>
+<li>Abstraction:
+<ul>
+<li>a <strong>table of items</strong></li>
+<li>items can have different attributes but need a <strong>primary key</strong>: either a <strong>partition key</strong> alone, or a <strong>partition key + sort key</strong>
+<ul>
+<li>The <strong>partition key</strong> decides how data is <strong>partitioned across nodes</strong></li>
+</ul>
+</li>
+<li>the <strong>sort key</strong> orders data <strong>within a partition</strong> for efficient range queries.</li>
+</ul>
+</li>
+<li><strong>Replication:</strong>
+<ul>
+<li>three replicas per partition kept in sync with <strong>state machine replication</strong>; writes go to the leader and are acknowledged when <strong>two of three</strong> have them</li>
+<li>Reads are <strong>eventually consistent</strong> (any replica) or <strong>strongly consistent</strong> (the leader)</li>
+<li>Confusingly, DynamoDB's architecture is <strong>very different from the Dynamo paper</strong>.</li>
+</ul>
+</li>
+<li><strong>API:</strong>
+<ul>
+<li>CRUD on single items</li>
+<li><strong>query items sharing a partition key</strong> (optionally conditions on the sort key)</li>
+<li><strong>scan the whole table</strong>. <strong>No joins, by design</strong> (they do not scale well), and do not implement joins in the application: <strong>model the data so joins are not needed</strong>.</li>
+</ul>
+</li>
+<li><strong>Example.</strong> Most common access pattern: orders of one customer, sorted by date. So <strong>customer ID = partition key, order date = sort key</strong>:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Partition Key</th>
+<th>Sort Key</th>
+<th>Attribute</th>
+<th>Attribute</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>jonsnow</td>
+<td>2021-07-13</td>
+<td>OrderID: 1452</td>
+<td>Status: Shipped</td>
+</tr>
+<tr>
+<td>aryastark</td>
+<td>2021-07-20</td>
+<td>OrderID: 5252</td>
+<td>Status: Placed</td>
+</tr>
+<tr>
+<td>branstark</td>
+<td>2021-07-22</td>
+<td>OrderID: 5260</td>
+<td>Status: Placed</td>
+</tr>
+</tbody>
+</table>
+<p>To also get the customer's full name, <strong>store customers and orders in the same table</strong> (a NoSQL table can hold several entity types):</p>
+<table>
+<thead>
+<tr>
+<th>Partition Key</th>
+<th>Sort Key</th>
+<th>Attribute</th>
+<th>Attribute</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>jonsnow</td>
+<td>2021-07-13</td>
+<td>OrderID: 1452</td>
+<td>Status: Shipped</td>
+</tr>
+<tr>
+<td>jonsnow</td>
+<td>jonsnow</td>
+<td>FullName: Jon Snow</td>
+<td>Address: ...</td>
+</tr>
+<tr>
+<td>aryastark</td>
+<td>2021-07-20</td>
+<td>OrderID: 5252</td>
+<td>Status: Placed</td>
+</tr>
+<tr>
+<td>aryastark</td>
+<td>aryastark</td>
+<td>FullName: Arya Stark</td>
+<td>Address: ...</td>
+</tr>
+</tbody>
+</table>
+<p>Customer and orders share a partition key, so <strong>one query fetches all of the customer's entities</strong>: the table is structured by access pattern, <strong>no join needed</strong>. In a normalised relational design you would have orders and customers tables and a <strong>join at query time</strong>, slower and harder to scale.</p>
+<ul>
+<li><strong>Secondary indexes</strong>
+<ul>
+<li>model more complex patterns: <strong>local secondary indexes</strong> give alternate sort keys within the same table</li>
+<li><strong>global secondary indexes</strong> give different partition and sort keys, but index updates are <strong>asynchronous and eventually consistent</strong>.</li>
+</ul>
+</li>
+<li><strong>Misconception:</strong>
+<ul>
+<li>NoSQL is not more flexible because it &quot;scales without modelling upfront&quot;</li>
+<li>&quot;Nothing is further from the truth&quot;: it needs <strong>more</strong> care in modelling, and being tightly coupled to access patterns it is <strong>less flexible</strong> than a relational database.</li>
+</ul>
+</li>
+<li><strong>The one concept to take away:</strong>
+<ul>
+<li>using a NoSQL store requires identifying access patterns upfront and modelling data accordingly</li>
+<li>Recommended: <em>The DynamoDB Book</em> (https://www.dynamodbbook.com/), useful even for other NoSQL stores.</li>
+</ul>
+</li>
+</ul>
+<h2 id="newsql">NewSQL</h2>
+<p>The latest trend combines NoSQL's scalability with relational <strong>ACID</strong> guarantees. NoSQL prioritises <strong>availability</strong> over consistency under network partitions; <strong>NewSQL prefers consistency</strong>.</p>
+<p>The argument: with the right design the availability lost to strong consistency is <strong>hardly noticeable</strong> for many applications (see https://dbmsmusings.blogspot.com/2018/09/newsql-database-systems-are-failing-to.html), and 100% availability is impossible anyway (availability is measured in nines).</p>
+<p>Examples: <strong>CockroachDB</strong> (https://github.com/cockroachdb/cockroach) and <strong>Spanner</strong> (section 12.4). Retrospective talk by Andy Pavlo: https://www.youtube.com/watch?v=LwkS82zs65g.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+leader-follower replication · write-ahead log · synchronous / asynchronous replication · failover · read replica · application-layer partitioning · normalisation · NoSQL · key-value vs document store · partition key · sort key · access-pattern-driven modelling · single-table design · local / global secondary index · NewSQL.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 19. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">Understanding Distributed Systems 18: Network load balancing</a> · <a href="/book-digest/understanding-distributed-systems/uds-20-caching/">Understanding Distributed Systems 20: Caching</a> · <a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a> · <a href="/book-digest/understanding-distributed-systems/uds-12-transactions/">Understanding Distributed Systems 12: Transactions</a> · databases</p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">&larr; Understanding Distributed Systems 18: Network load balancing</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-20-caching/">Understanding Distributed Systems 20: Caching &rarr;</a></nav></main></body></html>

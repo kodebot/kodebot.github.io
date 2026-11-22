@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 11: Foundational Security Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-11-foundational-security-architecture">Grokking Software Architecture 11: Foundational Security Architecture</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 11. Previous: <a href="/book-digest/grokking-software-architecture/gsa-10-resilience-and-scale/">Grokking Software Architecture 10: Architecting for Resilience and Scale</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-12-monoliths-vs-microservices/">Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Security is a first-class <strong>architectural attribute</strong> (one of the -ilities), not a launch-week checklist. <strong>Assume the perimeter will be breached</strong>; limit the <strong>blast radius</strong>.</li>
+<li>Two mental models: <strong>Least Privilege</strong> and <strong>Defense in Depth</strong>.</li>
+<li>Structural tools: <strong>API gateway</strong> (single chokepoint), <strong>Identity Provider</strong> (OIDC + OAuth 2.0, JWT), <strong>Zero Trust</strong> (mTLS, service mesh), <strong>Secrets Manager</strong> (rotation).</li>
+<li>Practice: <strong>threat model with STRIDE</strong>; automate checks (policy as code, SAST, SBOM).</li>
+<li>Lesson of <strong>Target 2013</strong>: a system is only as secure as its least secure integration.</li>
+</ul>
+</div></div>
+<h2 id="11-2-the-security-mindset">11.2 The security mindset</h2>
+<h3 id="principle-of-least-privilege-polp">Principle of Least Privilege (PoLP)</h3>
+<p>Restrict users, systems and processes to the <strong>minimum permissions</strong> needed. Keycard analogy: the receptionist's stolen card opens the coffee machine, not the server room.</p>
+<ul>
+<li><strong>Deny by default</strong>, grant granular capabilities (read-only on one table, call one internal API).</li>
+<li><strong>Monolith problem:</strong> one &quot;God Mode&quot; database login (<code>admin/password123</code>) means a bug in &quot;Update Profile&quot; can drop the database.</li>
+<li><strong>Where to enforce</strong>
+<ul>
+<li><strong>Database:</strong> a reporting service connects with <code>SELECT</code> only.</li>
+<li><strong>Network:</strong> an email-queue worker denies all inbound traffic.</li>
+<li><strong>File system:</strong> a web app that only reads config gets no write or execute rights.</li>
+</ul>
+</li>
+<li><strong>The wildcard danger:</strong>
+<ul>
+<li>developers reach for <code>*</code> to move fast</li>
+<li>forgetting to remove it before production destroys least privilege. Ask the Boundary Keeper's question: &quot;what is the narrowest set of data this service needs?&quot;</li>
+</ul>
+</li>
+<li><strong>Reduce friction so people don't bypass security:</strong> automate permissions with IaC; use <strong>Just-In-Time (JIT) access</strong> (temporary, auto-expiring elevated rights for debugging).</li>
+<li>Splitting a &quot;God database&quot;: Ambler and Sadalage, <em>Refactoring Databases</em>.</li>
+</ul>
+<h3 id="defense-in-depth-the-castle-approach">Defense in Depth (the castle approach)</h3>
+<p>The old <strong>perimeter model</strong> is an egg: hard shell (firewall), soft centre (trusted internal network). It is broken because the perimeter has dissolved (remote work, mobile, BYOD, third-party cloud integrations) and attackers bypass what remains (phishing, social engineering, supply-chain attacks). Defense in depth uses <strong>multiple independent layers</strong>:</p>
+<p><img src="/book-digest/grokking-software-architecture/img/defence-in-depth.svg" alt="Defence in depth layers" loading="lazy" /></p>
+<ol>
+<li><strong>Passive network security (moat and walls):</strong> VPCs and strict subnet routing so the internet never reaches databases or workers.</li>
+<li><strong>Active perimeter defences (archers):</strong> WAF, IPS, rate limiters; drop malicious traffic, ban IPs, stop brute force.</li>
+<li><strong>Identity and access management (portcullis):</strong> strong authentication and authorisation on every request.</li>
+<li><strong>Application defences (inner guards):</strong> account lockouts, input validation (SQL injection).</li>
+<li><strong>Data security (vault):</strong> encryption <strong>at rest</strong> and <strong>in transit</strong>; a stolen database file is gibberish.</li>
+</ol>
+<p>Combined with least privilege, a breach is <strong>contained</strong> while monitoring detects it.</p>
+<h2 id="11-3-api-gateways-identity-providers-zero-trust">11.3 API gateways, identity providers, zero trust</h2>
+<h3 id="api-gateway-the-single-chokepoint">API gateway: the single chokepoint</h3>
+<p>A <strong>centralised edge server</strong> that is the single entry point for external requests. Fifty doors from the wilderness would be undefendable. External clients cannot talk to microservices directly.</p>
+<ul>
+<li><strong>Rate limiting:</strong> drop a single IP trying 500 logins in a minute before it reaches the auth service.</li>
+<li><strong>TLS termination:</strong> decrypt HTTPS once at the edge.</li>
+<li><strong>Request routing:</strong> <code>GET /orders/123</code> goes to the right service.</li>
+<li><strong>Initial authentication:</strong> the bouncer checks the ticket.</li>
+</ul>
+<h3 id="identity-providers-oauth-2-0-and-oidc">Identity providers: OAuth 2.0 and OIDC</h3>
+<p><strong>Don't roll your own crypto or password hashing.</strong> Use an <strong>Identity Provider (IdP)</strong> (Auth0, Okta, AWS Cognito): manages identities, authenticates, issues verifiable tokens, centralises <strong>MFA</strong>.</p>
+<ul>
+<li><strong>OIDC (OpenID Connect):</strong> <strong>authentication</strong>, who you are (a digital passport).</li>
+<li><strong>OAuth 2.0:</strong> <strong>authorisation</strong>, what you may do (a valet key: drive, not open the glovebox). Spec: https://tools.ietf.org/html/rfc6749.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>OAuth 2.0 flow</th>
+<th>Characteristic</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Human logging into a web or mobile app</td>
+<td><strong>Authorization Code (with PKCE)</strong></td>
+<td>redirect to the IdP's login page</td>
+</tr>
+<tr>
+<td>Backend service to service (machine to machine)</td>
+<td><strong>Client Credentials</strong></td>
+<td>no human; the service uses its own ID and secret to get a token</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>PKCE</strong>
+<ul>
+<li>(Proof Key for Code Exchange, &quot;pixy&quot;): protects public clients (mobile, single-page apps) that cannot keep a secret</li>
+<li>a unique temporary code challenge per login makes an intercepted login code useless.</li>
+</ul>
+</li>
+<li>Using a browser redirect flow for a background server process is a leading cause of vendor-integration failures.</li>
+<li><strong>The flow:</strong>
+<ul>
+<li>login (with MFA) at the IdP returns a signed <strong>JWT</strong> (&quot;I am the IdP; this user is John Doe with role User&quot;). The client attaches it to every request</li>
+<li>the gateway verifies the signature before forwarding.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/grokking-software-architecture/img/jwt-flow.svg" alt="OIDC and JWT flow" loading="lazy" /></p>
+<p><strong>JWT verification minefield</strong> (security only exists on the backend: hiding an &quot;Admin Dashboard&quot; button in React stops nothing)</p>
+<ol>
+<li><strong>Verify against JWKS:</strong> fetch the IdP's public keys from its JWKS endpoint (never hardcode keys); unsigned tokens let attackers forge admin.</li>
+<li><strong>Validate expiry:</strong> check <code>exp</code>; a validly signed token from three days ago is useless.</li>
+<li><strong>Pin the algorithm:</strong> attackers edit the header to <code>{&quot;alg&quot;: &quot;none&quot;}</code>, set the payload to <code>{&quot;user&quot;:&quot;attacker&quot;,&quot;role&quot;:&quot;admin&quot;}</code> and delete the signature. A misconfigured library skips verification. Explicitly accept only the expected algorithm (e.g. <strong>RS256</strong>).</li>
+</ol>
+<h3 id="zero-trust-never-trust-always-verify">Zero Trust: never trust, always verify</h3>
+<p>&quot;Past the gateway means safe&quot; lets <strong>supply-chain attacks</strong> pivot from a low-priority service (an analytics dashboard) into the payment database. <strong>Zero Trust</strong> abolishes implicit trust: every request, internal or external, must be authenticated, authorised and cryptographically validated.</p>
+<ul>
+<li><strong>mTLS (mutual TLS):</strong>
+<ul>
+<li>standard TLS only proves the <em>server</em> (bouncer checks your ID, you don't check his)</li>
+<li>mTLS is a two-way ID check (the &quot;blind date&quot;: both show certificates) for <strong>all service-to-service calls</strong>.</li>
+</ul>
+</li>
+<li><strong>Order Service → Customer Service flow</strong>
+<ol>
+<li>mTLS: both verify cryptographic identity.</li>
+<li>Order Service presents its own application token.</li>
+<li>Customer Service validates it and checks least privilege for that data.</li>
+</ol>
+</li>
+<li><strong>Stance:</strong> with AI output you &quot;trust but verify&quot;; in security, <strong>never trust, always verify</strong>.</li>
+</ul>
+<p><strong>Implementing it: service mesh and sidecars</strong></p>
+<ul>
+<li>Writing mTLS and token code in four languages is a nightmare
+<ul>
+<li>A <strong>service mesh</strong> (Istio, Linkerd) deploys a <strong>sidecar proxy</strong> beside each service to handle mTLS, identity-based authorisation, routing and retries; application code stays unaware</li>
+<li>Pattern doc: https://learn.microsoft.com/en-us/azure/architecture/patterns/sidecar.</li>
+</ul>
+</li>
+<li>Start with a proof of concept in staging on a few services; expand incrementally.</li>
+<li><strong>Legacy migration roadmap (no downtime)</strong>
+<ol>
+<li><strong>Audit mode:</strong> log all traffic, block nothing.</li>
+<li><strong>Baseline:</strong> which services really talk to which.</li>
+<li><strong>Identity:</strong> certificates for every service.</li>
+<li><strong>Policy:</strong> gradually add least-privilege rules matching the baseline.</li>
+<li><strong>Deny by default:</strong> block unexpected traffic.</li>
+</ol>
+</li>
+<li><strong>Google BeyondCorp:</strong>
+<ul>
+<li>after a major <strong>2009</strong> attack Google dropped its privileged intranet</li>
+<li>an on-campus employee has the same access as someone in a coffee shop (none): access depends on <strong>device health and user identity</strong> only.</li>
+</ul>
+</li>
+<li><strong>Rightsize tooling:</strong>
+<ul>
+<li>Vault or a full mesh is overkill for side projects</li>
+<li>Startups/MVPs: managed services (Doppler, AWS Parameter Store, Auth0, Clerk)</li>
+<li>Regulated healthcare/finance may need self-hosted for audit.</li>
+</ul>
+</li>
+</ul>
+<h2 id="11-5-secrets-management">11.5 Secrets management</h2>
+<p><strong>Hardcoded disaster:</strong> <code>psycopg2.connect(host=&quot;prod-db.internal.castle.com&quot;, database=&quot;orders_db&quot;, user=&quot;admin&quot;, password=&quot;Password123!&quot;)</code>.</p>
+<ul>
+<li><strong>Source control leakage:</strong> the secret lives in git history forever, even after deletion.</li>
+<li><strong>God account:</strong> violates least privilege.</li>
+<li><strong>Static vulnerability:</strong> changing it means a full redeploy.</li>
+</ul>
+<p><strong>Fix:</strong> fetch credentials at runtime from a <strong>Secrets Manager</strong> (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault) using a <strong>short-lived IAM role</strong> on the server. The code holds only the secret's <em>name</em>:</p>
+<pre class="hl"><code><span class="k">def</span><span class="w"> </span><span class="nf">get_database_credentials</span><span class="p">():</span>
+    <span class="n">client</span> <span class="o">=</span> <span class="n">boto3</span><span class="o">.</span><span class="n">session</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span><span class="o">.</span><span class="n">client</span><span class="p">(</span><span class="n">service_name</span><span class="o">=</span><span class="s1">'secretsmanager'</span><span class="p">,</span> <span class="n">region_name</span><span class="o">=</span><span class="s2">"us-east-1"</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">resp</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">get_secret_value</span><span class="p">(</span><span class="n">SecretId</span><span class="o">=</span><span class="s2">"prod/BillingDatabase/Credentials"</span><span class="p">)</span>
+    <span class="k">except</span> <span class="n">ClientError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="n">e</span>                         <span class="c1"># lacks IAM permission? it fails (least privilege)</span>
+    <span class="n">secret</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">resp</span><span class="p">[</span><span class="s1">'SecretString'</span><span class="p">])</span>
+    <span class="k">return</span> <span class="n">secret</span><span class="p">[</span><span class="s1">'username'</span><span class="p">],</span> <span class="n">secret</span><span class="p">[</span><span class="s1">'password'</span><span class="p">]</span>
+</code></pre>
+<ul>
+<li><strong>Why it is secure:</strong> no credentials in code; identity-based access (decommissioned server = revoked); a specific read-only secret (small blast radius); <strong>ready for rotation</strong>.</li>
+<li><strong>IAM equivalents</strong></li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Cloud</th>
+<th>VMs</th>
+<th>Containers / serverless</th>
+<th>Search terms</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AWS</td>
+<td>IAM role via EC2 Instance Profile</td>
+<td>IAM role on ECS task, IRSA for EKS</td>
+<td>IAM Roles, Instance Profiles</td>
+</tr>
+<tr>
+<td>Azure</td>
+<td>system-assigned Managed Identity</td>
+<td>Managed Identity on AKS pod / Container App</td>
+<td>Managed Identities</td>
+</tr>
+<tr>
+<td>Google Cloud</td>
+<td>Service Account on Compute Engine</td>
+<td>Workload Identity for GKE, Service Account on Cloud Run</td>
+<td>Service Accounts</td>
+</tr>
+<tr>
+<td>Alibaba</td>
+<td>RAM Role on ECS</td>
+<td>RRSA for ACK</td>
+<td>RAM Roles</td>
+</tr>
+<tr>
+<td>Oracle</td>
+<td>Instance Principal</td>
+<td>Workload Identity for OKE</td>
+<td>Instance Principals</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Small projects on Vercel, Heroku, DigitalOcean App Platform: inject secrets into the platform's encrypted <strong>environment variables</strong> instead.</li>
+</ul>
+<p><strong>Secret rotation</strong> (e.g. AWS Secrets Manager can change a database password every <strong>30 days</strong>). A password cached at boot fails at midnight with &quot;Unauthorized&quot; and the app crashes. Mature apps, using the resilience patterns of ch. 10:</p>
+<ol>
+<li>Catch the specific &quot;Unauthorized / Login Failed&quot; error.</li>
+<li><strong>Invalidate</strong> the cached password.</li>
+<li><strong>Fetch</strong> the fresh secret.</li>
+<li><strong>Retry</strong> the operation, before the user notices.</li>
+</ol>
+<ul>
+<li><strong>Spring Boot</strong>
+<ul>
+<li>automates this: connection pools (HikariCP) plus Spring Cloud Vault or AWS Secrets Manager integrations evict dead connections, flush with <code>@RefreshScope</code>, fetch the new secret and rebuild the pool</li>
+<li>Check for &quot;dynamic secrets&quot; plugins before hand-rolling.</li>
+</ul>
+</li>
+<li><strong>If rotation itself fails</strong> (Secrets Manager down or corrupt): trip a <strong>circuit breaker</strong> to stop hammering the DB, and <strong>page on-call</strong> with an alert citing an authentication failure (not a vague timeout).</li>
+<li><strong>Compromise playbook</strong>
+<ol>
+<li><strong>Immediate revocation:</strong> invalidate and regenerate.</li>
+<li><strong>Forced re-authentication:</strong> sever connections or block affected services.</li>
+<li><strong>Audit and scope:</strong> logs show timeline and what was accessed.</li>
+<li><strong>Stakeholder notification:</strong> security, operations, legal.</li>
+<li><strong>Root cause remediation:</strong> how it leaked (git commit, social engineering).</li>
+</ol>
+</li>
+</ul>
+<h2 id="11-6-threat-modelling-stride">11.6 Threat modelling: STRIDE</h2>
+<p>Threat modelling means analysing the architecture <strong>before writing code</strong> (&quot;shift left&quot;), like a robber studying the blueprint, instead of waiting for pen tests. <strong>STRIDE</strong> (Microsoft: https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats) has six categories:</p>
+<table>
+<thead>
+<tr>
+<th>Threat</th>
+<th>Question and example</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>S</strong>poofing</td>
+<td>Can someone pretend to be a user or service? (a rogue container posing as <code>OrderService</code>)</td>
+<td>IdP for humans, <strong>mTLS</strong> for services</td>
+</tr>
+<tr>
+<td><strong>T</strong>ampering</td>
+<td>Can data be modified in transit or at rest? (changing a shipping address in a request)</td>
+<td>TLS 1.2+ in transit, database encryption at rest</td>
+</tr>
+<tr>
+<td><strong>R</strong>epudiation</td>
+<td>Can someone deny an action? (a rogue admin drops a table, logs don't say who)</td>
+<td>immutable, append-only <strong>audit logs</strong> tied to verified identity</td>
+</tr>
+<tr>
+<td><strong>I</strong>nformation disclosure</td>
+<td>Can someone see unauthorised data? (API returns whole user object incl. password hash and relies on the UI to hide it)</td>
+<td>least privilege; <strong>anti-corruption layer</strong> filters payloads</td>
+</tr>
+<tr>
+<td><strong>D</strong>enial of service</td>
+<td>Can they exhaust resources?</td>
+<td>rate limiting and <strong>WAF</strong> at the gateway</td>
+</tr>
+<tr>
+<td><strong>E</strong>levation of privilege</td>
+<td>Can a user gain admin rights? (backend trusts a form's <code>role</code> parameter)</td>
+<td>backend-only authorisation on every route using the verified <strong>JWT</strong></td>
+</tr>
+</tbody>
+</table>
+<p>If you cannot explain how an attacker might spoof a service or tamper with a payload, scouting is unfinished. Reading: Tanya Janca, <em>Alice and Bob Learn Application Security</em>.</p>
+<h2 id="11-7-the-dork-side-target-s-hvac-hack-2013">11.7 The Dork Side: Target's HVAC hack (2013)</h2>
+<p>Late <strong>2013</strong>: attackers stole card and personal data of <strong>over 40 million</strong> customers in the holiday season; est. cost <strong>$292 million</strong>, damaged stock price, CEO resigned. No zero-day: they came through the <strong>air conditioning</strong>.</p>
+<ul>
+<li><strong>How it happened</strong>
+<ol>
+<li>Target's HVAC/refrigeration vendor had credentials to an external <strong>vendor portal</strong> (billing, contracts).</li>
+<li>Attackers <strong>phished the vendor</strong> and stole those credentials.</li>
+<li>Target's network was the &quot;egg&quot;: once inside the firewall, traffic was implicitly trusted; poor <strong>segmentation</strong> let them pivot from billing to the network controlling <strong>point-of-sale registers</strong>.</li>
+<li>They installed custom malware on registers; card data was decrypted momentarily in memory after a swipe, so it was <strong>scraped from memory</strong> and exfiltrated.</li>
+</ol>
+</li>
+<li><strong>Lesson:</strong>
+<ul>
+<li>a system is only as secure as its <strong>least secure integration</strong></li>
+<li>Least-privilege segmentation (the billing portal should have no route to POS; vendor credentials should only submit invoices) would have ended it at step 2.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Third-party integration rules</strong></p>
+<ol>
+<li><strong>Short-lived tokens:</strong> no permanent vendor API keys; OAuth tokens that expire after e.g. <strong>15 minutes</strong>.</li>
+<li><strong>Egress filtering:</strong> most firms filter inbound only. Allow outbound connections only to approved domains (e.g. <code>api.stripe.com</code>); an attacker can't download malware or exfiltrate.</li>
+<li><strong>Automated enforcement</strong>
+<ul>
+<li><strong>Policy as code and IaC scanning:</strong>
+<ul>
+<li><strong>Open Policy Agent</strong> (https://www.openpolicyagent.org/; CNCF graduated), Checkov, tfsec fail the build if Terraform opens a route from a vendor subnet to the POS subnet</li>
+<li>policies can be unit-tested.</li>
+</ul>
+</li>
+<li><strong>SAST</strong>
+<ul>
+<li>(SonarQube etc.) flags hardcoded secrets and injection flaws</li>
+<li>NIST list of analysers: https://www.nist.gov/itl/csd/secure-systems-and-applications/source-code-security-analyzers</li>
+<li>(Fitness functions: ch. 13-14.)</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Defend the supply chain:</strong> treat build pipelines and dependencies as primary attack vectors.
+<ul>
+<li><strong>SolarWinds (2020):</strong> attackers compromised the build system and injected a backdoor into a legitimate update; <strong>18,000</strong> customers incl. the US Government downloaded it.</li>
+<li><strong>XZ Utils (2024):</strong>
+<ul>
+<li>an attacker spent <strong>over two years</strong> volunteering, earned maintainer access from an exhausted developer, and inserted a backdoor that would have compromised <strong>SSH on millions of Linux servers</strong></li>
+<li>a Microsoft engineer noticed a <strong>500 ms delay</strong> and investigated.</li>
+</ul>
+</li>
+<li><strong>event-stream (2018):</strong> the tired maintainer handed publishing keys to a &quot;helper&quot;, who added encrypted malware <code>flatmap-stream</code> that activated only when compiled in the build of <strong>Copay</strong> (Bitcoin wallet), stealing private keys of users with over <strong>100 BTC</strong>.</li>
+<li><strong>Axios (March 2026):</strong> a package with over 100 million weekly downloads was compromised in two versions (https://www.microsoft.com/en-us/security/blog/2026/04/01/mitigating-the-axios-npm-supply-chain-compromise/).</li>
+<li><strong>left-pad (2016):</strong>
+<ul>
+<li>not an attack</li>
+<li>a developer unpublished his packages after a trademark dispute, including an <strong>11-line</strong> <code>left-pad</code> used by thousands (React, Babel, Facebook, Netflix, Spotify): millions of builds failed</li>
+<li>npm changed its unpublish policy.</li>
+</ul>
+</li>
+<li><strong>Mitigation: SBOM</strong>
+<ul>
+<li>(Software Bill of Materials): a machine-readable inventory of every dependency (&quot;ingredients list&quot;)</li>
+<li>the pipeline cross-references it with known vulnerabilities and <strong>halts the deployment</strong> if one is flagged. Also run <strong>CI/CD runners with least privilege</strong> (segregated deployment keys, secondary approvals).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Continuous assessment (the 3 A's, ch. 1)</strong>
+<ul>
+<li><strong>Awareness:</strong> automation: SAST (SonarQube, Snyk, Semgrep), <strong>secrets scanning</strong>, contract tests (Pact, Postman), anomaly detection (Datadog, AWS GuardDuty).</li>
+<li><strong>Alignment:</strong> regular reviews; record security choices and threat models in <strong>ADRs</strong>, revisited at least <strong>quarterly</strong> or on major integration changes.</li>
+<li><strong>Accountability:</strong> explicit <strong>owner</strong> per external integration; <strong>anti-corruption layers</strong> mask and limit data sent out.</li>
+</ul>
+</li>
+</ol>
+<h2 id="11-8-mission-checklist-recap">11.8 Mission, checklist, recap</h2>
+<p><strong>Mission: Blast Radius Audit</strong> of the Chapter 3 Order Processor. Deliverable: an <strong>ADR</strong> (Scribe role).</p>
+<ol>
+<li><strong>Map entry points:</strong> one API gateway or services exposing their own endpoints? Where is the perimeter?</li>
+<li><strong>Kill the God account:</strong> create a restricted user:<pre class="hl"><code><span class="k">CREATE</span><span class="w"> </span><span class="k">USER</span><span class="w"> </span><span class="n">order_processor</span><span class="w"> </span><span class="k">WITH</span><span class="w"> </span><span class="n">PASSWORD</span><span class="w"> </span><span class="s1">'your_secure_password'</span><span class="p">;</span>
+<span class="k">GRANT</span><span class="w"> </span><span class="k">SELECT</span><span class="p">,</span><span class="w"> </span><span class="k">INSERT</span><span class="p">,</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="n">order_processor</span><span class="p">;</span>
+</code></pre>
+No <code>DROP</code> or <code>DELETE</code>.</li>
+<li><strong>Hunt the secrets:</strong> remove hardcoded keys; use environment variables (locally a <code>.env</code> file excluded from source control, loaded via <code>python-dotenv</code> or <code>dotenv</code>).</li>
+<li><strong>Enforce MFA</strong> on developer accounts, cloud console and repositories.
+(Guided solution in Appendix A.) Next: monoliths vs microservices (ch. 12).</li>
+</ol>
+<p><strong>Recap:</strong> security is architectural; PoLP; defense in depth; API gateway chokepoint; IdP with OIDC and OAuth; zero trust with mTLS and a service mesh; secrets managers and rotation; the 3 A's; STRIDE; assume the outer wall fails and contain the intruder.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+least privilege · JIT access · defense in depth · perimeter model · WAF · API gateway · TLS termination · IdP · OIDC · OAuth 2.0 · Authorization Code + PKCE · Client Credentials · JWT · JWKS · <code>alg: none</code> · zero trust · mTLS · service mesh · sidecar · secrets manager · IAM role · secret rotation · STRIDE · egress filtering · policy as code · SAST · SBOM · supply-chain attack.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 11. Pre-release; no public source page found.</li>
+<li>OAuth 2.0 RFC 6749: https://tools.ietf.org/html/rfc6749 · STRIDE: https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-10-resilience-and-scale/">Grokking Software Architecture 10: Architecting for Resilience and Scale</a> · <a href="/book-digest/grokking-software-architecture/gsa-12-monoliths-vs-microservices/">Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices</a> · <a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">Understanding Distributed Systems 21: Microservices</a> · <a href="/book-digest/understanding-distributed-systems/uds-03-secure-links/">Understanding Distributed Systems 3: Secure links</a> · <a href="/book-digest/grokking-software-architecture/gsa-08-the-database-as-an-architectural-pillar/">Grokking Software Architecture 8: The Database as an Architectural Pillar</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-10-resilience-and-scale/">&larr; Grokking Software Architecture 10: Architecting for Resilience and Scale</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-12-monoliths-vs-microservices/">Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices &rarr;</a></nav></main></body></html>

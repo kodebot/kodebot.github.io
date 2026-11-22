@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 6: Reliable API Design (public contracts and synchronous communication)</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-6-reliable-api-design-public-contracts-and-synchronous-communication">Grokking Software Architecture 6: Reliable API Design (public contracts and synchronous communication)</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 6. Previous: <a href="/book-digest/grokking-software-architecture/gsa-05-hexagonal-architecture/">Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters)</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-07-event-driven-architecture/">Grokking Software Architecture 7: Event-Driven Architecture (temporal decoupling and async communication)</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>An <strong>API is a binding public contract</strong>, not a list of URLs. Once published it is &quot;forever&quot;: breaking it breaks apps, partners and agents.</li>
+<li>Crossing the <strong>network boundary</strong> turns a fast, reliable in-memory call into a slow, fallible request.</li>
+<li><strong>Statelessness</strong> lets any server handle any request (scale). <strong>Idempotency</strong> makes retries safe: REST builds it into verbs, GraphQL needs an <strong>idempotency key</strong>.</li>
+<li><strong>REST</strong> (cacheable, universal, over-fetches) vs <strong>GraphQL</strong> (precise, flexible, harder to cache); <strong>BFF</strong> to serve both.</li>
+<li>AI agents are API consumers: <strong>naming is prompt engineering</strong>; spec = UI for the robot.</li>
+<li>Hidden traps: <strong>N+1 queries</strong>, <strong>API sprawl</strong>, <strong>debugging &quot;magic&quot; ORMs</strong>, <strong>chained sync dependencies (distributed monolith)</strong>.</li>
+</ul>
+</div></div>
+<h2 id="6-2-client-server-model">6.2 Client-server model</h2>
+<p>Workload split between <strong>Client</strong> (initiates) and <strong>Server</strong> (holds resources, fulfils). Old model: a dumb terminal plus a mainframe. Now the <strong>network boundary</strong> separates device code from data-centre code; treat each crossing as a <strong>potential failure point</strong> (latency, risk, complexity).</p>
+<ul>
+<li><strong>Client (&quot;Asker&quot;):</strong> presentation, interaction, input validation (browsers, mobile apps, IoT, desktop apps, other servers, AI agents): knows what it wants, not how.</li>
+<li><strong>Server (&quot;Doer&quot;):</strong> business logic, data storage, security, integrity; treats all clients equally per the contract.</li>
+<li><strong>Request-response cycle</strong> (synchronous, client always initiates, &quot;boomerang&quot;): (1) request (<code>GET /user/123</code>), (2) processing, (3) response (<code>200 OK {&quot;name&quot;:&quot;Archie&quot;}</code>), (4) rendering.</li>
+<li><strong>Communication vs flow:</strong>
+<ul>
+<li>the handshake is synchronous, but the <strong>work can be asynchronous</strong>: close the loop early with a receipt (<strong>202 Accepted</strong>) and deliver results by callback or polling</li>
+<li>Otherwise you create a <strong>blocking chain</strong> / &quot;temporal chain&quot; leading to a <strong>distributed monolith</strong> (ch. 7).</li>
+</ul>
+</li>
+<li><strong>Statelessness:</strong>
+<ul>
+<li>the server retains no memory of previous interactions; each request carries all needed context (who and what)</li>
+<li><strong>Amnesiac bartender</strong> analogy: you must say &quot;I'm Archie (Token #123), I had a Lager, another please&quot;</li>
+<li>Accepted because it lets <strong>50 bartenders</strong> serve interchangeably (scale).</li>
+</ul>
+</li>
+<li><strong>Thin client</strong>
+<ul>
+<li>(server-side rendering): secure (logic on server), easy to update, consistent on cheap devices</li>
+<li>but laggy round-trips, useless offline. <strong>Thick client</strong> (SPA/mobile): snappy, instant validation, offline</li>
+<li>but duplicated logic and outdated app versions
+<ul>
+<li><strong>Defensible decision:</strong> thick for UX, <strong>critical rules on the server</strong> (client: &quot;is email format valid (has <code>@</code>)?&quot;; server: &quot;is this email allowed to register?&quot;).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Why split:</strong> <strong>Scale</strong> (1,000,000 users: add servers behind the scenes, horizontal scaling, no huge executable to redownload) and <strong>Specialisation</strong> (frontend and backend teams work independently; the <strong>API contract</strong> is what they agree on).</li>
+</ul>
+<h2 id="6-3-api-as-a-public-contract">6.3 API as a public contract</h2>
+<p>An API is a formal agreement of what requests are possible, data formats (JSON) and responses; once published it cannot change without breaking dependents. Internally an IDE refactors everything; over a network you cannot force teams or phones to update. Styles (REST, GraphQL) are concrete implementations of the contract idea.</p>
+<ul>
+<li><strong>Restaurant analogy:</strong>
+<ul>
+<li>kitchen = Core (hot, chaotic)</li>
+<li>customer = client</li>
+<li><strong>menu = API</strong>. Swap chef, stoves, building</li>
+<li>if &quot;Burger&quot; still arrives, nobody cares. &quot;You cannot order a Shoe&quot; = <code>404 Not Found</code>.</li>
+</ul>
+</li>
+<li><strong>Four clauses:</strong>
+<ol>
+<li><strong>Endpoint</strong> (address): <code>GET /api/v1/orders/123</code>; moving it without a redirect breaks the contract.</li>
+<li><strong>Headers</strong> (metadata): <code>Authorization</code>, <code>Content-Type: application/json</code> (the bouncer at the club).</li>
+<li><strong>Request/response bodies</strong> (data structures): the IKEA box promising 32 screws; changing or omitting fields collapses the integration.</li>
+<li><strong>Status codes</strong> (result): <code>200 OK</code>, <code>400 Bad Request</code>; a crash returned as <code>200 OK</code> with an error message is lying (the waiter's thumbs-up and empty plate).</li>
+</ol>
+</li>
+<li><strong>Overarching wrapper: idempotency.</strong>
+<ul>
+<li>Doing the same action many times has the same effect as once</li>
+<li>the first request changes state, identical repeats are <strong>no-ops</strong> returning the same success. Protects from being charged twice when a connection drops before the reply.</li>
+</ul>
+</li>
+<li><strong>Breaking changes:</strong>
+<ul>
+<li>renaming <code>userId</code> to <code>user_id</code> crashes mobile, blanks the frontend, fails partners</li>
+<li><strong>Forbidden:</strong> removing or renaming a field, changing a data type (ID <code>123</code> to <code>&quot;123&quot;</code>), adding a <strong>required</strong> parameter</li>
+<li><strong>Allowed:</strong> adding an optional parameter or a response field.</li>
+</ul>
+</li>
+<li><strong>Hyrum's Law</strong>
+<ul>
+<li>(Hyrum Wright; https://www.hyrumslaw.com): &quot;With a sufficient number of users of an API, it does not matter what you promise in the contract: all observable behaviours of your system will be depended on by somebody.&quot; E.g</li>
+<li>a user list never documented as sorted came back alphabetically for two years; a database switch randomised it and broke a client</li>
+<li>The real contract is <strong>how production behaves</strong>.</li>
+</ul>
+</li>
+<li><strong>Versioning</strong> is the escape hatch: run <code>/api/v1/orders</code> and <code>/api/v2/orders</code> side by side (print a new menu rather than replacing the burger).</li>
+<li><strong>Date-based versioning (the Stripe model):</strong>
+<ul>
+<li>one endpoint (<code>POST /v1/charges</code>) and a <strong>release-date header</strong></li>
+<li>the core always uses the latest domain models</li>
+<li>a gateway or middleware chain applies <strong>backward-compatibility transformations</strong> for older dates (e.g. 2022-08-01)
+<ul>
+<li>Pros: incremental non-breaking updates, no forced migrations</li>
+<li>Cons: high server-side complexity</li>
+<li>Default to <strong>URI path versioning</strong></li>
+</ul>
+</li>
+<li>consider dates for high-value public financial/SaaS platforms.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-4-rest-or-graphql">6.4 REST or GraphQL</h2>
+<ul>
+<li><strong>REST</strong>
+<ul>
+<li>(Representational State Transfer; Roy Fielding, 2000 dissertation): resources as nouns with standard URLs; simplicity and cacheability</li>
+<li><strong>Vending machine:</strong> press B4 (<code>GET /products/123</code>) and get the whole bag</li>
+<li><strong>Over-fetching:</strong> you want the price, you get <code>id</code>, <code>name</code>, <code>price</code>, <code>calories</code>, <code>ingredients</code>, <code>manufacturer</code> (5 KB for 4 bytes)</li>
+<li>Mitigation: field filtering <code>GET /products/123?fields=name,price</code>.</li>
+</ul>
+</li>
+<li><strong>Idempotency in verbs:</strong>
+<ul>
+<li><code>GET /orders/1</code> idempotent</li>
+<li><code>PUT /orders/1</code> idempotent (set Shipped ten times, still Shipped)</li>
+<li><code>DELETE /orders/1</code> idempotent</li>
+<li><strong><code>POST /orders</code> NOT idempotent</strong> (ten clicks, ten charges). Practices: <strong>enforce PUT for updates</strong> (a phone on bad Wi-Fi cannot safely retry a POST update)</li>
+<li><strong>&quot;POST-to-PUT promotion&quot;</strong> for payments: <code>PUT /payments/{transaction_id}</code> as an <strong>upsert</strong> (create if absent; if the retry finds identical data do nothing and return success)</li>
+<li>a retry hitting an idempotent PUT or DELETE should return <strong>200 OK or 204 No Content</strong>, not an error.</li>
+</ul>
+</li>
+<li><strong>GraphQL:</strong>
+<ul>
+<li>developed by <strong>Facebook in 2012</strong>, open-sourced <strong>2015</strong>, built because complex mobile apps on slow <strong>3G</strong> crashed with heavy REST</li>
+<li>Data as a graph crawled in one request</li>
+<li><strong>Personal shopper:</strong> you send a shopping list</li>
+<li>Example: <code>query { chipItem: product(id:&quot;123&quot;){ name } sodaItem: product(id:&quot;456&quot;){ price } }</code> returns exactly those two fields</li>
+<li>Pros: flexible, precise; cons: complex server, <strong>harder to cache</strong> (every request differs).</li>
+</ul>
+</li>
+<li><strong>GraphQL and idempotency:</strong>
+<ul>
+<li>almost all requests are <strong>HTTP POST</strong>, losing REST's verb safety. Queries are naturally idempotent</li>
+<li><strong>mutations</strong>
+<ul>
+<li>(<code>processPayment(amount: 50)</code>) are dangerous on retry</li>
+<li>Fix: the client generates a UUID <strong>idempotency key</strong> (<code>processPayment(amount: 50.00, idempotencyKey: &quot;a1b2c3d4-...&quot;) { status transactionId }</code>)</li>
+</ul>
+</li>
+<li>the server checks &quot;processed this key recently?&quot; and either processes and stores it, or <strong>returns a copy of the original success</strong>.</li>
+</ul>
+</li>
+<li><strong>Reality check:</strong>
+<ul>
+<li>public APIs are overwhelmingly REST (standardisation)</li>
+<li>GraphQL grows in <strong>internal APIs</strong> (Meta, Shopify, GitHub) via zero over-fetching, no chattiness (one round trip), client-driven shaping, selective field resolution
+<ul>
+<li><strong>gRPC</strong> (Google): binary Protocol Buffers, great for backend-to-backend microservices, no native browser support so not for public web APIs (grpc.io).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Decision with the 5-step process</strong>
+<ul>
+<li>(Chip Inventory API): consumers: Scenario A public API for third-party grocery stores</li>
+<li>Scenario B warehouse workers with terrible Wi-Fi. Sketch: REST = three chatty arrows (<code>/products/123</code>, <code>/inventory/123</code>, <code>/locations/123</code>)</li>
+<li>GraphQL = one arrow.</li>
+<li><strong>ADR 006: API style for Public Partner Gateway</strong>
+<ul>
+<li>(Accepted): decide <strong>REST Level 2 (verbs)</strong></li>
+<li>Rationale: <strong>compatibility</strong> (lower &quot;time to first Hello World&quot;), <strong>cacheability</strong> (CDNs), <strong>tooling</strong> (OpenAPI/Swagger)</li>
+<li>Consequences: accept chattiness, keep resources granular; future: a dedicated <strong>GraphQL adapter (BFF)</strong> for the warehouse team if performance blocks.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Backends for Frontends (BFF):</strong>
+<ul>
+<li>a dedicated single-purpose API per UI (Sam Newman: https://samnewman.io/patterns/architectural/bff/). Mobile BFF strips heavy data and stitches several domain responses</li>
+<li>Web BFF serves rich data. Core API = &quot;general access&quot;</li>
+<li>BFFs = &quot;frontend performance&quot; (SRP; a tailored suit instead of a poncho).</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-5-designing-for-the-ai-agent">6.5 Designing for the AI agent</h2>
+<p>AI agents (LLMs) read API docs, choose a tool and execute. <strong>&quot;Dumb genius&quot; paradox:</strong> great reasoning, poor context. Vague slang or internal acronyms cause <strong>hallucination</strong>.</p>
+<ul>
+<li><strong>Cost of context:</strong>
+<ul>
+<li>a limited <strong>context window</strong></li>
+<li>every JSON character costs tokens
+<ul>
+<li>A 50 KB response when only an email was needed wastes money and can push instructions out of memory</li>
+<li>Prefer <strong>granularity</strong> (<code>getUserEmail</code>) over convenience (<code>getAllUserData</code>)</li>
+<li>Illustrative maths: a bloated 50 KB response might cost <strong>$0.01 per call</strong></li>
+</ul>
+</li>
+<li>at 1,000 calls a day, over <strong>$3,650 a year</strong> (the book's own illustration). Counter-risk: hundreds of tiny endpoints = API sprawl (6.8.2).</li>
+</ul>
+</li>
+<li><strong>Naming is prompt engineering; your schema is the system prompt.</strong>
+<ul>
+<li>Hazard: <code>/update_status</code> with <code>status: 0</code> could be hallucinated as &quot;banned&quot; when it means &quot;admin&quot;</li>
+<li>Cryptic <code>{ &quot;f_id&quot;: 101, &quot;t&quot;: 4, &quot;val&quot;: &quot;x99&quot; }</code> vs declarative <code>{ &quot;flaggedCommentId&quot;: 101, &quot;reasonType&quot;: &quot;Spam&quot;, &quot;moderatorNote&quot;: &quot;x99&quot; }</code> (<strong>string enums are self-documenting</strong>).</li>
+</ul>
+</li>
+<li><strong>Rule: treat the OpenAPI/Swagger spec as the UI for the robot.</strong>
+<ul>
+<li>C# XML comments can carry rules of engagement: <code>/// USE THIS ENDPOINT whenever the user asks &quot;How much is shipping?&quot; Do NOT use this for digital items (ebooks), as they have free shipping.</code> on <code>[HttpPost(&quot;calculate-shipping&quot;)] decimal GetShipping(...)</code></li>
+<li>The book generates OpenAPI specs first, then server stubs and AI tool definitions from the same source of truth.</li>
+</ul>
+</li>
+<li>An <strong>API gateway</strong> in front of the contract does rate limiting and security (ch. 11).</li>
+</ul>
+<h2 id="6-7-code-a-clean-endpoint-c">6.7 Code: a clean endpoint (C#)</h2>
+<p>The <strong>Controller</strong> is a <strong>Translator</strong>: converts HTTP/JSON into class calls, hands work to a Service, translates the answer back. <strong>MVC</strong> (Model = data/the burger, View = UI/the plate, Controller = coordinator/the waiter); in JSON APIs there is no View but the Controller remains.</p>
+<pre class="hl"><code><span class="na">[ApiController]</span><span class="p">[</span><span class="n">Route</span><span class="p">(</span><span class="s">"api/orders"</span><span class="p">)]</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">OrderController</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">ControllerBase</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">IOrderService</span><span class="w"> </span><span class="n">_service</span><span class="p">;</span><span class="w">                 </span><span class="c1">// the Core</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="nf">OrderController</span><span class="p">(</span><span class="n">IOrderService</span><span class="w"> </span><span class="n">service</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">_service</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">service</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="na">[HttpGet("{id}")]</span>
+<span class="w">  </span><span class="k">public</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="n">Task</span><span class="o">&lt;</span><span class="n">IActionResult</span><span class="o">&gt;</span><span class="w"> </span><span class="n">GetOrder</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">var</span><span class="w"> </span><span class="n">order</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="n">_service</span><span class="p">.</span><span class="n">GetOrderById</span><span class="p">(</span><span class="n">id</span><span class="p">);</span><span class="w">           </span><span class="c1">// 1 translate to domain intent</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">order</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="k">null</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">NotFound</span><span class="p">(</span><span class="s">$"Order {id} not found."</span><span class="p">);</span><span class="w">  </span><span class="c1">// 2 implicit contract</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nf">Ok</span><span class="p">(</span><span class="n">order</span><span class="p">);</span><span class="w">                                      </span><span class="c1">// 3 translate to HTTP response</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>Knows routes and status codes but no SQL or business rules. Swap it for a console app calling the same <code>_service</code> to get a CLI. In hexagonal terms this is a <strong>primary adapter</strong> and the service interface is the port.</p>
+<h2 id="6-8-hidden-costs-of-abstraction">6.8 Hidden costs of abstraction</h2>
+<p><img src="/book-digest/grokking-software-architecture/img/n-plus-one.svg" alt="N+1 queries vs batching" loading="lazy" /></p>
+<ul>
+<li><strong>N+1 query problem:</strong>
+<ul>
+<li>1 query for a parent list (latest 50 orders) plus N queries for a child per parent = <strong>51 database calls</strong> for one screen</li>
+<li>In <strong>REST/ORM</strong> it hides behind lazy loading (<code>order.User.Name</code> in a loop; <code>db.Orders.Take(50).ToList()</code>)</li>
+<li><strong>Fix: eager loading</strong> (<code>db.Orders.Include(o =&gt; o.User).Take(50).ToList()</code> does a JOIN)</li>
+<li>In <strong>GraphQL</strong> it happens <strong>by design</strong> (the <code>user</code> resolver runs 50 times for <code>orders { user { name } }</code>)</li>
+<li><strong>Fix: DataLoader</strong> (Facebook): collect the 50 IDs for a few milliseconds, fire one batch <code>SELECT Id, Name FROM Users WHERE ID IN (1,...,50)</code>, map back</li>
+<li>ORM = Object-Relational Mapper (details in ch. 8).</li>
+</ul>
+</li>
+<li><strong>API sprawl:</strong>
+<ul>
+<li>an endpoint per tiny request (<code>/api/user-summary</code>, <code>/api/user-summary-with-phone</code>, <code>/api/mobile-user</code>) gives 400 endpoints in two years, none deletable
+<ul>
+<li>Fix: <strong>ruthless generalisation</strong>: one endpoint with <code>?fields=phone,summary</code></li>
+</ul>
+</li>
+<li>prune like a garden.</li>
+</ul>
+</li>
+<li><strong>Debugging hell:</strong>
+<ul>
+<li>&quot;magic&quot; ORMs (Entity Framework, Prisma) hide SQL until a timeout, deadlock or a 400-line generated query</li>
+<li>&quot;<strong>You cannot debug what you cannot see, and you cannot debug what you do not know.</strong>&quot; Learning SQL is not optional: at least <strong>INDEX, JOIN, execution plans</strong>.</li>
+</ul>
+</li>
+<li><strong>Chained dependencies (distributed monolith):</strong>
+<ul>
+<li>Order API calls Inventory, Payment, Shipping synchronously: latency adds (3 x 200 ms = <strong>600 ms plus network</strong>), and <strong>availability is limited by the worst service</strong> (Shipping down = no orders despite stock and a valid card)</li>
+<li>Fix: do stock and payment synchronously, <strong>queue &quot;Print Label&quot;</strong> asynchronously (ch. 7).</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-9-the-dork-side-the-accidental-genius-of-rest">6.9 The Dork Side: the accidental genius of REST</h2>
+<p>1990s enterprise systems used <strong>SOAP</strong> and <strong>CORBA</strong> with heavy XML/WSDL contracts, while the <strong>World Wide Web</strong> was already scaling exponentially.</p>
+<p><strong>Roy Fielding</strong>'s 2000 PhD dissertation &quot;Architectural Styles and the Design of Network-based Software Architectures&quot; (https://roy.gbiv.com/pubs/dissertation/fielding_dissertation.pdf) described why the web works; he was simultaneously co-authoring <strong>HTTP/1.1 (RFC 2616)</strong> (https://datatracker.ietf.org/doc/html/rfc2616).</p>
+<p>REST is an <strong>architectural style, not a protocol</strong>.</p>
+<ul>
+<li><strong>Constraints:</strong>
+<ul>
+<li><strong>client-server</strong></li>
+<li><strong>statelessness</strong></li>
+<li><strong>cacheability</strong> (responses must say whether reusable)</li>
+<li><strong>uniform interface</strong> (same URIs and verbs). (&quot;State Transfer&quot;: the server forgets; the <strong>representation</strong> of state is transferred to the client.)</li>
+</ul>
+</li>
+<li><strong>HATEOAS</strong>
+<ul>
+<li>(Hypermedia as the Engine of Application State): responses include links for the only valid next steps: <code>{ &quot;orderId&quot;:123, &quot;status&quot;:&quot;shipped&quot;, &quot;links&quot;:[{&quot;rel&quot;:&quot;self&quot;,&quot;href&quot;:&quot;/api/v1/orders/123&quot;},{&quot;rel&quot;:&quot;cancel&quot;,&quot;href&quot;:&quot;/api/v1/orders/123/cancel&quot;}] }</code></li>
+<li>when the cancel link is missing the Cancel button disappears.</li>
+</ul>
+</li>
+<li><strong>Richardson Maturity Model</strong>
+<ul>
+<li>(Leonard Richardson; https://martinfowler.com/articles/richardsonMaturityModel.html): grades how RESTful an API is, from the &quot;Swamp&quot; of chaotic commands up to Level 3 hypermedia</li>
+<li>Purists demand Level 3; <strong>Level 2 (verbs) is usually good enough</strong></li>
+<li>Respect Fielding's physics: statelessness and cacheability.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-10-mission-checklist-recap">6.10 Mission, checklist, recap</h2>
+<ul>
+<li><strong>Function-mindset anti-pattern:</strong>
+<ul>
+<li><code>GET /api/getMyThings</code> and <code>POST /api/saveThing</code> returning <code>[&quot;Buy milk&quot;,&quot;Walk the dog&quot;,&quot;Call Mom&quot;]</code></li>
+<li>Critique:
+<ul>
+<li><strong>verbs in URLs</strong> (HTTP already has verbs)</li>
+<li><strong>no identity</strong> (cannot delete one safely)</li>
+<li><strong>no extensibility</strong> (adding a &quot;Done&quot; checkbox means changing strings to objects, breaking clients)</li>
+</ul>
+</li>
+<li><strong>Exercise:</strong> refactor <code>POST /api/changeUserAddress</code>, <code>GET /api/data/user_info</code> returning a raw string into a RESTful contract: identify the noun, standardise verbs, use an extensible JSON object (guided solution in Appendix A).</li>
+</ul>
+</li>
+<li><strong>Recap:</strong>
+<ul>
+<li>client = asker, server = doer</li>
+<li>sync communication can trigger async flow</li>
+<li>stateless = amnesia</li>
+<li>idempotency is the safety switch</li>
+<li>an API is a binding contract</li>
+<li>four REST pillars (client-server, statelessness, cacheability, uniform interface)</li>
+<li>REST = vending machine, GraphQL = personal shopper</li>
+<li>for AI: granularity, descriptive naming, strict versioning</li>
+<li>the Controller is a translator, not a decision maker.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+network boundary · request-response · statelessness · thin/thick client · API contract · four clauses · idempotency / idempotency key · breaking change · Hyrum's Law · URI vs date-based versioning · REST · GraphQL · gRPC · BFF · hallucination · context window · N+1 · eager loading · DataLoader · API sprawl · distributed monolith · HATEOAS · Richardson Maturity Model.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 6. Pre-release; no public source page found.</li>
+<li>Fielding, dissertation (2000): https://roy.gbiv.com/pubs/dissertation/fielding_dissertation.pdf · Hyrum's Law: https://www.hyrumslaw.com</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-05-hexagonal-architecture/">Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters)</a> · <a href="/book-digest/grokking-software-architecture/gsa-07-event-driven-architecture/">Grokking Software Architecture 7: Event-Driven Architecture (temporal decoupling and async communication)</a> · <a href="/book-digest/understanding-distributed-systems/uds-05-apis/">Understanding Distributed Systems 5: APIs</a> · <a href="/book-digest/understanding-distributed-systems/uds-21-microservices/">Understanding Distributed Systems 21: Microservices</a> · <a href="/book-digest/spring-start-here/ch11-consuming-rest-endpoints/">Ch 11: Consuming REST endpoints</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-05-hexagonal-architecture/">&larr; Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters)</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-07-event-driven-architecture/">Grokking Software Architecture 7: Event-Driven Architecture (temporal decoupling and async communication) &rarr;</a></nav></main></body></html>

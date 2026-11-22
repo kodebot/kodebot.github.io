@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 2: Kubernetes Principles of Operation</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-2-kubernetes-principles-of-operation">The Kubernetes Book 2: Kubernetes Principles of Operation</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 2. Previous: <a href="/book-digest/the-kubernetes-book/tkb-01-kubernetes-primer/">The Kubernetes Book 1: Kubernetes Primer</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A cluster is <strong>control plane nodes</strong> (the brains: API server, scheduler, cluster store, controllers) plus <strong>worker nodes</strong> (run your apps: kubelet, runtime, kube-proxy).</li>
+<li>Kubernetes works <strong>declaratively</strong>: you post desired state as YAML, controllers reconcile observed state to match it, continuously.</li>
+<li>Apps are wrapped in <strong>Pods</strong>; Pods are wrapped in <strong>Deployments</strong> (self-healing, scaling, rollouts).</li>
+<li>Pods are <strong>mortal and immutable</strong>: replaced, never patched, each time with a new ID and IP.</li>
+<li><strong>Services</strong> give groups of Pods a stable name, IP and port, and load balance to healthy Pods.</li>
+</ul>
+</div></div>
+<h2 id="2-1-kubernetes-from-40k-feet">2.1 Kubernetes from 40K feet</h2>
+<p>Kubernetes is both a <strong>cluster</strong> and an <strong>orchestrator</strong>.</p>
+<h3 id="cluster">Cluster</h3>
+<ul>
+<li>One or more nodes providing CPU, memory and other resources for apps.</li>
+<li>Two node types: <strong>control plane</strong> and <strong>worker</strong>.</li>
+<li>Both can be physical servers, VMs or cloud instances, on ARM or AMD64/x86-64.</li>
+<li>Control plane nodes must be <strong>Linux</strong>; workers can be <strong>Linux or Windows</strong>.</li>
+<li>Every cluster needs at least one control plane node; use <strong>three or five</strong> for high availability (HA).</li>
+<li>Every control plane node runs every control plane service: API server, scheduler, and the controllers behind self-healing, autoscaling and rollouts.</li>
+<li>Figure 2.1: a cluster of three control plane nodes and three workers.</li>
+<li>Dev and test often run user apps on control plane nodes; many production setups restrict apps to workers so the control plane can focus on cluster operations.</li>
+</ul>
+<h3 id="orchestrator">Orchestrator</h3>
+<p>A system that deploys and manages apps. Kubernetes:</p>
+<ul>
+<li>spreads apps across nodes and failure zones for performance and availability</li>
+<li>fixes things when they break</li>
+<li>scales when demand changes</li>
+<li>manages rollouts and rollbacks</li>
+</ul>
+<h2 id="2-2-control-plane-and-worker-nodes">2.2 Control plane and worker nodes</h2>
+<h3 id="mixed-linux-and-windows-workers">Mixed Linux and Windows workers</h3>
+<ul>
+<li>Almost all cloud-native apps are Linux apps and need Linux workers.</li>
+<li>Cloud-native Windows apps need one or more Windows workers.</li>
+<li>One cluster can mix both; Kubernetes schedules each app to the right node type.</li>
+</ul>
+<h3 id="the-control-plane">The control plane</h3>
+<ul>
+<li>System services that expose the API, schedule apps, implement self-healing, manage scaling and more.</li>
+<li>Simplest cluster: one control plane node, for labs and testing.</li>
+<li>Production: three or five nodes, spread across <strong>availability zones</strong> (Figure 2.2).</li>
+<li>Most clusters run every control plane service on every control plane node.</li>
+</ul>
+<h3 id="the-api-server">The API server</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-02-deploy-flow.svg" alt="Sequence of a deployment request from kubectl to running containers" loading="lazy" /></p>
+<ul>
+<li>The <strong>front end</strong> of Kubernetes; every command and request goes through it, even internal control plane traffic.</li>
+<li>Exposes a <strong>RESTful API over HTTPS</strong>; every request is authenticated and authorised.</li>
+<li>Deploying or updating an app:
+<ol>
+<li>Describe the app in a YAML configuration file.</li>
+<li>Post the file to the API server.</li>
+<li>The request is authenticated and authorised.</li>
+<li>The app definition is persisted in the cluster store.</li>
+<li>The app's containers are scheduled to nodes.</li>
+</ol>
+</li>
+</ul>
+<h3 id="the-cluster-store">The cluster store</h3>
+<ul>
+<li>Holds the <strong>desired state</strong> of all apps and cluster components; the <strong>only stateful part</strong> of the control plane.</li>
+<li>Based on the <strong>etcd</strong> distributed database; most clusters run an etcd replica on every control plane node.</li>
+<li>Large, high-change clusters may run a <strong>separate etcd cluster</strong> for performance.</li>
+<li><strong>HA is not backup.</strong> You still need a way to recover the store.</li>
+<li>etcd prefers an <strong>odd number of replicas</strong> to avoid <strong>split brain</strong>: replicas cannot communicate and cannot tell whether they hold a quorum (majority).</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Cluster</th>
+<th>Nodes</th>
+<th>After a network partition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td>4</td>
+<td>2 + 2: neither side has a majority (split brain)</td>
+</tr>
+<tr>
+<td>B</td>
+<td>3</td>
+<td>Node A knows it lacks a majority; Nodes B and C know they have one (no split brain)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>On split brain, etcd goes <strong>read-only</strong>: apps keep working, but Kubernetes cannot scale or update them.</li>
+<li>Write consistency is vital: concurrent writes to the same item can corrupt it. etcd uses the <strong>Raft</strong> consensus algorithm to prevent this.</li>
+</ul>
+<h3 id="controllers-and-the-controller-manager">Controllers and the controller manager</h3>
+<ul>
+<li>Controllers implement much of the cluster intelligence. Each runs as a process on the control plane. Common ones:
+<ul>
+<li>Deployment controller</li>
+<li>StatefulSet controller</li>
+<li>ReplicaSet controller</li>
+</ul>
+</li>
+<li>All run as background <strong>watch loops</strong>, reconciling observed state with desired state.</li>
+<li>Example: ask for three replicas and a controller ensures three healthy replicas exist, acting if not.</li>
+<li>The <strong>controller manager</strong> spawns and manages the individual controllers.</li>
+</ul>
+<h3 id="the-scheduler">The scheduler</h3>
+<p>Watches the API server for new work and assigns it to healthy workers:</p>
+<ol>
+<li>Watch the API server for new tasks.</li>
+<li>Identify capable nodes.</li>
+<li>Assign tasks to nodes.</li>
+</ol>
+<ul>
+<li>Identifying capable nodes uses predicate checks, filtering and ranking.
+<ul>
+<li>Checks: taints, affinity and anti-affinity rules, network port availability, available CPU and memory.</li>
+<li>Incapable nodes are ignored.</li>
+<li>Rankings: already has the image, available CPU and memory, number of tasks running. Each earns points; the highest score wins.</li>
+</ul>
+</li>
+<li>No suitable node: the task is marked <strong>pending</strong>.</li>
+<li>With node autoscaling configured, a pending task triggers a <strong>cluster autoscaling</strong> event that adds a node, and the scheduler assigns the task there.</li>
+</ul>
+<h3 id="the-cloud-controller-manager">The cloud controller manager</h3>
+<ul>
+<li>On a public cloud (AWS, Azure, GCP, Civo Cloud) the cluster runs a <strong>cloud controller manager</strong> integrating with cloud instances, load balancers and storage.</li>
+<li>Example: an app asks for a load balancer, and it provisions a cloud load balancer and connects it to the app.</li>
+</ul>
+<h3 id="control-plane-summary">Control plane summary</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-02-cluster-architecture.svg" alt="Control plane components and worker node components, all talking through the API server" loading="lazy" /></p>
+<ul>
+<li>Brains of Kubernetes: API server, scheduler, cluster store, controllers.</li>
+<li>Three or five nodes for HA; a separate etcd cluster for large busy clusters.</li>
+<li>All communication passes through the API server.</li>
+</ul>
+<h3 id="worker-nodes">Worker nodes</h3>
+<p>Run business apps. Three main components:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Kubelet</strong></td>
+<td>Main agent; watches the API server for tasks, tells the runtime to execute them, reports status. If a task will not run, it reports to the API server and lets the control plane decide.</td>
+</tr>
+<tr>
+<td><strong>Runtime</strong></td>
+<td>Executes tasks: pulls images, starts and stops containers. Most new clusters pre-install <strong>containerd</strong>.</td>
+</tr>
+<tr>
+<td><strong>Kube-proxy</strong></td>
+<td>Implements cluster networking and load balances traffic to tasks on the node.</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Docker as a runtime is no longer supported; <strong>Red Hat OpenShift</strong> uses <strong>CRI-O</strong>; many others exist, each with pros and cons.</li>
+<li>Chapter 9 (Wasm) uses different runtimes.</li>
+</ul>
+<h2 id="2-3-packaging-apps-for-kubernetes">2.3 Packaging apps for Kubernetes</h2>
+<p>Kubernetes runs containers, VMs, Wasm apps and more, but all must be <strong>wrapped in Pods</strong>.</p>
+<h3 id="courier-analogy">Courier analogy</h3>
+<ul>
+<li>A courier ships books, clothes, food and electricals if you use its approved packaging and labels. It handles planes, trucks, hand-offs, tracking, delivery details and proof of delivery.</li>
+<li>Likewise, wrap a workload in a Pod and Kubernetes handles node choice, networking, volumes, and lets you query and change the app.</li>
+<li>Extras like insurance, refrigeration, signatures and express delivery map to <strong>controllers</strong>: health, autoscaling and more.</li>
+</ul>
+<h3 id="example-flow">Example flow</h3>
+<ol>
+<li>Write the app.</li>
+<li>Containerise it.</li>
+<li>Push it to a registry.</li>
+<li>Wrap it in a Pod.</li>
+<li>Usually wrap the Pod in a higher-level controller (for example a <strong>Deployment</strong>).</li>
+</ol>
+<p>Two things to know:</p>
+<ul>
+<li>Apps need wrapping in Pods to run.</li>
+<li>Pods get wrapped in higher-level controllers for advanced features.</li>
+</ul>
+<h3 id="object-nesting">Object nesting</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-02-object-nesting.svg" alt="A container inside a Pod inside a Deployment" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What it adds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Container</td>
+<td>Wraps the app and provides dependencies</td>
+</tr>
+<tr>
+<td>Pod</td>
+<td>Wraps the container so it runs on Kubernetes</td>
+</tr>
+<tr>
+<td>Deployment</td>
+<td>Wraps the Pod; adds self-healing, scaling and more</td>
+</tr>
+</tbody>
+</table>
+<p>You post the Deployment YAML to the API server as the app's desired state.</p>
+<h2 id="2-4-the-declarative-model-and-desired-state">2.4 The declarative model and desired state</h2>
+<p>Three principles:</p>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Desired state</td>
+<td>What you want</td>
+</tr>
+<tr>
+<td>Observed state</td>
+<td>What you have (also called actual or current state)</td>
+</tr>
+<tr>
+<td>Reconciliation</td>
+<td>Keeping observed state in sync with desired state</td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-it-works">How it works</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-02-reconciliation.svg" alt="A controller compares desired and observed state and reconciles them" loading="lazy" /></p>
+<ol>
+<li>Describe desired state in a <strong>YAML manifest</strong>.</li>
+<li>Post it to the API server (most commonly with <code>kubectl</code>).</li>
+<li>Kubernetes records it in the cluster store as a <strong>record of intent</strong>.</li>
+<li>A controller notices observed state differs from the new desired state.</li>
+<li>The controller makes the changes needed to reconcile (schedule Pods, pull images, start containers, attach networks, start processes).</li>
+<li>It keeps running in the background to reconcile future differences.</li>
+</ol>
+<ul>
+<li>Desired state covers images, replica counts, network ports and more.</li>
+<li>Manifests are authenticated and authorised on the way in.</li>
+</ul>
+<h3 id="declarative-vs-imperative">Declarative vs imperative</h3>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Imperative</td>
+<td>Complex scripts of platform-specific commands to reach an end state</td>
+</tr>
+<tr>
+<td>Declarative</td>
+<td>A simple, platform-agnostic description of the end state</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Kubernetes supports both but <strong>prefers declarative</strong>: it works with version control and enables self-healing, autoscaling and rolling updates.</li>
+</ul>
+<h3 id="examples">Examples</h3>
+<ul>
+<li><strong>Node failure:</strong> you asked for 10 replicas; a node running two fails; observed state drops to 8; a controller schedules 2 new replicas.</li>
+<li><strong>App update:</strong> change the image version in the YAML and post it; the controller replaces old-version replicas with new-version ones.</li>
+<li>Imperatively you would script, monitor and health-check the whole update; declaratively you change <strong>one line of YAML</strong>.</li>
+</ul>
+<h2 id="2-5-pods">2.5 Pods</h2>
+<ul>
+<li>The atomic unit of scheduling in VMware is the VM; in Kubernetes it is the <strong>Pod</strong>.</li>
+<li>All workload types need wrapping in Pods.</li>
+</ul>
+<h3 id="pods-and-containers">Pods and containers</h3>
+<ul>
+<li>Simplest case: one container per Pod, so people use &quot;Pod&quot; and &quot;container&quot; interchangeably.</li>
+<li>Multi-container uses:
+<ul>
+<li>service meshes</li>
+<li>helper services that initialise environments</li>
+<li>apps with tightly coupled helpers such as log scrapers</li>
+</ul>
+</li>
+<li>A <strong>sidecar</strong> is a helper container in the same Pod as the main container.
+<ul>
+<li>In Figure 2.8 the service-mesh sidecar encrypts network traffic and provides telemetry.</li>
+<li>This keeps the main app simple, following the <strong>single responsibility principle</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="pod-anatomy">Pod anatomy</h3>
+<ul>
+<li>A Pod is a <strong>shared execution environment</strong>: network stack, volumes, shared memory and more.</li>
+<li>Single-container Pod: the container has it to itself. Multi-container Pod: containers share it.</li>
+<li>Figure 2.9: both containers share the Pod IP.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Container</th>
+<th>Address</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Main app</td>
+<td><code>10.0.10.15:8080</code></td>
+</tr>
+<tr>
+<td>Sidecar</td>
+<td><code>10.0.10.15:5005</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Containers in the same Pod talk to each other over the Pod's <code>localhost</code>.</li>
+<li>Choose multi-container Pods for <strong>tightly coupled</strong> components needing shared memory or storage; otherwise use single-container Pods loosely coupled over the network.</li>
+</ul>
+<h3 id="pod-scheduling">Pod scheduling</h3>
+<ul>
+<li>Containers in one Pod are always scheduled to <strong>one node</strong>: Kubernetes schedules Pods, and sharing memory, networking and volumes across nodes is hard.</li>
+<li>Starting a Pod is <strong>atomic</strong>: it is ready only when all containers are running (two containers, one started: not ready).</li>
+</ul>
+<h3 id="pods-as-the-unit-of-scaling">Pods as the unit of scaling</h3>
+<ul>
+<li>Scale up by adding Pods, down by deleting Pods. <strong>Never</strong> scale by adding containers to existing Pods.</li>
+</ul>
+<h3 id="pod-lifecycle">Pod lifecycle</h3>
+<ul>
+<li>Pods are <strong>mortal</strong>: created, live, die. A replacement is always new, with a <strong>new ID and new IP</strong>.</li>
+<li>So design apps loosely coupled and immune to individual Pod failure.</li>
+</ul>
+<h3 id="pod-immutability">Pod immutability</h3>
+<ul>
+<li>Pods are <strong>immutable</strong>: never change a running Pod; replace it with a new one.</li>
+<li>Never log on to a Pod and change it. &quot;Updating Pods&quot; always means delete and replace.</li>
+<li>A mindset shift that fits modern tooling and <strong>GitOps</strong> workflows.</li>
+</ul>
+<h2 id="2-6-deployments">2.6 Deployments</h2>
+<ul>
+<li>You almost always deploy Pods via higher-level controllers: <strong>Deployments</strong>, <strong>StatefulSets</strong>, <strong>DaemonSets</strong>.</li>
+<li>All are control plane watch loops reconciling observed with desired state.</li>
+<li><strong>Deployments</strong> add self-healing, scaling, rolling updates and versioned rollbacks to <strong>stateless</strong> apps.</li>
+</ul>
+<h2 id="2-7-service-objects-and-stable-networking">2.7 Service objects and stable networking</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-02-service-front-back.svg" alt="A Service has a stable front end and a back end selecting healthy Pods" loading="lazy" /></p>
+<ul>
+<li>Failed Pods managed by a controller are replaced with new IDs and new IPs
+<ul>
+<li>The same happens in rollouts (old Pods replaced by new IPs), scale-up (new Pods with new IPs) and scale-down (Pods deleted).</li>
+</ul>
+</li>
+<li>This <strong>IP churn</strong> makes Pods unreliable to connect to directly.</li>
+<li>A <strong>Service</strong> (capital S: a Kubernetes API resource) provides a reliable name and IP and load balances to Pods (Figure 2.11).</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Side</th>
+<th>What it provides</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Front end</td>
+<td>Stable DNS name, IP address and network port (never change)</td>
+</tr>
+<tr>
+<td>Back end</td>
+<td>Uses <strong>labels</strong> to load balance across a dynamic set of Pods</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Services keep a list of healthy Pods as scaling, rollouts and failures change membership, so traffic only reaches active healthy Pods.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Control plane nodes host the intelligence: API server, scheduler, cluster store, controllers; production uses three or five.</li>
+<li>Worker nodes run apps via kubelet (watches API server, reports status), a runtime (start and stop containers and Wasm apps) and kube-proxy (networking).</li>
+<li>Declarative is preferred; controllers reconcile observed state to desired state.</li>
+<li>Pods run workloads, Deployments add self-healing, scaling and rollouts, Services add reliable networking and basic load balancing.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Control plane / worker node</strong>: brains vs app-running nodes.</li>
+<li><strong>API server</strong>: the HTTPS REST front end for everything.</li>
+<li><strong>Cluster store (etcd)</strong>: stateful desired-state database; Raft; odd replicas.</li>
+<li><strong>Split brain</strong>: partition where no side is sure of quorum; etcd goes read-only.</li>
+<li><strong>Controller / controller manager</strong>: watch loops that reconcile state.</li>
+<li><strong>Scheduler</strong>: filters and ranks nodes, assigns tasks; pending if none fit.</li>
+<li><strong>Cloud controller manager</strong>: integrates cloud load balancers, instances, storage.</li>
+<li><strong>Kubelet / runtime / kube-proxy</strong>: worker agent, container executor, networking.</li>
+<li><strong>Desired / observed state, reconciliation, record of intent</strong>.</li>
+<li><strong>Pod, sidecar, Deployment, Service</strong>; <strong>IP churn</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 2. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap03.xhtml</li>
+<li>No other URLs given in the chapter.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-01-kubernetes-primer/">The Kubernetes Book 1: Kubernetes Primer</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-01-kubernetes-primer/">&larr; The Kubernetes Book 1: Kubernetes Primer</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes &rarr;</a></nav></main></body></html>

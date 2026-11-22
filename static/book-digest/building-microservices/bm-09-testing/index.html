@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 9: Testing</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-9-testing">Building Microservices 9: Testing</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 9. Previous: <a href="/book-digest/building-microservices/bm-08-deployment/">Building Microservices 8: Deployment</a>. Next: <a href="/book-digest/building-microservices/bm-10-from-monitoring-to-observability/">Building Microservices 10: From Monitoring to Observability</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Keep a <strong>pyramid</strong> of automated tests: many fast <strong>unit tests</strong>, fewer <strong>service tests</strong> (one microservice, collaborators stubbed), very few <strong>end-to-end tests</strong>.</li>
+<li>End-to-end tests across microservices are <strong>flaky, slow, ownerless and anti-independent-deployability</strong>; at scale most teams remove them in favour of <strong>explicit schemas, consumer-driven contracts (CDCs)</strong> and <strong>production testing</strong>.</li>
+<li><strong>Pact</strong> is the main CDC tool; CDCs are as much a <strong>conversation</strong> between teams as a test.</li>
+<li>Test in production safely (smoke tests, canaries, synthetic users) and weigh <strong>MTTR against MTBF</strong>.</li>
+<li>Treat <strong>cross-functional requirements</strong> (performance, robustness) as tests too, and start early.</li>
+</ul>
+</div></div>
+<h2 id="9-1-types-of-tests">9.1 Types of tests</h2>
+<ul>
+<li><strong>Brian Marick's testing quadrant</strong>
+<ul>
+<li>(as shown in Crispin and Gregory, <em>Agile Testing</em>): the lower half is <strong>technology facing</strong> (supports developers: unit tests, <strong>property tests</strong> such as performance), the upper half <strong>business facing</strong> (acceptance testing automated and end-to-end; <strong>exploratory testing</strong> manual, such as UAT). Most of it is <strong>preproduction validation</strong>, often a gate for deployment</li>
+<li>a limitation is that it leaves out testing in production.</li>
+</ul>
+</li>
+<li>Newman advises automating repetitive testing
+<ul>
+<li>if you still do large amounts of manual testing, fix that <strong>before</strong> going far down the microservices path, since you cannot get the benefits without fast validation.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] Manual exploratory testing
+Moving to microservices changes it little (apart from ownership if UIs split along team lines, &quot;Toward Stream-Aligned Teams&quot;). Tooling for <strong>visual assertions</strong> automates some checks, freeing testers for <strong>discovery</strong>: exploring as an end user and testing what is too costly to automate. This chapter mostly ignores it.</p>
+</blockquote>
+<h2 id="9-2-test-scope">9.2 Test scope</h2>
+<ul>
+<li><strong>Mike Cohn's test pyramid</strong>
+<ul>
+<li>(<em>Succeeding with Agile</em>, 2009): unit tests, service tests and UI tests. Higher up, <strong>scope and confidence grow</strong> but <strong>feedback slows</strong> and failures are <strong>harder to diagnose</strong></li>
+<li>lower down, tests run fast and pinpoint the failing line, but a single line tested tells little about the whole system.</li>
+</ul>
+</li>
+<li>The names are ambiguous (&quot;service&quot; especially; is a test of several classes a unit test?). Newman keeps <strong>unit</strong> and <strong>service</strong> but says <strong>end-to-end</strong> instead of UI.</li>
+<li>Worked example: a <strong>helpdesk</strong> and <strong>web shop</strong> call <strong>Customer</strong>, which calls <strong>Loyalty</strong>.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-09-quadrant-and-pyramid.svg" alt="Marick quadrant and Cohn pyramid" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>What it covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Unit</strong></td>
+<td>One function or method; no microservices launched, little external file or network use. Often from <strong>TDD</strong> or property-based testing. Thousands run in under a minute; they support <strong>refactoring</strong></td>
+</tr>
+<tr>
+<td><strong>Service</strong></td>
+<td>One microservice directly, bypassing the UI, <strong>external collaborators stubbed</strong> so failure points at that service</td>
+</tr>
+<tr>
+<td><strong>End-to-end</strong></td>
+<td>The whole system, often driving a GUI in a browser; high confidence, but tricky in microservices</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>[!note] What about integration tests?
+Newman avoids the term: some mean two services or a code-database binding, others mean full end-to-end tests. Map your own usage to his explicit terms.</p>
+</blockquote>
+<p><img src="/book-digest/building-microservices/img/bm-09-test-scopes.svg" alt="Scope of each level on the example system" loading="lazy" /></p>
+<h3 id="trade-offs">Trade-offs</h3>
+<ul>
+<li>Balance <strong>fast feedback</strong> against <strong>confidence</strong>
+<ul>
+<li>Too slow? Replace large tests with smaller ones: when a larger test fails, write a unit test to catch it sooner</li>
+<li>Bug in production? Probably a missing test.</li>
+</ul>
+</li>
+<li>Rule of thumb:
+<ul>
+<li><strong>an order of magnitude more tests as you go down</strong> the pyramid</li>
+<li>Example: a monolith with 4,000 unit, 1,000 service and 60 end-to-end tests that Newman's team cut down in large-scope tests.</li>
+</ul>
+</li>
+<li><strong>Test snow cone (inverted pyramid):</strong> almost no small tests, all coverage in large ones: glacial runs, few builds, and a build can stay broken a long time.</li>
+</ul>
+<h2 id="9-3-implementing-service-tests">9.3 Implementing service tests</h2>
+<ul>
+<li>Deploy one instance of the microservice (for example the container image built in chapter 7) and <strong>stub the downstream collaborators</strong> (Loyalty), configuring the service under test to talk to them.</li>
+<li><strong>Stub versus mock:</strong>
+<ul>
+<li>a <strong>stub</strong> returns canned responses (when asked for customer 123's balance, return 15,000) and does not care how often it is called (0, 1 or 100)</li>
+<li>A <strong>mock</strong> also verifies the call <strong>was made</strong> and fails otherwise
+<ul>
+<li>it needs more smarts and makes tests brittle if overused, but is useful for expected <strong>side effects</strong> (creating a customer sets up a points balance)</li>
+</ul>
+</li>
+<li>Newman uses stubs far more</li>
+<li>Gerard Meszaros calls fakes, spies, dummies, stubs and mocks <strong>Test Doubles</strong></li>
+<li>See Freeman and Pryce, <em>Growing Object-Oriented Software, Guided by Tests</em>.</li>
+</ul>
+</li>
+<li><strong>A smarter stub: mountebank</strong>
+<ul>
+<li>(Brandon Byars)</li>
+<li>A small appliance programmable over HTTP (written in NodeJS, which does not matter to callers): you create <strong>imposters</strong> on ports with a protocol (TCP, HTTP, HTTPS, SMTP) and canned responses, and can set expectations to act as a mock
+<ul>
+<li>one instance can stub several services</li>
+</ul>
+</li>
+<li>Capital One used it in performance tests</li>
+<li>It does not stub <strong>messaging protocols</strong> (Pact may help).</li>
+</ul>
+</li>
+<li>Passing service tests do not tell you about <strong>consumers</strong> (helpdesk, web shop), hence end-to-end tests.</li>
+</ul>
+<h2 id="9-4-implementing-those-tricky-end-to-end-tests">9.4 Implementing (those tricky) end-to-end tests</h2>
+<ul>
+<li>Deploy several microservices together and drive the UI
+<ul>
+<li>Which versions of the other services (production, or queued to go live)? Avoid duplication across services' own end-to-end tests with <strong>fan-in</strong>: a successful build of any of several pipelines triggers a <strong>shared end-to-end stage</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-09-fan-in-end-to-end.svg" alt="Fan-in to a shared end-to-end stage" loading="lazy" /></p>
+<h3 id="disadvantages">Disadvantages</h3>
+<ul>
+<li><strong>Flaky and brittle tests:</strong>
+<ul>
+<li>more moving parts, so failures unrelated to the functionality (a service down, a network glitch, race conditions, timeouts)</li>
+<li>Tests that people just rerun are <strong>flaky</strong>, &quot;the enemy&quot;</li>
+<li>They breed <strong>normalisation of deviance</strong> (Diane Vaughan, on the Challenger disaster): accepting failure as normal</li>
+<li>Per Fowler (&quot;Eradicating Non-Determinism in Tests&quot;): track them down, remove them if not fixable at once, rewrite them to avoid threads, stabilise the environment, or replace them with a smaller-scoped test.</li>
+</ul>
+</li>
+<li><strong>Who writes them?</strong>
+<ul>
+<li>Free-for-all test explosion (snow cone) or no ownership so failures get ignored</li>
+<li>Emily Bache's approach: split the suite into groups <strong>owned by different teams</strong> (still fragile: a Loyalty change can break both suites)</li>
+<li>A <strong>dedicated test team</strong> is &quot;disastrous&quot; (distance from the code, longer cycle times)</li>
+<li>If you cannot avoid a shared suite, give it <strong>joint ownership</strong> of its health; Newman thinks at a certain organisational scale you must move away from cross-team end-to-end tests.</li>
+</ul>
+</li>
+<li><strong>How long?</strong>
+<ul>
+<li>They can take a day or more (one regression suite took <strong>six weeks</strong>)</li>
+<li>Few teams <strong>curate</strong> them</li>
+<li>Parallelising (Selenium Grid) is no substitute for removing tests; removal is risky and unthanked (&quot;airport security&quot; analogy), so it rarely happens.</li>
+</ul>
+</li>
+<li><strong>The great pile-up:</strong>
+<ul>
+<li>long suites mean broken stages stay broken longer, changes pile in and releases get bigger and riskier</li>
+<li>The right answer is to make the suite faster, not to allow check-ins on a broken build.</li>
+</ul>
+</li>
+<li><strong>The metaversion:</strong> versioning services together invites deploying them together (&quot;Now you have 2.1.0 problems&quot;, Brandon Byars), abandoning <strong>independent deployability</strong>, and services become coupled and tangled.</li>
+<li><strong>Lack of independent testability:</strong>
+<ul>
+<li>teams that deploy independently should test independently, with their own test environments</li>
+<li><em>Accelerate</em> found high performers &quot;do most of their testing on demand, without requiring an integrated test environment&quot;.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!question] Should you avoid end-to-end tests?
+They can be manageable with few microservices, but with 10 or 20 they bloat into a Cartesian-like explosion, and a shared suite undermines independent deployability. <strong>Schemas</strong> catch structural breakages; <strong>semantic</strong> breakages need something with reduced scope: contract tests.</p>
+</blockquote>
+<h2 id="9-5-contract-tests-and-consumer-driven-contracts">9.5 Contract tests and consumer-driven contracts</h2>
+<ul>
+<li><strong>Contract tests:</strong> the consuming team writes tests that describe how it expects an external service to behave. They should pass against both your <strong>stubs</strong> and the real service.</li>
+<li><strong>CDCs:</strong> the contract tests become an explicit, programmatic statement of the consumer's expectations, shared with the producer team, who run each consumer's contracts in its build <strong>against a single producer in isolation</strong>: faster and more reliable than end-to-end.</li>
+<li>Example:
+<ul>
+<li>Customer has two consumers, so there is a set for the helpdesk and one for the web shop</li>
+<li>Scope matches a <strong>service test</strong> (run only Customer, dependencies stubbed)</li>
+<li>Good practice: people from <strong>both sides pair</strong> on the tests.</li>
+</ul>
+</li>
+<li>CDCs sit at the service-test level of the pyramid
+<ul>
+<li>a break shows <strong>which consumer</strong> is affected, then you fix it or start the breaking-change discussion (chapter 5). CDCs also make <strong>Conway's law</strong> explicit.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-09-consumer-driven-contracts.svg" alt="Consumer-driven contracts" loading="lazy" /></p>
+<h3 id="pact">Pact</h3>
+<ul>
+<li>Originally built in-house at <strong>realestate.com.au</strong>, now open source; initially Ruby and HTTP only, now JVM, JavaScript, Python, .NET and also <strong>messaging</strong>.</li>
+<li>Flow:
+<ul>
+<li>the consumer defines expectations in a <strong>DSL</strong></li>
+<li>a local <strong>Pact server</strong> runs them and produces a <strong>Pact file</strong> (a JSON specification). The same mock server acts as a <strong>local stub</strong>, replacing mountebank or hand-rolled stubs.</li>
+</ul>
+</li>
+<li>The producer replays the Pact file against its service
+<ul>
+<li>Because consumer and producer build separately, share the file via the CI artifact repository or the <strong>Pact Broker</strong>, which stores several versions (test against consumer-in-production and latest), records when contracts were validated, and shows <strong>which services depend on which</strong>.</li>
+</ul>
+</li>
+<li><strong>Other options:</strong> <strong>Spring Cloud Contract</strong>, only for pure JVM.</li>
+<li><strong>It is about conversations:</strong>
+<ul>
+<li>like Agile stories as &quot;a placeholder for a conversation&quot;, CDCs codify discussions about the API and trigger new ones when they break. They need <strong>trust and communication</strong>: with a third party you may have only limited integration tests around the untrusted component</li>
+<li>for thousands of public consumers you may play the consumer yourself, and CDCs matter more.</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-final-word">The final word</h3>
+<ul>
+<li>Those who have run microservices at scale mostly <strong>drop end-to-end tests</strong> for explicit schemas, CDCs, in-production testing and canaries
+<ul>
+<li>See them as <strong>training wheels</strong> while you learn CDCs and improve monitoring and deployment, trading cycle time for lower risk</li>
+<li>Do not ditch them without understanding what you lose.</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-6-developer-experience">9.6 Developer experience</h2>
+<ul>
+<li>Running many microservices locally strains the developer machine (JVM services are heavy)
+<ul>
+<li>Developing <strong>in the cloud</strong> adds latency to feedback and needs connectivity (cloud IDEs such as <strong>Cloud9</strong>, now AWS-owned, exist but are not yet the norm)</li>
+<li>Newman thinks it &quot;misses the point&quot;: a developer should run <strong>only the services they work on</strong> (say the team's five), locally, with <strong>stubs for other teams' services</strong></li>
+<li>Needing to work on hundreds of services signals a bigger problem (&quot;Strong Versus Collective Ownership&quot;).</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-7-from-preproduction-to-in-production-testing">9.7 From preproduction to in-production testing</h2>
+<ul>
+<li>Preproduction tests model how the system behaves
+<ul>
+<li>models are imperfect, and more tests bring <strong>diminishing returns</strong>: you cannot reduce failure to zero in a distributed system. Production is &quot;the most important location&quot; to test.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-09-in-production-testing.svg" alt="Testing across preproduction and production" loading="lazy" /></p>
+<ul>
+<li><strong>Types:</strong>
+<ul>
+<li>a <strong>ping check</strong> (is the instance up) is a test</li>
+<li><strong>smoke tests</strong> at deployment, on software before release</li>
+<li><strong>canary releases</strong></li>
+<li><strong>injecting fake user behaviour</strong> (a fake customer's order or registration) into the real system.</li>
+</ul>
+</li>
+<li><strong>Making it safe:</strong>
+<ul>
+<li>tests must not cause instability or <strong>taint production data</strong></li>
+<li>Pings (unless the health checks become an internal denial of service), and smoke tests on deployed-but-unreleased software are safe thanks to separating deployment from release</li>
+<li>Synthetic users need care (no shipping the order or taking payment); see &quot;Semantic Monitoring&quot;.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] MTTR over MTBF?
+Techniques such as blue-green and canary releases acknowledge you cannot catch every problem. In web operations the trade is <strong>mean time between failures (MTBF)</strong> versus <strong>mean time to repair (MTTR)</strong>. Fast <strong>rollback</strong> plus good monitoring (chapter 10) can beat more functional tests; many teams build test suites and neglect monitoring and recovery. Sometimes (proving a business idea) skipping preproduction testing altogether is sensible.</p>
+</blockquote>
+<h2 id="9-8-cross-functional-testing">9.8 Cross-functional testing</h2>
+<ul>
+<li><strong>Nonfunctional requirements</strong>
+<ul>
+<li>(latency, user capacity, accessibility, security) are better called <strong>cross-functional requirements (CFR)</strong>, Sarah Taraporewalla's term, since they emerge from cross-cutting work</li>
+<li>Most can really only be met in production, but tests in the <strong>property testing</strong> quadrant show progress</li>
+<li>They may be set per service (a payment service needs more durability than music recommendations, where 10 minutes of downtime is fine) and often surface as <strong>service-level objectives (SLOs)</strong> (chapter 10).</li>
+</ul>
+</li>
+<li>CFR tests follow the pyramid too:
+<ul>
+<li>a load test is end-to-end, but once a bottleneck is found, write a smaller test</li>
+<li>an accessibility check on generated HTML needs no network. Review CFRs early and often.</li>
+</ul>
+</li>
+</ul>
+<h3 id="performance-tests">Performance tests</h3>
+<ul>
+<li>Microservices add network calls (one database call becomes several service calls), and a slow link in a synchronous chain slows everything
+<ul>
+<li>Do not postpone performance testing until just before launch.</li>
+</ul>
+</li>
+<li>Mix isolated service tests with core <strong>journeys</strong> run at volume
+<ul>
+<li>ramp up simulated customers to see how latency varies</li>
+<li>make the environment as <strong>production-like</strong> as feasible (data volume, machines) while knowing results may mislead (false negatives or positives)
+<ul>
+<li>Run a <strong>subset daily and a larger set weekly</strong></li>
+</ul>
+</li>
+<li>the longer you wait, the harder to find the culprit commit.</li>
+</ul>
+</li>
+<li>Look at the results, with <strong>targets</strong> (your SLOs); or fail when performance <strong>drifts</strong> from one build to the next. Use the same visualisation tools as in production.</li>
+</ul>
+<h3 id="robustness-tests">Robustness tests</h3>
+<ul>
+<li>A microservice system is as reliable as its weakest link (multiple instances behind a load balancer, <strong>circuit breakers</strong>; chapter 12)
+<ul>
+<li>Tests that recreate failures (an artificial timeout against a stub) are trickier but worthwhile, especially for shared behaviour such as mesh circuit breaking.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Optimise for <strong>fast feedback</strong> and separate test types by scope.</li>
+<li>Avoid end-to-end tests spanning more than one team; use <strong>CDCs</strong> as focus points for conversations.</li>
+<li>Understand the trade-off between testing effort and fast detection (MTBF versus MTTR), and try testing in production.</li>
+<li>Further reading: Crispin and Gregory, <em>Agile Testing</em>; Ham Vocke, &quot;The Practical Test Pyramid&quot; (martinfowler.com, 2018).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Test pyramid, snow cone, Marick quadrant</strong>.</li>
+<li><strong>Unit, service and end-to-end tests; stub, mock, test double; mountebank</strong>.</li>
+<li><strong>Flaky test, normalisation of deviance, fan-in, metaversion</strong>.</li>
+<li><strong>Contract test, consumer-driven contract, Pact, Pact Broker</strong>.</li>
+<li><strong>Smoke test, canary release, MTBF, MTTR, cross-functional requirement, SLO</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 9. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch09.html</li>
+<li>Lisa Crispin and Janet Gregory, <em>Agile Testing</em> (Addison-Wesley, 2008)
+<ul>
+<li>Mike Cohn, <em>Succeeding with Agile</em> (Addison-Wesley, 2009)</li>
+<li>Steve Freeman and Nat Pryce, <em>Growing Object-Oriented Software, Guided by Tests</em> (2009)</li>
+<li>Martin Fowler, &quot;Eradicating Non-Determinism in Tests&quot; (https://oreil.ly/7Ve7e)</li>
+<li>Emily Bache, NDC Oslo 2017 talk (https://oreil.ly/QX3EK)</li>
+<li>Ham Vocke, &quot;The Practical Test Pyramid&quot; (https://oreil.ly/J7lc6)</li>
+<li>Diane Vaughan, <em>The Challenger Launch Decision</em> (1996): as cited by the book.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-08-deployment/">Building Microservices 8: Deployment</a></li>
+<li><a href="/book-digest/building-microservices/bm-10-from-monitoring-to-observability/">Building Microservices 10: From Monitoring to Observability</a></li>
+<li><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-08-deployment/">&larr; Building Microservices 8: Deployment</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-10-from-monitoring-to-observability/">Building Microservices 10: From Monitoring to Observability &rarr;</a></nav></main></body></html>

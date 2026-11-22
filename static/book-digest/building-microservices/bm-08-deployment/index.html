@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 8: Deployment</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-8-deployment">Building Microservices 8: Deployment</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 8. Previous: <a href="/book-digest/building-microservices/bm-07-build/">Building Microservices 7: Build</a>. Next: <a href="/book-digest/building-microservices/bm-09-testing/">Building Microservices 9: Testing</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A logical microservice becomes several <strong>instances</strong> across machines and zones, with <strong>databases</strong> that may use read replicas and shared infrastructure; topology differs per <strong>environment</strong>.</li>
+<li>Five principles: <strong>isolated execution</strong>, <strong>automation</strong>, <strong>infrastructure as code</strong>, <strong>zero-downtime deployment</strong>, <strong>desired state management</strong>.</li>
+<li>Options: physical machine, VM, container, application container, PaaS, FaaS (plus Wasm on the horizon). Newman's default is <strong>containers</strong>, with <strong>Kubernetes</strong> when you need orchestration, but &quot;if it ain't broke, don't fix it&quot; and give up as much control as you are comfortable with.</li>
+<li><strong>Progressive delivery</strong> separates <strong>deployment</strong> from <strong>release</strong>: blue-green, feature toggles, canary releases and parallel runs.</li>
+</ul>
+</div></div>
+<h2 id="8-1-from-logical-to-physical">8.1 From logical to physical</h2>
+<ul>
+<li>Earlier chapters showed services logically (Invoice talks to Order)
+<ul>
+<li>Physically each service has <strong>multiple instances</strong> for load and robustness, a <strong>load balancer</strong> (for HTTP) routing requests, and instances spread over <strong>machines and data centres</strong>.</li>
+</ul>
+</li>
+<li>Cloud providers (AWS, Azure, Google) give <strong>no SLA for a single machine or a single availability zone</strong>, so deploy across <strong>multiple availability zones</strong>.</li>
+<li><strong>The database:</strong>
+<ul>
+<li>&quot;don't share databases&quot; still holds, yet <strong>instances of the same service share one database</strong>: the data-access logic stays inside one logical service</li>
+<li>Each instance needs the same order data.</li>
+</ul>
+</li>
+<li><strong>Database deployment:</strong>
+<ul>
+<li><strong>Read replicas</strong> take read traffic from a primary node; writes are harder to scale (sharding adds complexity).</li>
+<li><strong>Shared infrastructure:</strong>
+<ul>
+<li>one engine and hardware can host several <strong>logically isolated databases</strong> (Invoice and Order), pooling hardware and cutting licences and management, but a failure hits several services. On-prem organisations favour this</li>
+<li>public cloud teams more often run <strong>dedicated databases per service</strong> (for example <strong>AWS RDS</strong> handles backups, upgrades and multi-zone failover cheaply).</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-08-logical-to-physical.svg" alt="Instances, zones and databases" loading="lazy" /></p>
+<h3 id="environments">Environments</h3>
+<ul>
+<li>Each environment has a purpose:
+<ul>
+<li>some have production data, some only a few real services with fakes for the rest</li>
+<li>The Catalog service's path: developer laptop, CI (fast and slow tests), <strong>preproduction</strong> (optional manual verification), then production.</li>
+</ul>
+</li>
+<li>Ideally every environment copies production, but cost forbids it; early environments favour <strong>fast feedback</strong>, later ones <strong>production-likeness</strong>.</li>
+<li>Example topology:
+<ul>
+<li>laptop with <strong>one instance</strong></li>
+<li>CI with <strong>two instances on one machine</strong> (to test load balancing cheaply)</li>
+<li>production with <strong>four instances over four machines in two data centres</strong>.</li>
+</ul>
+</li>
+<li>So the <strong>number of instances and configuration vary per environment</strong>, while the artifact is built once and environment-specific information stays separate (a parameter as simple as the instance count).</li>
+</ul>
+<h2 id="8-2-principles-of-microservice-deployment">8.2 Principles of microservice deployment</h2>
+<table>
+<thead>
+<tr>
+<th>Principle</th>
+<th>Idea</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Isolated execution</strong></td>
+<td>Instances have their own compute resources and cannot affect neighbours</td>
+</tr>
+<tr>
+<td><strong>Focus on automation</strong></td>
+<td>Choose technology that allows automation; make it culture</td>
+</tr>
+<tr>
+<td><strong>Infrastructure as code</strong></td>
+<td>Machine-readable configuration in source control, to recreate environments</td>
+</tr>
+<tr>
+<td><strong>Zero-downtime deployment</strong></td>
+<td>Releasing a version never interrupts consumers</td>
+</tr>
+<tr>
+<td><strong>Desired state management</strong></td>
+<td>A platform maintains the declared state, relaunching instances as needed</td>
+</tr>
+</tbody>
+</table>
+<h3 id="isolated-execution">Isolated execution</h3>
+<ul>
+<li><strong>Multiple services per host</strong>
+<ul>
+<li>looks simpler for host management (host count does not grow with services), but: monitoring is harder (service CPU or host CPU?)</li>
+<li><strong>side effects</strong> from one service's load</li>
+<li>harder <strong>impact analysis</strong> of host failures</li>
+<li><strong>contradictory dependencies</strong></li>
+<li>and <strong>who configures the host</strong> (a central team, hurting team autonomy)
+<ul>
+<li>Gilt, a fashion retailer that began with a Rails monolith, hit uneven load on one service damaging neighbours</li>
+<li>It undermines <strong>independent deployability</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Neal Ford:
+<ul>
+<li>many deployment practices optimise for <strong>scarcity of resources</strong> (buying a server took long lead times, every two to three years at some clients)</li>
+<li>on-demand computing and virtualisation removed that.</li>
+</ul>
+</li>
+<li>Isolation models:
+<ul>
+<li><strong>dedicated physical machines</strong> (best isolation, highest cost) to <strong>containers</strong> (weaker isolation, cheaper and faster to provision)</li>
+<li>PaaS platforms such as Lambda or Heroku provide isolation for you</li>
+<li>For most workloads containers are &quot;good enough&quot;, Newman's default.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-08-isolation-and-containers.svg" alt="Isolation versus cost, and VM versus container stacks" loading="lazy" /></p>
+<h3 id="focus-on-automation">Focus on automation</h3>
+<ul>
+<li>More services mean more processes to configure and monitor
+<ul>
+<li>manual operations then need more people. Automate (launch a VM with code, deploy software and database changes without manual steps) and let developers <strong>self-service provision</strong>.</li>
+</ul>
+</li>
+<li><strong>Case studies:</strong>
+<ul>
+<li><strong>realestate.com.au (REA)</strong> front-loaded tooling work: two services in the first three months, 10 to 15 in the next three, over <strong>70</strong> after 18 months. <strong>Gilt</strong> went from about 10 services after a year to over 100 by 2012 and over <strong>450</strong> in 2014 (roughly three per developer)</li>
+<li>the Financial Times has a similar ratio.</li>
+</ul>
+</li>
+</ul>
+<h3 id="infrastructure-as-code">Infrastructure as code</h3>
+<ul>
+<li>Configure infrastructure with machine-readable code (Chef, Puppet, bash), bringing software-development practice (version control, testing, repeatability) to operations
+<ul>
+<li>See Kief Morris, <em>Infrastructure as Code</em>, 2nd ed</li>
+<li>(2020).</li>
+</ul>
+</li>
+<li>Declarative tools:
+<ul>
+<li><strong>Puppet</strong></li>
+<li><strong>Chef</strong></li>
+<li><strong>Ansible</strong> (from <strong>CFEngine</strong>); for cloud resources <strong>Terraform</strong> (cross-platform, Newman's preference over <strong>AWS CloudFormation/CDK</strong>) and <strong>Pulumi</strong> (normal programming languages instead of DSLs).</li>
+</ul>
+</li>
+<li>Benefits:
+<ul>
+<li>auditing (who changed what) and <strong>reproducing an environment at a point in time</strong></li>
+<li>A client rebuilding a past production system for a court case spent over three months piecing it together from emails and release notes.</li>
+</ul>
+</li>
+</ul>
+<h3 id="zero-downtime-deployment">Zero-downtime deployment</h3>
+<ul>
+<li>Without it you must coordinate outages with consumers
+<ul>
+<li>Sarah Wells of the Financial Times called it the single biggest improvement in delivery speed, enabling more frequent releases and releasing <strong>during working hours</strong> (fewer mistakes, more support).</li>
+</ul>
+</li>
+<li>Asynchronous, broker-backed communication makes it easy (messages wait); synchronous is harder
+<ul>
+<li><strong>Rolling upgrades</strong> (ramp old instances down as new ones come up) suit Kubernetes, though <strong>blue-green</strong> suffices if that is all you need</li>
+<li>Retrofitting is harder than designing for it.</li>
+</ul>
+</li>
+</ul>
+<h3 id="desired-state-management">Desired state management</h3>
+<ul>
+<li>Specify requirements (instance count, memory, CPU) and the <strong>platform maintains them</strong>: if an instance dies, it launches a replacement, even on hardware or data-centre loss
+<ul>
+<li>Examples: <strong>Kubernetes</strong>, cloud <strong>autoscaling groups</strong>, <strong>Nomad</strong> (mixed workloads such as Java apps, VMs, Hadoop jobs).</li>
+</ul>
+</li>
+<li>Anecdote: killing dev EC2 instances at day's end while an <strong>autoscaling group</strong> kept respawning them cost real money (per-hour billing). Fix: a script that disables the group on shutdown.</li>
+<li><strong>Prerequisites:</strong>
+<ul>
+<li>fully automated instance deployment and <strong>fast launch times</strong> (else keep spare capacity)</li>
+<li>Adopt a platform rather than hack your own, perhaps after you already have a few services.</li>
+</ul>
+</li>
+<li><strong>GitOps</strong>
+<ul>
+<li>(pioneered by <strong>Weaveworks</strong>) combines desired state and infrastructure as code: the desired state lives in source control and tooling (for example <strong>Flux</strong>) applies changes to the running Kubernetes system</li>
+<li>A tool does not mean you embrace the ideas.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-08-desired-state.svg" alt="The desired-state loop" loading="lazy" /></p>
+<h2 id="8-3-deployment-options">8.3 Deployment options</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Physical machine</strong></td>
+<td>Directly on hardware, no virtualisation</td>
+</tr>
+<tr>
+<td><strong>Virtual machine</strong></td>
+<td>An instance in a VM</td>
+</tr>
+<tr>
+<td><strong>Container</strong></td>
+<td>An instance as a container, perhaps orchestrated by Kubernetes</td>
+</tr>
+<tr>
+<td><strong>Application container</strong></td>
+<td>Services inside a host such as Tomcat, IIS or WebLogic</td>
+</tr>
+<tr>
+<td><strong>PaaS</strong></td>
+<td>Higher abstraction (Heroku, Google App Engine, AWS Beanstalk)</td>
+</tr>
+<tr>
+<td><strong>FaaS</strong></td>
+<td>Instance deployed as functions (AWS Lambda, Azure Functions)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Physical machines:</strong>
+<ul>
+<li>rare</li>
+<li>low <strong>utilisation</strong>, the temptation to <strong>pack several services per machine</strong>, and desired state or zero-downtime need a management layer. Needs a specific reason.</li>
+</ul>
+</li>
+<li><strong>Virtual machines:</strong>
+<ul>
+<li>split a physical machine into VMs (VMware, EC2), each a full OS</li>
+<li>excellent isolation, higher utilisation
+<ul>
+<li><strong>Cost of virtualisation:</strong> the <strong>hypervisor</strong> (type 2 virtualisation: AWS, VMware, vSphere, Xen, KVM, which run on a host OS; type 1 runs on hardware) consumes CPU, I/O and memory, so there are <strong>diminishing returns</strong>, like <strong>dividers in a sock drawer</strong> taking space</li>
+<li>Cloud-managed VMs are easy to automate (with autoscaling groups)</li>
+</ul>
+</li>
+<li>VMs under central ops control often are not. Netflix built much on EC2 VMs. Use when you need stricter isolation or cannot containerise.</li>
+</ul>
+</li>
+</ul>
+<h3 id="containers">Containers</h3>
+<ul>
+<li>The Linux kernel manages the <strong>process tree</strong> and resource limits
+<ul>
+<li>A container is an <strong>abstraction over a subtree of the process tree</strong>, sharing the host <strong>kernel</strong>, with resources allocated by the kernel</li>
+<li>Lineage: Solaris Zones, OpenVZ, <strong>LXC</strong>, then <strong>Docker</strong> on top.</li>
+</ul>
+</li>
+<li>Versus VMs:
+<ul>
+<li><strong>no hypervisor</strong>, no extra kernel</li>
+<li>start in <strong>seconds</strong> rather than minutes</li>
+<li>finer resource control</li>
+<li>many more per host (thin dividers). Often run on EC2 VMs for the best of both.</li>
+</ul>
+</li>
+<li><strong>Not perfect:</strong>
+<ul>
+<li>you must <strong>route traffic</strong> to containers (Docker helped; LXC did not). Isolation is weaker than VMs: early documented <strong>container breakouts</strong></li>
+<li>much improved, but treat containers as isolation for <strong>trusted software</strong>, and investigate more for untrusted code.</li>
+</ul>
+</li>
+<li><strong>Windows containers</strong>
+<ul>
+<li>arrived with <strong>Windows Server 2016</strong></li>
+<li>OS size was an obstacle (<strong>Nano Server</strong> over 1 GB early on, versus Alpine at a few megabytes, though layer caching helps; <strong>Server Core</strong> for legacy). They offer <strong>process isolation</strong> or <strong>Hyper-V isolation</strong> (own VM; same image, chosen at launch, slower start).</li>
+</ul>
+</li>
+<li><strong>Blurred lines:</strong> stronger isolation with container lightness: <strong>Hyper-V containers</strong> and <strong>Firecracker</strong> (a &quot;kernel-based VM&quot;, used behind AWS Lambda).</li>
+<li><strong>Docker:</strong>
+<ul>
+<li>brought the <strong>image</strong> concept, tooling, networking help and a <strong>registry</strong>. Treat services in any language uniformly</li>
+<li>replaces heavyweight <strong>Vagrant</strong> VMs locally, with the same image locally and in production. It managed one machine only</li>
+<li>Docker Swarm and Swarm Mode followed, but <strong>Kubernetes</strong> won orchestration.</li>
+</ul>
+</li>
+</ul>
+<h3 id="application-containers">Application containers</h3>
+<ul>
+<li>Several services in one host such as Tomcat, IIS or WebLogic:
+<ul>
+<li>clustering and monitoring, and a single JVM's overhead for several services. Newman challenges them: they <strong>constrain technology choice</strong> and automation options</li>
+<li>shared in-memory <strong>session state</strong> clustering is something to avoid</li>
+<li>monitoring is insufficient</li>
+<li>slow start-up</li>
+<li>harder life-cycle management and analysing threads and resource use</li>
+<li>cost and overhead. It again optimises for scarcity, and lacks isolation: prefer <strong>self-contained, process-per-instance</strong> services.</li>
+</ul>
+</li>
+</ul>
+<h3 id="platform-as-a-service">Platform as a Service</h3>
+<ul>
+<li>Higher abstraction:
+<ul>
+<li>give a technology artifact (WAR file, Ruby gem) and it runs and may autoscale. Best ones are hosted</li>
+<li><strong>Heroku</strong> set the benchmark and also runs databases. Trade-off: little control when it does not fit</li>
+<li>&quot;the smarter the PaaS tries to be, the more it goes wrong&quot; (autoscaling heuristics for the average app). Growth in self-hosted PaaS stalled</li>
+<li><strong>serverless</strong> products (managed brokers, databases, storage) filled the space.</li>
+</ul>
+</li>
+</ul>
+<h3 id="function-as-a-service">Function as a Service</h3>
+<ul>
+<li><strong>Serverless</strong>
+<ul>
+<li>is an umbrella for technologies where servers do not matter to the user (Ken Fromm is credited with coining it, as far as Newman can tell). <strong>AWS Lambda</strong> (launched 2014) started the FaaS excitement: you deploy a <strong>function</strong>, dormant until a <strong>trigger</strong> (file, queue item, HTTP call)</li>
+<li>the platform starts, runs and stops it and scales concurrency.</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong> pay only for use (good for low or unpredictable load), implicit high availability, less operational work.</li>
+<li><strong>Limitations:</strong>
+<ul>
+<li><strong>Runtime support:</strong> Azure Functions supports the most; Google supported only Go, some Node versions and Python at the time of writing; AWS allows custom runtimes (more to maintain).</li>
+<li><strong>Resources:</strong> you control only <strong>memory</strong>, which implies CPU and I/O.</li>
+<li><strong>Duration caps:</strong> Google 9 minutes, AWS Lambda 15, Azure potentially unlimited. Long-running work is a poor fit.</li>
+<li><strong>Statelessness:</strong> chaining is awkward; <strong>Azure Durable Functions</strong> suspend and resume state, which Newman finds friendlier than <strong>AWS Step Functions</strong> (JSON configuration).</li>
+</ul>
+</li>
+<li><strong>WebAssembly (Wasm):</strong>
+<ul>
+<li>a standard for running sandboxed programs from many languages in browsers (eBay delivered barcode scanning written in C++ this way)</li>
+<li><strong>WASI</strong>
+<ul>
+<li>extends it beyond the browser (for example CDNs such as Fastly and Cloudflare)</li>
+<li>Lightweight and strongly sandboxed, it may challenge containers server-side but lacks platforms (running it inside Kubernetes containers is &quot;somewhat pointless&quot;)</li>
+</ul>
+</li>
+<li>Nomad's pluggable drivers suit it.</li>
+</ul>
+</li>
+<li><strong>Challenges:</strong>
+<ul>
+<li><strong>cold starts</strong> (worst for JVM and .NET; runtimes are often kept warm, and Go, Python, Node and Ruby start fast)</li>
+<li><strong>concurrency limits</strong> and scaling that <strong>overwhelms downstream systems</strong> (Bustle's Redis).</li>
+</ul>
+</li>
+<li><strong>Mapping to microservices:</strong>
+<ul>
+<li><strong>Function per microservice:</strong> a sensible start; an entry point dispatches on the path (<code>/receipt</code>, <code>/claim</code>, <code>/report</code> for an Expenses service).</li>
+<li><strong>Function per aggregate</strong>
+<ul>
+<li>(DDD): one function per aggregate keeps lifecycle logic together</li>
+<li>Keep a <strong>coarser external interface</strong>; a shared database is acceptable while one team manages it, but split data if needs diverge</li>
+<li>The microservice then becomes more a <strong>logical</strong> concept than a single deployable.</li>
+</ul>
+</li>
+<li><strong>Finer than an aggregate:</strong> Newman advises against it (it breaks aggregate integrity and drags in sagas; he abandoned a function per state transition).</li>
+</ul>
+</li>
+<li><strong>The way forward:</strong>
+<ul>
+<li>most developers will use platforms hiding detail</li>
+<li>he urges Kubernetes-bound clients to <strong>try FaaS first</strong>. The <strong>BBC</strong> runs Lambda for BBC News alongside EC2 where Lambda invocations would cost too much.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-08-faas-mapping.svg" alt="FaaS mapping options" loading="lazy" /></p>
+<h2 id="8-4-which-option-is-right">8.4 Which option is right?</h2>
+<div class="callout c-tip"><div class="callout-title">Sam&#x27;s really basic rules of thumb</div><div class="callout-body">
+<ul>
+<li><strong>If it ain't broke, don't fix it.</strong> Fashion should not drive decisions.</li>
+<li><strong>Give up as much control as you are happy with, then a little more.</strong> If a good PaaS or FaaS works, use it.</li>
+<li><strong>Containerising is not pain-free but is a good compromise</strong> between isolation cost and control, with local-development benefits. &quot;Expect Kubernetes in your future.&quot;</li>
+<li>If on public cloud and the problem <strong>fits FaaS</strong>, do that and <strong>skip Kubernetes</strong>. Do not let lock-in fear trap you (chapter 16).</li>
+<li>Found a PaaS (Heroku, Zeit) that fits? Push the work to it.</li>
+<li>For the rest, containerisation.</li>
+</ul>
+</div></div>
+<h3 id="role-for-puppet-chef-and-other-tools">Role for Puppet, Chef and other tools</h3>
+<ul>
+<li>Their role shrank (since 2014) with containers:
+<ul>
+<li>a <strong>Dockerfile</strong> defines the same needs, and a container is rebuilt from scratch, avoiding much of the complexity of re-running tools on long-lived machines. They persist for legacy and for building clusters</li>
+<li>infrastructure as code remains vital, now via <strong>Terraform</strong> or <strong>Pulumi</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-5-kubernetes-and-container-orchestration">8.5 Kubernetes and container orchestration</h2>
+<ul>
+<li><strong>Why orchestrate:</strong>
+<ul>
+<li>Docker defines and runs a container on one machine</li>
+<li>you need containers across machines
+<ul>
+<li>Orchestrators <strong>schedule</strong> workloads (find or reallocate resources), maintain <strong>desired state</strong>, and distribute for utilisation, latency or robustness</li>
+<li>Hand-written scripts &quot;get old very fast&quot;</li>
+<li>Mesos, Nomad, ECS and Swarm Mode offer similar</li>
+</ul>
+</li>
+<li>Kubernetes won (Docker Swarm, Rancher and CoreOS lost out).</li>
+</ul>
+</li>
+</ul>
+<h3 id="simplified-kubernetes-concepts">Simplified Kubernetes concepts</h3>
+<ul>
+<li><strong>Cluster:</strong> <strong>nodes</strong> (machines running workloads) plus a <strong>control plane</strong>.</li>
+<li><strong>Pod:</strong> one or more containers deployed together (usually one; a sidecar proxy such as Envoy in a service mesh is the rare second).</li>
+<li><strong>Service:</strong> a <strong>stable routing endpoint</strong> mapping to ephemeral pods. You do not &quot;deploy a service&quot;; you deploy pods that map to one.</li>
+<li><strong>Replica set:</strong> desired number of pods; usually handled via a <strong>deployment</strong>.</li>
+<li><strong>Deployment:</strong> applies changes: <strong>rolling upgrades</strong>, rollbacks, scaling.</li>
+<li>To deploy: define a pod, a service, and apply changes with a deployment.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-08-kubernetes-concepts.svg" alt="Kubernetes concepts" loading="lazy" /></p>
+<h3 id="multitenancy-and-federation">Multitenancy and federation</h3>
+<ul>
+<li>One shared cluster pools resources and cuts cost, but Kubernetes is limited as a <strong>multitenant</strong> platform
+<ul>
+<li>Options: platforms on top (Red Hat's <strong>OpenShift</strong>, with access controls but vendor abstractions), or <strong>federation</strong> (several clusters plus a layer across them), which makes pooling harder (a node belongs to one cluster) but eases <strong>upgrading</strong> clusters (move services to a new cluster rather than upgrading in place)</li>
+<li>Largely a scale concern.</li>
+</ul>
+</li>
+</ul>
+<h3 id="background-cncf-and-portability">Background, CNCF and portability</h3>
+<ul>
+<li>Kubernetes began at Google, inspired by <strong>Borg</strong> and <strong>Omega</strong> (see &quot;Borg, Omega, and Kubernetes&quot;, Burns et al.), but made more developer-friendly and not aimed at Borg's massive scale
+<ul>
+<li>Mesos and Nomad suit thousands of machines (Apple Siri on Mesos; Roblox on Nomad). Newman sees it both as a gift to the industry and as Google's counter to an <strong>AWS</strong> near-monopoly (AWS and Azure lead; Google Cloud is a distant third), both true.</li>
+</ul>
+</li>
+<li>The <strong>CNCF</strong> (part of the Linux Foundation) hosts and curates projects (it is compared to the Apache Software Foundation), runs events, docs, training and certification.</li>
+<li>Kubernetes is not really a platform
+<ul>
+<li>teams assemble one (service mesh, brokers, log aggregation), often via a <strong>platform engineering team</strong>. This gives choice but &quot;tyranny of choice&quot;</li>
+<li>OpenShift pre-selects. <strong>Portability</strong> is true in theory, less in practice (your custom platform must be rebuilt).</li>
+</ul>
+</li>
+</ul>
+<h3 id="helm-operators-crds-and-knative">Helm, Operators, CRDs and Knative</h3>
+<ul>
+<li><strong>Helm</strong>
+<ul>
+<li>(&quot;the missing package manager&quot;) and <strong>Operators</strong> manage third-party applications (such as Kafka)</li>
+<li>Operators focus on ongoing management, and they can be used together
+<ul>
+<li><strong>CRDs</strong> extend the Kubernetes API (new abstractions beside pod, service and so on, integrating with the CLI and access controls)</li>
+</ul>
+</li>
+<li>Newman finds their best use unclear and the space unsettled.</li>
+</ul>
+</li>
+<li><strong>Knative</strong>
+<ul>
+<li>brings FaaS-style workflows to Kubernetes but needs a service mesh (only <strong>Istio</strong> stable)</li>
+<li>given Kubernetes and Istio's churn he advises conservative organisations to look at <strong>OpenFaaS</strong> (no mesh required) instead, and regrets that Google kept Knative out of the CNCF.</li>
+</ul>
+</li>
+<li><strong>The future:</strong> Kubernetes will be &quot;everywhere. You just won't know it&quot;, hidden under higher-level abstractions, though developers still must understand distributed systems.</li>
+</ul>
+<h3 id="should-you-use-it">Should you use it?</h3>
+<ul>
+<li>Running your own cluster is a significant undertaking (big on-prem users outsource it)
+<ul>
+<li>prefer <strong>fully managed</strong> (Google, Azure, AWS), but on public cloud ask whether FaaS or PaaS (Azure Web Apps, Google App Engine, Zeit, Heroku) fits better</li>
+<li>Let admins and developers <strong>try it first</strong> (minikube, MicroK8s, Katacoda, CNCF training)</li>
+<li>Do not adopt it &quot;because everyone else is&quot;: with a handful of developers and few services it is overkill.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-6-progressive-delivery">8.6 Progressive delivery</h2>
+<ul>
+<li>Frequent deployment correlates with <strong>lower change failure rates</strong> (Forsgren, Humble and Kim, <em>Accelerate</em>, 2018), so &quot;go fast and break stuff&quot; does not apply to shipping
+<ul>
+<li><strong>Progressive delivery</strong> releases functionality to users in a controlled way, built on separating <strong>deployment</strong> from <strong>release</strong>.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] Deployment versus release (Jez Humble)
+<strong>Deployment</strong> is installing a version into an environment (often production). <strong>Release</strong> is making the system or a feature available to users. <strong>Blue-green</strong> shows it: run the new (green) version beside the live (blue), verify, then redirect customers; a problem found before the switch hurts nobody.</p>
+</blockquote>
+<ul>
+<li><strong>Progressive delivery</strong>
+<ul>
+<li>was coined by <strong>James Governor</strong> (RedMonk): &quot;continuous delivery with fine-grained control over the blast radius&quot;</li>
+<li>Adam Zimman of LaunchDarkly adds it can <strong>delegate feature control to the product owner</strong>, who must understand the mechanics.</li>
+</ul>
+</li>
+<li><strong>Feature toggles (flags):</strong>
+<ul>
+<li>hide deployed functionality</li>
+<li>used with trunk-based development, to enable on a schedule, to disable a problem feature, or per user (a beta group). Start with a <strong>configuration file</strong></li>
+<li>managed tools include <strong>LaunchDarkly</strong> and <strong>Split</strong></li>
+<li>see Pete Hodgson's &quot;Feature Toggles&quot;.</li>
+</ul>
+</li>
+<li><strong>Canary release:</strong>
+<ul>
+<li>named for mine canaries</li>
+<li>a limited subset sees the new version, growing if healthy
+<ul>
+<li>With microservices: toggle per service, or run two versions and route in the <strong>network path</strong></li>
+<li>Newman once ramped manually over a week</li>
+</ul>
+</li>
+<li>now <strong>Spinnaker</strong> automates it from metrics.</li>
+</ul>
+</li>
+<li><strong>Parallel run:</strong>
+<ul>
+<li>send the same request to two implementations and compare, with one the <strong>source of truth</strong> (do not send two order updates or pay an invoice twice). Newman's <em>Monolith to Microservices</em> (2019, ch. 3) covers it</li>
+<li>GitHub's <strong>Scientist</strong> does it in-process.</li>
+</ul>
+</li>
+<li>Start by separating deployment from release and deploying safely and often, working with product owners.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-08-progressive-delivery.svg" alt="Progressive delivery techniques" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>The principles (isolation, automation, infrastructure as code, zero downtime, desired state) outlive the current technology.</li>
+<li>Understand your requirements; a simpler solution than Kubernetes may fit, and offloading work to the public cloud is fine.</li>
+<li>Next chapter: testing.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Instance, availability zone, read replica, environment</strong>.</li>
+<li><strong>Isolated execution, infrastructure as code, desired state, GitOps, zero-downtime deployment</strong>.</li>
+<li><strong>VM, hypervisor, container, Docker image, application container, PaaS, FaaS, Wasm</strong>.</li>
+<li><strong>Pod, service, replica set, deployment, control plane, node, federation, CRD</strong>.</li>
+<li><strong>Blue-green, feature toggle, canary release, parallel run, progressive delivery</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 8. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch08.html</li>
+<li>Forsgren, Humble and Kim, <em>Accelerate</em> (IT Revolution, 2018)
+<ul>
+<li>Kief Morris, <em>Infrastructure as Code</em>, 2nd ed. (O'Reilly, 2020)</li>
+<li>Sam Newman, <em>Monolith to Microservices</em> (O'Reilly, 2019)</li>
+<li>Padmanabhan and Jha, &quot;WebAssembly at eBay&quot; (https://oreil.ly/SfvHT)</li>
+<li>Ishmael, &quot;Optimising Serverless for BBC Online&quot; (https://oreil.ly/gkSdp): as cited by the book.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-07-build/">Building Microservices 7: Build</a></li>
+<li><a href="/book-digest/building-microservices/bm-09-testing/">Building Microservices 9: Testing</a></li>
+<li><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-00-preface/">The Kubernetes Book 0: Preface</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-07-build/">&larr; Building Microservices 7: Build</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-09-testing/">Building Microservices 9: Testing &rarr;</a></nav></main></body></html>

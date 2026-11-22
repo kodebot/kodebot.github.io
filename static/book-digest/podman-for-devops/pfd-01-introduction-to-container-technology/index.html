@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 1: Introduction to container technology</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-1-introduction-to-container-technology">Podman for DevOps 1: Introduction to container technology</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, February 2026), ch. 1. Read through O'Reilly: https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/. Next: <a href="/book-digest/podman-for-devops/pfd-02-comparing-podman-and-docker/">Podman for DevOps 2: Comparing Podman and Docker</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>container is an isolated process</strong>, not a virtual machine: it shares the host kernel and is isolated by Linux <strong>namespaces</strong> (what it sees) and <strong>cgroups</strong> (what it may use).</li>
+<li><strong>Images</strong> (read-only, layered, copy-on-write, OCI standard) make containers portable; a running container adds a thin <strong>ephemeral</strong> read/write layer, so data lives outside it.</li>
+<li><strong>Engines</strong> (Podman, Docker, CRI-O, containerd) take user requests; <strong>runtimes</strong> (runc, crun) start the process. They are separate, swappable pieces.</li>
+<li>Containers are <strong>not automatically more secure</strong>: add SELinux or AppArmor, capabilities and seccomp.</li>
+<li>The lineage runs chroot (1979), FreeBSD jails (2000), Solaris Zones (2004), LXC (2008), Docker (2013), OCI (2015), <strong>Podman (2017)</strong>, which is <strong>daemonless</strong> and supports <strong>rootless</strong> containers.</li>
+</ul>
+</div></div>
+<p>The chapter answers four questions: what containers are, why you need one, where they come from, and where they are used today. It needs no setup. A shell prompt <code>$</code> means a standard user, <code>#</code> means root, and <code>\</code> continues a long command onto a new line.</p>
+<h2 id="1-1-what-are-containers">1.1 What are containers?</h2>
+<p><strong>Process basics first</strong></p>
+<ul>
+<li>A <strong>process</strong> is an instance of an executing program (the book cites Michael Kerrisk, <em>The Linux Programming Interface</em>). A <strong>program</strong> is a file; it can link libraries dynamically or statically (Go links statically by default).</li>
+<li>A process runs on the CPU in <strong>user space</strong> with its own memory. To reach disks, network or terminals it makes a <strong>system call</strong> into the <strong>kernel</strong>.</li>
+<li>It touches storage through a <strong>filesystem</strong>, a multi-layer abstraction. The kernel scheduler shares CPU cores across many processes.</li>
+<li>Running several versions of one program on a host makes the administrator manage conflicts: ports, binaries, libraries, dependencies.</li>
+</ul>
+<p><strong>A container is a form of application isolation</strong> on six levels:</p>
+<table>
+<thead>
+<tr>
+<th>Isolation</th>
+<th>What the containerised process gets</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>File system</td>
+<td>its own filesystem view; programs run from it</td>
+</tr>
+<tr>
+<td>Process ID</td>
+<td>an independent set of PIDs</td>
+</tr>
+<tr>
+<td>User</td>
+<td>its own UIDs and GIDs; privileged inside the container only</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>separate devices, IPv4 and IPv6 stacks, routing tables, firewall rules</td>
+</tr>
+<tr>
+<td>IPC</td>
+<td>separate POSIX message queues and System V IPC objects</td>
+</tr>
+<tr>
+<td>Resource usage</td>
+<td>limits and monitoring through Linux <strong>cgroups</strong> (CPU, memory, disk)</td>
+</tr>
+</tbody>
+</table>
+<p>Without containers, native applications share binaries, libraries, kernel, filesystem, network and users, so a new version can hit conflicting libraries or unmet dependencies (Figure 1.1). Containers let a new deployment just run the new containerised version beside the others.</p>
+<h3 id="namespaces">Namespaces</h3>
+<p>Namespaces abstract a system resource so the process believes the isolated copy is the host's. There are <strong>eight kinds</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Isolates</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mount</td>
+<td>the list of mount points</td>
+</tr>
+<tr>
+<td>PID</td>
+<td>process IDs (two namespaces can reuse the same PID)</td>
+</tr>
+<tr>
+<td>User</td>
+<td>UIDs, GIDs, root directory, keyrings, capabilities (root inside, unprivileged outside)</td>
+</tr>
+<tr>
+<td>UTS</td>
+<td>hostname and NIS domain name</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>devices, IP stacks, routing tables, firewall rules, port numbers; <strong>veth pairs</strong> tunnel between namespaces</td>
+</tr>
+<tr>
+<td>IPC</td>
+<td>System V IPC objects and POSIX message queues</td>
+</tr>
+<tr>
+<td>cgroup</td>
+<td>cgroup directories (a virtualised view)</td>
+</tr>
+<tr>
+<td>Time</td>
+<td>system time, so a process can run with an offset from host time</td>
+</tr>
+</tbody>
+</table>
+<h3 id="resource-usage-with-cgroups">Resource usage with cgroups</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-01-namespaces-and-cgroups.svg" alt="A container is a process isolated by namespaces and limited by cgroups" loading="lazy" /></p>
+<ul>
+<li><strong>cgroups</strong> organise processes in a hierarchical tree and limit or monitor their resources. The interface is the <strong>cgroupfs</strong> pseudo-filesystem, usually mounted at <code>/sys/fs/cgroup</code> (like <code>/proc</code>).</li>
+<li><strong>Controllers</strong> (subsystems) limit CPU share, memory, or freeze and resume processes.</li>
+<li><strong>v1 vs v2:</strong>
+<ul>
+<li>v1 mounts different controllers on different hierarchies.</li>
+<li>v2 has one unified hierarchy, with processes in leaf nodes.</li>
+<li>v1 is being deprecated, though some distributions keep it for compatibility.</li>
+</ul>
+</li>
+<li>Containers use cgroups for a <strong>CPU quota</strong> (microseconds of CPU per period) or <strong>CPU shares</strong> (a weighted proportion of cycles).</li>
+</ul>
+<h3 id="running-isolated-processes-by-hand">Running isolated processes by hand</h3>
+<p>Linux offers everything needed through the <code>unshare()</code> and <code>clone()</code> system calls and the <code>unshare</code> command. A shell in its own PID namespace:</p>
+<pre class="hl"><code><span class="c1"># unshare --fork --pid --mount-proc /bin/sh</span>
+</code></pre>
+<p>Inside it <code>ps aux</code> shows the shell as <strong>PID 1</strong>, the first process of the new namespace:</p>
+<pre class="hl"><code>sh-5.0# ps aux
+USER PID %CPU %MEM VSZ    RSS  TTY   STAT START TIME COMMAND
+root 1   0.0  0.0  226164 4012 pts/4 S    22:56 0:00 /bin/sh
+root 4   0.0  0.0  227968 3484 pts/4 R+   22:56 0:00 ps aux
+</code></pre>
+<p>Only the PID namespace is isolated; everything else is still the host's. Adding <code>--net</code> isolates the network stack too:</p>
+<pre class="hl"><code><span class="c1"># unshare --fork --net --pid --mount-proc /bin/sh</span>
+</code></pre>
+<pre class="hl"><code>sh-5.0# ip addr show
+1: lo: &lt;LOOPBACK&gt; mtu 65536 qdisc noop state DOWN group default qlen 1000
+link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+</code></pre>
+<p>The host's network devices are no longer visible. <strong>Lesson:</strong> containers are built from native Linux features, and a container runtime abstracts that complexity. Mount isolation is the most important piece.</p>
+<h3 id="isolating-mounts">Isolating mounts</h3>
+<ul>
+<li>To avoid binary and library conflicts a process needs its <strong>own directory tree</strong> (binaries and libraries of choice), built from <strong>mount namespaces</strong> plus <strong>bind mounts</strong>. Mount namespaces arrived in 2002 with Linux kernel 2.4.19.</li>
+<li>Doing this by hand is hard: you extract archives of directory trees from different distributions and bind mount them into separate namespaces. Early Linux containers worked this way.</li>
+</ul>
+<h3 id="container-images">Container images</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-01-image-layers.svg" alt="An image is read-only layers; a running container adds a thin ephemeral layer" loading="lazy" /></p>
+<ul>
+<li>Docker introduced the clever storage method; images later became the <strong>Open Container Initiative (OCI) image specification</strong> (https://github.com/opencontainers/image-spec).</li>
+<li>An image is a <strong>filesystem bundle</strong> pulled from an <strong>image registry</strong> (specialised object storage for image data and metadata) and unpacked before the first run. Public free registries include quay.io and docker.io; private ones run on-premises or in the cloud.</li>
+<li>Images are built from a <strong>Dockerfile</strong> (the recipe). <strong>Multi-stage builds</strong> compile source in a first stage with a full toolchain, then copy only the artifacts into a minimal second-stage image for fast startup and small size (Figure 1.2). Built images are pushed to registries.</li>
+<li><strong>Why images matter:</strong> a self-consistent package deployable anywhere with no further software dependencies, the answer to &quot;it works on my machine&quot;. Developers know their execution environment; operations stop maintaining a server's library dependencies.</li>
+<li><strong>Layers:</strong> an image is many tar archives called <strong>blobs</strong> or layers, composed by metadata into one filesystem view, usually through a <strong>union filesystem</strong>.
+<ul>
+<li><strong>OverlayFS</strong> (https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html) is the most used; it lives in the kernel tree, though not fully POSIX-compliant.</li>
+<li>It combines an <code>upperdir</code> stacked on a <code>lowerdir</code>; the unified view is <code>merged</code>. It supports up to <strong>128 layers</strong>. It knows nothing about images; it is only the foundation.</li>
+</ul>
+</li>
+<li><strong>Immutability:</strong> all image layers are read-only. To change a lower layer, rebuild the image. In cloud computing an instance, container or cluster is <strong>replaced by a new version, never modified</strong>, so we do not install packages or edit config inside a running container, and all copies stay in sync.</li>
+<li>When a container runs, a <strong>thin read/write layer is added on top</strong>; it is <strong>ephemeral</strong> and lost when the container is destroyed (Figure 1.3). So <strong>store nothing inside containers</strong>: use bind mounts or network storage (NFS, S3, iSCSI).</li>
+</ul>
+<h3 id="security-considerations">Security considerations</h3>
+<p>A process in a container is <strong>not</strong> inherently more secure; an attacker may still reach host filesystem and memory. Extra features:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Mandatory access control</strong> (SELinux, AppArmor)</td>
+<td>policy-based isolation of filesystem and network access against the host</td>
+</tr>
+<tr>
+<td><strong>Capabilities</strong></td>
+<td>independently enabled privileges for an unprivileged process (effective UID not 0); a container run can add or drop them</td>
+</tr>
+<tr>
+<td><strong>Seccomp</strong> (secure computing mode)</td>
+<td>a kernel feature restricting the syscalls a process can make; profiles shrink the attack surface</td>
+</tr>
+</tbody>
+</table>
+<p>Applying these by hand has a learning curve, so tools that automate them declaratively add value. Chapter 10 covers security in depth.</p>
+<h3 id="container-engines-and-runtimes">Container engines and runtimes</h3>
+<p>Running and securing containers manually does not reproduce or automate well and causes <strong>configuration drift</strong> between hosts. Engines and runtimes exist for that, and the two are often confused:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Container engine</th>
+<th>Container runtime</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Role</td>
+<td>accepts user requests and orchestrates everything needed for a container</td>
+<td>the lower-level piece that actually runs the containers</td>
+</tr>
+<tr>
+<td>Does</td>
+<td>CLI and/or REST interface; pulls and extracts images; manages the mount point and bind-mounts the extracted image; handles metadata; calls the runtime</td>
+<td>starts the process at the target mount point with metadata; manages cgroup resource allocation; manages MAC policies (SELinux, AppArmor) and capabilities</td>
+</tr>
+<tr>
+<td>Examples</td>
+<td>Docker (best known, not the first), <strong>Podman</strong>, CRI-O, containerd, LXD</td>
+<td><strong>runc</strong> (most common), crun, kata-containers, youki, gVisor</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The engine also creates the thin R/W layer and presents the merged directory stack to the runtime.</li>
+<li>Most runtimes follow the <strong>OCI runtime spec</strong> (https://github.com/opencontainers/runtime-spec), an industry standard for runtime behaviour and interface.</li>
+<li><strong>Swappable runtimes, a real example:</strong> Fedora 33 introduced the cgroups v2 hierarchy; runc did not initially support it, so Podman simply swapped in <strong>crun</strong>, which did. Now runc supports cgroups v2, so Podman can use it again with no impact on users.</li>
+</ul>
+<h3 id="containers-versus-virtual-machines">Containers versus virtual machines</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-01-vm-vs-container.svg" alt="VMs each carry a guest OS; containers share the host kernel" loading="lazy" /></p>
+<p><strong>Containers are not virtual machines.</strong> A containerised process <strong>talks to the host kernel directly</strong> through system calls (it may be unaware of host namespaces, but still context-switches into kernel space for I/O). A VM runs on a <strong>hypervisor</strong> with its own guest OS, filesystem, network, storage (usually image files) and <strong>kernel</strong>; its system calls go to the guest kernel (Figures 1.4 and 1.5).</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Container</th>
+<th>Virtual machine</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kernel</td>
+<td>shared with the host</td>
+<td>own guest kernel</td>
+</tr>
+<tr>
+<td>Security isolation</td>
+<td>refined features and strict policies (CIS Docker, NIST, HIPAA); hard to exploit</td>
+<td>stronger by default, though CPU attacks (Spectre, Meltdown) can reach VM address spaces</td>
+</tr>
+<tr>
+<td>Startup</td>
+<td>milliseconds if the image is on the host (no kernel to boot)</td>
+<td>boots kernel and initramfs, pivots to root filesystem, runs init (systemd) and services</td>
+</tr>
+<tr>
+<td>Resources</td>
+<td>lighter</td>
+<td>more RAM, CPU and storage for the guest OS</td>
+</tr>
+<tr>
+<td>Workloads</td>
+<td>one container per workload (best practice)</td>
+<td>several workloads together</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example (LAMP or WordPress):</strong> a small environment might run Apache, PHP, MySQL and WordPress on one VM. As containers this splits into a front-end container (Apache, PHP, WordPress) and a MySQL container with a volume for the database files; the front end scales up and down easily.</p>
+<h3 id="virtual-machines-in-containers">Virtual machines in containers</h3>
+<ul>
+<li>Traditionally containers ran inside VMs. Tools such as <strong>KubeVirt</strong> reverse that: <strong>VMs inside containers</strong>, managed by Kubernetes.</li>
+<li><strong>Why:</strong> run legacy software that suits VMs beside container applications on one platform, add an isolation layer, and have Kubernetes manage both.</li>
+<li><strong>QEMU</strong> emulates hardware so the VM thinks it has its own machine; <strong>KVM</strong> (a kernel module) lets VMs use the server's hardware directly, speeding QEMU up.</li>
+</ul>
+<h3 id="bootable-containers">Bootable containers</h3>
+<ul>
+<li>Powered by the open source project <strong>bootc</strong>: a specialised container image holding a <strong>complete OS (kernel, libraries, system tools)</strong> that can be <strong>booted directly</strong> like a traditional OS, and is OCI compliant.</li>
+<li><strong>Benefits:</strong> more isolation and control than application containers; no hypervisor or guest OS, so faster boot, lower memory use, better performance. Fits embedded systems, edge computing, specialised machine-learning servers.</li>
+<li><strong>Podman Desktop</strong> has a bootable-containers extension for building and managing them.</li>
+</ul>
+<h2 id="1-2-why-do-i-need-a-container">1.2 Why do I need a container?</h2>
+<p>Companies watch <strong>ROI</strong> while keeping <strong>TCO</strong> under control; containers help on both. The book gives seven reasons:</p>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Open source</strong></td>
+<td>the technology is open source and open standards; community-driven, inspectable (transparency aids robustness and security); only the best software gets adopted</td>
+</tr>
+<tr>
+<td><strong>Portability</strong></td>
+<td>an image runs on any host with a container engine, whatever the distribution (a CentOS or nginx image pulls on Fedora or Debian and behaves the same); reduces vendor lock-in</td>
+</tr>
+<tr>
+<td><strong>DevOps facilitators</strong></td>
+<td>ends &quot;it works on my machine&quot;; developers get self-consistent bundles, operations stop managing dependency constraints or one VM per application; developers become aware of the OS layer in their image and work with operations on build templates</td>
+</tr>
+<tr>
+<td><strong>Cloud readiness</strong></td>
+<td>built around <strong>immutability</strong>: redeploy a modified image, never patch in place; build pipelines go from build and image creation through registry push and tagging to deployment; Kubernetes (chapter 14) automates scheduling at scale</td>
+</tr>
+<tr>
+<td><strong>Infrastructure optimisation</strong></td>
+<td>lighter than VMs, so containerised servers pack onto fewer hosts with resource limits and requests; a bare-metal hypervisor can become a container worker node</td>
+</tr>
+<tr>
+<td><strong>Microservices</strong></td>
+<td>one container per fine-grained service: independent scaling, clearer team responsibilities, different technology stacks, finer security control (public exposure, mTLS); orchestration needs Kubernetes, a service mesh (Istio, Linkerd) and tracing (Jaeger, Kiali)</td>
+</tr>
+<tr>
+<td><strong>AI/ML</strong></td>
+<td>isolate Jupyter notebooks in custom environments; fine-tune a foundation model in a container training pipeline; serve models through inference APIs in dedicated containers (MLOps)</td>
+</tr>
+</tbody>
+</table>
+<p>Monolithic applications fit containers; microservices are the ideal match.</p>
+<h2 id="1-3-where-do-containers-come-from">1.3 Where do containers come from?</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-01-container-lineage.svg" alt="From chroot in 1979 to Podman in 2017" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Year</th>
+<th>Milestone</th>
+<th>What it added</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1979</strong></td>
+<td><strong>chroot</strong> (Unix V7); added to BSD in 1982</td>
+<td>change the root directory of a process and its children so it cannot reach files outside the subtree; <strong>not built for security</strong> and discouraged as an isolation mechanism</td>
+</tr>
+<tr>
+<td><strong>2000</strong></td>
+<td><strong>FreeBSD jails</strong></td>
+<td>built on chroot; virtualises networking, users and processes too (four features below); each jail has its own users and root with no power over other jails or the host</td>
+</tr>
+<tr>
+<td><strong>2004</strong></td>
+<td><strong>Solaris Containers (Zones)</strong></td>
+<td>a virtualised application environment helped by <strong>ZFS</strong> (snapshots, cloning); <strong>branded zones</strong> can hold different binaries or even a different OS; own networking, users, time zone</td>
+</tr>
+<tr>
+<td><strong>2008</strong></td>
+<td><strong>Linux Containers (LXC)</strong></td>
+<td>first complete Linux container manager; its authors built many kernel features other runtimes use; goal: VM-like isolation without hardware simulation or a new kernel; <strong>unprivileged containers</strong> by mapping container UID 0 to a high host UID</td>
+</tr>
+<tr>
+<td><strong>2013</strong></td>
+<td><strong>Docker</strong></td>
+<td>first used LXC; a year later <strong>libcontainer</strong> replaced it; needs a <strong>daemon</strong>; brought OverlayFS, container images, registries and the Dockerfile</td>
+</tr>
+<tr>
+<td><strong>2014 to 2015</strong></td>
+<td><strong>rkt</strong> (CoreOS, later bought by Red Hat)</td>
+<td><strong>daemonless</strong>: each container is an ordinary process; CNCF adopted it in 2017; discontinued after the Red Hat acquisition, but influenced Podman</td>
+</tr>
+<tr>
+<td><strong>2015 to 2017</strong></td>
+<td><strong>OCI and CRI-O</strong></td>
+<td>OCI formed in 2015 under the Linux Foundation (Docker with Red Hat, AWS, Google, Microsoft, IBM); runtime spec and image spec; first runtime <strong>runc</strong>; Kubernetes <strong>CRI</strong> plugin interface; <strong>CRI-O</strong> (Red Hat, 2017) is a lightweight CRI implementation</td>
+</tr>
+<tr>
+<td><strong>2017</strong></td>
+<td><strong>Podman</strong></td>
+<td>first commit in 2017; name = <strong>POD MANager</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>FreeBSD jail features:</strong> directory subtree (as chroot), an <strong>independent IP address</strong>, hostname, and the command to run (path relative to the jail). A jail can be created <strong>from binary</strong> (like the host OS) or <strong>from source</strong> (built from scratch for the application). FreeBSD itself dates from 1993, derived from BSD.</li>
+<li><strong>LXC kernel functions:</strong> namespaces, mandatory access control, cgroups. <strong>SELinux</strong> was developed by the US National Security Agency (NSA) and adds role-based access control and multi-level security through <strong>labels</strong> (security contexts) on every file, device and directory.</li>
+<li><strong>containerd:</strong> the Docker team extracted the core runtime from the daemon and donated it to the CNCF.</li>
+<li><strong>Kubernetes</strong> (&quot;helmsman&quot; in Greek, K8s) was open sourced by Google and is maintained by the CNCF.</li>
+<li><strong>Pod:</strong> the smallest deployable unit in Kubernetes, one or more containers scheduled together with a shared context.</li>
+</ul>
+<h3 id="podman-in-brief">Podman in brief</h3>
+<ul>
+<li>Manages <strong>containers, images, volumes and pods</strong>, built from scratch to follow OCI standards.</li>
+<li><strong>No central daemon:</strong> containers start as standard system processes. A <strong>Docker-compatible CLI</strong> eases migration.</li>
+<li><strong>Rootless containers:</strong> a normal user can run restricted containers with no privileges beyond that user's, with no OS-level setup by an administrator.</li>
+<li><strong>Release milestones:</strong>
+<ul>
+<li><strong>3.0:</strong> Docker Compose support.</li>
+<li><strong>4.0:</strong> new network stack from <strong>Netavark</strong> and <strong>Aardvark</strong>.</li>
+<li><strong>5.0:</strong> rewritten <strong>Podman Machine</strong> (needed on macOS and Windows) and a new rootless network stack based on <strong>pasta</strong>.</li>
+</ul>
+</li>
+<li><strong>CNCF:</strong> Red Hat announced in late 2024 the intent to donate Podman, Podman Desktop, Buildah, Skopeo, bootc and composefs; they joined the <strong>CNCF Sandbox in January 2025</strong>.</li>
+</ul>
+<h2 id="1-4-where-are-containers-used-today">1.4 Where are containers used today?</h2>
+<ul>
+<li>Adoption spans every business sector, from automotive to healthcare, speeding project delivery. Companies move new applications from the <strong>VM model</strong> to containers.</li>
+<li><strong>Evolution:</strong> first a packaging method for <strong>monolithic</strong> runtimes; then the <strong>cloud-native</strong> wave (build and deploy scalable apps in public, private or hybrid clouds) and <strong>microservices</strong> made containers the de facto packaging standard. Kubernetes added service meshes and serverless for microservice architecture (MSA, loosely coupled fine-grained services over lightweight protocols).</li>
+<li><strong>Example web store (Figure 1.6):</strong> mobile or browser clients reach three decoupled services over a REST API; <strong>each service has its own database</strong>, making them independent in development and deployment. One container per service plus Kubernetes completes the solution, each with a base image containing just the runtimes it needs.</li>
+<li><strong>CI/CD</strong> (continuous integration and delivery or deployment) automates build, test and run, and containers fit it naturally.</li>
+<li>Containers were born for system administrators but became the developers' favourite, linking dev and ops and speeding <strong>DevOps</strong> (practices linking Dev and Ops to shorten the application life cycle and release more often).</li>
+<li><strong>Legacy workloads too:</strong> enterprises with proprietary virtualisation face hardware, licences, expertise, resource-hungry VMs. Containers offer lower overhead, faster deployment, greater density and savings, and one platform can manage both VMs and containers (less training). Base images have shrunk: a <strong>minimal Red Hat Enterprise Linux base image is about 30 MB to download and 84 MB extracted</strong>. Kubernetes added features for <strong>stateful</strong> workloads and <strong>persistent storage</strong>.</li>
+<li><strong>Statistic quoted:</strong> 66% of organisations run half of their application base as containers in production, from the CNCF 2023 Annual Survey (https://www.cncf.io/reports/cncf-annual-survey-2023/).</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+process · system call · namespace (eight kinds) · cgroup (v1, v2) · <code>unshare</code> · bind mount · OCI image and runtime specs · registry · Dockerfile · multi-stage build · layer, blob · OverlayFS · immutability · SELinux, AppArmor · capabilities · seccomp · container engine vs runtime · runc, crun · hypervisor · KubeVirt · bootc · chroot · FreeBSD jail · Solaris Zone · LXC · rkt · CRI, CRI-O · pod · rootless · daemonless.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 1; O'Reilly: https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>[1] CNCF 2023 Annual Survey: https://www.cncf.io/reports/cncf-annual-survey-2023/</li>
+<li>[2] <em>The Linux Programming Interface</em>, Michael Kerrisk (ISBN 978-1-59327-220-3)</li>
+<li>[3] Demystifying namespaces and containers in Linux: https://opensource.com/article/19/10/namespaces-and-containers-linux</li>
+<li>[4] OCI Runtime Specs: https://github.com/opencontainers/runtime-spec</li>
+<li>[5] OCI Image Specs: https://github.com/opencontainers/image-spec</li>
+<li>[6] Container Runtime Interface announcement: https://kubernetes.io/blog/2016/12/container-runtime-interface-cri-in-kubernetes/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a> · <a href="/book-digest/grokking-software-architecture/gsa-09-architecting-for-the-cloud/">Grokking Software Architecture 9: Architecting for the Cloud (pets for cattle, concrete for code)</a></p>
+<nav class="pager"><span></span><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-02-comparing-podman-and-docker/">Podman for DevOps 2: Comparing Podman and Docker &rarr;</a></nav></main></body></html>

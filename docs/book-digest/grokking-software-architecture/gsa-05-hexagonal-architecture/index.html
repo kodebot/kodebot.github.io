@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters)</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-5-hexagonal-architecture-ports-and-adapters">Grokking Software Architecture 5: Hexagonal Architecture (Ports and Adapters)</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 5. Previous: <a href="/book-digest/grokking-software-architecture/gsa-04-thinking-in-layers/">Grokking Software Architecture 4: Thinking in Layers</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-06-reliable-api-design/">Grokking Software Architecture 6: Reliable API Design (public contracts and synchronous communication)</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Layered architecture leaves the <strong>database at the bottom as a heavy anchor</strong> (&quot;Database Gravity&quot;). <strong>Hexagonal</strong> applies DIP to the whole app: a protected <strong>Core</strong> with <strong>Ports (interfaces)</strong> and <strong>Adapters (implementations)</strong>.</li>
+<li><strong>Golden rule: all dependencies point INWARD.</strong> Data may still flow out (save to DB) but the DB adapter references the Core's interface.</li>
+<li>Payoffs: <strong>testability</strong> (core runs in &quot;airplane mode&quot; with fake adapters), <strong>small blast radius</strong> (a Twilio API change stays inside one adapter), <strong>reuse</strong> (driven by web, CLI, job, test).</li>
+<li>Cost: the <strong>complexity tax</strong>: more files, indirection, mapping. Overkill for simple CRUD.</li>
+<li>Onion, Clean (and LMAX) are &quot;dialects of the same language&quot;.</li>
+</ul>
+</div></div>
+<h2 id="5-2-decoupling-the-core-database-gravity">5.2 Decoupling the core: &quot;database gravity&quot;</h2>
+<ul>
+<li>In layered systems everything depends downward on the database, encouraging <strong>Database-First design</strong> even with ORMs
+<ul>
+<li>Example: <code>Order { Id, CustomerId (a foreign key, not a Customer object), TotalAmount, byte[] RowVersion (SQL concurrency token) }</code> is <strong>an SQL table in disguise</strong>: the database dictates the architecture.</li>
+</ul>
+</li>
+<li><strong>Signs of a leaky system:</strong>
+<ul>
+<li>business rules in SQL/stored procedures (totals, tax, discounts)</li>
+<li>validation in the repository's <code>Save()</code> (&quot;is user active&quot;, stock sufficient)</li>
+<li>formatting in the database (concatenating names, formatting dates for the UI). Layer boundaries are only folders so it is easy to cheat</li>
+<li>hexagonal makes them structural walls.</li>
+</ul>
+</li>
+<li><strong>Mental shift:</strong>
+<ul>
+<li>think in <strong>regions (Inside / Outside)</strong> as well as layers</li>
+<li>the <strong>boundary</strong> separates them. <strong>Decoupling the core</strong> = the business logic depends on nothing outside: no DB, UI, framework, API.</li>
+</ul>
+</li>
+<li><strong>Clean-room analogy:</strong>
+<ul>
+<li>Inside = sterile lab (business logic)</li>
+<li>Outside = delivery truck (database), scientists (UI), phone calls (APIs)</li>
+<li>the <strong>airlock (interface)</strong>: the clean room defines the rules, the outside adapts.</li>
+</ul>
+</li>
+<li>The <strong>Boundary Keeper</strong> becomes <strong>Guardian of the Airlock</strong>: you cannot leak SQL into the Core because it does not know what SQL is.</li>
+</ul>
+<h2 id="5-3-inside-ports-adapters">5.3 Inside, ports, adapters</h2>
+<ul>
+<li><strong>The Inside:</strong> the <strong>Domain</strong> (entities and rules) plus the <strong>Orchestrator</strong> (use-case flow: &quot;load the order, validate, save&quot;; also called Application/Service layer or Use Cases).</li>
+<li><strong>Ports = interfaces:</strong>
+<ul>
+<li><strong>Primary (driving):</strong> how the outside uses the app (<code>IOrderService</code>: <code>PlaceOrder()</code>, <code>CancelOrder()</code>): &quot;here is what I can do for you&quot;.</li>
+<li><strong>Secondary (driven):</strong> what the app needs (<code>IOrderRepository</code>: <code>Save()</code>, <code>FindById()</code>): &quot;here is what I need you to do for me&quot;.</li>
+</ul>
+</li>
+<li><strong>Adapters = translators:</strong>
+<ul>
+<li><strong>Primary adapter:</strong> takes an outside request (HTTP, CLI), converts it, calls a primary port (<code>OrderController</code> unpacks JSON and calls <code>IOrderService.PlaceOrder()</code>).</li>
+<li><strong>Secondary adapter:</strong> implements a secondary port (<code>SqlOrderRepository</code> turns the clean <code>Order</code> into SQL).</li>
+<li>In DDD adapters often act as an <strong>Anti-Corruption Layer</strong> (so messy external schemas do not corrupt the core)
+<ul>
+<li>see Evans (domainlanguage.com/ddd/) and https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>It is <strong>OCP</strong> in action: add an adapter, never modify the Core. <strong>The inversion:</strong> data still flows out but the <strong>dependency points in</strong>.</li>
+<li><strong>USB analogy:</strong>
+<ul>
+<li>laptop = Core</li>
+<li>USB port = Port (the strict standard, i.e. the &quot;driver&quot; is the interface)</li>
+<li>mouse/keyboard = Adapters</li>
+<li>unplug SQL, plug a file-system adapter for tests. <strong>Castle analogy:</strong> ports are the fortified gates, adapters the drawbridges</li>
+<li>primary adapters rewrite the messenger's muddy note onto clean parchment (a domain object) for the King</li>
+<li>swap a wooden bridge for an iron one (SQL to Mongo) and the fortress never notices. (REST vs GraphQL come in ch. 6.)</li>
+</ul>
+</li>
+<li><strong>Four pitfalls:</strong>
+<ol>
+<li><strong>Leaky Port:</strong> a port using outside types (<code>IUserRepository.Save(SqlDataReader reader)</code>). Fix: speak the Core's language (<code>User</code>).</li>
+<li><strong>Fat Adapter:</strong> business rules in the controller or repository. Adapters should be <strong>dumb translators</strong>.</li>
+<li><strong>CRUD obsession:</strong> a port per table (<code>ITable1Repository</code>). Design ports around <strong>use cases</strong> (<code>IOrderProcessing</code>).</li>
+<li><strong>Misplaced responsibility:</strong> transactions or retry policy inside an adapter; &quot;must be atomic/retried&quot; belongs <strong>inside</strong>.</li>
+</ol>
+<ul>
+<li>Rule of thumb: &quot;<strong>What should I do with this data?</strong>&quot; = business logic (inside); &quot;<strong>How do I fetch/store it?</strong>&quot; = persistence (outside).</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-4-the-map">5.4 The map</h2>
+<p><img src="/book-digest/grokking-software-architecture/img/hexagon.svg" alt="Hexagonal architecture: ports and adapters" loading="lazy" />
+Layered diagrams flow top to bottom; the hexagon flows <strong>outside-in</strong>. <strong>Centre</strong> = domain (no outward dependencies). <strong>Left (driving side):</strong> users, automated tests, external systems use a primary adapter and port.</p>
+<p><strong>Right (driven side):</strong> databases, email servers, payment gateways; the Core calls a secondary port that a secondary adapter implements.</p>
+<p><strong>Why a hexagon?</strong> Alistair Cockburn chose it only because it has <strong>enough sides</strong> (a square implies top/bottom/left/right, hence layers); future adapters (mobile app, admin CLI) fit without changing the core.</p>
+<h2 id="5-5-code-the-universal-power-outlet-server-monitor-c">5.5 Code: the &quot;universal power outlet&quot; (server monitor, C#)</h2>
+<p>Goal: alert an admin on overheating, SMS in production, console in development.</p>
+<ul>
+<li><strong>Before:</strong>
+<ul>
+<li><code>ServerMonitor.CheckTemperature(int temp)</code> hardcodes <code>temp &gt; 95</code> and <code>new TwilioClient(&quot;API_KEY&quot;).SendSms(&quot;555-1234&quot;, ...)</code>. Pain: every test sends a real SMS (and a bill)</li>
+<li>vendor lock-in.</li>
+</ul>
+</li>
+<li><strong>After:</strong>
+<ul>
+<li>
+<p><strong>Secondary port</strong> in the Core:</p>
+<pre class="hl"><code><span class="k">interface</span><span class="w"> </span><span class="n">IAlertPort</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">void</span><span class="w"> </span><span class="nf">SendAlert</span><span class="p">(</span><span class="kt">string</span><span class="w"> </span><span class="n">message</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+</li>
+<li>
+<p><strong>Adapters</strong> (Infrastructure): <code>TwilioAdapter(apiKey, targetPhoneNumber)</code>, <code>ConsoleAdapter</code> (red text, dev), <code>KafkaAlertAdapter(IProducer)</code> producing <code>{Error, Timestamp}</code> JSON to topic <code>&quot;server-alerts-topic&quot;</code> (<strong>fire and forget</strong>; first taste of Event-Driven Architecture, ch. 7).</p>
+</li>
+<li>
+<p><strong>The Core's socket:</strong></p>
+<ul>
+<li><code>ServerMonitor(IAlertPort alertPort)</code></li>
+<li><code>CheckTemperature</code> calls <code>_alertPort.SendAlert($&quot;Temp is {temp} degrees! Take cover!&quot;)</code> when above <code>HIGH_TEMP_THRESHOLD</code>. It never uses <code>new</code>.</li>
+</ul>
+</li>
+<li>
+<p><strong>Composition Root:</strong></p>
+<ul>
+<li>the single entry point (<code>Program.Main</code>) that builds the object graph: read config, <code>new TwilioAdapter(envApiKey, envPhoneNumber)</code>, <code>new ServerMonitor(myAdapter)</code>, run</li>
+<li>Like a <strong>general contractor</strong> who buys the bulb and hands it to the electrician</li>
+<li>Swapping = one line</li>
+<li>(Java/Spring does this via <code>@Configuration</code>.)</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Folder layout:</strong>
+<ul>
+<li><code>/Core/Domain/ServerMonitor.cs</code>, <code>/Core/Ports/IAlertPort.cs</code>, <code>/Infrastructure/Adapters/{Console,Twilio,KafkaAlert}Adapter.cs</code>, <code>/Infrastructure/ExternalLibs/</code> (SDKs), <code>Program.cs</code> (Composition Root)
+<ul>
+<li>Infrastructure files <code>using MyProject.Core</code></li>
+</ul>
+</li>
+<li>Core files never <code>using MyProject.Infrastructure</code>.</li>
+</ul>
+</li>
+<li><strong>Architectural Sovereignty:</strong>
+<ul>
+<li>the business logic is &quot;king of its own territory&quot;</li>
+<li>Drive the same Core from a web API (primary adapter 1), an admin CLI with <code>ConsoleAdapter</code> (2), a scheduled job with <code>KafkaAdapter</code> (3).</li>
+</ul>
+</li>
+<li><strong>Why not just a Layered Factory with DIP?</strong> A factory swaps outputs, but only the hexagon decouples the <strong>inputs (drivers)</strong> too; in layered, you still bring the anchor along.</li>
+<li><strong>Boring, reliable test:</strong>
+<ul>
+<li><code>FakeAlertPort</code> holds <code>List&lt;string&gt; SentMessages</code></li>
+<li><code>new ServerMonitor(fakePort).CheckTemperature(100)</code></li>
+<li>assert exactly 1 message containing &quot;Take cover!&quot;. No internet, no keys.</li>
+</ul>
+</li>
+<li><strong>The family (history):</strong>
+<ul>
+<li><strong>Hexagonal (2005):</strong> Alistair Cockburn: &quot;stop building layers, start building boundaries&quot;; article https://alistair.cockburn.us/hexagonal-architecture.</li>
+<li><strong>Onion (2008):</strong> Jeffrey Palermo: concentric circles, layers inside the core (https://jeffreypalermo.com/2008/07/the-onion-architecture-part-1).</li>
+<li><strong>LMAX (2011):</strong> extreme speed via the Disruptor, millions of transactions per second (Fowler: https://martinfowler.com/articles/lmax.html).</li>
+<li><strong>Clean (2012):</strong> Robert C. Martin: &quot;Use Cases&quot;, formalised Dependency Rule (https://blog.cleancoder.com/uncle-bob/2011/11/22/Clean-Architecture.html).</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Goal</th>
+<th>Centre called</th>
+<th>Orchestrator called</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hexagonal</td>
+<td>decouple the tech stack</td>
+<td>Application Core</td>
+<td>Application Layer</td>
+</tr>
+<tr>
+<td>Onion</td>
+<td>structure the domain</td>
+<td>Domain Model</td>
+<td>Application Services</td>
+</tr>
+<tr>
+<td>LMAX</td>
+<td>low latency</td>
+<td>single-threaded business logic</td>
+<td>the Disruptor (ring buffer)</td>
+</tr>
+<tr>
+<td>Clean</td>
+<td>standardise the rules</td>
+<td>Entities</td>
+<td>Use Cases</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5-6-the-dork-side-cockburn-s-hexagon">5.6 The Dork Side: Cockburn's hexagon</h2>
+<p>Cockburn (an original <strong>Agile Manifesto</strong> signatory) wrote it in <strong>2005</strong> to solve <strong>entanglement</strong> (core logic inseparable from external tech). Story (often cited as a weather-forecasting system): he could not test logic automatically because it was tangled with GUI code and a baked-in database.</p>
+<p>Layered diagrams imply a top and bottom, a one-way street pulled by gravity. The hexagon was chosen for &quot;enough room&quot; for many ports (UI, DB, test harness, admin API); <strong>six is arbitrary</strong> (3, 10 or 50 ports; &quot;Dodecahedron Architecture&quot; is hard to draw).</p>
+<p>He later <strong>renamed it &quot;Ports and Adapters&quot;</strong> because the shape distracted from the plugs.</p>
+<h2 id="5-7-rescue-mission-migrating-legacy-code">5.7 Rescue mission: migrating legacy code</h2>
+<p>Use the <strong>Strangler Fig Pattern</strong> (https://martinfowler.com/bliki/StranglerFigApplication.html): grow new hexagonal code around the legacy system until it takes over. Steps: (1) find a <strong>seam</strong> (new feature or bug-fix area), (2) build a <strong>hexagonal outpost</strong> (new folder/project), (3) write a <strong>legacy adapter</strong> satisfying the port by calling old code or database, (4) <strong>shift</strong> more logic in until the host is unneeded.</p>
+<h2 id="5-8-the-cost-of-decoupling">5.8 The cost of decoupling</h2>
+<ul>
+<li><strong>Complexity tax:</strong>
+<ul>
+<li>&quot;Update User Email&quot; may need 3 files in layered (Controller, Service, Repository) but <strong>7 to 8</strong> in hexagonal: Controller (adapter), Input Port, Command/DTO, Use Case implementation, Output Port, Persistence Adapter, Database Entity, Mapper</li>
+<li>A <strong>DTO</strong> carries raw values with no logic; a <strong>Command Object</strong> is a DTO that signals a write via an Input Port (vs a read-only Query)</li>
+<li>Simple CRUD with thin logic: &quot;renting a semi-truck to pick up a gallon of milk&quot;.</li>
+</ul>
+</li>
+<li><strong>Indirection frustration:</strong> &quot;Go to Definition&quot; lands on an interface; you hunt for the adapter.</li>
+<li><strong>Mapping fatigue:</strong>
+<ul>
+<li><code>UserEntity</code> (DB), <code>User</code> (domain), <code>UserDto</code> (API) plus mappers (AI assistants write these well)</li>
+<li>Do not retreat to leaky code for a theoretical speed gain: <strong>premature optimisation</strong> (Fowler: https://martinfowler.com/ieeeSoftware/yetOptimization.pdf).</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Layered</th>
+<th>Hexagonal</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Shape</td>
+<td>vertical stack</td>
+<td>concentric hub and spoke</td>
+</tr>
+<tr>
+<td>Dependency flow</td>
+<td>downward</td>
+<td>inward to the core</td>
+</tr>
+<tr>
+<td>The boss</td>
+<td>infrastructure (schema drives design)</td>
+<td>the domain</td>
+</tr>
+<tr>
+<td>Interchangeability</td>
+<td>difficult</td>
+<td>easy (unplug/plug adapter)</td>
+</tr>
+<tr>
+<td>Testability</td>
+<td>medium</td>
+<td>high (&quot;airplane mode&quot;)</td>
+</tr>
+<tr>
+<td>Complexity tax</td>
+<td>low upfront, high long-term</td>
+<td>high upfront, low long-term</td>
+</tr>
+<tr>
+<td>Framework coupling</td>
+<td>high</td>
+<td>zero in the core</td>
+</tr>
+<tr>
+<td>Best for</td>
+<td>CRUD-heavy apps, small teams (under 5), rapid prototypes/MVPs</td>
+<td>complex business logic, long-lived systems (5+ years), multi-client (web + mobile + API)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5-9-mission-checklist-recap">5.9 Mission, checklist, recap</h2>
+<ul>
+<li><strong>Mission:</strong>
+<ul>
+<li>hunt hidden dependencies in your code (<code>new HttpClient()</code>, <code>fetch()</code>, <code>requests.get()</code>, <code>console.log()</code>, <code>File.WriteAllText()</code>, <strong><code>DateTime.Now</code>/<code>new Date()</code>: system time counts</strong>)
+<ul>
+<li>sketch five minutes (hexagon, leaky arrow out, add a port, add an adapter outside)</li>
+</ul>
+</li>
+<li><strong>Practice example:</strong> a Crypto Portfolio Tracker: <code>PortfolioManager.CalculateTotalValue(btcAmount)</code> creates an <code>HttpClient</code>, calls <code>https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&amp;vs_currencies=usd</code>, parses JSON, multiplies</li>
+<li>Pain: breaks if the internet is down, if CoinGecko changes URL or JSON, cannot unit-test without real HTTP calls (slow, flaky, rate limited)</li>
+<li>Win condition: explain why hard-coding blocks testing and how a Port fixes it</li>
+<li>Guided solution in Appendix A.</li>
+</ul>
+</li>
+<li><strong>Recap:</strong>
+<ul>
+<li>hexagonal flips a vertical stack to inside vs outside</li>
+<li>the Core has zero outside dependencies</li>
+<li>ports are airlocks</li>
+<li>adapters are outside translators</li>
+<li><strong>all dependencies point inward</strong></li>
+<li>fake adapters make tests fast</li>
+<li>Cockburn created it for entanglement so an app can be driven by a user, a program or a test script
+<ul>
+<li>Next: exposing the core through public contracts (ch. 6: REST, GraphQL, design for the AI era).</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+Database Gravity · Database-First design · Inside/Outside · boundary · port (primary/driving, secondary/driven) · adapter · anti-corruption layer · Composition Root · Architectural Sovereignty · entanglement · Strangler Fig · Complexity Tax · DTO · Command Object · mapper · Onion/Clean/LMAX.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 5. Pre-release; no public source page found.</li>
+<li>Alistair Cockburn, &quot;Hexagonal Architecture&quot; (2005): https://alistair.cockburn.us/hexagonal-architecture</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-04-thinking-in-layers/">Grokking Software Architecture 4: Thinking in Layers</a> · <a href="/book-digest/grokking-software-architecture/gsa-06-reliable-api-design/">Grokking Software Architecture 6: Reliable API Design (public contracts and synchronous communication)</a> · <a href="/book-digest/domain-driven-design-quickly/ddd-06-preserving-model-integrity-and-bounded-context/">DDD Quickly 6: Preserving model integrity: bounded context, continuous integration, context map</a> · <a href="/book-digest/spring-start-here/ch03-spring-context-wiring-beans/">Ch 3: The Spring context, wiring beans</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-04-thinking-in-layers/">&larr; Grokking Software Architecture 4: Thinking in Layers</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-06-reliable-api-design/">Grokking Software Architecture 6: Reliable API Design (public contracts and synchronous communication) &rarr;</a></nav></main></body></html>

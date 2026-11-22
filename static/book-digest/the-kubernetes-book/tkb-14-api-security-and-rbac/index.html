@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 14: API Security and RBAC</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-14-api-security-and-rbac">The Kubernetes Book 14: API Security and RBAC</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 14. Previous: <a href="/book-digest/the-kubernetes-book/tkb-13-statefulsets/">The Kubernetes Book 13: StatefulSets</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-15-the-kubernetes-api/">The Kubernetes Book 15: The Kubernetes API</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Every API request, from <code>kubectl</code>, Pods, kubelets, control plane services or native apps, passes three checks in order: <strong>authentication</strong>, <strong>authorization</strong>, <strong>admission control</strong>. The connection itself is secured with <strong>TLS</strong>.</li>
+<li>Kubernetes has <strong>no built-in identity database</strong>; authN is pluggable (client certificates, webhooks, external IAM such as Active Directory or cloud IAM).</li>
+<li>Authorization is usually <strong>RBAC</strong>: <strong>deny by default</strong>, allow rules only, built from Roles, RoleBindings, ClusterRoles and ClusterRoleBindings.</li>
+<li>A <strong>ClusterRole bound through RoleBindings</strong> defines a role once and reuses it across Namespaces.</li>
+<li><strong>Admission controllers</strong> enforce policy on write requests: <strong>mutating</strong> ones run first and can modify; <strong>validating</strong> ones can only reject.</li>
+</ul>
+</div></div>
+<p>CRUD-style requests (create, read, update, delete) to the API server come from:</p>
+<ul>
+<li>operators and developers using <code>kubectl</code></li>
+<li>Pods</li>
+<li>kubelets</li>
+<li>control plane services</li>
+<li>Kubernetes-native apps</li>
+</ul>
+<h2 id="14-1-api-security-big-picture">14.1 API security big picture</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-14-api-request-pipeline.svg" alt="Every request passes authentication, authorisation, then admission control" loading="lazy" /></p>
+<p>Figure 14.1: the same flow whatever the origin; <strong>authN</strong> is authentication, <strong>authZ</strong> is authorisation.</p>
+<p>Example: user <code>grant-ward</code> creates a Deployment <code>hive</code> in Namespace <code>terran</code>.</p>
+<ol>
+<li><code>kubectl apply</code> sends the YAML; <code>kubectl</code> builds a request with the user's credentials embedded, over <strong>TLS</strong>.</li>
+<li>The authentication module decides whether it is really <code>grant-ward</code> or an imposter.</li>
+<li>The authorisation module decides whether <code>grant-ward</code> may create Deployments in <code>terran</code>.</li>
+<li>Admission controllers check that the Deployment meets policy.</li>
+<li>Only after all three does the request execute.</li>
+</ol>
+<p><strong>Airport analogy:</strong> authenticate with a passport (authN), the system checks you bought a seat (authZ), airline policies restrict hand luggage and alcohol (admission control), then you fly.</p>
+<h2 id="14-2-authentication">14.2 Authentication</h2>
+<ul>
+<li>Authentication (authN, &quot;auth en&quot;) proves identity. All requests carry credentials and the authN layer verifies them. Failure returns <strong>HTTP 401</strong> and denies the request.</li>
+<li>The layer is <strong>pluggable</strong>: client certificates, webhooks, and integration with external identity systems such as <strong>Active Directory (AD)</strong> and cloud <strong>IAM</strong>.</li>
+<li>Kubernetes has <strong>no identity database of its own</strong>, to avoid yet another identity silo; it offloads to an external system.</li>
+<li>Most clusters support client certificates out of the box, but real clusters integrate with the cloud or corporate identity system; many hosted services do so automatically.</li>
+</ul>
+<h3 id="checking-your-current-authentication-setup">Checking your current authentication setup</h3>
+<p>Credentials and cluster details live in the <strong>kubeconfig</strong> file <code>config</code>:</p>
+<ul>
+<li>Windows: <code>C:\Users\&lt;user&gt;\.kube\config</code></li>
+<li>Linux and Mac: <code>/home/&lt;user&gt;/.kube/config</code></li>
+</ul>
+<pre class="hl"><code><span class="c1"># ~/.kube/config</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Config</span>
+<span class="nt">clusters</span><span class="p">:</span><span class="w">                          </span><span class="c1"># cluster block: one or more clusters and certs</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">cluster</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod-shield</span><span class="w">              </span><span class="c1"># a cluster called "prod-shield"</span>
+<span class="w">    </span><span class="nt">server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://&lt;url-or-ip-address-of-api-server&gt;:443</span><span class="w">    </span><span class="c1"># the cluster's URL</span>
+<span class="w">    </span><span class="nt">certificate-authority-data</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LS0tLS1C...LS0tCg==</span><span class="w">          </span><span class="c1"># cluster's certificate</span>
+<span class="nt">users</span><span class="p">:</span><span class="w">                             </span><span class="c1"># users block: one or more users and credentials</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">njfury</span><span class="w">                     </span><span class="c1"># user called njfury</span>
+<span class="w">  </span><span class="nt">user</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">as-user-extra</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{}</span>
+<span class="w">    </span><span class="nt">token</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eyJhbGciOiJSUzI1NiIsImtpZCI6IlZwMzl...SZY3uUQ</span><span class="w">     </span><span class="c1"># user's credentials</span>
+<span class="nt">contexts</span><span class="p">:</span><span class="w">                          </span><span class="c1"># a context is a cluster + user</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">context</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield-admin</span><span class="w">             </span><span class="c1"># context called "shield-admin"</span>
+<span class="w">    </span><span class="nt">cluster</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod-shield</span><span class="w">           </span><span class="c1"># cluster</span>
+<span class="w">    </span><span class="nt">user</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">njfury</span><span class="w">                   </span><span class="c1"># user</span>
+<span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="nt">current-context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield-admin</span><span class="w">      </span><span class="c1"># context used by kubectl</span>
+</code></pre>
+<p>Four top-level sections:</p>
+<ul>
+<li><strong>clusters</strong>: friendly name, API server endpoint, the CA's public key.</li>
+<li><strong>users</strong>: a name and a token (often an X.509 certificate signed by the cluster's CA or one it trusts).</li>
+<li><strong>contexts</strong>: user and cluster pairs.</li>
+<li><strong>current-context</strong>: the pair <code>kubectl</code> uses.</li>
+</ul>
+<p>This snippet sends all requests to <code>prod-shield</code> as <code>njfury</code>:</p>
+<pre class="hl"><code><span class="c1"># ~/.kube/config (excerpt)</span>
+<span class="nt">current-context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield-admin</span><span class="w">      </span><span class="c1"># current context</span>
+<span class="nt">contexts</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">context</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield-admin</span>
+<span class="w">    </span><span class="nt">cluster</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod-shield</span><span class="w">           </span><span class="c1"># send commands to this cluster</span>
+<span class="w">    </span><span class="nt">user</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">njfury</span><span class="w">                   </span><span class="c1"># user to authenticate as</span>
+<span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+</code></pre>
+<p>The cluster's authentication module decides whether the user is genuinely <code>njfury</code> (handing off to an external IAM if integrated). On success the request proceeds to authorisation.</p>
+<h2 id="14-3-authorization-rbac">14.3 Authorization (RBAC)</h2>
+<ul>
+<li>AuthZ (&quot;auth zee&quot;) runs right after successful authentication
+<ul>
+<li>It is <strong>pluggable</strong> and a cluster can run <strong>several modules</strong>; the moment any one authorises a request, the rest are skipped and it moves to admission control</li>
+<li>Most clusters use <strong>RBAC</strong>.</li>
+</ul>
+</li>
+<li>Sections: RBAC big picture, users and permissions, cluster-level users and permissions, pre-configured users and permissions.</li>
+</ul>
+<h3 id="rbac-big-picture">RBAC big picture</h3>
+<p><strong>Role-Based Access Control</strong> answers: which <strong>users</strong> can perform which <strong>actions</strong> against which <strong>resources</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>User (subject)</th>
+<th>Action</th>
+<th>Resource</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bao</td>
+<td>create</td>
+<td>Pods</td>
+<td>Can create Pods</td>
+</tr>
+<tr>
+<td>Kalila</td>
+<td>list</td>
+<td>Deployments</td>
+<td>Can list Deployments</td>
+</tr>
+<tr>
+<td>Josh</td>
+<td>delete</td>
+<td>ServiceAccounts</td>
+<td>Can delete ServiceAccounts</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Enabled on most clusters; <strong>least-privilege, deny by default</strong>. You write allow rules to open things up.</li>
+<li>Kubernetes has <strong>no deny rules</strong>, only allow rules, which makes implementation and troubleshooting simpler.</li>
+</ul>
+<h3 id="users-and-permissions">Users and permissions</h3>
+<p>Two key concepts: <strong>Roles</strong> define permissions; <strong>RoleBindings</strong> bind them to users.</p>
+<p>Role <code>read-deployments</code> grants <code>get</code>, <code>watch</code>, <code>list</code> on Deployments in Namespace <code>shield</code>:</p>
+<pre class="hl"><code><span class="c1"># Role</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Role</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">read-deployments</span>
+<span class="nt">rules</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">verbs</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"get"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"watch"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"list"</span><span class="p p-Indicator">]</span><span class="w">     </span><span class="c1"># allowed actions</span>
+<span class="w">  </span><span class="nt">apiGroups</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"apps"</span><span class="p p-Indicator">]</span><span class="w">                 </span><span class="c1"># on resources</span>
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"deployments"</span><span class="p p-Indicator">]</span><span class="w">          </span><span class="c1"># of this type</span>
+</code></pre>
+<p>A Role does nothing until bound. This RoleBinding binds it to user <code>sky</code>:</p>
+<pre class="hl"><code><span class="c1"># RoleBinding</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">RoleBinding</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">read-deployments</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield</span>
+<span class="nt">subjects</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">User</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sky</span><span class="w">                           </span><span class="c1"># name of the authenticated user</span>
+<span class="w">  </span><span class="nt">apiGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io</span>
+<span class="nt">roleRef</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Role</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">read-deployments</span><span class="w">              </span><span class="c1"># bind this Role to the user above</span>
+<span class="w">  </span><span class="nt">apiGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io</span>
+</code></pre>
+<p>Deploying both lets authenticated user <code>sky</code> run <code>kubectl get deployments -n shield</code>. The username in the RoleBinding must be a <strong>string that matches an authenticated user</strong>.</p>
+<h3 id="looking-closer-at-rules">Looking closer at rules</h3>
+<p>A Role's <code>rules</code> have three properties:</p>
+<ul>
+<li><code>verbs</code>: permitted actions</li>
+<li><code>apiGroups</code>: which API group</li>
+<li><code>resources</code>: which objects</li>
+</ul>
+<p>Example (read access to Deployments):</p>
+<pre class="hl"><code><span class="c1"># rules excerpt</span>
+<span class="nt">rules</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">verbs</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"get"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"watch"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"list"</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">apiGroups</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"apps"</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"deployments"</span><span class="p p-Indicator">]</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>apiGroup</th>
+<th>resource</th>
+<th>Kubernetes API path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&quot;&quot;</code></td>
+<td>pods</td>
+<td><code>/api/v1/namespaces/{namespace}/pods</code></td>
+</tr>
+<tr>
+<td><code>&quot;&quot;</code></td>
+<td>secrets</td>
+<td><code>/api/v1/namespaces/{namespace}/secrets</code></td>
+</tr>
+<tr>
+<td><code>&quot;storage.k8s.io&quot;</code></td>
+<td>storageclass</td>
+<td><code>/apis/storage.k8s.io/v1/storageclasses</code></td>
+</tr>
+<tr>
+<td><code>&quot;apps&quot;</code></td>
+<td>deployments</td>
+<td><code>/apis/apps/v1/namespaces/{namespace}/deployments</code></td>
+</tr>
+</tbody>
+</table>
+<p>An empty <code>&quot;&quot;</code> apiGroup means the <strong>core</strong> group; all other groups are strings in quotes.</p>
+<p>Verbs map to HTTP methods (showing the REST nature of the API):</p>
+<table>
+<thead>
+<tr>
+<th>Kubernetes verb(s)</th>
+<th>HTTP method</th>
+<th>Common responses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>create</td>
+<td>POST</td>
+<td>201 created, 403 Access Denied</td>
+</tr>
+<tr>
+<td>get, list, watch</td>
+<td>GET</td>
+<td>200 OK, 403 Access Denied</td>
+</tr>
+<tr>
+<td>update</td>
+<td>PUT</td>
+<td>200 OK, 403 Access Denied</td>
+</tr>
+<tr>
+<td>patch</td>
+<td>PATCH</td>
+<td>200 OK, 403 Access Denied</td>
+</tr>
+<tr>
+<td>delete</td>
+<td>DELETE</td>
+<td>200 OK, 403 Access Denied</td>
+</tr>
+</tbody>
+</table>
+<p>List resources and supported verbs when building rules:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>api-resources<span class="w"> </span>--sort-by<span class="w"> </span>name<span class="w"> </span>-o<span class="w"> </span>wide
+<span class="go">NAME          APIGROUP           KIND         VERBS</span>
+<span class="go">deployments   apps               Deployment   [create delete ... get list patch update watch]</span>
+<span class="go">ingresses     networking.k8s.io  Ingress      [create delete ... get list patch update watch]</span>
+<span class="go">pods                             Pod          [create delete ... get list patch update watch]</span>
+<span class="go">secrets                          Secret       [create delete ... get list patch update watch]</span>
+<span class="go">services                         Service      [create delete get list patch update watch]</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p><code>*</code> stands for all API groups, resources and verbs. This Role grants everything everywhere (demo only; you probably should not write rules like this):</p>
+<pre class="hl"><code><span class="c1"># Role granting everything (demonstration)</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Role</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">read-deployments</span>
+<span class="nt">rules</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">verbs</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"*"</span><span class="p p-Indicator">]</span><span class="w">            </span><span class="c1"># all actions</span>
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"*"</span><span class="p p-Indicator">]</span><span class="w">        </span><span class="c1"># on all resources</span>
+<span class="w">  </span><span class="nt">apiGroups</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"*"</span><span class="p p-Indicator">]</span><span class="w">        </span><span class="c1"># in every API group</span>
+</code></pre>
+<h3 id="cluster-level-users-and-permissions">Cluster-level users and permissions</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-14-rbac-objects.svg" alt="Roles, RoleBindings, ClusterRoles and ClusterRoleBindings" loading="lazy" /></p>
+<p>Four RBAC objects:</p>
+<table>
+<thead>
+<tr>
+<th>Object</th>
+<th>Scope</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Role</td>
+<td>Namespaced</td>
+</tr>
+<tr>
+<td>RoleBinding</td>
+<td>Namespaced</td>
+</tr>
+<tr>
+<td>ClusterRole</td>
+<td>Cluster-wide (all Namespaces)</td>
+</tr>
+<tr>
+<td>ClusterRoleBinding</td>
+<td>Cluster-wide</td>
+</tr>
+</tbody>
+</table>
+<p>They share an API sub-group and nearly identical YAML structure.</p>
+<p><strong>Powerful pattern:</strong> define a role once as a <strong>ClusterRole</strong> and bind it per Namespace with <strong>RoleBindings</strong>, reusing common roles. Figure 14.2: one ClusterRole applied to two Namespaces via two RoleBindings.</p>
+<p><code>read-deployments</code> as a ClusterRole (differences: <code>kind: ClusterRole</code>, no <code>metadata.namespace</code>):</p>
+<pre class="hl"><code><span class="c1"># ClusterRole</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterRole</span><span class="w">                 </span><span class="c1"># cluster-scoped role</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">read-deployments</span>
+<span class="nt">rules</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">verbs</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"get"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"watch"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"list"</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">apiGroups</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"apps"</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"deployments"</span><span class="p p-Indicator">]</span>
+</code></pre>
+<h3 id="real-world-example-docker-desktop-cluster-admin">Real-world example: Docker Desktop cluster-admin</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-14-cluster-admin-mapping.svg" alt="How the kubectl user maps to cluster-admin" loading="lazy" /></p>
+<p>Most clusters ship pre-created roles and bindings. This walkthrough uses the Docker Desktop multi-node cluster from <a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes</a>; other clusters differ in detail but not in principle. Docker Desktop writes a <strong>client certificate</strong> for an admin user into your kubeconfig, signed by the cluster's built-in CA, so the cluster trusts it.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>config<span class="w"> </span>view
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">users:</span>
+<span class="go">- name: docker-desktop                    # Docker Desktop kubeconfig entry for the built-in user</span>
+<span class="go">  user:</span>
+<span class="go">    client-certificate-data: DATA+OMITTED # including client certificate</span>
+<span class="go">    client-key-data: DATA+OMITTED</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p><code>docker-desktop</code> is only a <strong>friendly name</strong>; the username <code>kubectl</code> uses is embedded in the certificate. Decode it (Linux-style systems only, needs <code>jq</code>, context set to Docker Desktop):</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>config<span class="w"> </span>view<span class="w"> </span>--raw<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s2">".users[] | select(.name==\"docker-desktop\")"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">'.user["client-certificate-data"]'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span><span class="p">|</span><span class="w"> </span>openssl<span class="w"> </span>x509<span class="w"> </span>-text<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s2">"Subject:"</span>
+</code></pre>
+<pre class="hl"><code>Subject: O=kubeadm:cluster-admins, CN=kubernetes-admin
+</code></pre>
+<p>Commands authenticate as user <strong><code>kubernetes-admin</code></strong>, member of group <strong><code>kubeadm:cluster-admins</code></strong>. (<strong>Certificates encode the username in <code>CN</code> and groups in <code>O</code>.</strong>) The CA signature makes it pass authN.</p>
+<p>Many clusters grant admin through the <strong><code>cluster-admin</code> ClusterRole</strong>, so the user or group must be bound to it (Figure 14.3).</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>clusterrole<span class="w"> </span>cluster-admin
+<span class="go">Name:         cluster-admin</span>
+<span class="go">Labels:       kubernetes.io/bootstrapping=rbac-defaults</span>
+<span class="go">Annotations:  rbac.authorization.kubernetes.io/autoupdate: true</span>
+<span class="go">PolicyRule:</span>
+<span class="go">  Resources  Non-Resource URLs  Resource Names  Verbs</span>
+<span class="go">  ---------  -----------------  --------------  -----</span>
+<span class="go">  *.*        []                 []              [*]</span>
+<span class="go">             [*]                []              [*]</span>
+</code></pre>
+<p>All verbs on all resources in all Namespaces: the equivalent of <strong>root</strong>, &quot;powerful and dangerous&quot;. Which ClusterRoleBindings reference it?</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>clusterrolebindings<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>cluster-admin
+<span class="go">NAME                      ROLE</span>
+<span class="go">cluster-admin             ClusterRole/cluster-admin</span>
+<span class="go">kubeadm:cluster-admins    ClusterRole/cluster-admin</span>
+</code></pre>
+<p>Inspect the <code>kubeadm:cluster-admins</code> binding:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>clusterrolebindings<span class="w"> </span>kubeadm:cluster-admins
+<span class="go">Name:         kubeadm:cluster-admins</span>
+<span class="go">Labels:       &lt;none&gt;</span>
+<span class="go">Annotations:  &lt;none&gt;</span>
+<span class="go">Subjects:                              # bind subjects (users) that are</span>
+<span class="go">  Kind   Name                          # members of the "kubeadm:cluster-admins" group</span>
+<span class="go">  ----   ----</span>
+<span class="go">  Group  kubeadm:cluster-admins</span>
+<span class="go">Role:                                  # to the ClusterRole</span>
+<span class="go">  Kind:  ClusterRole                   # called "cluster-admin"</span>
+<span class="go">  Name:  cluster-admin</span>
+</code></pre>
+<p>Summary (Figure 14.4): the certificate identifies <code>kubernetes-admin</code>, in group <code>kubeadm:cluster-admins</code>, signed by the CA (passes authN); the ClusterRoleBinding <code>kubeadm:cluster-admins</code> binds that group to ClusterRole <code>cluster-admin</code>, which grants admin rights on all objects in all Namespaces.</p>
+<h3 id="summarising-authorization">Summarising authorization</h3>
+<p>AuthZ ensures authenticated users may perform actions. RBAC implements least privilege on a deny-by-default model. Roles and ClusterRoles grant permissions; RoleBindings and ClusterRoleBindings bind them to users.</p>
+<h2 id="14-4-admission-control">14.4 Admission control</h2>
+<p>Runs right after authN and authZ; it is about <strong>policy</strong>. Two types:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Mutating</strong></td>
+<td>Checks compliance <strong>and can modify</strong> requests</td>
+</tr>
+<tr>
+<td><strong>Validating</strong></td>
+<td>Checks compliance but <strong>cannot modify</strong> requests (only reject)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Mutating controllers <strong>always run first</strong>.</li>
+<li>Both apply only to requests that <strong>modify</strong> the cluster; <strong>reads are not subject</strong> to admission control.</li>
+<li>Example:
+<ul>
+<li>a production policy requires <code>env=prod</code> on all new and updated objects. A mutating controller can <strong>add</strong> the label if missing</li>
+<li>a validating controller can only <strong>reject</strong> if it is missing.</li>
+</ul>
+</li>
+</ul>
+<p>On Docker Desktop the API server uses the <code>NodeRestriction</code> admission controller:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>kube-apiserver-desktop-control-plane<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--namespace<span class="w"> </span>kube-system<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>admission
+<span class="go">--enable-admission-plugins=NodeRestriction</span>
+</code></pre>
+<ul>
+<li>Real clusters run many more. Example: the <strong><code>AlwaysPullImages</code></strong> mutating controller sets <code>imagePullPolicy</code> to <code>Always</code> on all new Pods, forcing every node's runtime to pull from the registry (no locally cached images)
+<ul>
+<li>this needs every node to have valid pull credentials.</li>
+</ul>
+</li>
+<li>If <strong>any</strong> admission controller rejects a request it is denied immediately without consulting the others; <strong>all must approve</strong> before a request runs.</li>
+<li>Admission controllers are very important in real production clusters.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Every API request carries credentials and must pass authN, authZ, then admission control, over a TLS connection.</li>
+<li>Authentication: most clusters support client certificates; production should use enterprise <strong>IAM</strong>.</li>
+<li>Authorization: pluggable, most commonly <strong>RBAC</strong> with four objects.</li>
+<li>Admission: <strong>validating</strong> controllers reject non-compliant requests; <strong>mutating</strong> controllers modify them to comply.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>authN / authZ</strong>: authentication (who are you) / authorisation (what may you do).</li>
+<li><strong>401 / 403</strong>: authentication failure / access denied.</li>
+<li><strong>RBAC</strong>: Role, RoleBinding, ClusterRole, ClusterRoleBinding; deny by default, allow rules only.</li>
+<li><strong>verbs, apiGroups, resources</strong>: the parts of a rule.</li>
+<li><strong>cluster-admin</strong>: root-equivalent ClusterRole.</li>
+<li><strong>CN / O in client certs</strong>: username / groups.</li>
+<li><strong>Mutating vs validating admission controllers</strong>; <code>NodeRestriction</code>, <code>AlwaysPullImages</code>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 14. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap15.xhtml</li>
+<li>No other URLs given in the chapter.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-13-statefulsets/">The Kubernetes Book 13: StatefulSets</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-15-the-kubernetes-api/">The Kubernetes Book 15: The Kubernetes API</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-13-statefulsets/">&larr; The Kubernetes Book 13: StatefulSets</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-15-the-kubernetes-api/">The Kubernetes Book 15: The Kubernetes API &rarr;</a></nav></main></body></html>

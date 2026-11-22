@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 25-26: Redundancy and fault isolation</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-25-26-redundancy-and-fault-isolation">Understanding Distributed Systems 25-26: Redundancy and fault isolation</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), ch. 25 and 26. Previous: <a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">Understanding Distributed Systems 24: Part IV intro and common failure causes</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Redundancy</strong> (replicating functionality or state) is the first line of defence, but only helps if redundant parts <strong>do not fail for the same reason at the same time</strong> (uncorrelated failures).</li>
+<li>Spread across <strong>Availability Zones</strong> for data-centre outages; across <strong>regions</strong> only with a very good reason (rare, async replication, often legal compliance).</li>
+<li>Redundancy cannot stop <strong>correlated, logic-level</strong> failures (poison pills, noisy neighbours). Use <strong>partitioning for fault isolation</strong>: <strong>bulkheads</strong>, <strong>shuffle sharding</strong>, <strong>cells</strong>.</li>
+</ul>
+</div></div>
+<h2 id="ch-25-redundancy">Ch. 25 Redundancy</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-25-availability-zones.svg" alt="Replicas spread across Availability Zones" loading="lazy" />
+It is why distributed apps can beat single-node availability, and the same replication that lets you scale out. Marc Brooker's <strong>four prerequisites</strong> for redundancy to actually help (https://brooker.co.za/blog/2019/06/20/redundancy.html):</p>
+<ol>
+<li>The complexity it adds must not cost <strong>more availability than it adds</strong>.</li>
+<li>The system must <strong>reliably detect</strong> healthy vs unhealthy components.</li>
+<li>It must be able to <strong>run in degraded mode</strong>.</li>
+<li>It must be able to <strong>return to fully redundant mode</strong>.</li>
+</ol>
+<p><strong>Worked example, stateless service behind a load balancer:</strong></p>
+<ul>
+<li>The balancer masks node faults using a pool; it adds complexity (it can fail too) but the benefits &quot;almost always outweigh&quot; the risk.</li>
+<li>It detects bad nodes via <strong>health checks</strong> (chapter 18)
+<ul>
+<li>They are critical: with 10 servers and 1 unresponsive, <strong>10% of requests fail</strong> until it is removed, so slow detection means visible failures.</li>
+</ul>
+</li>
+<li>Removing servers assumes the rest have capacity (<strong>degraded mode</strong>), and <strong>replacements must be added</strong> or capacity eventually runs out.</li>
+<li><strong>Stateful</strong> services are far harder: masking failures means replicating state (previous chapters).</li>
+</ul>
+<h3 id="25-1-correlation">25.1 Correlation</h3>
+<p>Redundancy helps only when failures are <strong>not correlated</strong>. A bad memory module crashes one server, not its peers. But servers in one data centre all die together on a fibre cut or electrical storm, so no number of servers helps: <strong>use more than one data centre</strong>.</p>
+<ul>
+<li><strong>Availability Zones (AZs):</strong>
+<ul>
+<li>each cloud <strong>region</strong> has several data centres cross-connected by fast links</li>
+<li>Far enough apart to limit correlated failures (power cuts), close enough for <strong>low latency</strong> (bounded by the speed of light), low enough to allow <strong>synchronous replication</strong> without a big penalty.</li>
+</ul>
+</li>
+<li><strong>Stateless:</strong> instances in several AZs behind a shared load balancer; an AZ loss does not hurt availability.</li>
+<li><strong>Stateful:</strong> use a replication protocol across AZs; latency is low enough for <strong>partially synchronous (Raft)</strong> or even <strong>fully synchronous (chain replication)</strong>.</li>
+<li><strong>Multi-region:</strong>
+<ul>
+<li>for a whole-region disaster, duplicate the stack in several regions and spread traffic with <strong>global DNS load balancing</strong></li>
+<li>State must be replicated <strong>asynchronously</strong> because inter-region latency is high (Netflix: https://netflixtechblog.com/active-active-for-multi-regional-resiliency-c47719f6685b).</li>
+</ul>
+</li>
+<li>Region destruction is <strong>extremely unlikely</strong>:
+<ul>
+<li>have very good reasons first</li>
+<li>A likelier driver is <strong>legal compliance</strong> (EU customers' data processed and stored in Europe: https://www.europarl.europa.eu/RegData/etudes/ATAG/2020/652073/EPRS_ATA(2020)652073_EN.pdf).</li>
+</ul>
+</li>
+</ul>
+<h2 id="ch-26-fault-isolation">Ch. 26 Fault isolation</h2>
+<p>Some failures are too correlated for redundancy.</p>
+<ul>
+<li><strong>Poison pill:</strong> a user's malformed requests crash servers because of a code bug; the bug exists in every DC and region, so redundancy does not help.</li>
+<li><strong>Noisy neighbour:</strong> a user's requests need far more resources and degrade everyone.</li>
+<li>Problem: the <strong>blast radius</strong> is the entire application. Fix: <strong>partition the stack by user</strong> (chapter 16 viewed from a resilience angle) so a user can only affect their partition.</li>
+<li>Example: 6 stateless instances in <strong>3 partitions</strong>: a bad user hits at most <strong>33%</strong> of users; more partitions shrink it further.</li>
+<li>This is the <strong>bulkhead pattern</strong>, named after a ship's hull compartments: a leak stays in its compartment.</li>
+</ul>
+<h3 id="26-1-shuffle-sharding">26.1 Shuffle sharding</h3>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-26-shuffle-sharding.svg" alt="Shuffle sharding gives each user a different instance subset" loading="lazy" />
+Weakness of plain partitioning: users on a degraded partition suffer. For <strong>stateless</strong> services, <strong>shuffle sharding</strong> (https://aws.amazon.com/blogs/architecture/shuffle-sharding-massive-and-magical-fault-isolation/) assigns each user a <strong>virtual partition</strong>: a <strong>random but permanent subset</strong> of instances.</p>
+<ul>
+<li>6 instances in virtual partitions of 2: C(6,2) = 6!/(2!4!) = <strong>15 partitions</strong> instead of 3, so two users are much less likely to share one.</li>
+<li>Virtual partitions <strong>partly overlap</strong>, but combined with a load balancer that <strong>removes faulty instances</strong> and <strong>clients that retry</strong>, isolation is much better than with physical partitions alone.</li>
+</ul>
+<h3 id="26-2-cellular-architecture">26.2 Cellular architecture</h3>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-26-cells.svg" alt="Independent cells behind a gateway" loading="lazy" />
+Partition the <strong>entire stack including dependencies</strong> (load balancers, compute, storage) by user into <strong>cells</strong>; each cell is independent and a <strong>gateway</strong> routes requests to cells. (Partitioning by user is only one choice; location or workload also works. New Relic talk: https://www.youtube.com/watch?v=eMikCXiBlOA.)</p>
+<ul>
+<li>Azure Storage (chapter 17) is cellular: a cell is a <strong>storage cluster (stamp)</strong> and accounts are partitioned across clusters.</li>
+<li><strong>Unexpected benefit:</strong>
+<ul>
+<li>cap each cell's <strong>maximum size</strong></li>
+<li>to grow, <strong>add a cell</strong> rather than enlarge one. You can then <strong>test and benchmark at the maximum size</strong> and be sure of no future brick wall.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+redundancy · four prerequisites · degraded mode · correlated failure · Availability Zone · region · global DNS load balancing · poison pill · noisy neighbour · blast radius · bulkhead · shuffle sharding · cell / cellular architecture.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 25-26. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">Understanding Distributed Systems 24: Part IV intro and common failure causes</a> · <a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency</a> · <a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a> · <a href="/book-digest/understanding-distributed-systems/uds-17-file-storage/">Understanding Distributed Systems 17: File storage</a> · <a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">Understanding Distributed Systems 18: Network load balancing</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">&larr; Understanding Distributed Systems 24: Part IV intro and common failure causes</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-27-downstream-resiliency/">Understanding Distributed Systems 27: Downstream resiliency &rarr;</a></nav></main></body></html>

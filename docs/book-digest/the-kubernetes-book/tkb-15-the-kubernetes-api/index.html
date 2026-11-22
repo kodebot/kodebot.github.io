@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 15: The Kubernetes API</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-15-the-kubernetes-api">The Kubernetes Book 15: The Kubernetes API</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 15. Previous: <a href="/book-digest/the-kubernetes-book/tkb-14-api-security-and-rbac/">The Kubernetes Book 14: API Security and RBAC</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-16-threat-modeling-kubernetes/">The Kubernetes Book 16: Threat Modeling Kubernetes</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Kubernetes is <strong>API-centric</strong>: all resources are defined in the API and every request, from <code>kubectl</code>, kubelets or control plane services, goes through the <strong>API server</strong>, a RESTful HTTPS interface.</li>
+<li>Objects are <strong>serialised</strong> (JSON to external clients, <strong>Protobuf</strong> between internal components) for transit and for the cluster store.</li>
+<li>The API is split into the <strong>core group</strong> (<code>/api/v1</code>, no group name) and <strong>named groups</strong> (<code>/apis/&lt;group&gt;/&lt;version&gt;/</code>); REST paths follow <strong>GVR</strong> (group, version, resource).</li>
+<li>New resources go <strong>alpha, beta, GA</strong>; beta gets a 9-month window; GA deprecations are served for 12 months or three releases (whichever is longest).</li>
+<li><strong>CustomResourceDefinitions (CRDs)</strong> extend the API with resources that behave like native ones; a custom <strong>controller</strong> is what makes them do anything.</li>
+</ul>
+</div></div>
+<p>The chapter uses lots of jargon on purpose and recommends doing the hands-on parts. Terminology: Pods, Services and others are <strong>resources</strong> in the API and <strong>objects</strong> when deployed; the book uses the terms interchangeably.</p>
+<h2 id="15-1-kubernetes-api-big-picture">15.1 Kubernetes API big picture</h2>
+<ul>
+<li>All resources are defined in the API
+<ul>
+<li>all configuration and querying go through the API server. Admins and clients create, read, update and delete objects, usually with <code>kubectl</code>, but also from code or API testing tools.</li>
+</ul>
+</li>
+<li>Whatever the source, requests go to the API server, are authenticated and authorised, and a create request persists the object definition in the cluster store in <strong>serialised</strong> form and schedules it
+<ul>
+<li>(Figure 15.1.)</li>
+</ul>
+</li>
+</ul>
+<h3 id="json-serialisation">JSON serialisation</h3>
+<ul>
+<li><strong>Serialisation</strong> converts an object into a string or byte stream for sending over a network or persisting; <strong>deserialisation</strong> reverses it.</li>
+<li>Kubernetes serialises Pods, Services and so on as <strong>JSON</strong> and sends them over HTTP, in both directions:
+<ul>
+<li>clients like <code>kubectl</code> serialise objects when posting</li>
+<li>the API server serialises responses</li>
+<li>objects are also serialised for storage in the cluster store</li>
+</ul>
+</li>
+<li>Two schemas:
+<ul>
+<li><strong>JSON</strong> and <strong>Protobuf</strong></li>
+<li>Protobuf is faster, more efficient and scales better but is harder to inspect and troubleshoot</li>
+<li>At the time of writing: <strong>JSON with external clients, Protobuf between internal components</strong>.</li>
+</ul>
+</li>
+<li>Clients state supported schemas in the <code>Content-Type</code> header (for example <code>Content-Type: application/json</code>), and Kubernetes replies in kind.</li>
+</ul>
+<h3 id="api-analogy-amazon">API analogy (Amazon)</h3>
+<table>
+<thead>
+<tr>
+<th>Amazon</th>
+<th>Kubernetes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stuff</td>
+<td>Resources and objects</td>
+</tr>
+<tr>
+<td>Warehouse</td>
+<td>API</td>
+</tr>
+<tr>
+<td>Browser</td>
+<td><code>kubectl</code></td>
+</tr>
+<tr>
+<td>Amazon website</td>
+<td>API server</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>You can only buy what is listed on the site; you can only deploy objects that exist in the API.</li>
+<li>Resources have configurable properties (a Pod: metadata, restart policy, service account name, runtime class, containers, volumes; a USB cable: type, length, colour).</li>
+<li>Deploying a Pod means sending YAML to the API server
+<ul>
+<li>if valid and you are authorised it deploys, then you query status and finally send a delete request. Like ordering, tracking and returning an item.</li>
+</ul>
+</li>
+<li>Third parties define their own resources and you use the same <code>kubectl</code> and API server, as third-party sellers use the same website.</li>
+</ul>
+<h2 id="15-2-the-api-server">15.2 The API server</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-15-api-server-hub.svg" alt="Everything talks to the API server" loading="lazy" /></p>
+<ul>
+<li>Exposes the API over a <strong>RESTful HTTPS</strong> interface, commonly on port <strong>443 or 6443</strong> (configurable).</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>cluster-info
+<span class="go">Kubernetes control plane is running at https://kubernetes.docker.internal:6443</span>
+</code></pre>
+<ul>
+<li>Like <strong>Grand Central station</strong>: everything talks via REST calls to it:
+<ul>
+<li>all <code>kubectl</code> commands</li>
+<li>kubelets watching for tasks and reporting status</li>
+<li>control plane services sharing data and status</li>
+</ul>
+</li>
+<li>It is a control plane service, which some clusters run as <strong>Pods in <code>kube-system</code></strong>. If you build your own cluster, make the control plane highly available and fast
+<ul>
+<li>with hosted Kubernetes the provider manages and hides it.</li>
+</ul>
+</li>
+<li>Its main job is exposing the API inside and outside the cluster; it uses <strong>TLS</strong> and the same authN and authZ for internal and external requests.</li>
+<li><strong>RESTful</strong> means a modern web API accepting CRUD-style requests via standard HTTP methods (POST, GET, PUT, PATCH, DELETE).</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>K8s CRUD verb</th>
+<th>HTTP method</th>
+<th><code>kubectl</code> example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>create</td>
+<td>POST</td>
+<td><code>kubectl create -f &lt;filename&gt;</code></td>
+</tr>
+<tr>
+<td>get, list, watch</td>
+<td>GET</td>
+<td><code>kubectl get pods</code></td>
+</tr>
+<tr>
+<td>update</td>
+<td>PUT / PATCH</td>
+<td><code>kubectl edit deployment &lt;name&gt;</code></td>
+</tr>
+<tr>
+<td>delete</td>
+<td>DELETE</td>
+<td><code>kubectl delete ingress &lt;name&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<p>Names do not always match: <code>kubectl edit</code> uses the <code>update</code> verb and the HTTP <strong>PATCH</strong> method.</p>
+<h3 id="a-word-on-rest-and-restful">A word on REST and RESTful</h3>
+<ul>
+<li><strong>REST</strong> = REpresentational State Transfer, the industry standard for web APIs; systems using it, like Kubernetes, are called <strong>RESTful</strong>.</li>
+<li>A REST request is a <strong>verb</strong> (maps to an HTTP method) and a <strong>path</strong> (URI to a resource). &quot;Verb&quot; is used loosely for CRUD operations and HTTP methods: an action.</li>
+<li><code>kubectl</code> converts a command to a REST request:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>--namespace<span class="w"> </span>shield
+</code></pre>
+<pre class="hl"><code>GET /api/v1/namespaces/shield/pods
+</code></pre>
+<h2 id="15-3-hands-on-talking-to-the-api-server">15.3 Hands-on: talking to the API server</h2>
+<p>Clone the repo, branch <code>2025</code>:</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+</code></pre>
+<p><code>kubectl proxy</code> exposes the API on localhost and handles authentication (any port):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>proxy<span class="w"> </span>--port<span class="w"> </span><span class="m">9000</span><span class="w"> </span><span class="p">&amp;</span>
+<span class="go">[1] 27533</span>
+<span class="go">Starting to serve on 127.0.0.1:9000</span>
+</code></pre>
+<p>List Pods in <code>shield</code> (HTTP GET to the Pods path); empty because none exist:</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span>http://localhost:9000/api/v1/namespaces/shield/pods
+<span class="go">{</span>
+<span class="go">  "kind": "PodList",</span>
+<span class="go">  "apiVersion": "v1",</span>
+<span class="go">  "metadata": {</span>
+<span class="go">    "resourceVersion": "9524"</span>
+<span class="go">  },</span>
+<span class="go">  "items": []</span>
+<span class="go">}</span>
+</code></pre>
+<p>List all Namespaces:</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span>http://localhost:9000/api/v1/namespaces
+<span class="go">{</span>
+<span class="go">  "kind": "NamespaceList",</span>
+<span class="go">  "apiVersion": "v1",</span>
+<span class="go">  "metadata": {</span>
+<span class="go">    "resourceVersion": "9541"</span>
+<span class="go">  },</span>
+<span class="go">  "items": [</span>
+<span class="go">    {</span>
+<span class="go">      "metadata": {</span>
+<span class="go">        "name": "kube-system",</span>
+<span class="go">        "uid": "f5d39dd2-ccfe-4523-b634-f48ba3135663",</span>
+<span class="go">        "resourceVersion": "10",</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p><code>kubectl get pods --namespace shield</code> sends <code>application/json</code>; if authenticated and authorised the reply is <strong>HTTP 200 (OK)</strong> with serialised JSON. Add <code>-v</code> to see headers (<code>&gt;</code> lines sent by curl, <code>&lt;</code> lines returned by the API server):</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>-v<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span>http://localhost:9000/api/v1/namespaces/shield/pods
+
+<span class="go">&gt; GET /api/v1/namespaces/shield/pods HTTP/1.1     # HTTP GET to the REST path of Pods</span>
+<span class="go">&gt; Accept: */*                                     # accept all serialisation schemas</span>
+<span class="go">&gt;</span>
+<span class="go">&lt; HTTP/1.1 200 OK                                 # accepted request, starting response</span>
+<span class="go">&lt; Content-Type: application/json                  # responding using JSON serialisation</span>
+<span class="go">&lt; X-Kubernetes-Pf-Flowschema-Uid: d50...</span>
+<span class="go">&lt; X-Kubernetes-Pf-Prioritylevel-Uid: 828...</span>
+<span class="go">&lt;</span>
+<span class="go">{                                                 # start of response (serialised object)</span>
+<span class="go">  "kind": "PodList",</span>
+<span class="go">  "apiVersion": "v1",</span>
+<span class="go">  "metadata": {</span>
+<span class="go">    "resourceVersion": "34217"</span>
+<span class="go">  },</span>
+<span class="go">  "items": []</span>
+<span class="go">}</span>
+</code></pre>
+<p>The <code>X-Kubernetes-Pf-*</code> lines are Kubernetes <strong>priority and fairness</strong> settings.</p>
+<h3 id="a-word-on-crud">A word on CRUD</h3>
+<p><strong>CRUD</strong> = Create, Read, Update, Delete, implemented through HTTP methods. Creating via <code>kubectl apply -f ns.json</code> uses <strong>POST</strong> (hence &quot;POSTing a configuration&quot;). <code>ns.json</code> (folder <code>api</code>) defines Namespace <code>shield</code>:</p>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Namespace"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"apiVersion"</span><span class="p">:</span><span class="w"> </span><span class="s2">"v1"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"metadata"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"shield"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"labels"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"chapter"</span><span class="p">:</span><span class="w"> </span><span class="s2">"api"</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>A simplified request header (body is the JSON file):</p>
+<pre class="hl"><code>POST https://&lt;api-server&gt;/api/v1/namespaces
+Content-Type: application/json
+Accept: application/json
+</code></pre>
+<p>A successful response (the book prints a 200 here):</p>
+<pre class="hl"><code>HTTP/1.1 200 (OK)
+Content-Type: application/json
+{
+  &lt;payload&gt;
+}
+</code></pre>
+<p>POST the file with curl (needs the proxy running; run from <code>api</code>; delete an existing <code>shield</code> Namespace first; Windows: backtick for the backslash and a backtick before <code>@</code>):</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data-binary<span class="w"> </span>@ns.json<span class="w"> </span>http://localhost:9000/api/v1/namespaces
+
+<span class="go">{</span>
+<span class="go">  "kind": "Namespace",</span>
+<span class="go">  "apiVersion": "v1",</span>
+<span class="go">  "metadata": {</span>
+<span class="go">    "name": "shield",</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<ul>
+<li><code>-X POST</code> forces the method; <code>-H &quot;Content-Type...&quot;</code> says the body is JSON; <code>--data-binary @ns.json</code> names the file; the URI is the proxy address plus the resource's REST path.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>ns
+<span class="go">NAME              STATUS   AGE</span>
+<span class="go">kube-system       Active   47h</span>
+<span class="go">kube-public       Active   47h</span>
+<span class="go">kube-node-lease   Active   47h</span>
+<span class="go">default           Active   47h</span>
+<span class="go">shield            Active   14s</span>
+</code></pre>
+<p>Delete it with the DELETE method:</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>http://localhost:9000/api/v1/namespaces/shield
+<span class="go">{</span>
+<span class="go">  "kind": "Namespace",</span>
+<span class="go">  "apiVersion": "v1",</span>
+<span class="go">  "metadata": {</span>
+<span class="go">    "name": "shield",</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">  },</span>
+<span class="go">  "spec": {</span>
+<span class="go">    "finalizers": [</span>
+<span class="go">      "kubernetes"</span>
+<span class="go">    ]</span>
+<span class="go">  },</span>
+<span class="go">  "status": {</span>
+<span class="go">    "phase": "Terminating"</span>
+<span class="go">  }</span>
+<span class="go">}</span>
+</code></pre>
+<p><strong>Summary:</strong> the API server exposes the API over a secure RESTful interface to manipulate and query cluster state; it runs on the control plane, which must be highly available and fast.</p>
+<h2 id="15-4-the-api">15.4 The API</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-15-api-groups.svg" alt="The core group and the named groups with example paths" loading="lazy" /></p>
+<ul>
+<li>The API is where all resources are defined: <strong>large, modular and RESTful</strong>.</li>
+<li>Early on it was <strong>monolithic</strong> with all resources in one global namespace
+<ul>
+<li>as Kubernetes grew it was split into <strong>named groups</strong> (sub-groups). (Figure 15.3: simplified view with four of many groups.)</li>
+</ul>
+</li>
+<li>Two kinds: the <strong>core group</strong> and the <strong>named groups</strong>.</li>
+</ul>
+<h3 id="the-core-api-group">The core API group</h3>
+<ul>
+<li>Holds the <strong>original objects</strong>: Pods, Nodes, Services, Secrets, ServiceAccounts, found under <code>/api/v1</code>.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>REST path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pods</td>
+<td><code>/api/v1/namespaces/{namespace}/pods/</code></td>
+</tr>
+<tr>
+<td>Services</td>
+<td><code>/api/v1/namespaces/{namespace}/services/</code></td>
+</tr>
+<tr>
+<td>Nodes</td>
+<td><code>/api/v1/nodes/</code></td>
+</tr>
+<tr>
+<td>Namespaces</td>
+<td><code>/api/v1/namespaces/</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Namespaced objects have longer paths</strong>
+<ul>
+<li>(two extra segments <code>../namespaces/{namespace}/...</code>): <code>GET /api/v1/namespaces/shield/pods/</code></li>
+<li>Non-namespaced objects such as nodes are short: <code>GET /api/v1/nodes/</code>.</li>
+</ul>
+</li>
+<li>Read requests return <strong>200 OK</strong> or <strong>401 Unauthorized</strong> (as the book states).</li>
+<li><strong>GVR</strong> (group, version, resource) helps remember path structure (Figure 15.4: path to v1 StorageClasses in the <code>storage.k8s.io</code> group).</li>
+<li>Expect <strong>no new resources</strong> in the core group.</li>
+</ul>
+<h3 id="named-api-groups">Named API groups</h3>
+<ul>
+<li>All <strong>new</strong> resources go here
+<ul>
+<li>each group is a collection of related resources: <code>apps</code> has Deployments, StatefulSets, DaemonSets</li>
+<li><code>networking.k8s.io</code> has Ingresses, IngressClasses, NetworkPolicies.</li>
+</ul>
+</li>
+<li>Exceptions are older resources predating groups: <strong>Pods and Services are in the core group</strong>. Invented today, Services would probably be in <code>networking.k8s.io</code> and Pods in <code>apps</code>.</li>
+<li>Paths start <code>/apis/{group-name}/{version}/</code>:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ingress</td>
+<td><code>/apis/networking.k8s.io/v1/namespaces/{namespace}/ingresses/</code></td>
+</tr>
+<tr>
+<td>ClusterRole</td>
+<td><code>/apis/rbac.authorization.k8s.io/v1/clusterroles/</code></td>
+</tr>
+<tr>
+<td>StorageClass</td>
+<td><code>/apis/storage.k8s.io/v1/storageclasses/</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Named-group paths start <code>/apis</code> (<strong>plural</strong>) with a group name
+<ul>
+<li>the core group starts <code>/api</code> (<strong>singular</strong>) with none. The core group is sometimes written <code>&quot;&quot;</code> because originally &quot;everything was just in the API&quot;.</li>
+</ul>
+</li>
+<li>Splitting makes the API more scalable and easier to navigate and extend.</li>
+</ul>
+<h3 id="inspecting-the-api">Inspecting the API</h3>
+<p><code>kubectl api-resources</code> lists resources, groups, shortnames and whether they are namespaced (mixed sample):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>api-resources
+<span class="go">NAME                       SHORT    APIVERSION            NAMESPACED   KIND</span>
+<span class="go">namespaces                 ns       v1                    false        Namespace</span>
+<span class="go">nodes                      no       v1                    false        Node</span>
+<span class="go">pods                       po       v1                    true         Pod</span>
+<span class="go">deployments                deploy   apps/v1               true         Deployment</span>
+<span class="go">replicasets                rs       apps/v1               true         ReplicaSet</span>
+<span class="go">statefulsets               sts      apps/v1               true         StatefulSet</span>
+<span class="go">cronjobs                   cj       batch/v1              true         CronJob</span>
+<span class="go">jobs                                batch/v1              true         Job</span>
+<span class="go">horizontalpodautoscalers   hpa      autoscaling/v2        true         HorizontalPodAutoscaler</span>
+<span class="go">ingresses                  ing      networking.k8s.io/v1  true         Ingress</span>
+<span class="go">networkpolicies            netpol   networking.k8s.io/v1  true         NetworkPolicy</span>
+<span class="go">storageclasses             sc       storage.k8s.io/v1     false        StorageClass</span>
+</code></pre>
+<p><code>kubectl api-versions</code> shows supported versions (good for checking whether alpha APIs are enabled; some groups serve several versions):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>api-versions
+<span class="go">admissionregistration.k8s.io/v1</span>
+<span class="go">apiextensions.k8s.io/v1</span>
+<span class="go">apps/v1</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">autoscaling/v1</span>
+<span class="go">autoscaling/v2</span>
+<span class="go">v1</span>
+</code></pre>
+<p>Kind and version per resource (not on Windows):</p>
+<pre class="hl"><code><span class="gp">$ </span><span class="k">for</span><span class="w"> </span>kind<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="sb">`</span>kubectl<span class="w"> </span>api-resources<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>+2<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'{ print $1 }'</span><span class="sb">`</span><span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="k">do</span><span class="w"> </span>kubectl<span class="w"> </span>explain<span class="w"> </span><span class="nv">$kind</span><span class="p">;</span><span class="w"> </span><span class="k">done</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-e<span class="w"> </span><span class="s2">"KIND:"</span><span class="w"> </span>-e<span class="w"> </span><span class="s2">"VERSION:"</span>
+<span class="go">KIND:     Binding</span>
+<span class="go">VERSION:  v1</span>
+<span class="go">KIND:     ComponentStatus</span>
+<span class="go">VERSION:  v1</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">KIND:     HorizontalPodAutoscaler</span>
+<span class="go">VERSION:  autoscaling/v2</span>
+<span class="go">KIND:     CronJob</span>
+<span class="go">VERSION:  batch/v1</span>
+<span class="go">KIND:     Job</span>
+<span class="go">VERSION:  batch/v1</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>With the proxy still running, versions under the core group (only <code>v1</code>):</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>http://localhost:9000/api
+<span class="go">{</span>
+<span class="go">  "kind": "APIVersions",</span>
+<span class="go">  "versions": [</span>
+<span class="go">    "v1"</span>
+<span class="go">  ],</span>
+<span class="go">  "serverAddressByClientCIDRs": [</span>
+<span class="go">    {</span>
+<span class="go">      "clientCIDR": "0.0.0.0/0",</span>
+<span class="go">      "serverAddress": "172.21.0.4:6443"</span>
+<span class="go">    }</span>
+<span class="go">  ]</span>
+<span class="go">}</span>
+</code></pre>
+<p>All named groups (trimmed):</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>http://localhost:9000/apis
+<span class="go">{</span>
+<span class="go">  "kind": "APIGroupList",</span>
+<span class="go">  "apiVersion": "v1",</span>
+<span class="go">  "groups": [</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">    {</span>
+<span class="go">      "name": "apps",</span>
+<span class="go">      "versions": [</span>
+<span class="go">        {</span>
+<span class="go">          "groupVersion": "apps/v1",</span>
+<span class="go">          "version": "v1"</span>
+<span class="go">        }</span>
+<span class="go">      ],</span>
+<span class="go">      "preferredVersion": {</span>
+<span class="go">        "groupVersion": "apps/v1",</span>
+<span class="go">        "version": "v1"</span>
+<span class="go">      }</span>
+<span class="go">    },</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>List Namespace objects:</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>http://localhost:9000/api/v1/namespaces
+<span class="go">{</span>
+<span class="go">  "kind": "NamespaceList",</span>
+<span class="go">  "apiVersion": "v1",</span>
+<span class="go">  "metadata": {</span>
+<span class="go">    "resourceVersion": "35234"</span>
+<span class="go">  },</span>
+<span class="go">  "items": [</span>
+<span class="go">    {</span>
+<span class="go">      "metadata": {</span>
+<span class="go">        "name": "kube-system",</span>
+<span class="go">        "uid": "05fefa13-cbec-458b-aece-d65eb1972dfb",</span>
+<span class="go">        "resourceVersion": "4",</span>
+<span class="go">        "creationTimestamp": "2025-02-12T09:59:42Z",</span>
+<span class="go">        "labels": {</span>
+<span class="go">          "kubernetes.io/metadata.name": "kube-system"</span>
+<span class="go">        },</span>
+<span class="go">        "managedFields": [</span>
+<span class="go">          {</span>
+<span class="go">            "manager": "Go-http-client",</span>
+<span class="go">            "operation": "Update",</span>
+<span class="go">            "apiVersion": "v1",</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>The same URI paths work in a browser or API tools like <strong>Postman</strong>. Leave the proxy running.</p>
+<h3 id="alpha-beta-and-stable">Alpha, beta and stable</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-15-api-maturity.svg" alt="Alpha, beta and GA stages" loading="lazy" /></p>
+<p>New resources enter as alpha, progress through beta and graduate to <strong>GA</strong> (also called stable).</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Meaning</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Alpha</td>
+<td>Experimental (&quot;hairy and scary&quot;)</td>
+<td>Bugs, features dropped without warning, big changes; <strong>disabled by default</strong> on most clusters</td>
+</tr>
+<tr>
+<td>Beta</td>
+<td>Pre-release</td>
+<td>Close to the final design, minor changes expected at GA; <strong>enabled by default</strong> on most clusters; occasionally seen in production, but that is not a recommendation</td>
+</tr>
+<tr>
+<td>GA</td>
+<td>Stable, production-ready</td>
+<td>Strong long-term commitment</td>
+</tr>
+</tbody>
+</table>
+<p>Naming for a hypothetical resource <code>tkb</code> in the <code>apps</code> group:</p>
+<ul>
+<li>alpha: <code>/apis/apps/v1alpha1/tkb</code>, <code>/apis/apps/v1alpha2/tkb</code></li>
+<li>beta: <code>/apis/apps/v1beta1/tkb</code>, <code>/apis/apps/v1beta2/tkb</code></li>
+<li>GA v1, and v2 goes through the same incubation: <code>/apis/apps/v2alpha1/tkb</code>, <code>/apis/apps/v2beta1/tkb</code>, <code>/apis/apps/v2/tkb</code></li>
+</ul>
+<p>Real stable paths: <code>/apis/networking.k8s.io/v1/ingresses</code>, <code>/apis/batch/v1/cronjobs</code>, <code>/apis/autoscaling/v2/horizontalpodautoscalers</code>. You can deploy through one API (for example <code>v1beta2</code>) and later manage the object through a newer one (<code>v1</code>).</p>
+<h3 id="resource-deprecation">Resource deprecation</h3>
+<p>At the time of writing:</p>
+<ul>
+<li><strong>Beta</strong>: a <strong>9-month window</strong> to release a newer beta or graduate to GA, to stop resources stagnating (Ingress stayed in beta for over 15 releases).</li>
+<li><strong>GA</strong>:
+<ul>
+<li>long-lived</li>
+<li>When deprecated, still served and supported for <strong>12 months or three releases, whichever is longest</strong>, then removed</li>
+<li>A stable resource is only deprecated <strong>after a newer stable version exists</strong> (v1 only after v2 ships).</li>
+</ul>
+</li>
+</ul>
+<p>Deploying a deprecated resource in recent versions:</p>
+<ol>
+<li>Returns a <strong>deprecation warning</strong> on the CLI.</li>
+<li>Adds a <code>k8s.io/deprecated:true</code> annotation to the audit record.</li>
+<li>Sets the <code>apiserver_requested_deprecated_apis</code> gauge metric.</li>
+</ol>
+<p>The audit record and metric help you find deprecated API use when planning upgrades.</p>
+<h3 id="extending-the-api">Extending the API</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-15-crd-extension.svg" alt="A CRD adds a new API resource that still needs a controller" loading="lazy" /></p>
+<ul>
+<li>Kubernetes has built-in controllers for built-in resources, but you can add your own resources <strong>and</strong> controllers
+<ul>
+<li>Network and storage vendors use this to expose advanced features (snapshot schedules, IP address management)</li>
+<li>Example: volumes appear via CSI drivers, Pods consume them via StorageClasses and PVCs, while snapshot scheduling is a custom resource with a custom controller, all managed with <code>kubectl</code> and YAML.</li>
+</ul>
+</li>
+<li>Pattern:
+<ol>
+<li>Create your custom resource.</li>
+<li>Write and deploy your custom controller.</li>
+</ol>
+</li>
+<li>A <strong>CustomResourceDefinition (CRD)</strong> creates new resources that look and feel native, with their own REST paths
+<ul>
+<li><code>crd.yml</code> (folder <code>api</code>) defines a cluster-scoped resource <code>books</code> in group <code>nigelpoulton.com</code>, served at <code>v1</code>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1"># crd.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apiextensions.k8s.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CustomResourceDefinition</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">books.nigelpoulton.com</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton.com</span><span class="w">        </span><span class="c1"># API sub-group (a.k.a. "named API group")</span>
+<span class="w">  </span><span class="nt">scope</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Cluster</span><span class="w">                 </span><span class="c1"># can be "Namespaced" or "Cluster"</span>
+<span class="w">  </span><span class="nt">names</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">plural</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">books</span><span class="w">                </span><span class="c1"># all resources need a plural and singular name</span>
+<span class="w">    </span><span class="nt">singular</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">book</span><span class="w">               </span><span class="c1"># singular names are used on the CLI and in command output</span>
+<span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Book</span><span class="w">                   </span><span class="c1"># kind property used in YAML files</span>
+<span class="w">    </span><span class="nt">shortNames</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bk</span><span class="w">                         </span><span class="c1"># short name usable by kubectl</span>
+<span class="w">  </span><span class="nt">versions</span><span class="p">:</span><span class="w">                      </span><span class="c1"># resources can be served by multiple API versions</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="w">    </span><span class="nt">served</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                 </span><span class="c1"># if false, "v1" will not be served</span>
+<span class="w">    </span><span class="nt">storage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                </span><span class="c1"># store instances of the object as this version</span>
+<span class="w">    </span><span class="nt">schema</span><span class="p">:</span><span class="w">                      </span><span class="c1"># this block defines the resource's properties</span>
+<span class="w">      </span><span class="nt">openAPIV3Schema</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">object</span>
+<span class="w">        </span><span class="nt">properties</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">object</span>
+<span class="w">            </span><span class="nt">properties</span><span class="p">:</span>
+<span class="l l-Scalar l-Scalar-Plain">&lt;Snip&gt;</span>
+</code></pre>
+<p>Deploy (from the <code>api</code> directory, with the repo and branch as before):</p>
+<pre class="hl"><code><span class="gp">$ </span><span class="nb">cd</span><span class="w"> </span>TKB/api
+<span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>crd.yml
+<span class="go">customresourcedefinition.apiextensions.k8s.io/books.nigelpoulton.com created</span>
+</code></pre>
+<p>Served at <code>apis/nigelpoulton.com/v1/books/</code>. Verify (Windows: <code>Select-String -Pattern 'books'</code>):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>api-resources<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>books
+<span class="go">NAME    SHORTNAMES   APIGROUP             NAMESPACED   KIND</span>
+<span class="go">books   bk           nigelpoulton.com/v1  false        Book</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>explain<span class="w"> </span>book
+<span class="go">GROUP:      nigelpoulton.com</span>
+<span class="go">KIND:       Book</span>
+<span class="go">VERSION:    v1</span>
+<span class="go">DESCRIPTION:</span>
+<span class="go">    &lt;empty&gt;</span>
+<span class="go">FIELDS:</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p><code>book.yml</code> defines a <code>Book</code> object <code>ai</code>; the <code>spec</code> fields match the names and types in the custom resource:</p>
+<pre class="hl"><code><span class="c1"># book.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton.com/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Book</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ai</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">bookTitle</span><span class="p">:</span><span class="w"> </span><span class="s">"AI</span><span class="nv"> </span><span class="s">Explained"</span>
+<span class="w">  </span><span class="nt">subTitle</span><span class="p">:</span><span class="w"> </span><span class="s">"Facts,</span><span class="nv"> </span><span class="s">Fiction,</span><span class="nv"> </span><span class="s">and</span><span class="nv"> </span><span class="s">Future"</span>
+<span class="w">  </span><span class="nt">topic</span><span class="p">:</span><span class="w"> </span><span class="s">"Artificial</span><span class="nv"> </span><span class="s">Intelligence"</span>
+<span class="w">  </span><span class="nt">edition</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">  </span><span class="nt">salesUrl</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://www.amazon.com/dp/1916585388</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>book.yml
+<span class="go">book.nigelpoulton.com/ai created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>bk
+<span class="go">NAME   TITLE          SUBTITLE                      EDITION   URL</span>
+<span class="go">ai     AI Explained   Facts, Fiction, and Future    1         www.amazon.com/dp/1916585388</span>
+</code></pre>
+<p>Query the new API group with curl (start the proxy only if the earlier one is gone):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>proxy<span class="w"> </span>--port<span class="w"> </span><span class="m">9000</span><span class="w"> </span><span class="p">&amp;</span>
+<span class="go">[1] 14784</span>
+<span class="go">Starting to serve on 127.0.0.1:9000</span>
+
+<span class="gp">$ </span>curl<span class="w"> </span>http://localhost:9000/apis/nigelpoulton.com/v1/
+<span class="go">{</span>
+<span class="go">  "kind": "APIResourceList",</span>
+<span class="go">  "apiVersion": "v1",</span>
+<span class="go">  "groupVersion": "nigelpoulton.com/v1",</span>
+<span class="go">  "resources": [</span>
+<span class="go">    {</span>
+<span class="go">      "name": "books",</span>
+<span class="go">      "singularName": "book",</span>
+<span class="go">      "namespaced": false,</span>
+<span class="go">      "kind": "Book",</span>
+<span class="go">      "verbs": [</span>
+<span class="go">        "delete",</span>
+<span class="go">        "deletecollection",</span>
+<span class="go">        "get",</span>
+<span class="go">        "list",</span>
+<span class="go">        "patch",</span>
+<span class="go">        "create",</span>
+<span class="go">        "update",</span>
+<span class="go">        "watch"</span>
+<span class="go">      ],</span>
+<span class="go">      "shortNames": [</span>
+<span class="go">        "bk"</span>
+<span class="go">      ],</span>
+<span class="go">      "storageVersionHash": "F2QdXaP5vh4="</span>
+<span class="go">    }</span>
+<span class="go">  ]</span>
+<span class="go">}</span>
+</code></pre>
+<p><strong>Custom resources do nothing useful until a custom controller acts on them</strong>; writing controllers is out of scope for the chapter.</p>
+<h2 id="15-5-clean-up">15.5 Clean up</h2>
+<p>Things to clean: the <code>kubectl proxy</code> process, the <code>ai</code> book object, and the <code>books.nigelpoulton.com</code> CRD. Find the proxy PID:</p>
+<pre class="hl"><code><span class="gp">$ </span>ps<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>kubectl
+<span class="go">PID   TTY      TIME      CMD</span>
+<span class="go">27533 ttys001  0:03.13   kubectl proxy --port 9000</span>
+</code></pre>
+<p>(Linux and Mac.) On Windows:</p>
+<pre class="hl"><code><span class="go">&gt; tasklist | Select-String -Pattern 'kubectl'</span>
+<span class="go">Image Name      PID   Session Name   Session#</span>
+<span class="go">=============   ===== ============   ========</span>
+<span class="go">kubectl.exe     19776 Console        1</span>
+</code></pre>
+<p>Kill it with your own PID (Linux and Mac, then Windows):</p>
+<pre class="hl"><code><span class="gp">$ </span><span class="nb">kill</span><span class="w"> </span>-9<span class="w"> </span><span class="m">27533</span>
+<span class="go">[1] + 27533 killed     kubectl proxy --port 9000</span>
+
+<span class="go">&gt; taskkill /F /PID 19776</span>
+<span class="go">SUCCESS: The process with PID 19776 has been terminated.</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>book<span class="w"> </span>ai
+<span class="go">book.nigelpoulton.com "ai" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>crd<span class="w"> </span>books.nigelpoulton.com
+<span class="go">customresourcedefinition.apiextensions.k8s.io "books.nigelpoulton.com" deleted</span>
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Kubernetes is API-driven; the API is served by the API server, a control plane service that must be highly available and high-performance.</li>
+<li>The API is resource-based and RESTful, accepting CRUD operations via POST, GET, PUT, PATCH and DELETE; divided into the <strong>core group</strong> (<code>/api/v1</code>) and <strong>named groups</strong> (<code>/apis/...</code>).</li>
+<li>&quot;Resource&quot; is the API definition
+<ul>
+<li>&quot;object&quot; is a running instance (the book: &quot;The Pod resource exists in the core API group, and there are five Pod objects running in the default Namespace&quot;).</li>
+</ul>
+</li>
+<li>Alpha, beta, GA lifecycle; GA deprecation guarantees at least 12 months or three versions.</li>
+<li>The API is becoming the de facto cloud API; CRDs let third parties add resources that feel native.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Serialisation / Protobuf / JSON / Content-Type</strong>.</li>
+<li><strong>REST, RESTful, CRUD, verb</strong>.</li>
+<li><strong>API server, <code>kubectl proxy</code></strong>.</li>
+<li><strong>Core group <code>/api/v1</code> vs named groups <code>/apis/&lt;group&gt;/&lt;version&gt;</code>; GVR</strong>.</li>
+<li><strong>Alpha, beta, GA; deprecation windows</strong>.</li>
+<li><strong>CRD, custom resource, custom controller</strong>.</li>
+<li><strong>Resource vs object</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 15. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap16.xhtml</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+<li>Postman: mentioned only by name, no link given.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-14-api-security-and-rbac/">The Kubernetes Book 14: API Security and RBAC</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-16-threat-modeling-kubernetes/">The Kubernetes Book 16: Threat Modeling Kubernetes</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-14-api-security-and-rbac/">&larr; The Kubernetes Book 14: API Security and RBAC</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-16-threat-modeling-kubernetes/">The Kubernetes Book 16: Threat Modeling Kubernetes &rarr;</a></nav></main></body></html>

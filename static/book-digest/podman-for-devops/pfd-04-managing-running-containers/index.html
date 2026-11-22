@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 4: Managing running containers</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-4-managing-running-containers">Podman for DevOps 4: Managing running containers</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 4. Previous: <a href="/book-digest/podman-for-devops/pfd-03-running-the-first-container/">Podman for DevOps 3: Running the first container</a>. Next: <a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">Podman for DevOps 5: Implementing storage for the container's data</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Images:</strong> <code>podman search</code> (filter, format, <code>--list-tags</code>), <code>pull</code>, <code>images</code>, <code>inspect</code>, <code>image mount</code>, <code>rmi</code>, <code>image prune</code>. The name format is <code>&lt;registry&gt;[:&lt;port&gt;]/[&lt;namespace&gt;/]&lt;name&gt;:&lt;tag&gt;</code>; avoid relying on <code>:latest</code>.</li>
+<li><strong>Container life cycle:</strong> <code>ps</code>, <code>stop</code> (SIGTERM, then SIGKILL after 10 s), <code>start</code>, <code>restart</code>, <code>create</code>, <code>rm</code>, <code>kill</code>, <code>pause</code> and <code>unpause</code> (cgroup freezer, not signals), <code>container prune</code>.</li>
+<li><strong>Inspect:</strong> <code>top</code>, <code>stats</code>, <code>inspect --format</code> (Go templates), and the overlay directories (<code>MergedDir</code>, <code>LowerDir</code>, <code>UpperDir</code>).</li>
+<li><strong>Logs:</strong> write to STDOUT and STDERR; <code>podman logs</code> reads them (journald by default on recent Fedora).</li>
+<li><strong>Debug in place:</strong> <code>podman exec</code>. <strong>Pods:</strong> containers sharing network, IPC and storage, plus a hidden <strong>infra (pause) container</strong>.</li>
+</ul>
+</div></div>
+<h2 id="4-1-managing-container-images">4.1 Managing container images</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-04-image-name-format.svg" alt="Parts of an image name" loading="lazy" /></p>
+<ul>
+<li>Podman pulls an image automatically on first run, but pulling and inspecting in advance makes a container start faster from the local store.</li>
+<li><strong>Registries:</strong> public (docker.io, gcr.io, quay.io; often with paid private hosting) or private (inside an organisation, focused on security and content filtering). The main registry projects are <strong>CNCF graduated</strong> (https://landscape.cncf.io/card-mode?category=container-registry&amp;grouping=category) and offer multitenancy, authentication, <strong>RBAC</strong>, vulnerability scanning and image signing. Most expose the <strong>Docker Registry HTTP API V2</strong> (https://docs.docker.com/registry/spec/api/), so <code>curl</code> works. Chapter 9 covers registries in depth.</li>
+</ul>
+<h3 id="searching-for-images">Searching for images</h3>
+<pre class="hl"><code><span class="c1"># podman search nginx</span>
+</code></pre>
+<ul>
+<li>It searches all whitelisted registries; results can be clumsy, with unknown and unreliable repositories. The web search of public registries is <strong>higher quality</strong>. Syntax: <code>podman search [options] TERM</code>.</li>
+<li><strong>Output fields:</strong></li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>INDEX</td>
+<td>the registry indexing the image</td>
+</tr>
+<tr>
+<td>NAME</td>
+<td>full name with registry and namespaces</td>
+</tr>
+<tr>
+<td>DESCRIPTION</td>
+<td>short description of the image's role</td>
+</tr>
+<tr>
+<td>STARS</td>
+<td>user stars (only registries that support it, such as docker.io)</td>
+</tr>
+<tr>
+<td>OFFICIAL</td>
+<td>whether the image is official</td>
+</tr>
+<tr>
+<td>AUTOMATED</td>
+<td><code>OK</code> if automated</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>[!warning] Never trust unknown repositories; prefer official images
+Understand what a niche image contains before running it, since an attacker can hide malicious code. Even trusted repositories can be compromised: in enterprise scenarios <strong>verify image signatures</strong>.</p>
+</blockquote>
+<pre class="hl"><code><span class="c1"># podman search nginx --filter=is-official          # prints docker.io/library/nginx:latest</span>
+<span class="c1"># podman search fedora \</span>
+<span class="w">    </span>--filter<span class="w"> </span>is-official<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--format<span class="w"> </span><span class="s2">"table {{.Index}} {{.Name}}"</span>
+INDEX<span class="w">      </span>NAME
+docker.io<span class="w">  </span>docker.io/library/fedora
+</code></pre>
+<p><strong>Image name format:</strong> <code>&lt;registry&gt;[:&lt;port&gt;]/[&lt;namespace&gt;/]&lt;name&gt;:&lt;tag&gt;</code></p>
+<ul>
+<li><strong>registry:</strong> where it is stored (docker.io for nginx); an optional port, and registries by default expose TCP <strong>5000</strong> (the book's claim).</li>
+<li><strong>namespace:</strong> optional hierarchy: parent organisation, repository owner's username, or image role.</li>
+<li><strong>name:</strong> the repository, usually the application name (nginx).</li>
+<li><strong>tag:</strong> unique per image, mapped to a <strong>SHA256</strong> digest; <code>:latest</code> can be omitted.</li>
+</ul>
+<p>Show tags with <code>--list-tags</code>:</p>
+<pre class="hl"><code><span class="c1"># podman search quay.io/prometheus/prometheus --list-tags</span>
+NAME<span class="w">                           </span>TAG
+quay.io/prometheus/prometheus<span class="w">  </span><span class="m">0</span>.19.0
+quay.io/prometheus/prometheus<span class="w">  </span>latest
+quay.io/prometheus/prometheus<span class="w">  </span>main
+quay.io/prometheus/prometheus<span class="w">  </span>v1.0.0
+<span class="o">[</span>...output<span class="w"> </span>omitted...<span class="o">]</span>
+</code></pre>
+<blockquote>
+<p>[!warning] <code>:latest</code> is not a version
+It is expected to point to the newest image but need not: an untagged image can keep it while the newest push has a different tag, and maintainers can push incompatible updates to it and break deployments. With semantic versioning, <strong>pull the most recent version tag</strong>.</p>
+</blockquote>
+<h3 id="pulling-and-viewing-images">Pulling and viewing images</h3>
+<pre class="hl"><code><span class="c1"># podman pull docker.io/library/nginx:latest    # root: /var/lib/containers/storage</span>
+$<span class="w"> </span>podman<span class="w"> </span>pull<span class="w"> </span>docker.io/library/nginx:latest<span class="w">    </span><span class="c1"># rootless: $HOME/.local/share/containers/storage/</span>
+</code></pre>
+<ul>
+<li><code>podman pull nginx</code> without a registry tries aliases; if ambiguous a prompt asks which registry.</li>
+</ul>
+<pre class="hl"><code><span class="c1"># podman images</span>
+REPOSITORY<span class="w">               </span>TAG<span class="w">     </span>IMAGE<span class="w"> </span>ID<span class="w">      </span>CREATED<span class="w">     </span>SIZE
+docker.io/library/nginx<span class="w">  </span>latest<span class="w">  </span>7f553e8bbc89<span class="w">  </span><span class="m">6</span><span class="w"> </span>days<span class="w"> </span>ago<span class="w">  </span><span class="m">196</span><span class="w"> </span>MB
+<span class="c1"># podman images --sort=created      # sort by size, date, ID, repository or tag</span>
+<span class="c1"># podman images -qa                 # IDs of all images, including intermediate layers</span>
+</code></pre>
+<ul>
+<li><code>-a</code> (<code>--all</code>) and <code>-q</code> (<code>--quiet</code>) combine to print only IDs. <strong>Intermediate layers</strong> are the read-only filesystem snapshots created during the build: each <code>RUN</code>, <code>COPY</code> or <code>ADD</code> instruction in a Dockerfile or Containerfile adds one, stacked into the final image. See <code>man podman-images</code>.</li>
+</ul>
+<h3 id="inspecting-images">Inspecting images</h3>
+<pre class="hl"><code><span class="c1"># podman inspect docker.io/library/nginx:latest     # same as podman image inspect</span>
+<span class="c1"># podman inspect docker.io/library/nginx:latest \</span>
+<span class="w">    </span>--format<span class="w"> </span><span class="s2">"{{ .Config.Cmd }}"</span>
+<span class="o">[</span>nginx<span class="w"> </span>-g<span class="w"> </span>daemon<span class="w"> </span>off<span class="p">;</span><span class="o">]</span>
+</code></pre>
+<ul>
+<li>The JSON holds config, architecture, layers, labels, annotations and the <strong>image history</strong>, useful to learn how an image was built when the Dockerfile is missing. <code>--format</code> takes a <strong>Go template</strong>.</li>
+<li><strong>Look at the filesystem</strong> with <code>podman image mount</code>:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># podman image mount docker.io/library/nginx</span>
+/var/lib/containers/storage/overlay/11174639fa91.../merged
+<span class="c1"># ls -al /var/lib/containers/storage/overlay/11174639fa91.../merged/</span>
+<span class="c1"># podman image unmount docker.io/library/nginx</span>
+</code></pre>
+<ul>
+<li><strong>Rootless mount:</strong> with the default OverlayFS driver, mount and unmount only work after <code>podman unshare</code>, which opens a shell in a new namespace where your UID and GID map to <strong>0</strong>:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>unshare
+<span class="c1"># podman image mount docker.io/library/nginx:latest</span>
+.local/share/containers/storage/overlay/11174639fa91.../merged
+<span class="c1"># podman image unmount docker.io/library/nginx:latest</span>
+<span class="c1"># exit      # leave the temporary unshared namespace</span>
+</code></pre>
+<h3 id="deleting-images">Deleting images</h3>
+<pre class="hl"><code><span class="c1"># podman rmi docker.io/library/nginx:latest</span>
+Untagged:<span class="w"> </span>docker.io/library/nginx:latest
+Deleted:<span class="w"> </span>7f553e8bbc897571642d836b31eaf6ecbe395d7641c2b24291356ed28f3f2bd0
+<span class="c1"># podman rmi $(podman images -qa)       # all images (root; as a user, run it with $)</span>
+$<span class="w"> </span>sudo<span class="w"> </span>podman<span class="w"> </span>image<span class="w"> </span>prune<span class="w"> </span>-af<span class="w">           </span><span class="c1"># all unused images, no confirmation</span>
+</code></pre>
+<ul>
+<li><code>rmi</code> <strong>fails for images used by a container</strong>: stop and remove those containers, or use <code>--force</code>, which <strong>also removes the containers</strong>.</li>
+<li><code>image prune</code> keeps only images tied to containers, running or stopped. It works in rootless mode too, on the user's store.</li>
+</ul>
+<h2 id="4-2-operations-with-running-containers">4.2 Operations with running containers</h2>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:80<span class="w"> </span>docker.io/library/nginx
+$<span class="w"> </span>curl<span class="w"> </span>localhost:8080<span class="w">          </span><span class="c1"># "Welcome to nginx!" default page</span>
+</code></pre>
+<blockquote>
+<p>[!tip] Rootless containers add a security layer
+If a malicious process breaks out of isolation (for instance through a host vulnerability), it gains at best the privileges of the user who started the rootless container.</p>
+</blockquote>
+<h3 id="viewing-and-handling-status">Viewing and handling status</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-04-container-lifecycle.svg" alt="Container states and the commands that move between them" loading="lazy" /></p>
+<p><code>podman ps</code> columns:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CONTAINER ID</td>
+<td>unique hex ID; 64 characters, the <strong>short form is 12</strong></td>
+</tr>
+<tr>
+<td>IMAGE</td>
+<td>image used</td>
+</tr>
+<tr>
+<td>COMMAND</td>
+<td>command executed inside</td>
+</tr>
+<tr>
+<td>CREATED</td>
+<td>creation date</td>
+</tr>
+<tr>
+<td>STATUS</td>
+<td>current state</td>
+</tr>
+<tr>
+<td>PORTS</td>
+<td>open ports; <code>0.0.0.0:8080-&gt;80/tcp</code> means host 8080 on all interfaces maps to container 80</td>
+</tr>
+<tr>
+<td>NAMES</td>
+<td>user-given or <strong>random</strong> (adjective plus a notable scientist or hacker, from Docker's <code>github.com/docker/docker/namesgenerator</code> package, vendored by Podman)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong><code>podman stop</code></strong> sets the state to stopped and sends <strong>SIGTERM</strong>, then <strong>SIGKILL after a 10 second timeout</strong> if unresponsive. <code>podman ps -a</code> lists stopped containers too (<code>Exited (0)</code>).</li>
+<li><strong><code>podman start</code></strong> resumes it: config, storage and metadata are kept while stopped, but <strong>a new process starts inside</strong>. <code>man podman-start</code>.</li>
+<li><strong><code>podman restart</code></strong> restarts using the same data and process definition; the filesystem and configuration are reused but <strong>all namespaces are new</strong>, which can fix many networking problems because configuration is redone.</li>
+<li><strong><code>podman create</code></strong> builds a container without starting it (<code>podman create -p 8080:80 docker.io/library/nginx</code>); then <code>podman start &lt;ID or name&gt;</code>. Handy to prepare an environment or to mount a container filesystem as non-root:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>unshare
+$<span class="w"> </span>podman<span class="w"> </span>container<span class="w"> </span>mount<span class="w"> </span>&lt;Container_ID_or_Name&gt;
+/home/&lt;username&gt;/.local/share/containers/storage/overlay/bf9d8df2.../merged
+</code></pre>
+<p><code>podman container mount</code> (short <code>podman mount</code>) mounts a container's root filesystem on the host so you can browse and edit its files without a shell inside.</p>
+<ul>
+<li><strong><code>podman rm</code></strong> removes stopped containers (all storage, config and metadata are discarded); <code>-f</code> removes running ones.</li>
+</ul>
+<p><strong>Bulk operations</strong></p>
+<pre class="hl"><code>$<span class="w"> </span><span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">{</span><span class="m">1</span>..5<span class="o">}</span><span class="p">;</span><span class="w"> </span><span class="k">do</span><span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>docker.io/library/nginx<span class="p">;</span><span class="w"> </span><span class="k">done</span>
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>-qa<span class="w">                       </span><span class="c1"># IDs only</span>
+$<span class="w"> </span>podman<span class="w"> </span>stop<span class="w"> </span><span class="k">$(</span>podman<span class="w"> </span>ps<span class="w"> </span>-qa<span class="k">)</span>
+$<span class="w"> </span>podman<span class="w"> </span>rm<span class="w"> </span><span class="k">$(</span>podman<span class="w"> </span>ps<span class="w"> </span>-qa<span class="k">)</span>
+</code></pre>
+<ul>
+<li>Shell expansion <code>$(...)</code> passes the output as arguments. Most commands (<code>start</code>, <code>stop</code>, <code>rm</code>) also support <code>-a</code>.</li>
+<li><strong>Filter by status:</strong> <code>created</code>, <code>exited</code>, <code>paused</code>, <code>running</code>, <code>unknown</code>.</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>--filter<span class="w"> </span><span class="nv">status</span><span class="o">=</span>exited
+$<span class="w"> </span>podman<span class="w"> </span>rm<span class="w"> </span><span class="k">$(</span>podman<span class="w"> </span>ps<span class="w"> </span>-qa<span class="w"> </span>--filter<span class="w"> </span><span class="nv">status</span><span class="o">=</span>exited<span class="k">)</span>
+$<span class="w"> </span>podman<span class="w"> </span>container<span class="w"> </span>prune<span class="w">              </span><span class="c1"># removes all stopped containers</span>
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>-q<span class="w"> </span>--sort<span class="w"> </span>id
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>-a<span class="w"> </span>--format<span class="w"> </span><span class="s2">"{{.ID}} {{.Command}}"</span><span class="w"> </span>--no-trunc
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>--format<span class="w"> </span><span class="s2">"{{ .Pid }}"</span><span class="w">     </span><span class="c1"># host PID of the container process</span>
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>--namespace
+CONTAINER<span class="w"> </span>ID<span class="w">  </span>NAMES<span class="w">                 </span>PID<span class="w">     </span>CGROUPNS<span class="w">    </span>IPC<span class="w">         </span>MNT<span class="w">         </span>NET<span class="w">         </span>PIDNS<span class="w">       </span>USERNS<span class="w">      </span>UTS
+f2666ed4a46a<span class="w">  </span>unruffled_hofstadter<span class="w">  </span><span class="m">437764</span><span class="w">  </span><span class="m">4026533088</span><span class="w">  </span><span class="m">4026533086</span><span class="w">  </span><span class="m">4026533083</span><span class="w">  </span><span class="m">4026532948</span><span class="w">  </span><span class="m">4026533087</span><span class="w">  </span><span class="m">4026532973</span><span class="w">  </span><span class="m">4026533085</span>
+</code></pre>
+<p><code>--namespace</code> shows the container's namespaces, a starting point for advanced troubleshooting. Filters are listed on the <code>podman-ps</code> man page.</p>
+<h3 id="pausing-and-unpausing">Pausing and unpausing</h3>
+<ul>
+<li><code>podman stop</code> sends SIGTERM and SIGKILL to the parent process; <strong><code>podman pause</code> uses cgroups (the freezer) to suspend the processes without terminating them</strong>; unpausing resumes the same process transparently. The logic lives in the runtime (in crun at the time of writing: https://github.com/containers/crun/blob/7ef74c9330033cb884507c28fd8c267861486633/src/libcrun/cgroup.c#L1894-L1936).</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--name<span class="w"> </span>timer<span class="w"> </span>docker.io/library/fedora<span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s2">"while true; do echo </span><span class="k">$(</span>date<span class="k">)</span><span class="s2">; sleep 2; done"</span>
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>--format<span class="w"> </span><span class="s2">"{{ .Pid }}"</span><span class="w"> </span>--filter<span class="w"> </span><span class="nv">name</span><span class="o">=</span>timer<span class="w">     </span><span class="c1"># 816807</span>
+$<span class="w"> </span>podman<span class="w"> </span>pause<span class="w"> </span>timer
+$<span class="w"> </span>podman<span class="w"> </span>unpause<span class="w"> </span>timer
+$<span class="w"> </span>podman<span class="w"> </span>ps<span class="w"> </span>--format<span class="w"> </span><span class="s2">"{{ .Pid }}"</span><span class="w"> </span>--filter<span class="w"> </span><span class="nv">name</span><span class="o">=</span>timer<span class="w">     </span><span class="c1"># same PID: 816807</span>
+</code></pre>
+<ul>
+<li>Output stops while paused and resumes after; the PID is unchanged. Check the cgroup (root shell, replace the ID): the file <code>cgroup.freeze</code> flips between <strong>0 and 1</strong>.</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>-i
+$<span class="w"> </span><span class="nb">cd</span><span class="w"> </span>/sys/fs/cgroup/user.slice/user-1000.slice/user@<span class="nv">$UID</span>.service/user.slice/libpod-&lt;CONTAINER_ID&gt;.scope/container
+</code></pre>
+<ul>
+<li><strong>Cleanup:</strong> the <code>bash -c</code> loop ignores SIGTERM, so <code>podman kill timer</code> (or <code>podman stop</code> and wait 10 s; <code>--time 0</code> skips the wait).</li>
+</ul>
+<h3 id="inspecting-processes-inside-containers">Inspecting processes inside containers</h3>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>top<span class="w"> </span>f2666ed4a46a
+USER<span class="w">   </span>PID<span class="w">  </span>PPID<span class="w">  </span>%CPU<span class="w">  </span>ELAPSED<span class="w">          </span>TTY<span class="w">  </span>TIME<span class="w">  </span>COMMAND
+root<span class="w">   </span><span class="m">1</span><span class="w">    </span><span class="m">0</span><span class="w">     </span><span class="m">0</span>.000<span class="w"> </span>3m26.540290427s<span class="w">  </span>?<span class="w">    </span>0s<span class="w">    </span>nginx:<span class="w"> </span>master<span class="w"> </span>process<span class="w"> </span>nginx<span class="w"> </span>-g<span class="w"> </span>daemon<span class="w"> </span>off<span class="p">;</span>
+nginx<span class="w">  </span><span class="m">26</span><span class="w">   </span><span class="m">1</span><span class="w">     </span><span class="m">0</span>.000<span class="w"> </span>3m26.540547429s<span class="w">  </span>?<span class="w">    </span>0s<span class="w">    </span>nginx:<span class="w"> </span>worker<span class="w"> </span>process
+...
+$<span class="w"> </span>podman<span class="w"> </span>top<span class="w"> </span>f2666ed4a46a<span class="w"> </span>pid<span class="w"> </span>comm<span class="w"> </span>args<span class="w">       </span><span class="c1"># custom fields</span>
+</code></pre>
+<ul>
+<li>Output resembles <code>ps</code>, not the interactive <code>top</code>.</li>
+<li>Container PIDs start at 1 inside; the engine maps them to host PIDs. Get the host PID from <code>podman ps --namespace</code>, or <strong><code>podman top $CONTAINER_ID pid hpid</code></strong> (<code>hpid</code> = host PID). Then:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>strace<span class="w"> </span>-p<span class="w"> </span>&lt;PID&gt;<span class="w">                      </span><span class="c1"># syscalls (see man strace)</span>
+$<span class="w"> </span>pidstat<span class="w"> </span>-p<span class="w"> </span>&lt;PID&gt;<span class="w"> </span><span class="o">[</span>&lt;interval&gt;<span class="w"> </span>&lt;count&gt;<span class="o">]</span><span class="w">     </span><span class="c1"># resource usage over time (see man pidstat)</span>
+</code></pre>
+<ul>
+<li><strong><code>podman kill</code></strong> sends SIGKILL by default (<code>--signal</code> for SIGTERM, SIGHUP and others). A killed container is <strong>not removed</strong>: it stays, in <code>exited</code> state.</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--name<span class="w"> </span>custom-webserver<span class="w"> </span>-d<span class="w"> </span>docker.io/library/httpd
+$<span class="w"> </span>podman<span class="w"> </span><span class="nb">kill</span><span class="w"> </span>custom-webserver
+</code></pre>
+<p>Chapter 11 covers <code>nsenter</code> and more troubleshooting.</p>
+<h3 id="monitoring-container-stats">Monitoring container stats</h3>
+<p><code>podman stats</code> opens a self-refreshing top-like view. Default columns:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ID, NAME</td>
+<td>container ID and name</td>
+</tr>
+<tr>
+<td>CPU %</td>
+<td>total CPU usage</td>
+</tr>
+<tr>
+<td>MEM USAGE / LIMIT</td>
+<td>memory against a limit (system capabilities or cgroup limits)</td>
+</tr>
+<tr>
+<td>MEM %</td>
+<td>memory percentage</td>
+</tr>
+<tr>
+<td>NET IO, BLOCK IO</td>
+<td>network and disk I/O</td>
+</tr>
+<tr>
+<td>PIDS</td>
+<td>number of PIDs inside</td>
+</tr>
+<tr>
+<td>CPU TIME, AVG CPU %</td>
+<td>total and average CPU</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>stats<span class="w"> </span>--no-stream<span class="w">            </span><span class="c1"># one snapshot</span>
+$<span class="w"> </span>podman<span class="w"> </span>stats<span class="w"> </span>--format<span class="o">=</span>json
+<span class="o">[</span>
+<span class="w">  </span><span class="o">{</span>
+<span class="w">    </span><span class="s2">"id"</span>:<span class="w"> </span><span class="s2">"d19dbb81a0f3"</span>,
+<span class="w">    </span><span class="s2">"name"</span>:<span class="w"> </span><span class="s2">"admiring_bouman"</span>,
+<span class="w">    </span><span class="s2">"cpu_time"</span>:<span class="w"> </span><span class="s2">"16.773ms"</span>,
+<span class="w">    </span><span class="s2">"cpu_percent"</span>:<span class="w"> </span><span class="s2">"0.01%"</span>,
+<span class="w">    </span><span class="s2">"avg_cpu"</span>:<span class="w"> </span><span class="s2">"0.01%"</span>,
+<span class="w">    </span><span class="s2">"mem_usage"</span>:<span class="w"> </span><span class="s2">"1.884MB / 475.4MB"</span>,
+<span class="w">    </span><span class="s2">"mem_percent"</span>:<span class="w"> </span><span class="s2">"0.40%"</span>,
+<span class="w">    </span><span class="s2">"net_io"</span>:<span class="w"> </span><span class="s2">"0B / 796B"</span>,
+<span class="w">    </span><span class="s2">"block_io"</span>:<span class="w"> </span><span class="s2">"0B / 0B"</span>,
+<span class="w">    </span><span class="s2">"pids"</span>:<span class="w"> </span><span class="s2">"2"</span>
+<span class="w">  </span><span class="o">}</span>
+<span class="o">]</span>
+$<span class="w"> </span>podman<span class="w"> </span>stats<span class="w"> </span>-a<span class="w"> </span>--no-stream<span class="w"> </span>--format<span class="w"> </span><span class="s2">"{{ .ID }} {{ .CPUPerc }} {{ .MemUsageBytes }} {{ .PIDs }}"</span>
+</code></pre>
+<p><code>--format=json</code> works on most commands (e.g. <code>podman ps --format=json</code>) for machine-readable output.</p>
+<h2 id="4-3-inspecting-container-information">4.3 Inspecting container information</h2>
+<p><code>podman inspect &lt;ID or name&gt;</code> prints a large JSON. Notable fields:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Path</code>, <code>Args</code></td>
+<td>entry point and its arguments (together, the command run)</td>
+</tr>
+<tr>
+<td><code>State</code></td>
+<td>current state, executed PID, common PID, OCI version, health check</td>
+</tr>
+<tr>
+<td><code>Image</code>, <code>Name</code></td>
+<td>image ID and container name</td>
+</tr>
+<tr>
+<td><code>MountLabel</code>, <code>ProcessLabel</code></td>
+<td>SELinux labels</td>
+</tr>
+<tr>
+<td><code>EffectiveCaps</code></td>
+<td>effective capabilities</td>
+</tr>
+<tr>
+<td><code>GraphDriver</code></td>
+<td>storage driver (default overlay) and the upper, lower and merged directories</td>
+</tr>
+<tr>
+<td><code>Mounts</code></td>
+<td>user-specified mounts</td>
+</tr>
+<tr>
+<td><code>NetworkSettings</code></td>
+<td>internal IP, exposed ports, port mappings</td>
+</tr>
+<tr>
+<td><code>Config</code></td>
+<td>environment variables, hostname, command, working directory, labels, annotations</td>
+</tr>
+<tr>
+<td><code>HostConfig</code></td>
+<td>cgroup quotas, network mode, capabilities</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>inspect<span class="w"> </span>&lt;ID<span class="w"> </span>or<span class="w"> </span>Name&gt;<span class="w"> </span>--format<span class="w"> </span><span class="s2">"{{ .State.Pid }}"</span>
+</code></pre>
+<ul>
+<li><code>{{ .ResolvConfPath }}</code> shows where <code>resolv.conf</code> comes from: rootless <code>/run/user/&lt;UID&gt;/containers/overlay-containers/&lt;Container_ID&gt;/userdata/resolv.conf</code>; rootful <code>/var/run/containers/storage/overlay-containers/&lt;Container_ID&gt;/userdata/resolv.conf</code>.</li>
+<li><strong>Overlay directories, worked example</strong> (rootful):</li>
+</ul>
+<pre class="hl"><code><span class="c1"># podman run --name logger -d docker.io/library/fedora bash -c "while true; do echo test &gt;&gt; /tmp/test.log; sleep 5; done"</span>
+<span class="c1"># podman inspect logger --format "{{ .GraphDriver.Data.MergedDir }}"</span>
+/var/lib/containers/storage/overlay/4372e7c8.../merged<span class="w">       </span><span class="c1"># /tmp/test.log is here</span>
+<span class="c1"># podman inspect logger --format "{{ .GraphDriver.Data.LowerDir }}"</span>
+/var/lib/containers/storage/overlay/b0d5c42c.../diff<span class="w">        </span><span class="c1"># read-only image layers: no log file</span>
+<span class="c1"># podman inspect logger --format "{{ .GraphDriver.Data.UpperDir }}"</span>
+/var/lib/containers/storage/overlay/27d89046.../diff<span class="w">        </span><span class="c1"># read-write container layer: has /tmp/test.log</span>
+<span class="c1"># podman stop logger &amp;&amp; podman rm logger</span>
+</code></pre>
+<ul>
+<li><code>MergedDir</code> is where overlayfs merges all layers; <code>LowerDir</code> holds the read-only base layers (not written); <code>UpperDir</code> is the <strong>container's read-write layer</strong>, containing only what was written since startup. Chapter 5 returns to this.</li>
+</ul>
+<h2 id="4-4-capturing-logs-from-containers">4.4 Capturing logs from containers</h2>
+<ul>
+<li>Writing log files inside a container is fragile (read-only filesystems, permissions). <strong>Best practice: write to the standard streams, STDOUT and STDERR.</strong> Standard streams are channels connected to a process; in an interactive shell they connect to your terminal.</li>
+<li>Podman attaches STDIN, STDOUT and STDERR depending on the run options, and stores the output in a <strong>local file</strong>, or in <strong>journald</strong> on systemd distributions. <strong>From Fedora 35</strong> the default log driver changed from <code>k8s-file</code> to <strong><code>journald</code></strong>:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># grep ^log_driver /usr/share/containers/containers.conf</span>
+<span class="nv">log_driver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"journald"</span>
+</code></pre>
+<ul>
+<li><code>podman run -d -i -t docker.io/library/httpd</code> = detached (<code>-d</code>), pseudo-terminal attached to STDIN (<code>-t</code>), stdin kept open (<code>-i</code>).</li>
+<li><strong>The hard way:</strong> note the container name from <code>podman ps</code>, then <code>journalctl --user -t cranky_wu</code> (the output shows the Apache AH00558 warning and &quot;resuming normal operations&quot;).</li>
+<li><strong>The easy way:</strong> <code>podman logs</code>:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># podman logs cranky_wu</span>
+<span class="c1"># podman logs --tail 2 a068c7db7ff9       # only the last two lines</span>
+</code></pre>
+<ul>
+<li><strong>Tip:</strong> most commands accept <strong><code>--latest</code></strong>, acting on the most recently created container (<code>podman logs --latest</code>).</li>
+</ul>
+<h2 id="4-5-executing-processes-in-a-running-container">4.5 Executing processes in a running container</h2>
+<p><code>podman exec</code> finds the container's Linux namespaces and starts the given process <strong>inside them</strong>, in the same environment as the original process, preserving isolation.</p>
+<pre class="hl"><code><span class="c1"># podman run -d -i -t docker.io/library/httpd</span>
+e768bf9723687194329b6d6854605849529c79f1d19...
+<span class="c1"># podman exec -ti e768bf972368... /bin/bash</span>
+root@e768bf972368:/usr/local/apache2#<span class="w"> </span>ps<span class="w"> </span>aux
+bash:<span class="w"> </span>ps:<span class="w"> </span><span class="nb">command</span><span class="w"> </span>not<span class="w"> </span>found
+root@e768bf972368:/usr/local/apache2#<span class="w"> </span>ls<span class="w"> </span>-l<span class="w"> </span>/proc/*/exe
+lrwxrwxrwx.<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>root<span class="w"> </span><span class="m">0</span><span class="w"> </span>Oct<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="m">09</span>:36<span class="w"> </span>/proc/1/exe<span class="w"> </span>-&gt;<span class="w"> </span>/usr/local/apache2/bin/httpd
+</code></pre>
+<ul>
+<li>Useful for troubleshooting and testing. The image lacks <code>ps</code> (probably the <code>procps</code> package was left out to shrink the image), so the example reads <code>/proc</code> (&quot;everything is a file&quot;); alternatively install the package inside. Options mirror <code>podman run</code> (<code>-t</code>, <code>-i</code>); see <code>man podman exec</code>.</li>
+</ul>
+<h2 id="4-6-running-containers-in-pods">4.6 Running containers in pods</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-04-pod-infra-container.svg" alt="A Pod's infra container holds the shared namespaces" loading="lazy" /></p>
+<p>A <strong>pod</strong> is the smallest execution unit in Kubernetes. Grouping containers in one pod gives:</p>
+<ul>
+<li>one shared <strong>network namespace</strong> and IP address</li>
+<li>shared <strong>storage volumes</strong> for persistent data</li>
+<li>shared configuration</li>
+<li><strong>joint life cycle</strong> (start, stop, restart as one unit)</li>
+<li>a shared <strong>IPC namespace</strong>, useful for apps using shared memory</li>
+</ul>
+<pre class="hl"><code><span class="c1"># podman pod create --name myhttp</span>
+7a566073adb31df12286bfa82586d82b5004396ff10a2235d9d7cf7e7a49cb9f
+<span class="c1"># podman pod ps</span>
+POD<span class="w"> </span>ID<span class="w">        </span>NAME<span class="w">    </span>STATUS<span class="w">   </span>CREATED<span class="w">             </span>INFRA<span class="w"> </span>ID<span class="w">      </span><span class="c1"># OF CONTAINERS</span>
+7a566073adb3<span class="w">  </span>myhttp<span class="w">  </span>Created<span class="w">  </span><span class="m">13</span><span class="w"> </span>seconds<span class="w"> </span>ago<span class="w">      </span>b5483a84d10b<span class="w">  </span><span class="m">1</span>
+<span class="c1"># podman pod start myhttp</span>
+<span class="c1"># podman ps</span>
+CONTAINER<span class="w"> </span>ID<span class="w">  </span>IMAGE<span class="w">                                  </span>COMMAND<span class="w">  </span>CREATED<span class="w">        </span>STATUS<span class="w">             </span>PORTS<span class="w">  </span>NAMES
+b5483a84d10b<span class="w">  </span>localhost/podman-pause:5.2.2-1724198400<span class="w">         </span><span class="m">2</span><span class="w"> </span>minutes<span class="w"> </span>ago<span class="w">  </span>Up<span class="w"> </span>About<span class="w"> </span>a<span class="w"> </span>minute<span class="w">         </span>7a566073adb3-infra
+</code></pre>
+<ul>
+<li>An empty pod already runs one container: the <strong>infra container</strong> (image <code>podman-pause</code>). It does nothing; it <strong>holds the namespaces</strong> so the engine can connect other containers to the pod.</li>
+<li>Add a container with <code>--pod</code>:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># podman run --pod myhttp -d -i -t docker.io/library/httpd</span>
+<span class="c1"># podman pod ps        # now 2 containers</span>
+<span class="c1"># podman ps -p         # adds POD ID and PODNAME columns</span>
+</code></pre>
+<blockquote>
+<p>[!note] Lab cleanup
+Clean the lab between chapters with <code>podman rm --all --force</code> and <code>podman system reset</code> (resets Podman to default configuration). Extra material: https://github.com/PacktPublishing/Podman-for-DevOps-Second-Edition (folder <code>AdditionalMaterial</code>).</p>
+</blockquote>
+<blockquote>
+<p>[!warning] Grouping containers in a pod is an anti-pattern for containers
+Kubernetes treats the pod as the smallest unit scheduled on one node, so containers in one pod always run <strong>together on the same node</strong> and the orchestrator cannot spread their load across machines.</p>
+</blockquote>
+<h2 id="summary-points">Summary points</h2>
+<p>The chapter covered images, running-container operations, inspection, logs, executing processes, and pods; the commands are the daily toolkit of a container administrator. Next: storage for container data.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+image name format · <code>:latest</code> risk · <code>podman search/pull/images/inspect/rmi/prune</code> · <code>podman unshare</code> · <code>ps/stop/start/restart/create/rm/kill/pause</code> · cgroup freezer · <code>top</code>, <code>stats</code> · Go template <code>--format</code> · <code>MergedDir/LowerDir/UpperDir</code> · STDOUT/STDERR · journald log driver · <code>exec</code> · pod · infra (pause) container · <code>--latest</code>.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 4; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>CNCF container registries landscape: https://landscape.cncf.io/card-mode?category=container-registry&amp;grouping=category</li>
+<li>Docker Registry HTTP API V2: https://docs.docker.com/registry/spec/api/</li>
+<li>Book repository: https://github.com/PacktPublishing/Podman-for-DevOps-Second-Edition</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-03-running-the-first-container/">Podman for DevOps 3: Running the first container</a> · <a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">Podman for DevOps 5: Implementing storage for the container's data</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-03-running-the-first-container/">&larr; Podman for DevOps 3: Running the first container</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">Podman for DevOps 5: Implementing storage for the container&#x27;s data &rarr;</a></nav></main></body></html>

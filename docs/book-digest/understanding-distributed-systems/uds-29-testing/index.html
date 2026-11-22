@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 29: Testing</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-29-testing">Understanding Distributed Systems 29: Testing</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), ch. 29. Previous: <a href="/book-digest/understanding-distributed-systems/uds-28-upstream-resiliency/">Understanding Distributed Systems 28: Upstream resiliency (and Part V intro)</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">Understanding Distributed Systems 30: Continuous delivery and deployment</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Tests catch bugs early and, more importantly, let you <strong>change code without breaking behaviour</strong>; they also act as <strong>always up-to-date documentation</strong> and improve <strong>public interfaces</strong> (you must use them as a user would).</li>
+<li>Testing is <strong>not a silver bullet</strong>: it only covers failures developers can imagine, not <strong>emergent behaviour in production</strong> (see Cindy Sridharan, https://copyconstruct.medium.com/testing-microservices-the-sane-way-9bb31d158c16).</li>
+<li>Prefer <strong>small scope, small size</strong>; build a <strong>pyramid</strong>: many unit, fewer integration, fewest end-to-end tests. Flaky tests are nearly as bad as no tests.</li>
+<li>Use real implementations &gt; fakes &gt; stubs and mocks; combine mocks with <strong>contract tests</strong>.</li>
+<li>For hard-to-test design risks use <strong>formal specification</strong> (TLA+) to find bugs <strong>before writing code</strong>.</li>
+<li>Rule of thumb: to be confident an implementation behaves a certain way, <strong>add a test for it</strong>. &quot;The longer it takes to detect a bug, the more expensive it is to fix.&quot;</li>
+</ul>
+</div></div>
+<h2 id="29-1-scope">29.1 Scope</h2>
+<p><strong>System under test (SUT)</strong> = the code paths a test actually exercises (vs ones merely run). Scope sets the category.</p>
+<ul>
+<li><strong>Unit test:</strong>
+<ul>
+<li>a small part of the codebase, like a class (the &quot;sociable&quot; kind: https://martinfowler.com/articles/2021-test-shapes.html)</li>
+<li>It should be <strong>static in time</strong>: change only when the SUT's <strong>behaviour</strong> changes (refactors, bug fixes, new features should not break it)</li>
+<li>So:</li>
+<li>use only the SUT's <strong>public interfaces</strong>;</li>
+<li>test <strong>state changes</strong> in the SUT, not predetermined sequences of actions;</li>
+<li>test <strong>behaviours</strong>: how the SUT handles a given input in a specific state.</li>
+</ul>
+</li>
+<li><strong>Integration test:</strong>
+<ul>
+<li>verifies the service interacts with an <strong>external dependency</strong> as expected</li>
+<li>Fowler (https://martinfowler.com/bliki/IntegrationTest.html): <strong>narrow</strong> (only code paths that talk to one dependency, e.g. an adapter and its supporting classes) vs <strong>broad</strong> (code paths across multiple live services)</li>
+<li>The book calls broad ones <strong>end-to-end</strong> tests.</li>
+</ul>
+</li>
+<li><strong>End-to-end test:</strong>
+<ul>
+<li>behaviour spanning multiple services, a user-facing scenario</li>
+<li>Runs in shared environments (staging or production) so it <strong>must not affect other tests or users</strong></li>
+<li><strong>Slow, prone to intermittent failures</strong>, expensive to maintain, and a failure rarely shows which service caused it</li>
+<li>A &quot;necessary evil&quot;: uncovers <strong>unanticipated side effects and emergent behaviours</strong>.</li>
+</ul>
+</li>
+<li><strong>User journey test:</strong>
+<ul>
+<li>a multi-step interaction (e-commerce: create an order, modify, cancel) as <strong>one</strong> test</li>
+<li>usually faster than the parts as separate end-to-end tests, so it <strong>minimises</strong> their number.</li>
+</ul>
+</li>
+<li><strong>Larger scope = more brittle, slow and costly.</strong>
+<ul>
+<li>Intermittent failures make developers ignore tests</li>
+<li>Prefer small scope</li>
+<li>Good trade-off: <strong>many unit tests, fewer integration tests, even fewer end-to-end tests</strong> (the <strong>test pyramid</strong>).</li>
+</ul>
+</li>
+</ul>
+<h2 id="29-2-size">29.2 Size</h2>
+<p>Size = <strong>compute resources</strong> needed (e.g. number of nodes); correlated with scope but distinct (https://www.amazon.com/dp/B0859PF5HB, <em>Software Engineering at Google</em>).</p>
+<ul>
+<li><strong>Small:</strong> one process, no blocking calls or I/O: very fast, deterministic, very unlikely to flake.</li>
+<li><strong>Intermediate:</strong> one node, local I/O (disk, localhost network): more delay and non-determinism, more intermittent failures.</li>
+<li><strong>Large:</strong> multiple nodes: even more non-determinism and delay.</li>
+<li>Larger tests are slower and <strong>flakier</strong>, so write the <strong>smallest possible test</strong> for a behaviour. Use <strong>test doubles</strong> to shrink it:
+<ul>
+<li><strong>Fake:</strong> lightweight implementation behaving like the real one (an <strong>in-memory database</strong>).</li>
+<li><strong>Stub:</strong> a function that <strong>always returns the same value</strong> whatever the arguments.</li>
+<li><strong>Mock:</strong> has <strong>expectations on how it is called</strong>; tests <strong>interactions</strong> between objects.</li>
+</ul>
+</li>
+<li>Doubles do not capture the real thing's nuances: the weaker the resemblance, the less confidence. So:
+<ol>
+<li>use the <strong>real implementation</strong> if it is fast, deterministic and has few dependencies;</li>
+<li>else a <strong>fake maintained by the dependency's own developers</strong>;</li>
+<li><strong>stubs and mocks are last resort</strong> (least resemblance, <strong>brittle</strong> tests).</li>
+</ol>
+</li>
+<li><strong>Contract tests</strong>
+<ul>
+<li>(https://martinfowler.com/bliki/ContractTest.html) are a good compromise for integration tests with mocking: a contract defines a <strong>request and its expected response</strong> (for REST: an HTTP request and response)</li>
+<li>The test <strong>mocks the dependency from the contract</strong>, and the dependency's own test suite uses the <strong>same contract</strong> to simulate the client request and check the response, so the contract cannot silently break.</li>
+</ul>
+</li>
+</ul>
+<h2 id="29-3-practical-considerations">29.3 Practical considerations</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-29-test-pyramid.svg" alt="The test pyramid" loading="lazy" />
+Trade-offs. Example: end-to-end test one API endpoint of a service that talks to a <strong>data store</strong>, an <strong>internal service owned by another team</strong>, and a <strong>third-party billing API</strong>.</p>
+<ul>
+<li>Endpoint does not call the internal service: safe to <strong>mock</strong> it.</li>
+<li>Data store has an <strong>in-memory fake</strong>: use it, avoiding network calls.</li>
+<li>Billing API: real calls would issue real transactions; without a fake, maybe the provider offers a <strong>testing endpoint</strong> issuing fake transactions.</li>
+</ul>
+<p>Counter-example where smaller is riskier: testing that <strong>purging a user's data across the whole stack</strong> works. In Europe it is legally mandated (<strong>GDPR</strong>; fines up to <strong>EUR 20 million or 4% of annual turnover, whichever is greater</strong>). A silent break is high-risk, so use an <strong>end-to-end test that runs periodically in production</strong> against <strong>live services</strong> (no doubles).</p>
+<h2 id="29-4-formal-verification">29.4 Formal verification</h2>
+<p>Writing a <strong>specification</strong> (a high-level description of behaviour) before code reveals subtle bugs and architecture flaws early. It can range from an <strong>informal one-pager</strong> to a <strong>formal mathematical description a computer can check</strong>.</p>
+<ul>
+<li>Benefits: forces you to understand what you specify; <strong>documentation</strong> for others; <strong>guide</strong> to the implementation; if formal, <strong>model checking</strong> can algorithmically find flaws.</li>
+<li>Do not specify every corner: specify the parts <strong>most likely to contain errors and hard to catch with tests</strong>, at a chosen <strong>level of abstraction</strong> (which details to omit).</li>
+<li><strong>TLA+</strong>
+<ul>
+<li>(Temporal Logic of Actions; https://lamport.azurewebsites.net/tla/tla.html) is widely used, e.g</li>
+<li>by <strong>Amazon (S3)</strong> and <strong>Microsoft (Cosmos DB)</strong> (https://lamport.azurewebsites.net/tla/industrial-use.html)</li>
+<li>A <strong>behaviour</strong> is a sequence of <strong>states</strong> (assignments of values to global variables); a spec is the <strong>set of all possible behaviours</strong>.</li>
+</ul>
+</li>
+<li><strong>Safety property:</strong>
+<ul>
+<li>something is true in <strong>all states</strong> (an invariant)</li>
+<li><strong>Liveness property:</strong> something <strong>eventually happens</strong></li>
+<li>TLA+ verifies these over <strong>all</strong> states and behaviours: powerful because a system at scale eventually meets <strong>all</strong> of them and humans are bad at imagining several rare events together.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Worked example (migrating from key-value store X to cheaper Y with no downtime):</strong></p>
+<ol>
+<li>The service <strong>dual-writes</strong> to X and Y, still reading only from X.</li>
+<li>A one-off batch <strong>backfills</strong> Y with data from X older than the dual-write start.</li>
+<li>The app <strong>switches</strong> to read and write only Y.
+Will the stores end up in the same state? The model checker finds:</li>
+</ol>
+<ul>
+<li>a <strong>liveness violation</strong>: an instance <strong>crashes after writing to one store but before the other</strong>, leaving them inconsistent;</li>
+<li>modelling the two writes as <strong>atomic</strong> fixes that, but with <strong>two instances writing concurrently</strong> the stores can see writes <strong>in different orders</strong> and diverge;</li>
+<li>fix: a <strong>message channel</strong> that <strong>serialises all writes</strong> into one global order (like the transactions discussion, section 13.1).
+A failing check returns an <strong>error trace</strong>, the exact sequence of states violating the property. Point: a formal model lets you <strong>test architectural decisions</strong> that are otherwise hard to verify.</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+SUT · unit / narrow integration / broad integration / end-to-end · user journey test · test pyramid · flaky test · small / intermediate / large test · fake / stub / mock · contract test · specification · model checking · TLA+ · safety vs liveness · dual write · backfill.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 29. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-28-upstream-resiliency/">Understanding Distributed Systems 28: Upstream resiliency (and Part V intro)</a> · <a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">Understanding Distributed Systems 30: Continuous delivery and deployment</a> · <a href="/book-digest/understanding-distributed-systems/uds-12-transactions/">Understanding Distributed Systems 12: Transactions</a> · <a href="/book-digest/understanding-distributed-systems/uds-13-asynchronous-transactions/">Understanding Distributed Systems 13: Asynchronous transactions</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-28-upstream-resiliency/">&larr; Understanding Distributed Systems 28: Upstream resiliency (and Part V intro)</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">Understanding Distributed Systems 30: Continuous delivery and deployment &rarr;</a></nav></main></body></html>

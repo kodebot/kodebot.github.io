@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 11: Troubleshooting and monitoring containers</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-11-troubleshooting-and-monitoring-containers">Podman for DevOps 11: Troubleshooting and monitoring containers</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 11 (Part 3: Managing and integrating containers securely). Previous: <a href="/book-digest/podman-for-devops/pfd-10-securing-containers/">Podman for DevOps 10: Securing containers</a>. Next: <a href="/book-digest/podman-for-devops/pfd-12-implementing-container-networking-concepts/">Podman for DevOps 12: Implementing container networking concepts</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A container is <strong>just a host process</strong>, so troubleshoot <strong>top-down</strong>: application, then container, then host. Helpers: <code>podman logs</code>, <code>inspect</code>, <code>system df</code>, <code>info</code>.</li>
+<li><strong>Permission denied on a volume</strong> has layers: <strong>SELinux</strong> label (<code>:z</code> shared, <code>:Z</code> private), then <strong>user namespaces</strong> (<code>podman top user,huser</code>; fixes <code>:U</code>, <code>podman unshare chown</code>, <code>--userns=keep-id</code>).</li>
+<li><strong>Health checks</strong> separate &quot;running&quot; from &quot;healthy&quot;: <code>--health-cmd</code>, interval, retries, start period, timeout; scheduled by <strong>systemd transient timers</strong>; <code>--health-on-failure</code> (<code>none</code>, <code>restart</code>, <code>stop</code>, <code>kill</code>) gives self-healing; or embed <code>HEALTHCHECK</code> in the image.</li>
+<li><strong>Build failures</strong> come from a non-zero <code>RUN</code> exit code, a wrong repository or tag, or missing registry authentication; start scripts with <code>set -euo pipefail</code>.</li>
+<li><strong><code>nsenter</code></strong> runs host tools <strong>inside a container's namespaces</strong> (network, mount...), which <code>podman exec</code> cannot do for minimal images.</li>
+</ul>
+</div></div>
+<h2 id="11-1-troubleshooting-running-containers">11.1 Troubleshooting running containers</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-11-top-down-troubleshooting.svg" alt="Troubleshoot application, then container, then host" loading="lazy" /></p>
+<ul>
+<li>Start from the commands you know: <code>podman logs</code>, <code>podman inspect</code>, plus <code>podman system df</code> (storage used by containers and images) and <code>podman info</code> (host information).</li>
+<li><strong>A running container is a process on the host</strong>, so all host tools are available for the OS and its resources.</li>
+<li><strong>Best practice: top-down.</strong> Application layer first, then the container layer, then the base host. The Podman team keeps a list of common issues: https://github.com/containers/podman/blob/main/troubleshooting.md.</li>
+</ul>
+<h3 id="permission-denied-on-storage-volumes">Permission denied on storage volumes</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-11-permission-denied-ladder.svg" alt="SELinux label first, then user namespace ownership" loading="lazy" /></p>
+<p>Common on RHEL, Fedora and other SELinux distributions with SELinux in <strong>Enforcing</strong> mode (the recommended setting).</p>
+<p><strong>Layer 1, SELinux contexts.</strong> SELinux labels (extended attributes) keep container processes from reaching host or other containers' files. A host directory mounted into a container <strong>does not have the right label</strong>, and Podman does not change OS labels unless you ask:</p>
+<pre class="hl"><code>$<span class="w"> </span>mkdir<span class="w"> </span>~/mycontent
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-v<span class="w"> </span>~/mycontent:/content<span class="w"> </span>fedora<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>touch<span class="w"> </span>/content/file
+touch:<span class="w"> </span>cannot<span class="w"> </span>touch<span class="w"> </span><span class="s1">'/content/file'</span>:<span class="w"> </span>Permission<span class="w"> </span>denied
+</code></pre>
+<p><strong>Fix: relabel with <code>:z</code> or <code>:Z</code></strong> (chapter 5):</p>
+<table>
+<thead>
+<tr>
+<th>Suffix</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>:z</code> (shared)</td>
+<td>shared content label, for multiple containers</td>
+</tr>
+<tr>
+<td><code>:Z</code> (private)</td>
+<td>private, unshared label; <strong>the more secure choice</strong> when one container needs the data</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code><span class="c1"># Using :Z to grant exclusive access to the container</span>
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-v<span class="w"> </span>~/mycontent:/content:Z<span class="w"> </span>fedora<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>touch<span class="w"> </span>/content/file
+</code></pre>
+<p><strong>Layer 2, user namespaces (rootless).</strong> A user namespace isolates UIDs and GIDs, so a process can have a different identity inside than on the host. Rootless: you are UID 1000 on the host and <strong>root (UID 0) inside</strong>, an alias for your host user. A process running as another container user (mysql, nginx with UID 999) maps to a <strong>sub-UID</strong> from <code>/etc/subuid</code> that may not be allowed to write your mounted folder.</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>web<span class="w"> </span>-v<span class="w"> </span>~/data:/data:Z<span class="w"> </span>nginx
+$<span class="w"> </span>podman<span class="w"> </span>top<span class="w"> </span>web<span class="w"> </span>user,huser
+USER<span class="w">   </span>HUSER
+root<span class="w">   </span><span class="m">1000</span><span class="w">      </span><span class="c1"># inside is root, outside is your local user</span>
+nginx<span class="w">  </span><span class="m">100098</span><span class="w">    </span><span class="c1"># inside is nginx (999), outside is a sub-UID</span>
+</code></pre>
+<p>Here nginx runs as host UID <strong>100098</strong>, but <code>~/data</code> is owned by 1000, so it is blocked. Fixes:</p>
+<table>
+<thead>
+<tr>
+<th>Fix</th>
+<th>Command</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>:U</code> flag</strong> (Podman 3.1+)</td>
+<td><code>$ podman run -v ~/mycontent:/content:Z,U fedora touch /content/file</code></td>
+<td>automatically <code>chown</code>s the host directory to the UID and GID used inside the container; the most efficient</td>
+</tr>
+<tr>
+<td><strong><code>podman unshare</code></strong></td>
+<td><code>$ podman unshare chown -R 0:0 ~/mycontent</code></td>
+<td>for manual fixes: plain <code>sudo chown</code> won't do; <code>unshare</code> runs the command <strong>in the container's user namespace</strong>, so the directory becomes owned by the container's internal root</td>
+</tr>
+<tr>
+<td><strong><code>--userns=keep-id</code></strong></td>
+<td><code>$ podman run --userns=keep-id -v ~/mycontent:/content:Z fedora ...</code></td>
+<td>keeps UID 1000 on the host as UID 1000 inside; common for development tools</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ping-in-rootless-containers"><code>ping</code> in rootless containers</h3>
+<p>On hardened systems ping may be restricted to a group range, and the container's mapped user ID can fall outside it. Fedora uses the <strong><code>ping_group_range</code></strong> kernel parameter; a fresh install allows everyone:</p>
+<pre class="hl"><code>$<span class="w"> </span>cat<span class="w"> </span>/proc/sys/net/ipv4/ping_group_range
+<span class="m">0</span><span class="w"> </span><span class="m">2147483647</span>
+</code></pre>
+<p>Reproduce a failure by restricting it (make it persistent with a file in <code>/etc/sysctl.d</code> containing <code>net.ipv4.ping_group_range=0 0</code>):</p>
+<pre class="hl"><code>$<span class="w"> </span>sudo<span class="w"> </span>sysctl<span class="w"> </span>-w<span class="w"> </span><span class="s2">"net.ipv4.ping_group_range=0 0"</span>
+$<span class="w"> </span><span class="nv">container</span><span class="o">=</span><span class="k">$(</span>buildah<span class="w"> </span>from<span class="w"> </span>docker.io/library/fedora<span class="k">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>buildah<span class="w"> </span>run<span class="w"> </span><span class="nv">$container</span><span class="w"> </span>--<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>iputils<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>buildah<span class="w"> </span>commit<span class="w"> </span><span class="nv">$container</span><span class="w"> </span>ping_example
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>ping_example<span class="w"> </span>ping<span class="w"> </span>-W10<span class="w"> </span>-c1<span class="w"> </span>redhat.com
+PING<span class="w"> </span>redhat.com<span class="w"> </span><span class="o">(</span><span class="m">209</span>.132.183.105<span class="o">)</span>:<span class="w"> </span><span class="m">56</span><span class="w"> </span>data<span class="w"> </span>bytes
+---<span class="w"> </span>redhat.com<span class="w"> </span>ping<span class="w"> </span>statistics<span class="w"> </span>---
+<span class="m">1</span><span class="w"> </span>packets<span class="w"> </span>transmitted,<span class="w"> </span><span class="m">0</span><span class="w"> </span>packets<span class="w"> </span>received,<span class="w"> </span><span class="m">100</span>%<span class="w"> </span>packet<span class="w"> </span>loss
+</code></pre>
+<p>100% packet loss because ping cannot send over a raw socket. The fix is a range large enough to include the user's private group GID or a secondary group. <strong>Restore the default afterwards:</strong> <code>sudo sysctl -w &quot;net.ipv4.ping_group_range=0 2147483647&quot;</code> and remove any persistent file under <code>/etc/sysctl.d</code>.</p>
+<blockquote>
+<p>[!warning] Large UID/GID users in builds can hang the build
+Adding a user with a very large UID/GID creates a huge <strong>sparse</strong> <code>/var/log/lastlog</code> file in the image, which can make the build hang forever. The cause is that <strong>Go does not correctly support sparse files</strong>.</p>
+</blockquote>
+<blockquote>
+<p>[!note] Sparse files
+<code>/var/log/lastlog</code> is a binary sparse file recording each user's last login. A sparse file's apparent size (<code>ls -l</code>) exceeds its real disk use: only metadata for the empty blocks is written, saving space.</p>
+</blockquote>
+<h2 id="11-2-monitoring-containers-with-health-checks">11.2 Monitoring containers with health checks</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-11-health-check-cycle.svg" alt="Health checks run on a timer and can trigger an action" loading="lazy" /></p>
+<ul>
+<li>A <strong>health check</strong> determines the <strong>health or readiness</strong> of the process in a container, from &quot;is the process running&quot; to &quot;does it respond over the network&quot;.</li>
+<li><strong>Running vs healthy:</strong> Podman treats a container as up while <strong>PID 1</strong> hasn't exited, yet a web server can be deadlocked, out of memory, or unable to reach its database. A health check <strong>proactively runs a command inside the container at intervals</strong> to verify the service works.</li>
+<li><strong>Two sources:</strong> <strong>built-in</strong> (many official images, e.g. databases, carry a <code>HEALTHCHECK</code> in their Containerfile, so Podman starts monitoring automatically) and <strong>manual</strong> (<code>--health-cmd</code> overrides or adds one, e.g. to check an API endpoint or a lock file).</li>
+<li><strong>Status phases in <code>podman ps</code>:</strong></li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Starting</strong></td>
+<td>just launched; the initial grace period is active</td>
+</tr>
+<tr>
+<td><strong>Healthy</strong></td>
+<td>the check exited with code 0</td>
+</tr>
+<tr>
+<td><strong>Unhealthy</strong></td>
+<td>failed the consecutive number of times set by <code>retries</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Five components</strong> (command and interval are required; the rest optional):</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Command</strong></td>
+<td>run inside the container; <strong>exit 0 = success, any other = failure</strong>, e.g. a <code>curl</code> to the web port</td>
+</tr>
+<tr>
+<td><strong>Retries</strong></td>
+<td>consecutive failures before marking unhealthy; <strong>a success resets the counter</strong></td>
+</tr>
+<tr>
+<td><strong>Interval</strong></td>
+<td>time between checks, formats like <code>30s</code> or <code>1h5m</code>; too small wastes resources, too large risks catching timeouts; needs trial and error</td>
+</tr>
+<tr>
+<td><strong>Start period</strong></td>
+<td>failures are <strong>ignored</strong> (grace period for the app to come up)</td>
+</tr>
+<tr>
+<td><strong>Timeout</strong></td>
+<td>how long one check may take before counting as failed</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Manual run</strong> (<code>--health-interval=0</code> disables scheduling):</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-dt<span class="w"> </span>--name<span class="w"> </span>healthtest1<span class="w"> </span>--health-cmd<span class="w"> </span><span class="s1">'curl http://localhost || exit 1'</span><span class="w"> </span>--health-interval<span class="o">=</span><span class="m">0</span><span class="w"> </span>quay.io/libpod/alpine_nginx:latest
+$<span class="w"> </span>podman<span class="w"> </span>ps
+...<span class="w"> </span>Up<span class="w"> </span><span class="m">8</span><span class="w"> </span>seconds<span class="w"> </span><span class="o">(</span>starting<span class="o">)</span><span class="w"> </span><span class="m">80</span>/tcp<span class="w"> </span>healthtest1
+$<span class="w"> </span>podman<span class="w"> </span>healthcheck<span class="w"> </span>run<span class="w"> </span>healthtest1
+$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="nv">$?</span>
+<span class="m">0</span>
+$<span class="w"> </span>podman<span class="w"> </span>ps
+...<span class="w"> </span>Up<span class="w"> </span><span class="m">41</span><span class="w"> </span>seconds<span class="w"> </span><span class="o">(</span>healthy<span class="o">)</span><span class="w"> </span><span class="m">80</span>/tcp<span class="w"> </span>healthtest1
+</code></pre>
+<p>(The book writes <code>--health-interval</code> and <code>--healthcheck-interval</code> interchangeably.) In real use Podman schedules checks automatically and you never need <code>podman healthcheck run</code>.</p>
+<p><strong>Scheduling uses systemd timers</strong>, which is why systemd is required for automatic scheduling; without systemd use another tool such as cron, set up manually. With an interval:</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-dt<span class="w"> </span>--name<span class="w"> </span>healthtest2<span class="w"> </span>--health-cmd<span class="w"> </span><span class="s1">'curl http://localhost || exit 1'</span><span class="w"> </span>--healthcheck-interval<span class="o">=</span>10s<span class="w"> </span>quay.io/libpod/alpine_nginx:latest
+$<span class="w"> </span>ls<span class="w"> </span>/run/user/<span class="nv">$UID</span>/systemd/transient/69f3*
+/run/user/1000/systemd/transient/69f3ca0ce7aa...-6433a92c3f3c8479.service
+/run/user/1000/systemd/transient/69f3ca0ce7aa...-6433a92c3f3c8479.timer
+</code></pre>
+<p>Podman creates a <strong>transient</strong> systemd service and timer for each scheduled health check (not permanent; recreated when the container restarts):</p>
+<pre class="hl"><code><span class="c1"># service</span>
+<span class="k">[Unit]</span>
+<span class="na">Description</span><span class="o">=</span><span class="s">/usr/bin/podman healthcheck run 69f3ca0ce7aa...</span>
+
+<span class="k">[Service]</span>
+<span class="na">LogLevelMax</span><span class="o">=</span><span class="s">5</span>
+<span class="na">Environment</span><span class="o">=</span><span class="s">"PATH=/home/vagrant/.local/bin:/home/vagrant/bin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin"</span>
+<span class="na">ExecStart</span><span class="o">=</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">"/usr/bin/podman"</span><span class="w"> </span><span class="na">"healthcheck" "run" "69f3ca0ce7aa..."</span>
+
+<span class="c1"># timer</span>
+<span class="k">[Timer]</span>
+<span class="na">OnUnitInactiveSec</span><span class="o">=</span><span class="s">10s</span>
+<span class="na">AccuracySec</span><span class="o">=</span><span class="s">1s</span>
+</code></pre>
+<p>Filter by health: <code>$ podman ps -a --filter health=healthy</code>.</p>
+<h3 id="self-healing-with-health-on-failure">Self-healing with <code>--health-on-failure</code></h3>
+<p>By default a repeatedly failing container is only marked <strong>unhealthy</strong>, which suits external monitoring but doesn't fix a stalled service. <code>--health-on-failure</code> makes the engine act:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code> (default)</td>
+<td>only update status to unhealthy</td>
+</tr>
+<tr>
+<td><code>restart</code></td>
+<td>restart the container: the most common self-healing, for services that deadlock or leak</td>
+</tr>
+<tr>
+<td><code>stop</code></td>
+<td>stop it: for services that might corrupt data if left running</td>
+</tr>
+<tr>
+<td><code>kill</code></td>
+<td>send SIGKILL immediately</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--name<span class="w"> </span>self_healing_web<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--health-cmd<span class="w"> </span><span class="s2">"curl -f http://localhost/ || exit 1"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--health-on-failure<span class="o">=</span>restart<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>nginx
+</code></pre>
+<p>This gives &quot;a mini-orchestrator capability directly to the Podman CLI&quot;.</p>
+<h3 id="health-checks-in-the-image">Health checks in the image</h3>
+<p>The most robust way: a <strong><code>HEALTHCHECK</code></strong> instruction in the Containerfile, so anyone pulling the image (a Fedora developer or a production cluster) gets the same monitoring without remembering CLI flags:</p>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi9/ubi-minimal</span>
+
+<span class="c"># Install a simple web server (microdnf is the package manager for ubi-minimal)</span>
+<span class="k">RUN</span><span class="w"> </span>microdnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>python3<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>microdnf<span class="w"> </span>clean<span class="w"> </span>all
+
+<span class="c"># Define the health check: try to fetch the local index every 10 seconds</span>
+<span class="k">HEALTHCHECK</span><span class="w"> </span>--interval<span class="o">=</span>10s<span class="w"> </span>--timeout<span class="o">=</span>3s<span class="w"> </span>--start-period<span class="o">=</span>5s<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--retries<span class="o">=</span><span class="m">3</span><span class="w"> </span>CMD<span class="w"> </span>curl<span class="w"> </span>-f<span class="w"> </span>http://localhost:8080/<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"python3"</span><span class="p">,</span><span class="w"> </span><span class="s2">"-m"</span><span class="p">,</span><span class="w"> </span><span class="s2">"http.server"</span><span class="p">,</span><span class="w"> </span><span class="s2">"8080"</span><span class="p">]</span>
+</code></pre>
+<p>(The book installs only <code>python3</code>, yet the check uses <code>curl</code>; ubi-minimal may need <code>curl</code> too.) This chapter's examples live under <code>Chapter11/</code> in the book repository.</p>
+<h2 id="11-3-inspecting-your-container-build-results">11.3 Inspecting your container build results</h2>
+<p>Builds print each instruction's output and errors to stdout; errors from <code>RUN</code> commands are propagated.</p>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Cause and message</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>RUN</code> command error</strong></td>
+<td>the command exits <strong>non-zero</strong>; the build fails and prints the error and exit status. Example <code>RUN yum install -y htpd &amp;&amp; yum clean all -y</code> (typo): <code>No match for argument: htpd</code> / <code>Error: Unable to find a match: htpd</code> / <code>error building at STEP &quot;RUN yum install -y htpd &amp;&amp; yum clean all -y&quot;: error while running runtime: exit status 1</code></td>
+<td>use the message to find the failing <code>RUN</code> and fix the command; the step message comes from the <strong>stage executor</strong> of Buildah's <code>imagebuildah</code> package (https://github.com/containers/buildah/blob/main/imagebuildah/stage_executor.go)</td>
+</tr>
+<tr>
+<td><strong>Repository not found</strong> (<code>FROM registry.access.redhat.com/ubi_8</code>)</td>
+<td><code>... reading manifest latest in registry.access.redhat.com/ubi_8: name unknown: Repo not found</code></td>
+<td>fix the repository name, or check the registry holds it</td>
+</tr>
+<tr>
+<td><strong>Tag not found</strong> (<code>FROM docker.io/library/fedora:sometag</code>)</td>
+<td>registry 404: <code>manifest unknown: manifest unknown</code></td>
+<td>find a valid tag: <code>skopeo list-tags docker://docker.io/library/fedora</code> (shows <code>39</code>, <code>40</code>, <code>branched</code>, <code>heisenbug</code>, <code>latest</code>, <code>modular</code>, <code>rawhide</code> ...)</td>
+</tr>
+<tr>
+<td><strong>Authentication</strong> (<code>FROM local-registry.example.com/ubi8</code>)</td>
+<td><code>unauthorized: authentication required</code></td>
+<td><code>podman login</code> or <code>buildah login</code>, or provide an auth file with a valid token</td>
+</tr>
+</tbody>
+</table>
+<p>(The three example Dockerfiles <code>RUN_command_error</code>, <code>FROM_repo_not_found</code>, <code>FROM_tag_not_found</code> and <code>FROM_auth_error</code> share the same httpd body: <code>EXPOSE 80</code>, <code>CMD [&quot;/usr/sbin/httpd&quot;, &quot;-DFOREGROUND&quot;]</code>.)</p>
+<h3 id="troubleshooting-buildah-native-scripts">Troubleshooting Buildah-native scripts</h3>
+<p>Bash runs a script to the end <strong>despite intermediate errors</strong>, so start with:</p>
+<pre class="hl"><code><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+</code></pre>
+<ul>
+<li><code>-e</code>: exit immediately if a command or pipeline fails.</li>
+<li><code>-o pipefail</code>: a pipeline returns the exit code of the <strong>rightmost failing command</strong>.</li>
+<li><code>-u</code>: treat <strong>unset variables</strong> as errors.</li>
+</ul>
+<pre class="hl"><code><span class="ch">#!/bin/bash</span>
+
+<span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<span class="c1"># Trying to pull a non-existing tag of Fedora official image</span>
+<span class="nv">container</span><span class="o">=</span><span class="k">$(</span>buildah<span class="w"> </span>from<span class="w"> </span>docker.io/library/fedora:non-existing-tag<span class="k">)</span>
+buildah<span class="w"> </span>run<span class="w"> </span><span class="nv">$container</span><span class="w"> </span>--<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>httpd<span class="p">;</span><span class="w"> </span>dnf<span class="w"> </span>clean<span class="w"> </span>all<span class="w"> </span>-y
+buildah<span class="w"> </span>config<span class="w"> </span>--cmd<span class="w"> </span><span class="s2">"httpd -DFOREGROUND"</span><span class="w"> </span><span class="nv">$container</span>
+buildah<span class="w"> </span>config<span class="w"> </span>--port<span class="w"> </span><span class="m">80</span><span class="w"> </span><span class="nv">$container</span>
+buildah<span class="w"> </span>commit<span class="w"> </span><span class="nv">$container</span><span class="w"> </span>custom-httpd
+buildah<span class="w"> </span>tag<span class="w"> </span>custom-httpd<span class="w"> </span>registry.example.com/custom-httpd:v0.0.1
+</code></pre>
+<pre class="hl"><code>$ ./custom-httpd.sh
+Trying to pull docker.io/library/fedora:non-existing-tag...
+initializing source docker://fedora:non-existing-tag: reading manifest non-existing-tag in docker.io/library/fedora: manifest unknown: manifest unknown
+</code></pre>
+<p>Same message as the Dockerfile build, minus the step number (there are no steps in a script). Same solution: <code>skopeo list-tags</code>.</p>
+<h2 id="11-4-advanced-troubleshooting-with-nsenter">11.4 Advanced troubleshooting with <code>nsenter</code></h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-11-nsenter.svg" alt="nsenter runs host tools inside a container's namespaces" loading="lazy" /></p>
+<ul>
+<li>Basics (<code>podman logs</code>, <code>inspect</code>, <code>exec</code>, tailored health checks) often suffice. But images are small now, and increasingly have <strong>no package manager, not even <code>curl</code> or <code>wget</code></strong>, so you can't install tools inside.</li>
+<li>A container is a process in <strong>namespaces and cgroups</strong>; <strong><code>nsenter</code></strong> (<code>man nsenter</code>, not tied to any engine or runtime) runs a command <strong>inside one or more of a process's namespaces while you keep the host's tools</strong>.</li>
+</ul>
+<pre class="hl"><code>nsenter [options] [&lt;program&gt; [&lt;argument&gt;...]]
+ -a, --all        enter all namespaces
+ -t, --target &lt;pid&gt;   target process to get namespaces from
+ -m, --mount      -u, --uts      -i, --ipc      -n, --net
+ -p, --pid        -C, --cgroup   -U, --user     -T, --time
+ -S, --setuid &lt;uid&gt;   -G, --setgid &lt;gid&gt;   --preserve-credentials
+ -r, --root[=&lt;dir&gt;]   -w, --wd[=&lt;dir&gt;]   -F, --no-fork
+ -Z, --follow-context   set SELinux context according to --target PID
+</code></pre>
+<p>One option per namespace. Get the container's main PID:</p>
+<pre class="hl"><code>$<span class="w"> </span><span class="nv">CNT_PID</span><span class="o">=</span><span class="k">$(</span>podman<span class="w"> </span>inspect<span class="w"> </span>&lt;Container_Name&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--format<span class="w"> </span><span class="s1">'{{ .State.Pid }}'</span><span class="k">)</span>
+$<span class="w"> </span>ls<span class="w"> </span>-al<span class="w"> </span>/proc/<span class="nv">$CNT_PID</span>/ns<span class="w">      </span><span class="c1"># symlinks: namespace type -&gt; inode number</span>
+</code></pre>
+<p>(Hint: an <strong>inode</strong> stores information about a file or directory; the <strong>inode number</strong> uniquely identifies it in a filesystem.)</p>
+<h3 id="worked-example-a-database-client-failing-silently">Worked example: a database client failing silently</h3>
+<p>A web app queries Postgres and prints JSON, but logs almost nothing (an alpha app); code and a SQL script are at https://github.com/PacktPublishing/Podman-for-DevOps-Second-Edition/tree/main/Chapter11/students. Build (Dockerfile <code>Chapter11/students/Dockerfile</code>):</p>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/golang</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="s">builder</span>
+
+<span class="c"># Copy files for build</span>
+<span class="k">RUN</span><span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/go/src/students/models
+<span class="k">COPY</span><span class="w"> </span>go.mod<span class="w"> </span>main.go<span class="w"> </span>/go/src/students
+<span class="k">COPY</span><span class="w"> </span>models/main.go<span class="w"> </span>/go/src/students/models
+
+<span class="c"># Set the working directory</span>
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/go/src/students</span>
+
+<span class="c"># Download dependencies</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>get<span class="w"> </span>-d<span class="w"> </span>-v<span class="w"> </span>./...
+
+<span class="c"># Install the package</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>build<span class="w"> </span>-v
+
+<span class="c"># Runtime image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi9/ubi-minimal:latest</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="s">bin</span>
+<span class="k">COPY</span><span class="w"> </span>--from<span class="o">=</span>builder<span class="w"> </span>/go/src/students<span class="w"> </span>/usr/local/bin
+<span class="k">COPY</span><span class="w"> </span>entrypoint.sh<span class="w"> </span>/
+
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+
+<span class="k">ENTRYPOINT</span><span class="w"> </span><span class="p">[</span><span class="s2">"/entrypoint.sh"</span><span class="p">]</span>
+</code></pre>
+<pre class="hl"><code><span class="c1"># buildah build -t students-image .</span>
+</code></pre>
+<blockquote>
+<p>[!note] Rootless networking
+This example is rootful (traditional network namespaces). Even <strong>rootless</strong> containers keep their own network namespace; the difference is the driver. The current default, <strong><code>pasta</code></strong>, is a high-performance translation layer between the container's layer 2 interface and the host's native layer 4 sockets, giving isolation and security without elevated privileges (chapter 12).</p>
+</blockquote>
+<p>Flags: <code>-database</code> (default students), <code>-host</code> (default localhost), <code>-password</code> (default password), <code>-port</code> (default 5432), <code>-username</code> (default admin). Run with the supplied values (<code>pghost.example.com</code>, port 5432, user <code>students</code>, a lab password from the book):</p>
+<pre class="hl"><code><span class="c1"># podman run students-image students -help</span>
+<span class="c1"># podman run --rm -d -p 8080:8080 \</span>
+<span class="w">    </span>--name<span class="w"> </span>students_app<span class="w"> </span>students-image<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>students<span class="w"> </span>-host<span class="w"> </span>pghost.example.com<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-port<span class="w"> </span><span class="m">5432</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-username<span class="w"> </span>students<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-password<span class="w"> </span>Podman_R0cks#
+<span class="c1"># podman logs students_app</span>
+<span class="m">2021</span>/12/27<span class="w"> </span><span class="m">21</span>:51:31<span class="w"> </span>Connecting<span class="w"> </span>to<span class="w"> </span>host<span class="w"> </span>pghost.example.com:5432,<span class="w"> </span>database<span class="w"> </span>students
+$<span class="w"> </span>curl<span class="w"> </span>localhost:8080/students
+Internal<span class="w"> </span>Server<span class="w"> </span>Error
+</code></pre>
+<p>Logs say nothing more, and the <strong>UBI minimal</strong> image has no troubleshooting tools. Attach to the <strong>network namespace only</strong>, keeping host binaries:</p>
+<pre class="hl"><code>$<span class="w"> </span><span class="nv">CNT_PID</span><span class="o">=</span><span class="k">$(</span>sudo<span class="w"> </span>podman<span class="w"> </span>inspect<span class="w"> </span>students_app<span class="w"> </span>--format<span class="w"> </span><span class="s1">'{{ .State.Pid }}'</span><span class="k">)</span>
+$<span class="w"> </span>sudo<span class="w"> </span>nsenter<span class="w"> </span>-t<span class="w"> </span><span class="nv">$CNT_PID</span><span class="w"> </span>-n<span class="w"> </span>/bin/bash
+<span class="c1"># or run a single command: sudo nsenter -t $CNT_PID -n ip addr show</span>
+<span class="c1"># ip addr show        # lo and tap0 (10.0.2.100/24)</span>
+<span class="c1"># ip route            # default via 10.0.2.2 dev tap0</span>
+<span class="c1"># ss -atunp</span>
+tcp<span class="w">  </span>TIME-WAIT<span class="w">  </span><span class="m">0</span><span class="w">  </span><span class="m">0</span><span class="w">  </span><span class="m">10</span>.0.2.100:50728<span class="w">  </span><span class="m">10</span>.0.2.100:8080
+tcp<span class="w">  </span>LISTEN<span class="w">     </span><span class="m">0</span><span class="w">  </span><span class="m">128</span><span class="w">  </span>*:8080<span class="w">  </span>*:*<span class="w">  </span>users:<span class="o">((</span><span class="s2">"students"</span>,pid<span class="o">=</span><span class="m">402788</span>,fd<span class="o">=</span><span class="m">3</span><span class="o">))</span>
+</code></pre>
+<p><strong>No established connection to the database host</strong>, so likely routing, firewall or name resolution. Test with the host's <code>psql</code> and <code>dig</code>:</p>
+<pre class="hl"><code><span class="c1"># psql -h pghost.example.com</span>
+psql:<span class="w"> </span>error:<span class="w"> </span>could<span class="w"> </span>not<span class="w"> </span>translate<span class="w"> </span>host<span class="w"> </span>name<span class="w"> </span><span class="s2">"pghost.example.com"</span><span class="w"> </span>to<span class="w"> </span>address:<span class="w"> </span>Name<span class="w"> </span>or<span class="w"> </span>service<span class="w"> </span>not<span class="w"> </span>known
+<span class="c1"># dig pghost.example.com</span>
+<span class="p">;;</span><span class="w"> </span>-&gt;&gt;HEADER<span class="s">&lt;&lt;- opco</span>de:<span class="w"> </span>QUERY,<span class="w"> </span>status:<span class="w"> </span>NXDOMAIN
+</code></pre>
+<p><code>NXDOMAIN</code> means the name doesn't exist. The development team confirmed the real name had a <strong>dash</strong>: <code>pg-host.example.com</code>. Rerun with the right name and the query works:</p>
+<pre class="hl"><code>$<span class="w"> </span>curl<span class="w"> </span>localhost:8080/students
+<span class="o">{</span><span class="s2">"Id"</span>:10149,<span class="s2">"FirstName"</span>:<span class="s2">"Frank"</span>,<span class="s2">"MiddleName"</span>:<span class="s2">"Vincent"</span>,<span class="s2">"LastName"</span>:<span class="s2">"Zappa"</span>,<span class="s2">"Class"</span>:<span class="s2">"3A"</span>,<span class="s2">"Course"</span>:<span class="s2">"Composition"</span><span class="o">}</span>
+</code></pre>
+<ul>
+<li><code>nsenter</code> can attach to <strong>several namespaces</strong>; <code>-a</code> (all) simulates <code>podman exec</code>, including the <strong>mount namespace</strong>, giving the container's filesystem view: <code>$ sudo nsenter -t $CNT_PID -a /bin/bash</code>.</li>
+<li><strong>Why not just <code>podman exec</code>?</strong> It can only run <strong>binaries that already exist in the image</strong>. Production images (ubi-micro, ubi-minimal) often lack <code>ip</code>, <code>ps</code>, <code>tcpdump</code> or even bash, so <code>podman exec</code> fails; <code>nsenter</code> borrows the <strong>host's</strong> tools.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<p>Common runtime issues and fixes (labels, user namespaces, ping), health checks and their systemd scheduling, common build errors, and advanced network troubleshooting with <code>nsenter</code>. Next: advanced container networking.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+top-down troubleshooting · SELinux <code>:z</code>/<code>:Z</code> · user namespace · <code>huser</code> · <code>:U</code> · <code>podman unshare</code> · <code>--userns=keep-id</code> · <code>ping_group_range</code> · sparse file · health check (command, retries, interval, start period, timeout) · systemd transient timer · <code>--health-on-failure</code> · <code>HEALTHCHECK</code> · <code>set -euo pipefail</code> · <code>skopeo list-tags</code> · <code>nsenter</code> · <code>/proc/&lt;pid&gt;/ns</code>.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 11; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>Podman troubleshooting guidelines: https://github.com/containers/podman/blob/main/troubleshooting.md</li>
+<li>Buildah stage executor: https://github.com/containers/buildah/blob/main/imagebuildah/stage_executor.go</li>
+<li>Book code (students app): https://github.com/PacktPublishing/Podman-for-DevOps-Second-Edition/tree/main/Chapter11/students</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-04-managing-running-containers/">Podman for DevOps 4: Managing running containers</a> · <a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">Podman for DevOps 5: Implementing storage for the container's data</a> · <a href="/book-digest/podman-for-devops/pfd-10-securing-containers/">Podman for DevOps 10: Securing containers</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-10-securing-containers/">&larr; Podman for DevOps 10: Securing containers</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-12-implementing-container-networking-concepts/">Podman for DevOps 12: Implementing container networking concepts &rarr;</a></nav></main></body></html>

@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 8: Choosing the container base image</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-8-choosing-the-container-base-image">Podman for DevOps 8: Choosing the container base image</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 8. Previous: <a href="/book-digest/podman-for-devops/pfd-07-integrating-with-existing-application-build-processes/">Podman for DevOps 7: Integrating with existing application build processes</a>. Next: <a href="/book-digest/podman-for-devops/pfd-09-pushing-images-to-a-container-registry/">Podman for DevOps 9: Pushing images to a container registry</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A base image is the <strong>operating-system layer</strong> your application depends on, so choose it for <strong>security and updates</strong>.</li>
+<li>The <strong>OCI image</strong> = manifest, optional image index, filesystem layers, configuration. The <strong>manifest</strong> gives a hashable ID, enables <strong>multi-architecture</strong> images, and maps to the runtime spec.</li>
+<li>Prefer <strong>official images</strong> and <strong>registries with vulnerability scans</strong> (Docker Hub with Scout; Quay.io with <strong>Clair</strong>; Red Hat Ecosystem Catalog). Read the Dockerfile and the scan before you run an image.</li>
+<li>Control sources with <code>registries.conf</code>: <strong>unqualified vs fully qualified</strong> names, <code>[[registry]]</code> <code>prefix</code>/<code>location</code>/<code>insecure</code>/<code>blocked</code>, <strong>mirrors</strong>, and <strong>short-name aliases</strong>.</li>
+<li><strong>Red Hat UBI</strong> is the freely redistributable RHEL-based base in four flavours: <strong>Standard</strong> (~230 MiB, <code>yum</code>), <strong>Minimal</strong> (<code>microdnf</code>, about half), <strong>Micro</strong> (distroless, no package manager), <strong>Init</strong> (systemd as PID 1).</li>
+</ul>
+</div></div>
+<h2 id="8-1-the-open-container-initiative-image-format">8.1 The Open Container Initiative image format</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-08-oci-image-anatomy.svg" alt="Image index, manifests, config and layers" loading="lazy" /></p>
+<ul>
+<li>Recap: <strong>2013</strong> Docker introduced images and registries; its <strong>containerd</strong> was extracted and donated to the <strong>CNCF</strong>; in <strong>2015</strong> Docker with Red Hat, AWS, Google, Microsoft, IBM and others formed the <strong>OCI</strong> under the Linux Foundation. It produced the <strong>runtime-spec</strong> and <strong>image-spec</strong>, then <strong>runc</strong> as the first runtime implementation.</li>
+<li>An OCI image consists of:
+<ul>
+<li><strong>Manifest:</strong> metadata of contents and dependencies, identifying one or more filesystem archives to unpack into the runnable filesystem.</li>
+<li><strong>Image index (optional):</strong> a list of manifests and descriptors giving different implementations by target platform.</li>
+<li><strong>Set of filesystem layers:</strong> merged to build the final filesystem.</li>
+<li><strong>Configuration:</strong> what the runtime needs to run the app (arguments, environment variables).</li>
+</ul>
+</li>
+</ul>
+<h3 id="oci-image-manifest">OCI image manifest</h3>
+<p>It defines the layers and configuration of <strong>one image for one architecture and OS</strong>:</p>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"schemaVersion"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"config"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"mediaType"</span><span class="p">:</span><span class="w"> </span><span class="s2">"application/vnd.oci.image.config.v1+json"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"size"</span><span class="p">:</span><span class="w"> </span><span class="mi">7023</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"digest"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:b5b2b2c507a0944348e0303114d8d93aaaa081732b86451d9bce1f432a537bc7"</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"layers"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"mediaType"</span><span class="p">:</span><span class="w"> </span><span class="s2">"application/vnd.oci.image.layer.v1.tar+gzip"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"size"</span><span class="p">:</span><span class="w"> </span><span class="mi">32654</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"digest"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0"</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"annotations"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"com.example.key1"</span><span class="p">:</span><span class="w"> </span><span class="s2">"value1"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"com.example.key2"</span><span class="p">:</span><span class="w"> </span><span class="s2">"value2"</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schemaVersion</code></td>
+<td>must be <strong>2</strong>, for backward compatibility with Docker</td>
+</tr>
+<tr>
+<td><code>config</code></td>
+<td>references the image configuration through a digest; <code>mediaType</code> gives the format (just one currently)</td>
+</tr>
+<tr>
+<td><code>layers</code></td>
+<td>array of descriptors; each <code>mediaType</code> must be an allowed layer media type</td>
+</tr>
+<tr>
+<td><code>annotations</code></td>
+<td>extra metadata for the manifest</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Three goals of the spec:</strong></p>
+<ol>
+<li>Hash the image configuration to produce a <strong>unique ID</strong>.</li>
+<li>Allow <strong>multi-architecture images</strong> through the high-level manifest (image index) pointing to platform-specific manifests.</li>
+<li>Translate easily into the <strong>OCI Runtime Specification</strong>.</li>
+</ol>
+<h2 id="8-2-where-do-container-images-come-from">8.2 Where do container images come from?</h2>
+<p>Docker introduced images and public registries; other cloud registries followed:</p>
+<table>
+<thead>
+<tr>
+<th>Registry type</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Docker Hub</strong></td>
+<td>Docker Inc.'s hosted registry; hosts official repositories and security-verified images of popular open source projects</td>
+</tr>
+<tr>
+<td><strong>Quay.io</strong></td>
+<td>born at CoreOS, now Red Hat; private and public repositories, automated <strong>security scanning</strong>, image builds, integration with public Git repositories</td>
+</tr>
+<tr>
+<td><strong>Linux distribution registries</strong></td>
+<td>community (Fedora) or enterprise (RHEL); usually only for projects already packaged by the distribution; fed by maintainers, not open to end users</td>
+</tr>
+<tr>
+<td><strong>Public cloud registries</strong></td>
+<td>Amazon, Google, Microsoft and others offer public and private registries</td>
+</tr>
+</tbody>
+</table>
+<p>Chapter 9 explores them further. Docker Hub and Quay.io host images <strong>created by anyone</strong>, handy for quick tests, but just pulling and running one is risky: <strong>outdated software with known vulnerabilities, or malicious code that compromises the infrastructure</strong>. Both registries offer features showing where an image comes from.</p>
+<h3 id="docker-hub">Docker Hub</h3>
+<ul>
+<li><strong>Official Image</strong> tag after the name: images in Docker's Official Images program are <strong>curated by the Docker team with upstream maintainers</strong>. The image page shows the latest tags, supported architectures and links to documentation and issue tracking (e.g. https://hub.docker.com/_/alpine; Figure 8.1).</li>
+<li>You can <strong>read the Dockerfile</strong> behind any tag: the <code>edge</code> tag leads to https://github.com/alpinelinux/docker-alpine/blob/edge/x86_64/Dockerfile. <strong>Always prefer official images</strong>; if none fits, inspect the publisher's Dockerfile and image.</li>
+<li><strong>Docker Scout:</strong> scans images for vulnerabilities, gives remediation advice, integrates with CI/CD.</li>
+<li><strong>Limits:</strong> non-paying authenticated and unauthenticated users face limits, commonly the <strong>number of images pulled per hour</strong> (https://docs.docker.com/docker-hub/download-rate-limit/).</li>
+</ul>
+<h3 id="quay-io">Quay.io</h3>
+<ul>
+<li>Quay was acquired by <strong>CoreOS in 2014</strong>, now part of Red Hat. <strong>Quay.io</strong> is the managed SaaS of the open source Quay.</li>
+<li>It adopts <strong>Clair</strong>, a leading container vulnerability scanner, with reports on the repository tags page (SECURITY SCAN; Figure 8.2; example https://quay.io/repository/openshift-release-dev/ocp-release?tab=tags).</li>
+<li>At the time of writing: <strong>no pull limits</strong>; the free tier has <strong>five private repositories and unlimited public ones</strong>.</li>
+</ul>
+<h3 id="red-hat-container-registry">Red Hat Container Registry</h3>
+<ul>
+<li>Default registry for <strong>RHEL and OpenShift Container Platform (OCP)</strong>. The web interface is public, but almost all images are reserved for paying users. It offers <strong>official Red Hat images</strong>, <strong>Containerfile/Dockerfile sources</strong>, and <strong>security reports</strong> per image.</li>
+<li>The <strong>Red Hat Ecosystem Catalog</strong> page for an image (Figures 8.3 to 8.5; example MariaDB https://catalog.redhat.com/software/containers/rhel9/mariadb-105/61a6084dbfd4a5234d596220) shows description, version, architectures and tags, with <strong>Security</strong> and <strong>Dockerfile</strong> tabs. The Security tab lists vulnerability scan status (at the time of writing a vulnerability affecting three packages) with a <strong>Red Hat Advisory ID</strong> linked to public <strong>CVEs</strong>.</li>
+<li><strong>UBI</strong> (Universal Base Image; Figure 8.6, https://catalog.redhat.com/software/containers/ubi9/ubi/615bcf606feffc5384e8452e): a Red Hat initiative that lets <strong>every user, customer or not</strong>, use Red Hat container images, with the catalog's services and Red Hat package updates. One UBI version per RHEL release.</li>
+</ul>
+<h2 id="8-3-trusted-container-image-sources">8.3 Trusted container image sources</h2>
+<ul>
+<li>Running a pulled image without control means <strong>implicitly trusting the author</strong> not to have tampered with it. Chapter 10 covers attacks from containers: <strong>privilege escalation, data exfiltration, crypto miners</strong>; in Kubernetes clusters, malicious pods can spread across the infrastructure.</li>
+<li>The <strong>MITRE ATT&amp;CK</strong> matrices list attack strategies and techniques with real cases, detection and mitigation; one matrix is for <strong>containers</strong>, with techniques that rely on insecure images.</li>
+<li><strong>Prefer registries that support vulnerability scans</strong>, read the results, and <strong>avoid images with critical vulnerabilities</strong>.</li>
+<li>The first step to a secure cloud-native infrastructure: pull only from trusted sources, <strong>configure trusted registries and block disallowed ones</strong>.</li>
+</ul>
+<h3 id="managing-trusted-registries">Managing trusted registries</h3>
+<p><code>/etc/containers/registries.conf</code> (overridden by <code>$HOME/.config/containers/registries.conf</code>) lists registries Podman may contact:</p>
+<pre class="hl"><code><span class="n">unqualified-search-registries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"docker.io"</span><span class="p">,</span><span class="w"> </span><span class="s2">"quay.io"</span><span class="p">]</span>
+
+<span class="k">[[registry]]</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"registry.example.com:5000"</span>
+<span class="n">insecure</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+</code></pre>
+<ul>
+<li><strong>Fully qualified image:</strong> registry FQDN, namespace, name and tag, e.g. <code>docker.io/library/nginx:latest</code>: unambiguous.</li>
+<li><strong>Unqualified image:</strong> only the name (<code>nginx</code>); several candidates may exist across searched registries; most <code>podman search nginx</code> results are <strong>not official</strong>, so analyse them and filter by <strong>OFFICIAL</strong> and <strong>stars</strong> (more is better).</li>
+<li><code>unqualified-search-registries</code> is the search list for unqualified images. Removing a registry stops Podman <strong>searching</strong> it, but Podman can still <strong>pull a fully qualified image</strong> from it.</li>
+</ul>
+<p><strong><code>[[registry]]</code> TOML tables</strong> (per registry or image pattern):</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prefix</code></td>
+<td>image name pattern: <code>host[:port]/namespace[/namespace...]/repo(:tag|@digest)</code>, or simpler <code>host[:port]</code>, <code>host[:port]/namespace</code>, <code>[*.]host</code>; with two partially matching prefixes the <strong>longest match wins</strong></td>
+</tr>
+<tr>
+<td><code>insecure</code></td>
+<td><code>true</code> allows unencrypted HTTP or TLS with untrusted certificates</td>
+</tr>
+<tr>
+<td><code>blocked</code></td>
+<td><code>true</code> blocks registries or images matching the prefix</td>
+</tr>
+<tr>
+<td><code>location</code></td>
+<td>the registry's location; defaults to <code>prefix</code>; if different, a matching prefix <strong>resolves to this location</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Mirrors</strong> with <code>[[registry.mirror]]</code> tables: Podman tries the mirrors first, then falls back to <code>location</code>.</p>
+<pre class="hl"><code><span class="n">unqualified-search-registries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"docker.io"</span><span class="p">,</span><span class="w"> </span><span class="s2">"quay.io"</span><span class="p">]</span>
+
+<span class="k">[[registry]]</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"registry.example.com:5000/foo"</span>
+<span class="n">insecure</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+
+<span class="k">[[registry.mirror]]</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"mirror1.example.com:5000/bar"</span>
+
+<span class="k">[[registry.mirror]]</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"mirror2.example.com:5000/bar"</span>
+</code></pre>
+<p>Pulling <code>registry.example.com:5000/foo/app:latest</code> tries <code>mirror1.example.com:5000/bar/app:latest</code>, then <code>mirror2...</code>, then the main location. With a <strong>prefix</strong> (<code>prefix = &quot;example.com/foo&quot;</code>, same <code>location</code> and mirrors), pulling <code>example.com/foo/app:latest</code> goes through the mirrors, then <code>registry.example.com:5000/foo/app:latest</code>.</p>
+<p><strong>Private mirrors in disconnected environments</strong> remap public registries:</p>
+<pre class="hl"><code><span class="k">[[registry]]</span>
+<span class="n">prefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"quay.io"</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"mirror-internal.example.com/quay"</span>
+
+<span class="k">[[registry]]</span>
+<span class="n">prefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker.io"</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"mirror-internal.example.com/docker"</span>
+</code></pre>
+<blockquote>
+<p>[!note] Keep mirrors current
+Administrators or SRE teams should run an <strong>image sync policy</strong> so mirrors track the mirrored repositories.</p>
+</blockquote>
+<p><strong>Blocking</strong> (an image, a namespace, or a whole registry):</p>
+<pre class="hl"><code><span class="c1"># whole registry</span>
+<span class="k">[[registry]]</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"registry.rogue.io"</span>
+<span class="n">blocked</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+
+<span class="c1"># a namespace: blocks quay.io/foo/nginx:latest and quay.io/foo/httpd:v2.4, not quay.io/bar/fedora:latest</span>
+<span class="k">[[registry]]</span>
+<span class="n">prefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"quay.io/foo/"</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"quay.io"</span>
+<span class="n">blocked</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+
+<span class="c1"># a single image tag</span>
+<span class="k">[[registry]]</span>
+<span class="n">prefix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"internal-registry.example.com/dev/app:v0.1"</span>
+<span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"internal-registry.example.com"</span>
+<span class="n">blocked</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</code></pre>
+<p>Combine blocking rules with mirror tables. <strong>With many machines running Podman (developer workstations), keep the file updated with configuration-management tools and apply the filters declaratively.</strong></p>
+<h3 id="short-name-aliases">Short-name aliases</h3>
+<ul>
+<li>Fully qualified names such as <code>quay.io/podman/stable:latest</code> are the gold standard for security and automation but cumbersome to type. For an unqualified name (<code>podman pull fedora</code>) Podman would walk the registries search list, which can be slow and, if misconfigured, insecure.</li>
+<li><strong>Aliases short-circuit the search:</strong> a matching short name resolves <strong>immediately</strong> to the mapped fully qualified name, bypassing the search registries entirely. Fedora and RHEL ship a large trusted list at <code>/etc/containers/registries.conf.d/000-shortnames.conf</code>, maintained by the community and OS vendors:</li>
+</ul>
+<pre class="hl"><code><span class="k">[aliases]</span>
+<span class="s2">"fedora"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"registry.fedoraproject.org/fedora"</span>
+<span class="s2">"ubi8"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"registry.access.redhat.com/ubi8"</span>
+<span class="s2">"alpine"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker.io/library/alpine"</span>
+</code></pre>
+<ul>
+<li>Add custom aliases in extra files under <code>/etc/containers/registries.conf.d/</code> to keep the main file clean.</li>
+<li><strong>Boundaries:</strong> aliases resolve the <strong>repository path, not a version</strong>: if <code>my-app</code> aliases <code>quay.io/org/my-app</code>, <code>podman pull my-app:v2</code> resolves to <code>quay.io/org/my-app:v2</code>. <strong>Local user aliases</strong> (e.g. <code>$HOME/.config/containers/registries.conf.d/</code>) typically <strong>override</strong> the system ones.</li>
+</ul>
+<p>Blocking untrusted sources is a security best practice but does not replace <strong>choosing an image that is trustworthy with the smallest attack surface</strong>; UBI helps here.</p>
+<h2 id="8-4-introducing-the-universal-base-image">8.4 Introducing the Universal Base Image</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-08-ubi-flavours.svg" alt="The four UBI flavours" loading="lazy" /></p>
+<ul>
+<li><strong>Why UBI:</strong> many enterprises use RHEL; RHEL-based images share the OS release's package versions and get <strong>RHEL security updates immediately</strong>. But RHEL images are <strong>not public without a subscription</strong> and cannot be freely redistributed without breaking the Red Hat enterprise agreement. Red Hat created <strong>UBI</strong>: freely redistributable, usable for applications, middleware and utilities, continuously maintained and upgraded.</li>
+<li>UBI images are based on <strong>currently supported RHEL versions</strong> (UBI 8, 9 and 10 for RHEL 8, 9 and 10 at the time of writing) and are in effect a <strong>subset of RHEL</strong>. They are on registry.access.redhat.com and docker.io.</li>
+<li><strong>Bridge from development to production:</strong> build on a Fedora laptop or a cloud CI/CD pipeline and deploy to production RHEL or OpenShift with <strong>no compatibility concerns</strong>, and share anywhere including public registries without a subscription.</li>
+</ul>
+<p><strong>Four flavours</strong></p>
+<table>
+<thead>
+<tr>
+<th>Flavour</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Standard</strong></td>
+<td>most features and package availability; closest to RHEL</td>
+</tr>
+<tr>
+<td><strong>Minimal</strong></td>
+<td>stripped down, minimal package management</td>
+</tr>
+<tr>
+<td><strong>Micro</strong></td>
+<td>smallest footprint, <strong>no package manager</strong></td>
+</tr>
+<tr>
+<td><strong>Init</strong></td>
+<td>includes <strong>systemd</strong> to run multiple services in one container</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ubi-standard">UBI Standard</h3>
+<ul>
+<li>Has <strong><code>yum</code></strong>; customise with packages from <code>ubi-8-baseos</code> and <code>ubi-8-appstream</code>. Includes a curated set of tools (<strong>curl, tar, vi, sed, gzip</strong>) and <strong>OpenSSL</strong> libraries, about <strong>230 MiB</strong>: fewer packages mean a lighter image and smaller attack surface.</li>
+</ul>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi8</span>
+
+<span class="c"># Update image and install httpd</span>
+<span class="k">RUN</span><span class="w"> </span>yum<span class="w"> </span>update<span class="w"> </span>-y<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>yum<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>httpd<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>yum<span class="w"> </span>clean<span class="w"> </span>all
+
+<span class="c"># Expose the default httpd port 80</span>
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">80</span>
+
+<span class="c"># Run the httpd</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/usr/sbin/httpd"</span><span class="p">,</span><span class="w"> </span><span class="s2">"-DFOREGROUND"</span><span class="p">]</span>
+</code></pre>
+<h3 id="ubi-minimal">UBI Minimal</h3>
+<ul>
+<li>Built for self-consistent applications and runtimes (Python, Ruby, Node.js). <strong>About half the size</strong> of Standard; <strong>no <code>yum</code></strong>, replaced by <strong><code>microdnf</code></strong>.</li>
+</ul>
+<pre class="hl"><code><span class="c"># Based on the UBI8 Minimal image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi8-minimal</span>
+
+<span class="c"># Upgrade and install Python 3</span>
+<span class="k">RUN</span><span class="w"> </span>microdnf<span class="w"> </span>upgrade<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>microdnf<span class="w"> </span>install<span class="w"> </span>python3
+
+<span class="c"># Copy source code</span>
+<span class="k">COPY</span><span class="w"> </span>entrypoint.sh<span class="w"> </span>http_server.py<span class="w"> </span>/
+
+<span class="c"># Expose the default httpd port 80</span>
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+
+<span class="c"># Configure the container entrypoint</span>
+<span class="k">ENTRYPOINT</span><span class="w"> </span><span class="p">[</span><span class="s2">"/entrypoint.sh"</span><span class="p">]</span>
+
+<span class="c"># Run the httpd</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/usr/bin/python3"</span><span class="p">,</span><span class="w"> </span><span class="s2">"-u"</span><span class="p">,</span><span class="w"> </span><span class="s2">"/http_server.py"</span><span class="p">]</span>
+</code></pre>
+<p>The Python web server prints &quot;Hello World!&quot; on GET and handles SIGTERM and SIGINT so the container stops gracefully:</p>
+<pre class="hl"><code><span class="ch">#!/usr/bin/python3</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">http.server</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">socketserver</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">signal</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">http</span><span class="w"> </span><span class="kn">import</span> <span class="n">HTTPStatus</span>
+
+<span class="n">port</span> <span class="o">=</span> <span class="mi">8080</span>
+<span class="n">message</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">'Hello World!</span><span class="se">\n</span><span class="s1">'</span>
+<span class="n">logging</span><span class="o">.</span><span class="n">basicConfig</span><span class="p">(</span>
+    <span class="n">stream</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span>
+    <span class="n">level</span><span class="o">=</span><span class="n">logging</span><span class="o">.</span><span class="n">INFO</span>
+<span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">signal_handler</span><span class="p">(</span><span class="n">signum</span><span class="p">,</span> <span class="n">frame</span><span class="p">):</span>
+    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Handler</span><span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">server</span><span class="o">.</span><span class="n">SimpleHTTPRequestHandler</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">do_GET</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">send_response</span><span class="p">(</span><span class="n">HTTPStatus</span><span class="o">.</span><span class="n">OK</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">end_headers</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wfile</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="n">signal</span><span class="o">.</span><span class="n">signal</span><span class="p">(</span><span class="n">signal</span><span class="o">.</span><span class="n">SIGTERM</span><span class="p">,</span> <span class="n">signal_handler</span><span class="p">)</span>
+    <span class="n">signal</span><span class="o">.</span><span class="n">signal</span><span class="p">(</span><span class="n">signal</span><span class="o">.</span><span class="n">SIGINT</span><span class="p">,</span> <span class="n">signal_handler</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">httpd</span> <span class="o">=</span> <span class="n">socketserver</span><span class="o">.</span><span class="n">TCPServer</span><span class="p">((</span><span class="s1">''</span><span class="p">,</span> <span class="n">port</span><span class="p">),</span> <span class="n">Handler</span><span class="p">)</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Serving on port </span><span class="si">%s</span><span class="s2">"</span><span class="p">,</span> <span class="n">port</span><span class="p">)</span>
+        <span class="n">httpd</span><span class="o">.</span><span class="n">serve_forever</span><span class="p">()</span>
+    <span class="k">except</span> <span class="ne">SystemExit</span><span class="p">:</span>
+        <span class="n">httpd</span><span class="o">.</span><span class="n">shutdown</span><span class="p">()</span>
+        <span class="n">httpd</span><span class="o">.</span><span class="n">server_close</span><span class="p">()</span>
+</code></pre>
+<p>The entry point is minimal; the <code>-u</code> flag on Python makes output <strong>unbuffered</strong> so access logs appear in real time:</p>
+<pre class="hl"><code><span class="ch">#!/bin/bash</span>
+<span class="nb">set</span><span class="w"> </span>-e
+<span class="nb">exec</span><span class="w"> </span><span class="nv">$@</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>buildah<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>python_httpd<span class="w"> </span>.
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:8080<span class="w"> </span>python_httpd
+INFO:root:Serving<span class="w"> </span>on<span class="w"> </span>port<span class="w"> </span><span class="m">8080</span>
+</code></pre>
+<h3 id="ubi-micro">UBI Micro</h3>
+<ul>
+<li>The newest: a <strong>distroless</strong> image with a stripped-down package manager, minimal attack surface, little data to download on first use or update. Great in <strong>multistage builds</strong> (build in one stage, copy into Micro):</li>
+</ul>
+<pre class="hl"><code><span class="c"># Builder image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi8-minimal</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="s">builder</span>
+
+<span class="c"># Install Golang packages</span>
+<span class="k">RUN</span><span class="w"> </span>microdnf<span class="w"> </span>upgrade<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>microdnf<span class="w"> </span>install<span class="w"> </span>golang<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>microdnf<span class="w"> </span>clean<span class="w"> </span>all
+
+<span class="c"># Copy files for build</span>
+<span class="k">COPY</span><span class="w"> </span>go.mod<span class="w"> </span>/go/src/hello-world/
+<span class="k">COPY</span><span class="w"> </span>main.go<span class="w"> </span>/go/src/hello-world/
+
+<span class="c"># Set the working directory</span>
+<span class="k">WORKDIR</span><span class="w"> </span><span class="s">/go/src/hello-world</span>
+
+<span class="c"># Download dependencies</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>get<span class="w"> </span>-d<span class="w"> </span>-v<span class="w"> </span>./...
+
+<span class="c"># Install the package</span>
+<span class="k">RUN</span><span class="w"> </span>go<span class="w"> </span>build<span class="w"> </span>-v<span class="w"> </span>./...
+
+<span class="c"># Runtime image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi8/ubi-micro:latest</span>
+<span class="k">COPY</span><span class="w"> </span>--from<span class="o">=</span>builder<span class="w"> </span>/go/src/hello-world/hello-world<span class="w"> </span>/
+
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/hello-world"</span><span class="p">]</span>
+</code></pre>
+<p>The result is about <strong>45 MB</strong>. (The book's comment says the build runs in a &quot;UBI Standard container&quot;, but the code uses <code>ubi8-minimal</code>.)</p>
+<ul>
+<li><strong>Adding packages to Micro with Buildah:</strong> it has no package manager, but on <strong>RHEL</strong> (with Red Hat GPG keys) you can install into the mounted root with the host's <code>yum</code>:</li>
+</ul>
+<pre class="hl"><code><span class="ch">#!/bin/bash</span>
+
+<span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="nv">$UID</span><span class="w"> </span>-ne<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"This script must be run as root"</span>
+<span class="w">    </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="k">fi</span>
+
+<span class="nv">container</span><span class="o">=</span><span class="k">$(</span>buildah<span class="w"> </span>from<span class="w"> </span>registry.access.redhat.com/ubi8/ubi-micro<span class="k">)</span>
+<span class="nv">mount</span><span class="o">=</span><span class="k">$(</span>buildah<span class="w"> </span>mount<span class="w"> </span><span class="nv">$container</span><span class="k">)</span>
+
+yum<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--installroot<span class="w"> </span><span class="nv">$mount</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--setopt<span class="w"> </span><span class="nv">install_weak_deps</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--nodocs<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--noplugins<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--releasever<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>python3
+
+yum<span class="w"> </span>clean<span class="w"> </span>all<span class="w"> </span>--installroot<span class="w"> </span><span class="nv">$mount</span>
+
+buildah<span class="w"> </span>umount<span class="w"> </span><span class="nv">$container</span>
+buildah<span class="w"> </span>commit<span class="w"> </span><span class="nv">$container</span><span class="w"> </span>micro_python3
+</code></pre>
+<p><code>--installroot $mount</code> makes the working container's mount point the temporary root. Minimal and Micro suit <strong>microservice</strong> architectures with one container per service.</p>
+<h3 id="ubi-init">UBI Init</h3>
+<ul>
+<li>The normal pattern is <strong>one component per container</strong>, each doing one thing (the <strong>KISS</strong> philosophy from UNIX), with multi-tier apps as several orchestrated containers. Exceptions: processes that need to <strong>share all container namespaces</strong>, or a single &quot;uber image&quot;.</li>
+<li>Container images normally have no init system; the <code>CMD</code> process gets <strong>PID 1</strong>. <strong>UBI Init</strong> runs a <strong>minimal systemd</strong> inside, so several systemd units run under PID 1. It is slightly smaller than Standard but has more packages than Minimal.</li>
+<li>Default <code>CMD</code> is <strong><code>/sbin/init</code></strong>. systemd <strong>ignores SIGTERM and SIGKILL</strong> (what Podman uses to stop containers), so the image sets <strong><code>STOPSIGNAL SIGRTMIN+3</code></strong>.</li>
+</ul>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">registry.access.redhat.com/ubi8/ubi-init</span>
+
+<span class="k">RUN</span><span class="w"> </span>yum<span class="w"> </span>-y<span class="w"> </span>install<span class="w"> </span>httpd<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>yum<span class="w"> </span>clean<span class="w"> </span>all<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>httpd
+
+<span class="k">RUN</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Successful Web Server Test"</span><span class="w"> </span>&gt;<span class="w"> </span>/var/www/html/index.html
+
+<span class="k">RUN</span><span class="w"> </span>mkdir<span class="w"> </span>/etc/systemd/system/httpd.service.d/<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span>-e<span class="w"> </span><span class="s1">'[Service]\nRestart=always'</span><span class="w"> </span>&gt;<span class="w"> </span>/etc/systemd/system/httpd.service.d/httpd.conf
+
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">80</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="s2">"/sbin/init"</span><span class="w"> </span><span class="p">]</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>buildah<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>init_httpd<span class="w"> </span>.
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>httpd_init<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:80<span class="w"> </span>init_httpd
+$<span class="w"> </span>podman<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-ti<span class="w"> </span>httpd_init<span class="w"> </span>/bin/bash
+<span class="o">[</span>root@b4fb727f1907<span class="w"> </span>/<span class="o">]</span><span class="c1"># ps aux</span>
+root<span class="w">     </span><span class="m">1</span><span class="w">   </span>/sbin/init
+root<span class="w">     </span><span class="m">10</span><span class="w">  </span>/usr/lib/systemd/systemd-journald
+root<span class="w">     </span><span class="m">20</span><span class="w">  </span>/usr/sbin/httpd<span class="w"> </span>-DFOREGROUND
+dbus<span class="w">     </span><span class="m">21</span><span class="w">  </span>/usr/bin/dbus-daemon<span class="w"> </span>--system<span class="w"> </span>--address<span class="o">=</span>systemd:<span class="w"> </span>--nofork<span class="w"> </span>--nopidfile<span class="w"> </span>--systemd-activation<span class="w"> </span>--syslog-only
+apache<span class="w">   </span><span class="m">23</span><span class="w">  </span>/usr/sbin/httpd<span class="w"> </span>-DFOREGROUND<span class="w">   </span><span class="o">(</span>plus<span class="w"> </span>workers<span class="w"> </span><span class="m">24</span>,<span class="w"> </span><span class="m">25</span>,<span class="w"> </span><span class="m">26</span><span class="o">)</span>
+root<span class="w">     </span><span class="m">238</span><span class="w"> </span>/bin/bash
+</code></pre>
+<p><code>/sbin/init</code> is PID 1 and spawns <code>httpd</code>; <strong><code>dbus-daemon</code></strong> lets systemd expose its API, and <strong><code>systemd-journald</code></strong> handles logs. The unit-file edit could instead be a copy of pre-edited unit files when several services are needed.</p>
+<h3 id="other-ubi-based-images">Other UBI-based images</h3>
+<ul>
+<li>Red Hat builds many pre-built runtime images on UBI (Python, Quarkus, Golang, Perl, PHP, .NET, Node.js, Ruby, OpenJDK), usually without redistribution limits.</li>
+<li>UBI is the base of the <strong>Source-to-Image (S2I)</strong> framework that builds applications natively in OpenShift without Dockerfiles (assemble images from custom scripts and source code).</li>
+<li>Red Hat's supported <strong>Buildah, Podman and Skopeo</strong> container releases use <strong>UBI 8</strong> images.</li>
+<li>Other vendors use UBI too for official images on the Red Hat Marketplace: <strong>Intel, IBM, Isovalent, Cisco, Aqua Security</strong> and others.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<p>The OCI image specification, container registries, secure registry configuration with blocking policies, and UBI as a lightweight, reliable, redistributable RHEL-based base. Next: private and public registries, a local registry, and managing images with Skopeo.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+OCI manifest · image index · <code>schemaVersion</code> 2 · official image · Docker Scout · Clair · Red Hat Ecosystem Catalog · CVE · MITRE ATT&amp;CK · unqualified vs fully qualified · <code>[[registry]]</code> <code>prefix/location/insecure/blocked</code> · <code>[[registry.mirror]]</code> · short-name alias · UBI (Standard, Minimal, Micro, Init) · <code>microdnf</code> · <code>STOPSIGNAL SIGRTMIN+3</code> · S2I.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 8; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>[1] MITRE ATT&amp;CK containers matrix: https://attack.mitre.org/matrices/enterprise/containers/</li>
+<li>[2] Things you should know about the Kubernetes threat matrix: https://cloud.redhat.com/blog/2021-kubernetes-threat-matrix-updates-things-you-should-know</li>
+<li>[3] How to manage Linux container registries: https://www.redhat.com/sysadmin/manage-container-registries</li>
+<li>[4] (Re)Introducing the Red Hat Universal Base Image: https://www.redhat.com/en/blog/introducing-red-hat-universal-base-image</li>
+<li>[5] Introduction to Red Hat's UBI Micro: https://www.redhat.com/en/blog/introduction-ubi-micro</li>
+<li>Docker Hub rate limits: https://docs.docker.com/docker-hub/download-rate-limit/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-07-integrating-with-existing-application-build-processes/">Podman for DevOps 7: Integrating with existing application build processes</a> · <a href="/book-digest/podman-for-devops/pfd-02-comparing-podman-and-docker/">Podman for DevOps 2: Comparing Podman and Docker</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-07-integrating-with-existing-application-build-processes/">&larr; Podman for DevOps 7: Integrating with existing application build processes</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-09-pushing-images-to-a-container-registry/">Podman for DevOps 9: Pushing images to a container registry &rarr;</a></nav></main></body></html>

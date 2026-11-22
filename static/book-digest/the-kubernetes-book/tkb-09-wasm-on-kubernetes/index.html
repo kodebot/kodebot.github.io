@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 9: Wasm on Kubernetes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-9-wasm-on-kubernetes">The Kubernetes Book 9: Wasm on Kubernetes</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 9. Previous: <a href="/book-digest/the-kubernetes-book/tkb-08-ingress/">The Kubernetes Book 8: Ingress</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-10-service-discovery-deep-dive/">The Kubernetes Book 10: Service Discovery Deep Dive</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The book frames Wasm as the <strong>third wave</strong> after VMs and containers: smaller, faster, more portable.</li>
+<li>Wasm is a <strong>binary instruction set</strong> (like ARM or x86) that runs in a <strong>deny-by-default sandbox</strong>; <strong>WASI</strong> lets sandboxed apps reach external services.</li>
+<li>On Kubernetes with <strong>containerd</strong>, you swap <code>runc</code> and its shim for a <strong>Wasm shim</strong> (built on <strong>runwasi</strong>); Kubernetes sees nothing below containerd.</li>
+<li>To schedule Wasm Pods: install a shim on a node, <strong>label the node</strong>, create a <strong>RuntimeClass</strong> (<code>nodeSelector</code> + <code>handler</code>), and reference it from the Pod.</li>
+<li>Wasm suits event handlers, fast startup, IoT, edge and plugins; Linux containers are still better for traditional cloud apps with heavy networking and I/O.</li>
+</ul>
+</div></div>
+<p>The chapter has three parts: a Wasm primer, how Wasm works on Kubernetes, and hands-on. The book notes that tools like <strong>SpinKube</strong> (from Fermyon) automate much of the manual work you do here; the manual route is for understanding.</p>
+<p>Terminology: <strong>Wasm</strong> and <strong>WebAssembly</strong> mean the same thing; Wasm is a short form and <strong>not an acronym</strong>, so &quot;Wasm&quot;, not &quot;WASM&quot;. Wasm on Kubernetes is one case of &quot;WebAssembly outside the browser, on the server, in the cloud, at the edge&quot;. Figure 9.1 shows the waves: VMs, containers, Wasm.</p>
+<h2 id="9-1-wasm-primer">9.1 Wasm primer</h2>
+<ul>
+<li>WebAssembly appeared in <strong>2017</strong>, first speeding up web apps
+<ul>
+<li>Eight years on (per the book) it is an official <strong>W3C standard</strong>, in all major browsers, and the go-to for high-performance, secure, portable web games and apps.</li>
+</ul>
+</li>
+<li>Cloud entrepreneurs saw it as a fit for cloud apps
+<ul>
+<li>The book reports a widely circulated tweet by Docker founder <strong>Solomon Hykes</strong> saying that had Wasm plus WASI existed in 2008, Docker would not have been needed, and that a standard system interface was the missing link (paraphrase; the tweet is not linked in the book)</li>
+<li>He followed up expecting Linux and Wasm containers to run side by side with Docker working with both.</li>
+</ul>
+</li>
+<li>That future has arrived:
+<ul>
+<li>Docker supports Wasm, and Linux containers and Wasm containers can run side by side <strong>in the same Kubernetes Pod</strong></li>
+<li>But the standards and ecosystem are young, so Linux containers remain best for many use cases.</li>
+</ul>
+</li>
+</ul>
+<h3 id="what-wasm-is">What Wasm is</h3>
+<ul>
+<li>A <strong>binary instruction set architecture (ISA)</strong> like ARM, x86, MIPS and RISC-V: languages compile to Wasm binaries that run on any system with a <strong>Wasm runtime</strong>.</li>
+<li>Apps run in a <strong>deny-by-default sandbox</strong>: access to everything is denied unless explicitly allowed. Containers start with everything open.</li>
+<li><strong>WASI</strong>
+<ul>
+<li>(WebAssembly System Interface) lets sandboxed apps securely reach key-value stores, networks, the host environment and more. It is vital outside the browser</li>
+<li><strong>WASI Preview 2</strong> (also written WASI 0.2 or <code>wasip2</code>) is out at the time of writing.</li>
+</ul>
+</li>
+</ul>
+<h3 id="security-portability-performance">Security, portability, performance</h3>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>Wasm</th>
+<th>Containers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Security</strong></td>
+<td>Deny-by-default sandbox; runtime must explicitly allow outside access; sandbox battle-hardened for years in browsers</td>
+<td>Allow-by-default with broad access to a shared kernel; much community effort has made secure containers easier, but the model always poses challenges</td>
+</tr>
+<tr>
+<td><strong>Portability</strong></td>
+<td>Build once as a Wasm binary, run on any host with a Wasm runtime, including exotic IoT and edge architectures</td>
+<td><strong>Architecture-dependent</strong>: an ARM container cannot run on AMD, a Windows container cannot run on Linux; leads to <strong>image sprawl</strong></td>
+</tr>
+<tr>
+<td><strong>Performance</strong></td>
+<td>Start in about <strong>10 ms or less</strong>, some in microseconds; enables true scale-to-zero and serverless</td>
+<td>VMs take minutes, containers seconds</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The author's example of sprawl:
+<ul>
+<li>he keeps two images per app (Linux on ARM and AMD64) and sometimes forgets to rebuild one, breaking examples for some readers</li>
+<li>The chapter's app was built on an ARM Mac and compiled to Wasm, so it runs on any cluster.</li>
+</ul>
+</li>
+<li>Wasm apps are typically much smaller than Linux containers, so they fit resource-constrained edge and IoT where containers cannot.</li>
+</ul>
+<p><strong>Quick recap:</strong> Wasm apps are smaller, faster, more portable and more secure than traditional containers, but it is early days.</p>
+<ul>
+<li>Good choices now: event handlers, super-fast startup, IoT, edge, extensions and plugins.</li>
+<li>At the time of writing, containers may be better for traditional cloud apps needing networking, heavy I/O and connections to other services.</li>
+</ul>
+<h2 id="9-2-understanding-wasm-on-kubernetes">9.2 Understanding Wasm on Kubernetes</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-09-containerd-shims.svg" alt="containerd with a runc shim for Linux containers and a Wasm shim for Wasm apps" loading="lazy" /></p>
+<p>This overview covers clusters using <strong>containerd</strong> (other ways exist).</p>
+<ul>
+<li>Kubernetes is a high-level orchestrator
+<ul>
+<li>containerd does the low-level container work. Figure 9.2: containerd receives tasks and tells <strong>runc</strong> to build containers and start apps</li>
+<li>runc then exits, leaving <strong>shim</strong> processes to maintain connections between running containers and containerd.</li>
+</ul>
+</li>
+<li>Everything below containerd is hidden from Kubernetes, so you can replace runc and the standard shim with a <strong>Wasm runtime and a Wasm shim</strong>. Figure 9.3 shows the same node with two extra Wasm workloads
+<ul>
+<li>there is still a single containerd and it is a fully supported setup.</li>
+</ul>
+</li>
+<li>A Wasm shim differs from a runc shim: it is a <strong>single binary</strong> with the shim code and the Wasm runtime embedded (Figure 9.4).
+<ul>
+<li>The shim code that talks to containerd is <strong>runwasi</strong>.</li>
+<li>Each shim embeds a particular runtime. The <strong>Spin</strong> shim embeds runwasi plus the Spin runtime; the <strong>Slight</strong> shim embeds runwasi plus the Slight runtime.</li>
+<li>The runtime creates the Wasm host and runs the app; runwasi translates and interfaces with containerd.</li>
+</ul>
+</li>
+<li><strong>Shim naming (mandated by containerd):</strong> prefix <code>containerd-shim-</code>, then the runtime name, then the version. Example: <code>containerd-shim-spin-v2</code>.</li>
+<li>Mixed nodes need help scheduling (Figure 9.5: one node with the WasmEdge shim, one with the Spin shim). Use <strong>node labels</strong> and <strong>RuntimeClass</strong> objects: Node 2 has label <code>spin=yes</code>
+<ul>
+<li>a RuntimeClass selects that label and names the runtime in its <code>handler</code>, so Pods referencing it land on Node 2 and use Spin.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Deploy workflow (containerd):</strong></p>
+<ol>
+<li>Write the app and compile it as a Wasm binary.</li>
+<li>Package the binary as an <strong>OCI image</strong> and store it in an OCI registry.</li>
+<li>Install the Wasm shim on at least one node and label the node.</li>
+<li>Create a RuntimeClass specifying the node labels and the shim.</li>
+<li>Create a Pod for the Wasm app (image from step 2).</li>
+<li>Reference the RuntimeClass in the Pod.</li>
+<li>Deploy the Pod.</li>
+</ol>
+<p>On deploy: Kubernetes schedules the Pod to a node matching the RuntimeClass node selector; the kubelet passes the work to containerd with the shim info; containerd starts the app with that shim.</p>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-09-wasm-deploy-workflow.svg" alt="Seven-step workflow to run a Wasm app on Kubernetes" loading="lazy" /></p>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-09-runtimeclass-scheduling.svg" alt="How a RuntimeClass steers a Pod to a node and a shim" loading="lazy" /></p>
+<h2 id="9-3-hands-on-with-wasm-on-kubernetes">9.3 Hands-on with Wasm on Kubernetes</h2>
+<p>Clone the repo, switch to branch <code>2025</code> and use the <code>wasm</code> folder:</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+<span class="nb">cd</span><span class="w"> </span>TKB/wasm
+</code></pre>
+<p>Steps:</p>
+<ol>
+<li>Install and test prerequisites.</li>
+<li>Write and compile the Wasm app.</li>
+<li>Build an OCI image and push it to a registry.</li>
+<li>Build and configure a multi-node Kubernetes cluster for Wasm.</li>
+<li>Deploy the app.</li>
+</ol>
+<h3 id="prerequisites">Prerequisites</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Version</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Docker Desktop with Wasm support enabled</td>
+<td>up to date</td>
+</tr>
+<tr>
+<td>Rust (with the <code>wasm32-wasip1</code> target)</td>
+<td>1.82 or later</td>
+</tr>
+<tr>
+<td>Spin</td>
+<td>3.1.2 or later</td>
+</tr>
+<tr>
+<td>k3d</td>
+<td>5.8.1 or later</td>
+</tr>
+</tbody>
+</table>
+<p>Install Rust from https://www.rust-lang.org/tools/install, then add the target:</p>
+<pre class="hl"><code><span class="gp">$ </span>rustup<span class="w"> </span>target<span class="w"> </span>add<span class="w"> </span>wasm32-wasip1
+<span class="go">info: downloading component 'rust-std' for 'wasm32-wasip1'</span>
+<span class="go">info: installing component 'rust-std' for 'wasm32-wasip1'</span>
+</code></pre>
+<p><strong>Spin</strong> is a popular Wasm framework with a runtime and tooling; search for &quot;install Fermyon Spin&quot; and follow your platform's steps:</p>
+<pre class="hl"><code><span class="gp">$ </span>spin<span class="w"> </span>--version
+<span class="go">spin 3.1.2 (3d37bd8 2025-01-13)</span>
+</code></pre>
+<h3 id="write-and-compile-the-wasm-app">Write and compile the Wasm app</h3>
+<p>From the <code>wasm</code> folder, scaffold an app answering web requests on the <code>/tkb</code> path (TKB for The Kubernetes Book):</p>
+<pre class="hl"><code><span class="gp">$ </span>spin<span class="w"> </span>new<span class="w"> </span>tkb-wasm<span class="w"> </span>-t<span class="w"> </span>http-rust
+<span class="go">Description []: My first Wasm app</span>
+<span class="go">HTTP path [/...]: /tkb</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span><span class="nb">cd</span><span class="w"> </span>tkb-wasm
+<span class="gp">$ </span>tree
+<span class="go">├── Cargo.toml</span>
+<span class="go">├── spin.toml</span>
+<span class="go">└── src</span>
+<span class="go">    └── lib.rs</span>
+
+<span class="go">2 directories, 3 files</span>
+</code></pre>
+<p>(Use <code>ls -R</code> if you lack <code>tree</code>.) Two files matter: <code>spin.toml</code> (how Spin builds and runs the app) and <code>src/lib.rs</code> (the source). Change only the response body text to <code>The Kubernetes Book loves Wasm!</code>:</p>
+<pre class="hl"><code><span class="c1">// src/lib.rs</span>
+<span class="k">use</span><span class="w"> </span><span class="n">spin_sdk</span><span class="p">::</span><span class="n">http</span><span class="p">::{</span><span class="n">IntoResponse</span><span class="p">,</span><span class="w"> </span><span class="n">Request</span><span class="p">,</span><span class="w"> </span><span class="n">Response</span><span class="p">};</span>
+<span class="c1">// &lt;Snip&gt;</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">handle_tkb_wasm</span><span class="p">(</span><span class="n">req</span><span class="p">:</span><span class="w"> </span><span class="nc">Request</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">anyhow</span><span class="p">::</span><span class="nb">Result</span><span class="o">&lt;</span><span class="k">impl</span><span class="w"> </span><span class="n">IntoResponse</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">"Handling request to {:?}"</span><span class="p">,</span><span class="w"> </span><span class="n">req</span><span class="p">.</span><span class="n">header</span><span class="p">(</span><span class="s">"spin-full-url"</span><span class="p">));</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Response</span><span class="p">::</span><span class="n">builder</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">status</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">header</span><span class="p">(</span><span class="s">"content-type"</span><span class="p">,</span><span class="w"> </span><span class="s">"text/plain"</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">body</span><span class="p">(</span><span class="s">"The Kubernetes Book loves Wasm!"</span><span class="p">)</span><span class="w">   </span><span class="c1">// only change this line</span>
+<span class="w">        </span><span class="p">.</span><span class="n">build</span><span class="p">())</span>
+<span class="p">}</span>
+</code></pre>
+<p><code>spin build</code> compiles to Wasm; behind the scenes it runs a more complex <code>cargo build</code>:</p>
+<pre class="hl"><code><span class="gp">$ </span>spin<span class="w"> </span>build
+<span class="go">Building component tkb-wasm with `cargo build --target wasm32-wasip1 --release`</span>
+<span class="go">Updating crates.io index</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">Finished building all Spin components</span>
+</code></pre>
+<p>The binary is <code>target/wasm32-wasip1/release/tkb_wasm.wasm</code>; it runs on any machine with the Spin Wasm runtime.</p>
+<h3 id="build-an-oci-image-and-push-it">Build an OCI image and push it</h3>
+<p>Create a <code>Dockerfile</code> in <code>tkb-wasm</code> (keep the periods at the end of the last two lines):</p>
+<pre class="hl"><code><span class="c"># Dockerfile</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">scratch</span>
+<span class="k">COPY</span><span class="w"> </span>/target/wasm32-wasip1/release/tkb_wasm.wasm<span class="w"> </span>.
+<span class="k">COPY</span><span class="w"> </span>spin.toml<span class="w"> </span>.
+</code></pre>
+<ul>
+<li><code>FROM scratch</code> packages the app in an <strong>empty image</strong> instead of a Linux base image, keeping it tiny
+<ul>
+<li>Wasm apps do not need a Linux filesystem, but Docker and Kubernetes tooling expect basic container constructs, so the scratch image satisfies them</li>
+<li>At runtime the app and Wasm runtime run in a minimal container that is basically <strong>namespaces and cgroups</strong> (no filesystem etc.).</li>
+</ul>
+</li>
+<li>The first <code>COPY</code> puts the Wasm binary in the container's root; the second copies <code>spin.toml</code>.</li>
+<li><code>spin.toml</code> tells Spin where the app is and how to run it
+<ul>
+<li>It currently expects the binary under <code>target/wasm32-wasip1/release</code>, but the image places it in <code>/</code>, so strip the leading path from the <code>source</code> field:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1"># spin.toml</span>
+<span class="c1"># &lt;Snip&gt;</span>
+<span class="k">[component.tkb-wasm]</span>
+<span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"tkb_wasm.wasm"</span><span class="w">      </span><span class="c1"># remove the leading path from this line</span>
+<span class="c1"># &lt;Snip&gt;</span>
+</code></pre>
+<p>(The annotation is only to show which line changes; leave it out of the file.)</p>
+<p>You now have a Wasm binary, a <code>spin.toml</code> and a Dockerfile. Build the image (use your own Docker Hub username if you will push):</p>
+<pre class="hl"><code>docker<span class="w"> </span>build<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--platform<span class="w"> </span>wasi/wasm<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--provenance<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-t<span class="w"> </span>nigelpoulton/k8sbook:wasm-0.2<span class="w"> </span>.
+</code></pre>
+<p><code>--platform wasi/wasm</code> sets the image's OS and architecture, which <code>docker run</code> and containerd read to create the container.</p>
+<pre class="hl"><code><span class="gp">$ </span>docker<span class="w"> </span>images
+<span class="go">REPOSITORY             TAG       IMAGE ID       CREATED          SIZE</span>
+<span class="go">nigelpoulton/k8sbook   wasm-0.2  a003c43b1308   7 seconds ago    104kB</span>
+</code></pre>
+<p>The image is about <strong>104 kB</strong>; a similar hello-world Linux container is usually several megabytes. <code>docker inspect</code> shows the OS and architecture. Pushing is optional, since the book provides a pre-created image; if you push, you need a registry account and must use your own tag.</p>
+<pre class="hl"><code><span class="gp">$ </span>docker<span class="w"> </span>push<span class="w"> </span>nigelpoulton/k8sbook:wasm-0.2
+<span class="go">The push refers to repository [docker.io/nigelpoulton/k8sbook]</span>
+<span class="go">4073bf46d785: Pushed</span>
+<span class="go">7893057c9bbc: Pushed</span>
+<span class="go">wasm-0.2: digest: sha256:a003c43b1308dce78c8654b7561d9a...779c5c9f9b51979c9925f6f size: 695</span>
+</code></pre>
+<h3 id="build-and-configure-a-wasm-capable-k3d-cluster">Build and configure a Wasm-capable k3d cluster</h3>
+<p>The cluster uses a <strong>custom k3d image with pre-installed Wasm shims</strong>, so build exactly this one to follow along. Steps:</p>
+<ol>
+<li>Install k3d.</li>
+<li>Build a 3-node cluster (one control plane, two workers).</li>
+<li>Inspect the Wasm configuration on a worker.</li>
+<li>Label one worker as Wasm-capable.</li>
+<li>Create a RuntimeClass.</li>
+</ol>
+<p>Install k3d from k3d.io and check <code>k3d --version</code>. Then create the cluster (this also switches your kubectl context):</p>
+<pre class="hl"><code>k3d<span class="w"> </span>cluster<span class="w"> </span>create<span class="w"> </span>wasm<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--image<span class="w"> </span>ghcr.io/deislabs/containerd-wasm-shims/examples/k3d:v0.11.1<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="s2">"5005:80@loadbalancer"</span><span class="w"> </span>--agents<span class="w"> </span><span class="m">2</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cluster create wasm</code></td>
+<td>New cluster named <code>wasm</code></td>
+</tr>
+<tr>
+<td><code>--image</code></td>
+<td>Special image with containerd Wasm shims</td>
+</tr>
+<tr>
+<td><code>-p &quot;5005:80@loadbalancer&quot;</code></td>
+<td>Load balancer to an Ingress in the cluster, mapping host port 5005 to Ingress port 80</td>
+</tr>
+<tr>
+<td><code>--agents 2</code></td>
+<td>Two worker nodes</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>nodes
+<span class="go">NAME                STATUS   ROLES           AGE   VERSION</span>
+<span class="go">k3d-wasm-server-0   Ready    control-plane   17s   v1.27.8+k3s2</span>
+<span class="go">k3d-wasm-agent-1    Ready    &lt;none&gt;          15s   v1.27.8+k3s2</span>
+<span class="go">k3d-wasm-agent-0    Ready    &lt;none&gt;          15s   v1.27.8+k3s2</span>
+</code></pre>
+<p>A node needs both <strong>containerd running</strong> and <strong>a containerd Wasm shim installed and registered</strong>. Exec onto a worker and check:</p>
+<pre class="hl"><code><span class="gp">$ </span>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>k3d-wasm-agent-1<span class="w"> </span>ash
+<span class="gp">$ </span>ps<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>containerd
+<span class="go">PID   USER   COMMAND</span>
+<span class="go">98    0      containerd</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>Shims live in <code>/bin</code> and follow the naming convention. <code>containerd-shim-runc-v2</code> is the default for Linux containers; the other four are Wasm shims, and the Spin one is <code>containerd-shim-spin-v2</code>:</p>
+<pre class="hl"><code><span class="gp">$ </span>ls<span class="w"> </span>/bin<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>shim
+<span class="go">containerd-shim-lunatic-v1</span>
+<span class="go">containerd-shim-runc-v2</span>
+<span class="go">containerd-shim-slight-v1</span>
+<span class="go">containerd-shim-spin-v2</span>
+<span class="go">containerd-shim-wws-v1</span>
+</code></pre>
+<p>A shim file is not enough: it must be <strong>registered</strong> in containerd's config. k3d keeps it at <code>/var/lib/rancher/k3s/agent/etc/containerd/config.toml</code> rather than <code>/etc/containerd</code>:</p>
+<pre class="hl"><code><span class="c1"># /var/lib/rancher/k3s/agent/etc/containerd/config.toml (Wasm runtimes only)</span>
+<span class="k">[plugins.cri.containerd.runtimes.spin]</span>
+<span class="n">runtime_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"io.containerd.spin.v2"</span>
+
+<span class="k">[plugins.cri.containerd.runtimes.slight]</span>
+<span class="n">runtime_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"io.containerd.slight.v1"</span>
+
+<span class="k">[plugins.cri.containerd.runtimes.wws]</span>
+<span class="n">runtime_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"io.containerd.wws.v1"</span>
+
+<span class="k">[plugins.cri.containerd.runtimes.lunatic]</span>
+<span class="n">runtime_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"io.containerd.lunatic.v1"</span>
+</code></pre>
+<p>Verify the active config for Spin:</p>
+<pre class="hl"><code><span class="gp">$ </span>containerd<span class="w"> </span>--config<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/var/lib/rancher/k3s/agent/etc/containerd/config.toml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>config<span class="w"> </span>dump<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>spin
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.spin]</span>
+<span class="go">  runtime_type = "io.containerd.spin.v2"</span>
+<span class="go">  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.spin.options]</span>
+</code></pre>
+<p>containerd runs and the Spin shim is present and registered, so the node can run Spin apps.</p>
+<p>All nodes here run the same shims, so nothing more is strictly needed. Real environments are <strong>heterogeneous</strong>, so the book labels <code>agent-1</code> with <code>wasm=yes</code> and creates a RuntimeClass targeting that label. Type <code>exit</code> to leave the exec session first:</p>
+<pre class="hl"><code><span class="gp"># </span><span class="nb">exit</span>
+<span class="gp">$ </span>kubectl<span class="w"> </span>label<span class="w"> </span>nodes<span class="w"> </span>k3d-wasm-agent-1<span class="w"> </span><span class="nv">wasm</span><span class="o">=</span>yes
+<span class="go">node/k3d-wasm-agent-1 labeled</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>nodes<span class="w"> </span>--show-labels<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="nv">wasm</span><span class="o">=</span>yes
+<span class="go">NAME               STATUS   ROLES    VERSION        LABELS</span>
+<span class="go">k3d-wasm-agent-0   Ready    &lt;none&gt;   v1.27.8+k3s2   beta.kubernetes...,wasm=yes</span>
+</code></pre>
+<p>(The output the book prints names <code>agent-0</code> although the label was applied to <code>agent-1</code>; shown as printed.) Create the RuntimeClass:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>rc-spin.yml
+<span class="go">runtimeclass.node.k8s.io/rc-spin created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>runtimeclass
+<span class="go">NAME      HANDLER   AGE</span>
+<span class="go">rc-spin   spin      14s</span>
+</code></pre>
+<ul>
+<li><code>scheduling.nodeSelector</code> limits Pods using this RuntimeClass to nodes with <code>wasm=yes</code>.</li>
+<li><code>handler</code> tells containerd on the node to use the <code>spin</code> shim.</li>
+</ul>
+<h3 id="deploy-and-test-the-app">Deploy and test the app</h3>
+<p><code>app.yml</code> has a Deployment, a Service and an Ingress; the Deployment's key line is <code>runtimeClassName</code>:</p>
+<pre class="hl"><code><span class="c1"># app.yml (Deployment excerpt)</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wasm-spin</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<span class="w">  </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wasm</span>
+<span class="w">    </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">runtimeClassName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rc-spin</span><span class="w">          </span><span class="c1"># referencing the RuntimeClass</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">testwasm</span>
+<span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/k8sbook:wasm-0.1</span><span class="w">   </span><span class="c1"># pre-created image</span>
+<span class="w">        </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"/"</span><span class="p p-Indicator">]</span>
+</code></pre>
+<ul>
+<li>The reference ensures all three replicas go to a node matching the RuntimeClass nodeSelector: <code>agent-1</code>.</li>
+<li>Not shown: the Ingress sends traffic on <code>/</code> to a ClusterIP Service which forwards to Pods labelled <code>app=wasm</code> on port 80 (Figure 9.6).</li>
+<li>To use your own image, edit the <code>image</code> field.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>app.yml
+<span class="go">deployment.apps/wasm-spin created</span>
+<span class="go">service/svc-wasm created</span>
+<span class="go">ingress.networking.k8s.io/ing-wasm created</span>
+</code></pre>
+<p>When all three replicas are ready (<code>kubectl get deploy wasm-spin</code>), check where they run:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-o<span class="w"> </span>wide
+<span class="go">NAME                         READY   STATUS    ...   NODE</span>
+<span class="go">wasm-spin-5f6fccc557-5jzx6   1/1     Running   ...   k3d-wasm-agent-1</span>
+<span class="go">wasm-spin-5f6fccc557-c2tq7   1/1     Running   ...   k3d-wasm-agent-1</span>
+<span class="go">wasm-spin-5f6fccc557-ft6nz   1/1     Running   ...   k3d-wasm-agent-1</span>
+</code></pre>
+<p>All three on <code>agent-1</code>, so the label and RuntimeClass worked. Test (or browse <code>http://localhost:5005/tkb</code>):</p>
+<pre class="hl"><code><span class="gp">$ </span>curl<span class="w"> </span>http://localhost:5005/tkb
+<span class="go">The Kubernetes Book loves Wasm!</span>
+</code></pre>
+<h3 id="clean-up">Clean up</h3>
+<p>Artifacts: the <code>wasm</code> k3d cluster, the Wasm image in a registry and locally, and the Spin app directory. Delete the whole cluster:</p>
+<pre class="hl"><code><span class="gp">$ </span>k3d<span class="w"> </span>cluster<span class="w"> </span>delete<span class="w"> </span>wasm
+</code></pre>
+<p>Or keep the cluster and delete only the resources:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>app.yml
+<span class="go">deployment.apps "wasm-spin" deleted</span>
+<span class="go">service "svc-wasm" deleted</span>
+<span class="go">ingress.networking.k8s.io "ing-wasm" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>runtimeclass<span class="w"> </span>rc-spin
+<span class="go">runtimeclass.node.k8s.io "rc-spin" deleted</span>
+</code></pre>
+<p>Delete the local image (substitute your image name; the book's command names the <code>wasm-0.1</code> tag):</p>
+<pre class="hl"><code>docker<span class="w"> </span>rmi<span class="w"> </span>nigelpoulton/k8sbook:wasm-0.1
+</code></pre>
+<p>Delete the <code>tkb-wasm</code> directory (check you pick the right one). Then restore your kubectl context (Docker Desktop: whale menu, Kubernetes context):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>config<span class="w"> </span>get-contexts
+<span class="go">CURRENT   NAME             CLUSTER          AUTHINFO          NAMESPACE</span>
+<span class="go">          docker-desktop   docker-desktop   docker-desktop</span>
+<span class="go">          lke349416-ctx    lke349416        lke349416-admin   default</span>
+<span class="go">*         k3d-wasm         k3d-wasm         admin@k3d-wasm</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>config<span class="w"> </span>current-context<span class="w"> </span>docker-desktop
+<span class="go">docker-desktop</span>
+</code></pre>
+<p>(As printed in the book; the command that sets the context is <code>kubectl config use-context docker-desktop</code>, shown in chapter 3 as <code>use-context</code>.)</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Wasm is the third wave of cloud computing; Docker builds, runs and hosts Wasm apps, and containerd plus runwasi (and SpinKube) make them run on Kubernetes.</li>
+<li>Wasm is a compilation target:
+<ul>
+<li>apps compile to tiny binaries that run anywhere with a Wasm runtime</li>
+<li>smaller, faster, more portable and more secure than Linux containers, though not yet able to do everything they can.</li>
+</ul>
+</li>
+<li>Process: write, compile to Wasm, build an OCI image, push to an OCI registry, wrap in a Pod and run.</li>
+<li>On containerd, install and register a Wasm shim on at least one worker, label it, and reference the label via a RuntimeClass.</li>
+<li>Further reading suggested: the <strong>SpinKube</strong> project and the <strong>containerd shim lifecycle</strong> community proposal.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Wasm / WebAssembly</strong>: binary ISA compilation target, runs in a deny-by-default sandbox.</li>
+<li><strong>WASI</strong>: system interface for sandboxed apps; Preview 2 (<code>wasip2</code>, 0.2).</li>
+<li><strong>Wasm runtime</strong>: executes Wasm binaries (Spin, Slight, WasmEdge...).</li>
+<li><strong>shim / runwasi / runc</strong>: containerd-facing processes; runwasi is the Wasm shim library.</li>
+<li><strong>containerd-shim-&lt;runtime&gt;-&lt;version&gt;</strong>: mandated shim naming.</li>
+<li><strong>RuntimeClass</strong>: <code>handler</code> plus <code>scheduling.nodeSelector</code>, picks shim and nodes.</li>
+<li><strong>FROM scratch</strong>: empty base image for Wasm OCI images.</li>
+<li><strong>SpinKube</strong>: automates Wasm on Kubernetes.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 9. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap10.xhtml</li>
+<li>Rust install: https://www.rust-lang.org/tools/install</li>
+<li>k3d: k3d.io</li>
+<li>Shim image used: ghcr.io/deislabs/containerd-wasm-shims/examples/k3d:v0.11.1</li>
+<li>Hykes tweet: reported by the book, no link given (paraphrase, unverified).</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-04-working-with-pods/">The Kubernetes Book 4: Working with Pods</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-08-ingress/">The Kubernetes Book 8: Ingress</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-10-service-discovery-deep-dive/">The Kubernetes Book 10: Service Discovery Deep Dive</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-08-ingress/">&larr; The Kubernetes Book 8: Ingress</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-10-service-discovery-deep-dive/">The Kubernetes Book 10: Service Discovery Deep Dive &rarr;</a></nav></main></body></html>

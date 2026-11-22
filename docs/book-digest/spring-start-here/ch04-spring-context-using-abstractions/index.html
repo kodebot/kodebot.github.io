@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Ch 4: The Spring context, using abstractions</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/spring-start-here/">Spring Start Here</a></div>
+<main>
+<h1 id="ch-4-the-spring-context-using-abstractions">Ch 4: The Spring context, using abstractions</h1>
+<p>Source: Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 4. Previous: <a href="/book-digest/spring-start-here/ch03-spring-context-wiring-beans/">Ch 3: The Spring context, wiring beans</a>. Book projects: <code>ssh_ch4_ex1</code> to <code>ssh_ch4_ex7</code>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Real objects depend on other objects (controller → service → repository).</li>
+<li>If each points at a <strong>concrete class</strong>, changing one forces changes in its users.</li>
+<li>An <strong>interface</strong> says <em>what</em> is needed; an implementing class says <em>how</em>.</li>
+<li>Spring's DI then supplies the right implementation at runtime.</li>
+<li>This chapter is the first realistic example (comments on tasks) and the first to decide <em>which objects are beans</em> and <em>how to choose between several implementations</em>.</li>
+</ul>
+</div></div>
+<h2 id="4-1-interfaces-as-contracts">4.1 Interfaces as contracts</h2>
+<ul>
+<li><strong>Interface = the &quot;what&quot;; implementing class = the &quot;how&quot;.</strong></li>
+<li><strong>Author's anecdote:</strong>
+<ul>
+<li>as a child he asked his dad for a knife to open a radio case</li>
+<li>his dad said use a screwdriver. Lesson: ask for what you need, not for a solution. Interfaces are how objects ask for what they need.</li>
+</ul>
+</li>
+<li><strong>Ride-sharing analogy:</strong> the customer requests a <em>trip</em> (the interface), not a specific car or driver. Any driver with a car can answer, so customer and driver stay decoupled.</li>
+</ul>
+<h3 id="decoupling-example-deliverydetailsprinter-and-sorting">Decoupling example: <code>DeliveryDetailsPrinter</code> and sorting</h3>
+<p>Printing package details sorted by destination address. If the printer holds <code>SorterByAddress</code> directly, switching to &quot;sort by sender&quot; means editing the printer as well. The printer decides both <em>what</em> it needs and <em>which implementation</em>, which is the problem.</p>
+<p><img src="/book-digest/spring-start-here/img/interface-decoupling.svg" alt="Tight coupling vs an interface" loading="lazy" /></p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Sorter</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">sortDetails</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<p>Now the printer depends on <code>Sorter</code>; any implementation can satisfy it and the printer never changes.</p>
+<h2 id="4-1-2-the-scenario">4.1.2 The scenario</h2>
+<p>A team task-management app. A user publishes a <strong>comment</strong> on a task; the app <strong>stores</strong> it (e.g. in a database) and <strong>emails</strong> a configured address.</p>
+<h2 id="4-1-3-plain-java-no-framework-ssh-ch4-ex1">4.1.3 Plain Java, no framework (<code>ssh_ch4_ex1</code>)</h2>
+<p>Naming conventions the author uses:</p>
+<ul>
+<li><strong>Service:</strong> object that implements a use case; name ends in &quot;Service&quot; (<code>CommentService</code>). He recommends chapter 2 of Robert C. Martin's <em>Clean Code</em> (Pearson, 2008) for naming.</li>
+<li><strong>Repository</strong> (also called <strong>DAO</strong>, data access object): talks to the database (<code>CommentRepository</code>).</li>
+<li><strong>Proxy:</strong> talks to something outside the app (<code>CommentNotificationProxy</code>).</li>
+<li><strong>Model:</strong> a <strong>POJO</strong> (plain object with no dependencies, described only by attributes and methods) that carries data (<code>Comment</code> with <code>author</code> and <code>text</code>).</li>
+</ul>
+<p>Storing and notifying are two different responsibilities, so two objects, each hidden behind an interface.</p>
+<p><img src="/book-digest/spring-start-here/img/comment-design.svg" alt="Class design of the comment use case" loading="lazy" /></p>
+<p>Green = beans (annotated classes), white = interfaces, amber = plain data object (details in 4.2.1). Packages: <code>model</code>, <code>repositories</code>, <code>proxies</code>, <code>services</code>.</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Comment</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">author</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">text</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// getters, setters</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// CommentRepository.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">CommentRepository</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">storeComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// DBCommentRepository.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">DBCommentRepository</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Override</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">storeComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Storing comment: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">comment</span><span class="p">.</span><span class="na">getText</span><span class="p">());</span><span class="w">  </span><span class="c1">// simulated</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// CommentNotificationProxy.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">CommentNotificationProxy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">sendComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// EmailCommentNotificationProxy.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">EmailCommentNotificationProxy</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Override</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">sendComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Sending notification for comment: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">comment</span><span class="p">.</span><span class="na">getText</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// CommentService.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">CommentService</span><span class="p">(</span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">,</span>
+<span class="w">                          </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">commentRepository</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">commentNotificationProxy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">publishComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">commentRepository</span><span class="p">.</span><span class="na">storeComment</span><span class="p">(</span><span class="n">comment</span><span class="p">);</span>
+<span class="w">      </span><span class="n">commentNotificationProxy</span><span class="p">.</span><span class="na">sendComment</span><span class="p">(</span><span class="n">comment</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Main.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Main</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kd">var</span><span class="w"> </span><span class="n">commentRepository</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">DBCommentRepository</span><span class="p">();</span>
+<span class="w">      </span><span class="kd">var</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EmailCommentNotificationProxy</span><span class="p">();</span>
+<span class="w">      </span><span class="kd">var</span><span class="w"> </span><span class="n">commentService</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommentService</span><span class="p">(</span><span class="n">commentRepository</span><span class="p">,</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">);</span>
+
+<span class="w">      </span><span class="kd">var</span><span class="w"> </span><span class="n">comment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Comment</span><span class="p">();</span>
+<span class="w">      </span><span class="n">comment</span><span class="p">.</span><span class="na">setAuthor</span><span class="p">(</span><span class="s">"Laurentiu"</span><span class="p">);</span>
+<span class="w">      </span><span class="n">comment</span><span class="p">.</span><span class="na">setText</span><span class="p">(</span><span class="s">"Demo comment"</span><span class="p">);</span>
+<span class="w">      </span><span class="n">commentService</span><span class="p">.</span><span class="na">publishComment</span><span class="p">(</span><span class="n">comment</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code>Storing comment: Demo comment
+Sending notification for comment: Demo comment
+</code></pre>
+<p>Note <code>Main</code> creates every object and wires them by hand. Spring will remove that.</p>
+<h2 id="4-2-di-with-abstractions">4.2 DI with abstractions</h2>
+<h3 id="4-2-1-which-objects-belong-in-the-spring-context-ssh-ch4-ex2">4.2.1 Which objects belong in the Spring context? (<code>ssh_ch4_ex2</code>)</h3>
+<ul>
+<li><strong>Test:</strong> <em>Does this object need to be managed by the framework?</em> Here the only Spring feature in use is DI, so an object becomes a bean if it <strong>has an injected dependency or is a dependency itself</strong>.</li>
+<li><code>CommentService</code> (has two dependencies), <code>DBCommentRepository</code> and <code>EmailCommentNotificationProxy</code> (both are dependencies): beans.</li>
+<li><code>Comment</code> has no dependencies and is no one's dependency: <strong>not a bean</strong>
+<ul>
+<li>Adding it would be over-engineering: more complexity and less performance, for no framework benefit</li>
+<li>(A question the author gets often in courses.)</li>
+</ul>
+</li>
+<li><strong>Never put a stereotype annotation on an interface or abstract class.</strong> Spring cannot instantiate it; it compiles but is useless and counts as bad practice.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// DBCommentRepository.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">DBCommentRepository</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// EmailCommentNotificationProxy.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">EmailCommentNotificationProxy</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// CommentService.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// one constructor, so @Autowired is optional (needed if there were several)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">CommentService</span><span class="p">(</span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">,</span>
+<span class="w">                          </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">publishComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ProjectConfiguration.java</span>
+<span class="nd">@Configuration</span>
+<span class="nd">@ComponentScan</span><span class="p">(</span><span class="n">basePackages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="s">"com.example.proxies"</span><span class="p">,</span><span class="w"> </span><span class="s">"com.example.repositories"</span><span class="p">,</span><span class="w"> </span><span class="s">"com.example.services"</span><span class="p">})</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfiguration</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>The <code>model</code> package is left out of the scan because it contains no annotated classes.</p>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AnnotationConfigApplicationContext</span><span class="p">(</span><span class="n">ProjectConfiguration</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">comment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Comment</span><span class="p">();</span>
+<span class="n">comment</span><span class="p">.</span><span class="na">setAuthor</span><span class="p">(</span><span class="s">"Laurentiu"</span><span class="p">);</span>
+<span class="n">comment</span><span class="p">.</span><span class="na">setText</span><span class="p">(</span><span class="s">"Demo comment"</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">commentService</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">CommentService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">commentService</span><span class="p">.</span><span class="na">publishComment</span><span class="p">(</span><span class="n">comment</span><span class="p">);</span>
+</code></pre>
+<p>Same output as before. Spring sees interface-typed constructor parameters and finds beans whose classes implement those interfaces. With three classes the saving is small; with many classes, letting Spring create and connect objects removes boilerplate.</p>
+<p><strong>Other DI styles work the same with abstractions (sidebar):</strong></p>
+<ul>
+<li><strong>Field injection (<code>ssh_ch4_ex3</code>):</strong> <code>@Autowired private CommentRepository commentRepository;</code> and likewise for the proxy; fields are no longer <code>final</code>. Demo only; prefer the constructor.</li>
+<li><strong><code>@Bean</code> parameters (<code>ssh_ch4_ex4</code>):</strong> no <code>@Component</code>, no <code>@ComponentScan</code>:<pre class="hl"><code><span class="nd">@Configuration</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfiguration</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="nf">commentRepository</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">DBCommentRepository</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="nf">commentNotificationProxy</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EmailCommentNotificationProxy</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nd">@Bean</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">CommentService</span><span class="w"> </span><span class="nf">commentService</span><span class="p">(</span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">,</span>
+<span class="w">                                               </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommentService</span><span class="p">(</span><span class="n">commentRepository</span><span class="p">,</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+</li>
+</ul>
+<h3 id="4-2-2-several-implementations-of-one-abstraction">4.2.2 Several implementations of one abstraction</h3>
+<p><img src="/book-digest/spring-start-here/img/two-implementations.svg" alt="Two implementations of one interface" loading="lazy" /></p>
+<p>Add a second implementation (<code>ssh_ch4_ex5</code>, starting from ex2):</p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentPushNotificationProxy</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Override</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">sendComment</span><span class="p">(</span><span class="n">Comment</span><span class="w"> </span><span class="n">comment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Sending push notification for comment: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">comment</span><span class="p">.</span><span class="na">getText</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Run as is and it fails:</p>
+<pre class="hl"><code>NoUniqueBeanDefinitionException: No qualifying bean of type 'proxies.CommentNotificationProxy'
+available: expected single matching bean but found 2:
+commentPushNotificationProxy,emailCommentNotificationProxy
+</code></pre>
+<p><strong>Fix 1: <code>@Primary</code></strong> (the default choice):</p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="nd">@Primary</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentPushNotificationProxy</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>Output: <code>Sending push notification for comment: Demo comment</code>.</p>
+<ul>
+<li><em>&quot;Why keep both if Spring injects only one?&quot;</em> A dependency of yours may already provide an implementation of an interface, but not one that suits your app
+<ul>
+<li>You write your own and mark it <code>@Primary</code> so Spring injects yours.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Fix 2: <code>@Qualifier</code></strong> (<code>ssh_ch4_ex6</code>): when different objects need different implementations (email here, push there). Name each implementation, then name the one you want at the injection point:</p>
+<pre class="hl"><code><span class="nd">@Component</span><span class="w"> </span><span class="nd">@Qualifier</span><span class="p">(</span><span class="s">"PUSH"</span><span class="p">)</span><span class="w">  </span><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentPushNotificationProxy</span><span class="w">  </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+<span class="nd">@Component</span><span class="w"> </span><span class="nd">@Qualifier</span><span class="p">(</span><span class="s">"EMAIL"</span><span class="p">)</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">EmailCommentNotificationProxy</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// CommentService.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">CommentService</span><span class="p">(</span><span class="n">CommentRepository</span><span class="w"> </span><span class="n">commentRepository</span><span class="p">,</span>
+<span class="w">                          </span><span class="nd">@Qualifier</span><span class="p">(</span><span class="s">"PUSH"</span><span class="p">)</span><span class="w"> </span><span class="n">CommentNotificationProxy</span><span class="w"> </span><span class="n">commentNotificationProxy</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Output: <code>Sending push notification for comment: Demo comment</code>.</p>
+<h2 id="4-3-say-the-responsibility-service-and-repository-ssh-ch4-ex7">4.3 Say the responsibility: <code>@Service</code> and <code>@Repository</code> (<code>ssh_ch4_ex7</code>)</h2>
+<p><code>@Component</code> is generic. Developers usually mark known roles explicitly. All three are <strong>stereotype annotations</strong>: Spring creates and registers an instance of the annotated class.</p>
+<p><img src="/book-digest/spring-start-here/img/stereotypes.svg" alt="Stereotype annotations" loading="lazy" /></p>
+<ul>
+<li><strong><code>@Service</code></strong>: object that implements use cases.</li>
+<li><strong><code>@Repository</code></strong>: object that manages data persistence.</li>
+<li><strong><code>@Component</code></strong>: anything else with no dedicated annotation (e.g. the proxy).</li>
+</ul>
+<pre class="hl"><code><span class="c1">// CommentService.java</span>
+<span class="nd">@Service</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CommentService</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// DBCommentRepository.java</span>
+<span class="nd">@Repository</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">DBCommentRepository</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">CommentRepository</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>The benefit is readability: the role of each class is visible to anyone reading it. Next chapter: how Spring creates and manages these objects through their life cycle.</p>
+<h2 id="chapter-summary-book">Chapter summary (book)</h2>
+<ul>
+<li>Decoupling = classes do not depend on specific implementations, so the app is easier to change, extend and maintain.</li>
+<li>Interfaces define the contract. With DI on an interface, Spring finds a bean implementing it.</li>
+<li>Stereotype annotations go on classes Spring should create, never on interfaces.</li>
+<li>Several beans for one interface: <code>@Primary</code> (default) or <code>@Qualifier</code> (by name).</li>
+<li><code>@Service</code> for service logic, <code>@Repository</code> for data access; they make roles explicit.</li>
+</ul>
+<h2 id="terms-to-carry-forward">Terms to carry forward</h2>
+<p>abstraction · contract · decoupling · POJO · model · service · repository / DAO · proxy · stereotype annotation · <code>@Service</code> · <code>@Repository</code> · <code>@Primary</code> · <code>@Qualifier</code> · <code>NoUniqueBeanDefinitionException</code>.</p>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 4. https://www.manning.com/books/spring-start-here-second-edition (unverified)</li>
+<li>Robert C. Martin, <em>Clean Code</em> (Pearson, 2008), ch. 2 on naming, cited by the book (no online source checked).</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/spring-start-here/ch03-spring-context-wiring-beans/">Ch 3: The Spring context, wiring beans</a> · <a href="/book-digest/spring-start-here/ch05-spring-context-scopes-and-lifecycle/">Ch 5: The Spring context, bean scopes and life cycle</a> · coupling · open-closed-principle</p>
+<nav class="pager"><a href="/book-digest/spring-start-here/ch03-spring-context-wiring-beans/">&larr; Ch 3: The Spring context, wiring beans</a><a href="/book-digest/spring-start-here/">Contents</a><a href="/book-digest/spring-start-here/ch05-spring-context-scopes-and-lifecycle/">Ch 5: The Spring context, bean scopes and life cycle &rarr;</a></nav></main></body></html>

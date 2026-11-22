@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 11: Kubernetes Storage</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-11-kubernetes-storage">The Kubernetes Book 11: Kubernetes Storage</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 11. Previous: <a href="/book-digest/the-kubernetes-book/tkb-10-service-discovery-deep-dive/">The Kubernetes Book 10: Service Discovery Deep Dive</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-12-configmaps-and-secrets/">The Kubernetes Book 12: ConfigMaps and Secrets</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Kubernetes connects to external storage (block, file, object; cloud or on-premises) through <strong>CSI plugins</strong> and exposes it with three API objects: <strong>PV</strong>, <strong>PVC</strong>, <strong>StorageClass</strong>.</li>
+<li><strong>PVs</strong> map to external volumes, <strong>PVCs</strong> grant Pods access to PVs, and <strong>StorageClasses</strong> make the whole thing automatic and dynamic.</li>
+<li>The <strong>reclaim policy</strong> decides what happens to the PV and volume when the PVC is released: <code>Delete</code> (default for dynamic PVs, dangerous) or <code>Retain</code> (safe, manual cleanup).</li>
+<li><strong>Volume binding mode</strong> <code>Immediate</code> creates the volume at once; <code>WaitForFirstConsumer</code> waits for a Pod so the volume lands in the Pod's region and zone.</li>
+<li>The hands-on uses <strong>LKE</strong> and will not work on other clouds; GKE files are included in the repo.</li>
+</ul>
+</div></div>
+<h2 id="11-1-the-big-picture">11.1 The big picture</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-11-storage-architecture.svg" alt="Providers, CSI plugins, the persistent volume subsystem and the Pod" loading="lazy" /></p>
+<ul>
+<li>Kubernetes supports block, file and object storage from many external systems, on-premises (EMC, NetApp) or from cloud providers.</li>
+<li>The hands-on examples run on <strong>Linode Kubernetes Engine (LKE)</strong>: simple and cheap, but they will not work elsewhere, because each cloud has its own storage plugins and options
+<ul>
+<li>The repo includes files for <strong>Google Kubernetes Engine (GKE)</strong>.</li>
+</ul>
+</li>
+</ul>
+<p>Figure 11.1 architecture, left to right:</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Storage providers (left)</td>
+<td>External systems: on-premises arrays or cloud storage services</td>
+</tr>
+<tr>
+<td>Plugin layer (middle)</td>
+<td>Interface between storage and Kubernetes; modern plugins use the <strong>Container Storage Interface (CSI)</strong>, an industry-standard interface for container orchestrators</td>
+</tr>
+<tr>
+<td>Persistent volume subsystem (right)</td>
+<td>Standard API objects apps use to consume storage</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>[!note] In-tree vs out-of-tree
+Before CSI, storage plugins lived in the main Kubernetes code tree (<strong>in-tree</strong>). They had to be open source, and updates and bug fixes were tied to the Kubernetes release cycle. CSI plugins are <strong>out-of-tree</strong>: they need not be open source and can be released whenever needed.</p>
+</blockquote>
+<p>Core objects (referred to by PascalCase name, acronym, or plain words):</p>
+<ul>
+<li><strong>PersistentVolumes (PV)</strong></li>
+<li><strong>PersistentVolumeClaims (PVC)</strong></li>
+<li><strong>StorageClasses (SC)</strong></li>
+</ul>
+<h3 id="volume-provisioning-workflow-aws-example">Volume provisioning workflow (AWS example)</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-11-volume-provisioning.svg" alt="Sequence of dynamic volume provisioning on AWS" loading="lazy" /></p>
+<ol>
+<li>A Pod needs a 50GB volume and requests it via a <strong>PVC</strong>.</li>
+<li>The PVC asks the <strong>StorageClass</strong> to create a new PV and the volume on the AWS backend.</li>
+<li>The SC calls the AWS backend through the <strong>AWS CSI plugin</strong>.</li>
+<li>The plugin creates a 50GB <strong>EBS</strong> volume.</li>
+<li>The plugin reports the creation back to the SC.</li>
+<li>The SC creates the PV and maps it to the EBS volume.</li>
+<li>The Pod mounts the PV and uses it.</li>
+</ol>
+<p>Kubernetes prevents multiple Pods writing to the same PV, and forces a <strong>1:1 mapping</strong> between external volumes and PVs: you cannot map one 50GB volume to two 25GB PVs.</p>
+<h2 id="11-2-storage-providers">11.2 Storage providers</h2>
+<ul>
+<li>Providers (or provisioners) each supply a <strong>CSI plugin</strong> exposing their features and options, usually delivered as a <strong>Helm chart or YAML installer</strong>
+<ul>
+<li>Installed, it runs as Pods in the <strong><code>kube-system</code></strong> Namespace.</li>
+</ul>
+</li>
+<li>Restrictions: you cannot mount AWS EBS volumes from a cluster on Azure; locality may apply (Pods may need to be in the same region or zone as the storage).</li>
+<li>Volume size, protection level, snapshot schedule, replication, encryption and more are configured through the backend's CSI plugin
+<ul>
+<li>Backends differ, so <strong>read the plugin's documentation</strong>: it is your responsibility.</li>
+</ul>
+</li>
+</ul>
+<h2 id="11-3-the-container-storage-interface-csi">11.3 The Container Storage Interface (CSI)</h2>
+<ul>
+<li>An open-source project defining an industry-standard interface so orchestrators use external storage uniformly
+<ul>
+<li>Storage providers get a documented interface, and CSI plugins should work on <strong>any orchestration platform</strong> supporting CSI.</li>
+</ul>
+</li>
+<li>A reasonably current plugin list (called &quot;drivers&quot;): https://kubernetes-csi.github.io/docs/drivers.html</li>
+<li>Most clouds pre-install CSI plugins for their native storage. Third-party plugins you install yourself, typically from Helm charts or YAML, and they run as Pods in <code>kube-system</code>.</li>
+</ul>
+<h2 id="11-4-the-kubernetes-persistent-volume-subsystem">11.4 The Kubernetes persistent volume subsystem</h2>
+<p>A set of API objects letting apps request and access storage:</p>
+<ul>
+<li>PVs make external volumes available (to use a 50GB AWS volume you map it to a PV).</li>
+<li>A Pod needs a <strong>PVC</strong> granting access to the PV.</li>
+<li>SCs let apps create PVs and backend volumes <strong>dynamically</strong>.</li>
+</ul>
+<p>Example with four tiers on an external system, one StorageClass each:</p>
+<table>
+<thead>
+<tr>
+<th>External tier</th>
+<th>StorageClass</th>
+<th>CSI plugin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Flash</td>
+<td><code>sc-fast-block</code></td>
+<td><code>csi.xyz.block</code></td>
+</tr>
+<tr>
+<td>Flash encrypted</td>
+<td><code>sc-fast-encrpted</code> (as printed)</td>
+<td><code>csi.xyz.block</code></td>
+</tr>
+<tr>
+<td>Mechanical disk</td>
+<td><code>sc-slow</code></td>
+<td><code>csi.xyz.block</code></td>
+</tr>
+<tr>
+<td>NFS Filestore</td>
+<td><code>sc-file</code></td>
+<td><code>csi.xyz.file</code></td>
+</tr>
+</tbody>
+</table>
+<p>To deploy an app needing 100GB of fast encrypted block storage, define a Pod referencing a PVC requesting 100GB from <code>sc-fast-encrypted</code>. After posting to the API server: the <strong>SC controller</strong> sees the PVC and tells the CSI plugin to provision 100GB of encrypted flash; the external system creates it and reports back; the controller maps it to a new PV; the Pod uses the PVC to mount the PV.</p>
+<h2 id="11-5-dynamic-provisioning-with-storageclasses">11.5 Dynamic provisioning with StorageClasses</h2>
+<ul>
+<li>Resources in the <strong><code>storage.k8s.io/v1</code></strong> API group, kind <code>StorageClass</code>, shortname <strong><code>sc</code></strong>. (<code>kubectl api-resources</code> lists all resources, shortnames, API groups and kinds.)</li>
+<li>You choose how to define classes based on available storage; a cloud might offer fast SSD block, fast encrypted SSD block, slow mechanical block and NFS file.</li>
+</ul>
+<h3 id="a-storageclass-yaml">A StorageClass YAML</h3>
+<p><code>fast-local</code> provisions encrypted SSD volumes at 10 IOPS per GB in the Ireland AWS region:</p>
+<pre class="hl"><code><span class="c1"># StorageClass fast-local</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">StorageClass</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">storage.k8s.io/v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fast-local</span>
+<span class="nt">provisioner</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ebs.csi.aws.com</span><span class="w">          </span><span class="c1"># AWS Elastic Block Store CSI plugin</span>
+<span class="nt">parameters</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">encrypted</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                     </span><span class="c1"># create encrypted volumes</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">io1</span><span class="w">                           </span><span class="c1"># AWS SSD drives</span>
+<span class="w">  </span><span class="nt">iopsPerGB</span><span class="p">:</span><span class="w"> </span><span class="s">"10"</span><span class="w">                     </span><span class="c1"># performance requirement</span>
+<span class="nt">allowedTopologies</span><span class="p">:</span><span class="w">                    </span><span class="c1"># where to provision volumes and replicas</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matchLabelExpressions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">topology.ebs.csi.aws.com/zone</span>
+<span class="w">    </span><span class="nt">values</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eu-west-1a</span><span class="w">                      </span><span class="c1"># Ireland AWS region</span>
+</code></pre>
+<ul>
+<li><code>provisioner</code> says which CSI plugin to use (must be installed); <code>parameters</code> define the storage type; <code>allowedTopologies</code> says where replicas go.</li>
+<li>Notes:
+<ul>
+<li>StorageClasses are <strong>immutable</strong>: no modification after deploy.</li>
+<li>Give <code>metadata.name</code> a meaningful value, since it is how you and other objects refer to the class.</li>
+<li><em>Provisioner</em>, <em>plugin</em> and <em>driver</em> are used interchangeably.</li>
+<li><code>parameters</code> is plugin-specific and different for every plugin; read the plugin docs.</li>
+</ul>
+</li>
+</ul>
+<h3 id="working-with-storageclasses">Working with StorageClasses</h3>
+<p>Workflow:</p>
+<ol>
+<li>Install and configure the CSI plugin.</li>
+<li>Create one or more StorageClasses.</li>
+<li>Deploy Pods with PVCs that request volumes through the classes.</li>
+</ol>
+<p>(Assumes external storage is connected. Hosted services often pre-install CSI drivers for the cloud's native backends.)</p>
+<p>One file can hold all three objects, separated by <code>---</code> (truncated here as in the book; GKE example):</p>
+<pre class="hl"><code><span class="c1"># Pod, PVC and StorageClass in one file</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span><span class="w">                             </span><span class="c1"># 1. Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mypod</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">data</span>
+<span class="w">    </span><span class="nt">persistentVolumeClaim</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">claimName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mypvc</span><span class="w">                </span><span class="c1"># 2. request volume via the "mypvc" PVC</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+<span class="c1"># &lt;SNIP&gt;</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PersistentVolumeClaim</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mypvc</span><span class="w">                         </span><span class="c1"># 3. this is the "mypvc" PVC</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">accessModes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ReadWriteOnce</span>
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">storage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">50Gi</span><span class="w">                   </span><span class="c1"># 4. provision a 50Gi volume...</span>
+<span class="w">  </span><span class="nt">storageClassName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fast</span><span class="w">              </span><span class="c1"># 5. ...based on the "fast" StorageClass</span>
+<span class="nn">---</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">StorageClass</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">storage.k8s.io/v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fast</span><span class="w">                          </span><span class="c1"># 6. this is the "fast" StorageClass</span>
+<span class="nt">provisioner</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pd.csi.storage.gke.io</span><span class="w">    </span><span class="c1"># 7. use this CSI plugin</span>
+<span class="nt">parameters</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pd-ssd</span><span class="w">                        </span><span class="c1"># 8. provision this type of storage</span>
+</code></pre>
+<p>Walkthrough: a normal Pod (1) requests a volume via PVC <code>mypvc</code> (2); <code>mypvc</code> (3) asks for 50Gi (4) from StorageClass <code>fast</code> (5); <code>fast</code> is defined (6), uses the <code>pd.csi.storage.gke.io</code> plugin (7), which provisions <code>pd-ssd</code> storage from Google Cloud (8).</p>
+<h3 id="additional-volume-settings">Additional volume settings</h3>
+<p><strong>Access mode</strong> (three):</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ReadWriteOnce</code> (RWO)</td>
+<td>One PVC can bind in read-write mode; binding from several PVCs fails</td>
+</tr>
+<tr>
+<td><code>ReadWriteMany</code> (RWM)</td>
+<td>Many PVCs can bind read-write; file and object storage usually support it, block usually does not</td>
+</tr>
+<tr>
+<td><code>ReadOnlyMany</code> (ROM)</td>
+<td>Many PVCs can bind read-only</td>
+</tr>
+</tbody>
+</table>
+<p>A PV can only be opened in <strong>one mode</strong>: you cannot bind one PV to a PVC in ROM and another in RWM.</p>
+<p><strong>Reclaim policy</strong> (what happens to a PV and external storage when its PVC is released):</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Delete</code></td>
+<td><strong>Most dangerous</strong>; default for dynamically created PVs. Deleting the PVC deletes the PV and the external storage.</td>
+</tr>
+<tr>
+<td><code>Retain</code></td>
+<td>Keeps the PV and external storage after the PVC is deleted. Safer, but you reclaim resources manually.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Summary:</strong> SCs represent tiers of storage apps use to create volumes dynamically. Defined in YAML, each references a plugin and ties to a storage type on an external system (for example, fast AWS SSD in Mumbai versus slow AWS storage elsewhere). The SC controller watches for new PVCs referencing the class and, for each, creates the volume on the external system and maps it to a PV.</p>
+<h2 id="11-6-hands-on">11.6 Hands-on</h2>
+<p>Demos (LKE only):</p>
+<ol>
+<li>Use an existing StorageClass.</li>
+<li>Create and use a new StorageClass.</li>
+</ol>
+<p>Assumes the repo clone on branch <code>2025</code> and a connection to your LKE cluster (see <a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes</a>):</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+<span class="nb">cd</span><span class="w"> </span>storage
+</code></pre>
+<h3 id="use-an-existing-storageclass">Use an existing StorageClass</h3>
+<p>Most environments pre-create at least one (output trimmed):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>sc
+<span class="go">NAME                          PROVISIONER               RECLAIM POLICY  VOLUME BINDINGMODE  ALLOWVOLUME EXPANSION</span>
+<span class="go">linode-blck-stg               linodebs.csi.linode.com   Delete          Immediate           true</span>
+<span class="go">linode-blck-stg-retain (def)  linodebs.csi.linode.com   Retain          Immediate           true</span>
+</code></pre>
+<ul>
+<li>Two classes, both via the <code>linodebs.csi.linode.com</code> plugin and the <code>Immediate</code> binding mode; one <code>Delete</code>, one <code>Retain</code>.</li>
+<li>The class marked <code>(default)</code> is used by PVCs that name no class. Specify a class for important production apps, since defaults <strong>differ between clusters</strong>.</li>
+</ul>
+<p>A GKE Autopilot regional cluster pre-creates eight (five use <code>filestore.csi.storage.gke.io</code> for NFS Filestore, two use <code>pd.csi.storage.gke.io</code> for block, one uses the legacy in-tree <strong>non-CSI</strong> <code>kubernetes.io/gce-pd</code>):</p>
+<pre class="hl"><code>NAME               PROVISIONER                     RECLAIM POLICY  VOLUMEBINDINGMODE
+enterprise-multi.. filestore.csi.storage.gke.io    Delete          WaitForFirstConsumer
+enterprise-rwx     filestore.csi.storage.gke.io    Delete          WaitForFirstConsumer
+premium-rwo        pd.csi.storage.gke.io           Delete          WaitForFirstConsumer
+premium-rwx        filestore.csi.storage.gke.io    Delete          WaitForFirstConsumer
+standard           kubernetes.io/gce-pd            Delete          Immediate
+standard-rwo (def) pd.csi.storage.gke.io           Delete          WaitForFirstConsumer
+standard-rwx       filestore.csi.storage.gke.io    Delete          WaitForFirstConsumer
+zonal-rwx          filestore.csi.storage.gke.io    Delete          WaitForFirstConsumer
+</code></pre>
+<p>Inspect <code>linode-block-storage</code> (the book's first listing abbreviates the names; shown as printed):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>sc<span class="w"> </span>linode-block-storage
+<span class="go">Name:                  linode-block-storage</span>
+<span class="go">IsDefaultClass:        No</span>
+<span class="go">Annotations:           lke.linode.com/caplke-version=v1.31.5-2025-02b</span>
+<span class="go">Provisioner:           linodebs.csi.linode.com</span>
+<span class="go">Parameters:            &lt;none&gt;</span>
+<span class="go">AllowVolumeExpansion:  True</span>
+<span class="go">MountOptions:          &lt;none&gt;</span>
+<span class="go">ReclaimPolicy:         Delete</span>
+<span class="go">VolumeBindingMode:     Immediate</span>
+<span class="go">Events:                &lt;none&gt;</span>
+</code></pre>
+<p>It uses <code>Delete</code>: Kubernetes will delete the PV and backend volume when you stop using the PVC. Check nothing exists first:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pv
+<span class="go">No resources found</span>
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pvc
+<span class="go">No resources found in default namespace.</span>
+</code></pre>
+<p>PVC <code>pvc-test</code> requests a 10GB volume from <code>linode-block-storage</code>:</p>
+<pre class="hl"><code><span class="c1"># lke-pvc-test.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PersistentVolumeClaim</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pvc-test</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">accessModes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ReadWriteOnce</span>
+<span class="w">  </span><span class="nt">storageClassName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">linode-block-storage</span>
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">storage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10Gi</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>lke-pvc-test.yml
+<span class="go">persistentvolumeclaim/pvc-test created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pvc
+<span class="go">NAME       STATUS   VOLUME                 CAPACITY   ACCESS MODES   STORAGECLASS</span>
+<span class="go">pvc-test   Bound    pvc-cc3dd8716c7d46c9   10Gi       RWO            linode-block-storage</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pv
+<span class="go">NAME                   CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM      STORAGECLASS</span>
+<span class="go">pvc-cc3dd8716c7d46c9   10Gi       RWO            Delete           Bound    pvc-test   linode-block-storage</span>
+</code></pre>
+<ul>
+<li>The PVC is already <strong>Bound</strong> because <code>Immediate</code> creates the PV and backend storage without waiting for a Pod. The PV is bound to <code>pvc-test</code>.</li>
+<li>In the LKE dashboard (cloud.linode.com, Volumes tab) you see a 10GB volume in your cluster's region (Figure 11.3: how everything maps; only the Pod is missing).</li>
+<li>With <code>WaitForFirstConsumer</code>, nothing would be created until a Pod used the PVC.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>pvc<span class="w"> </span>pvc-test
+<span class="go">persistentvolumeclaim "pvc-test" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pv
+<span class="go">No resources found</span>
+</code></pre>
+<p>Deleting the PVC also deletes the PV and Linode volume (reclaim policy <code>Delete</code>); confirm in the Volumes tab.</p>
+<h3 id="create-and-use-a-new-storageclass">Create and use a new StorageClass</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-11-binding-modes.svg" alt="Immediate versus WaitForFirstConsumer volume binding" loading="lazy" /></p>
+<p>A class implementing <strong>topology-aware provisioning</strong> (also called <strong>provision on demand</strong>): it delays volume creation until a Pod requests it, so the volume lands in the Pod's region and zone. <code>lke-sc-wait-keep.yml</code> defines <code>block-wait-keep</code>:</p>
+<ul>
+<li>block storage</li>
+<li><code>volumeBindingMode: WaitForFirstConsumer</code></li>
+<li><code>reclaimPolicy: Retain</code> (keep volume and data when the PVC is deleted)</li>
+</ul>
+<pre class="hl"><code><span class="c1"># lke-sc-wait-keep.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">storage.k8s.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">StorageClass</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">block-wait-keep</span>
+<span class="nt">provisioner</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">linodebs.csi.linode.com</span><span class="w">      </span><span class="c1"># CSI plugin</span>
+<span class="nt">allowVolumeExpansion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="nt">volumeBindingMode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WaitForFirstConsumer</span><span class="w">   </span><span class="c1"># provision on demand</span>
+<span class="nt">reclaimPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Retain</span><span class="w">                     </span><span class="c1"># keep volume when PVC released</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>lke-sc-wait-keep.yml
+<span class="go">storageclass.storage.k8s.io/block-wait-keep created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>sc
+<span class="go">NAME                          PROVISIONER               RECLAIM POLICY  VOLUME BINDINGMODE    ALLOW VOLUME EXPANSION</span>
+<span class="go">block-wait-keep               linodebs.csi.linode.com   Retain          WaitForFirstConsumer  true</span>
+<span class="go">linode-blck-stg               linodebs.csi.linode.com   Delete          Immediate             true</span>
+<span class="go">linode-blck-stg-retain (def)  linodebs.csi.linode.com   Retain          Immediate             true</span>
+</code></pre>
+<p>PVC <code>pvc-wait-keep</code> requests 20GB from that class:</p>
+<pre class="hl"><code><span class="c1"># lke-pvc-wait-keep.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PersistentVolumeClaim</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pvc-wait-keep</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">accessModes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ReadWriteOnce</span>
+<span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">storage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20Gi</span>
+<span class="w">  </span><span class="nt">storageClassName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">block-wait-keep</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>lke-pvc-wait-keep.yml
+<span class="go">persistentvolumeclaim/pvc-wait-keep created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pvc
+<span class="go">NAME            STATUS    VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS</span>
+<span class="go">pvc-wait-keep   Pending                                      block-wait-keep</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pv
+<span class="go">No resources found</span>
+</code></pre>
+<p>The PVC stays <strong>Pending</strong> and no PV exists, because <code>WaitForFirstConsumer</code> waits for a Pod to reference it. Pod <code>volpod</code> (annotated) uses it:</p>
+<pre class="hl"><code><span class="c1"># lke-app.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">volpod</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">data</span><span class="w">                          </span><span class="c1"># create a volume called "data"</span>
+<span class="w">    </span><span class="nt">persistentVolumeClaim</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">claimName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pvc-wait-keep</span><span class="w">          </span><span class="c1"># from the PVC called "pvc-wait-keep"</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu-ctr</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu:latest</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/bin/bash</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"-c"</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"sleep</span><span class="nv"> </span><span class="s">60m"</span>
+<span class="w">    </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">data</span><span class="w">                        </span><span class="c1"># mount the "data" volume</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/tkb</span><span class="w">                   </span><span class="c1"># to /tkb</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>lke-app.yml
+<span class="go">pod/volpod created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pvc
+<span class="go">NAME            STATUS   VOLUME                 CAPACITY   ACCESS MODES   STORAGECLASS</span>
+<span class="go">pvc-wait-keep   Bound    pvc-279f09e083254fa9   20Gi       RWO            block-wait-keep</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pv
+<span class="go">NAME                   CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM           STORAGECLASS</span>
+<span class="go">pvc-279f09e083254fa9   20Gi       RWO            Retain           Bound    pvc-wait-keep   block-wait-keep</span>
+</code></pre>
+<p>The PVC is Bound, a PV of the same name exists, and capacity, reclaim policy and class are as expected. Confirm the Pod mounts it:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>volpod
+<span class="go">Name:         volpod</span>
+<span class="go">Namespace:    default</span>
+<span class="go">Node:         lke340882-541526-0198b5d80000/192.168.145.142</span>
+<span class="go">Status:       Running</span>
+<span class="go">IP:           10.2.1.3</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">Containers:</span>
+<span class="go">  ubuntu-ctr:</span>
+<span class="go">    &lt;Snip&gt;</span>
+<span class="go">    Mounts:</span>
+<span class="go">      /tkb from data (rw)               # mount the "data" volume</span>
+<span class="go">    &lt;Snip&gt;</span>
+<span class="go">Volumes:</span>
+<span class="go">  data:                                 # create the "data" volume from the PVC</span>
+<span class="go">    Type:       PersistentVolumeClaim (a reference to a PVC...)</span>
+<span class="go">    ClaimName:  pvc-wait-keep           # called "pvc-wait-keep"</span>
+<span class="go">    ReadOnly:   false</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>What happened:</p>
+<ol>
+<li>You created <code>block-wait-keep</code> (Linode block storage).</li>
+<li>The SC controller started watching for PVCs referencing it.</li>
+<li>Your PVC created no volume, because of <code>WaitForFirstConsumer</code>.</li>
+<li>Deploying a Pod that used the PVC requested the 20GB volume.</li>
+<li>The SC controller dynamically created the PV and the Linode volume.</li>
+</ol>
+<h3 id="clean-up">Clean up</h3>
+<p>Five steps:</p>
+<ol>
+<li>Delete the Pod using the PVC.</li>
+<li>Delete the PVC.</li>
+<li>Delete the PV.</li>
+<li>Manually delete the volume in the Linode backend.</li>
+<li>Delete the SC.</li>
+</ol>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>volpod
+<span class="go">pod "volpod" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>pvc<span class="w"> </span>pvc-wait-keep
+<span class="go">persistentvolumeclaim "pvc-wait-keep" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>pv<span class="w"> </span>pvc-279f09e083254fa9
+<span class="go">persistentvolume "pvc-279f09e083254fa9" deleted</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>sc<span class="w"> </span>block-wait-keep
+<span class="go">storageclass.storage.k8s.io "block-wait-keep" deleted</span>
+</code></pre>
+<ul>
+<li>The PV and external volume survived the PVC deletion because of <code>Retain</code>; you deleted the PV by hand (yours has a different name).</li>
+<li>In the Linode console delete the volume with the <strong>same name as the PV</strong>; it shows as unattached in the <em>Attached to</em> column. Not deleting it <strong>incurs Linode costs</strong>.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Kubernetes has a powerful storage subsystem for dynamically provisioning and using storage from many external providers.</li>
+<li>Each provider has a CSI plugin that creates volumes and surfaces them; hosted clusters pre-install plugins as Pods in <code>kube-system</code>.</li>
+<li>After installing the plugin, create StorageClasses mapping to storage types
+<ul>
+<li>the SC controller (a reconciliation loop on the control plane) watches for PVCs, creates the requested volume and maps it to a PV</li>
+<li>Pods claim and mount it through the PVC.</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>PV / PVC / StorageClass</strong>: external volume mapping / access claim / dynamic provisioning tier.</li>
+<li><strong>CSI</strong>: Container Storage Interface; plugins run as Pods in <code>kube-system</code>; in-tree vs out-of-tree.</li>
+<li><strong>Access modes</strong>: RWO, RWM, ROM.</li>
+<li><strong>Reclaim policy</strong>: <code>Delete</code> or <code>Retain</code>.</li>
+<li><strong>Volume binding mode</strong>: <code>Immediate</code> or <code>WaitForFirstConsumer</code> (topology-aware, provision on demand).</li>
+<li><strong>Default StorageClass</strong>: used when a PVC names none; differs between clusters.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 11. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap12.xhtml</li>
+<li>CSI drivers list: https://kubernetes-csi.github.io/docs/drivers.html</li>
+<li>Linode cloud console: cloud.linode.com</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-03-getting-kubernetes/">The Kubernetes Book 3: Getting Kubernetes</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-10-service-discovery-deep-dive/">The Kubernetes Book 10: Service Discovery Deep Dive</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-12-configmaps-and-secrets/">The Kubernetes Book 12: ConfigMaps and Secrets</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-10-service-discovery-deep-dive/">&larr; The Kubernetes Book 10: Service Discovery Deep Dive</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-12-configmaps-and-secrets/">The Kubernetes Book 12: ConfigMaps and Secrets &rarr;</a></nav></main></body></html>

@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 6: Kubernetes Deployments</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-6-kubernetes-deployments">The Kubernetes Book 6: Kubernetes Deployments</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 6. Previous: <a href="/book-digest/the-kubernetes-book/tkb-05-virtual-clusters-with-namespaces/">The Kubernetes Book 5: Virtual Clusters with Namespaces</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-07-kubernetes-services/">The Kubernetes Book 7: Kubernetes Services</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>Deployment</strong> wraps a Pod template and adds self-healing, scaling, rolling updates and versioned rollbacks to <strong>stateless</strong> apps.</li>
+<li>Under the hood a <strong>ReplicaSet</strong> provides self-healing and scaling; you manage everything through the Deployment, never the ReplicaSet or Pods.</li>
+<li>Everything is <strong>reconciliation</strong>: a controller compares observed state with desired state and fixes the difference.</li>
+<li>A rollout creates a <strong>new ReplicaSet</strong>, scaling it up while the old one scales down; old ReplicaSets are kept (up to <code>revisionHistoryLimit</code>) so rollback is just the reverse.</li>
+<li>Prefer <strong>declarative</strong> changes: scaling with <code>kubectl scale</code> leaves your YAML out of sync.</li>
+</ul>
+</div></div>
+<h2 id="6-1-deployment-theory">6.1 Deployment theory</h2>
+<ul>
+<li>Deployments are the most popular way to run stateless apps, adding self-healing, scaling, rollouts and rollbacks.</li>
+<li>Example flow: write the app, containerise it, define a Pod, wrap the Pod in a Deployment, post it; the <strong>Deployment controller</strong> deploys the Pod.
+<ul>
+<li>Pod fails: replaced by a new one.</li>
+<li>Demand rises: more identical Pods.</li>
+<li>App updated: old Pods deleted, new ones created.</li>
+</ul>
+</li>
+<li>A shopping cart service gets its own Pod and its own Deployment, so two microservices means two Deployments.</li>
+<li>Figure 6.1: web Deployment manages four identical web Pods; cart Deployment manages two cart Pods.</li>
+<li>Standard Kubernetes architecture: a <strong>resource</strong> defines objects, a <strong>controller</strong> manages them.
+<ul>
+<li>The Deployment resource lives in the <strong><code>apps/v1</code></strong> API and defines the attributes.</li>
+<li>The Deployment controller is a control plane service reconciling observed with desired state.</li>
+</ul>
+</li>
+</ul>
+<h3 id="deployments-and-pods">Deployments and Pods</h3>
+<ul>
+<li>Every Deployment manages one or more <strong>identical</strong> Pods, defined in an embedded <strong>Pod template</strong>.</li>
+<li>Figure 6.2: YAML requesting four replicas; raising to six adds two identical Pods.</li>
+</ul>
+<h3 id="deployments-and-replicasets">Deployments and ReplicaSets</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-06-deployment-replicaset-pods.svg" alt="A Deployment owns a ReplicaSet which manages identical Pods" loading="lazy" /></p>
+<ul>
+<li>Behind the scenes a <strong>ReplicaSet</strong> provides self-healing and scaling.</li>
+<li>Posting one Deployment YAML creates a Deployment, a ReplicaSet and the identical Pods (Figure 6.3, where <code>rs</code> is ReplicaSet)
+<ul>
+<li>The Pods are managed by the ReplicaSet, which is managed by the Deployment.</li>
+</ul>
+</li>
+</ul>
+<h3 id="a-quick-word-on-scaling">A quick word on scaling</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-06-autoscaling-chain.svg" alt="HPA and Cluster Autoscaler working together" loading="lazy" /></p>
+<p>Manual scaling is possible, but Kubernetes also has autoscalers:</p>
+<table>
+<thead>
+<tr>
+<th>Autoscaler</th>
+<th>What it does</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Horizontal Pod Autoscaler (HPA)</strong></td>
+<td>Adds and removes Pods to meet demand</td>
+<td>Installed on most clusters; widely used</td>
+</tr>
+<tr>
+<td><strong>Cluster Autoscaler (CA)</strong></td>
+<td>Adds and removes cluster nodes so all scheduled Pods fit</td>
+<td>Installed by default; widely used</td>
+</tr>
+<tr>
+<td><strong>Vertical Pod Autoscaler (VPA)</strong></td>
+<td>Raises or lowers CPU and memory of running Pods</td>
+<td>Not installed by default; known limitations; replaces the Pod on every resize (disruptive, may land on another node); in-place updates are early alpha</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Community projects such as <strong>karmada</strong> scale apps across multiple clusters.</li>
+<li><strong>HPA + CA example:</strong>
+<ol>
+<li>An HPA keeps an app between 2 and 10 Pods.</li>
+<li>Demand rises, so the HPA asks for 4 Pods, then 2 more.</li>
+<li>The scheduler finds no node with room and marks the 2 new Pods <strong>pending</strong>.</li>
+<li>The CA notices and adds a node; the scheduler places the pending Pods there.</li>
+<li>Scaling down works in reverse: fewer Pods may make the CA remove a node, and Kubernetes evicts that node's Pods and replaces them on surviving nodes.</li>
+</ol>
+</li>
+<li><strong>Multi-dimensional autoscaling</strong> means combining methods (Pods and nodes, horizontal and vertical).</li>
+</ul>
+<h3 id="it-s-all-about-the-state">It's all about the state</h3>
+<p>Three concepts:</p>
+<ul>
+<li><strong>Desired state</strong>: what you want.</li>
+<li><strong>Observed state</strong> (actual or current state): what you have.</li>
+<li><strong>Reconciliation</strong>: a controller brings observed into line with desired.</li>
+</ul>
+<p>The <strong>declarative model</strong> states the desired outcome and leaves the how to Kubernetes.</p>
+<h4 id="declarative-vs-imperative">Declarative vs imperative</h4>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Analogy</th>
+<th>Real example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Declarative</td>
+<td>&quot;Give me a chocolate cake to feed ten people.&quot;</td>
+<td>YAML asking for five front-end Pods on port 80 and two back-end Pods on port 27017</td>
+</tr>
+<tr>
+<td>Imperative</td>
+<td>Drive to the store, buy ingredients, drive home, preheat, mix, bake 30 or 40 minutes depending on oven, cool, frost</td>
+<td>Long command lists with no desired state</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Imperative problems: endless variations (commands to start <strong>containerd</strong> containers differ from <strong>CRI-O</strong>), more work, more errors, and no self-healing because no desired state is declared.</li>
+<li>Kubernetes supports both and <strong>strongly prefers declarative</strong>.</li>
+<li>containerd and CRI-O are runtimes on worker nodes doing low-level work like starting and stopping containers.</li>
+</ul>
+<h4 id="controllers-and-reconciliation">Controllers and reconciliation</h4>
+<ul>
+<li>ReplicaSets run as a background <strong>reconciliation loop</strong>: too few Pods, add; too many, terminate.</li>
+<li>Desired state ten, observed eight: the ReplicaSet controller creates two, whether the cause is failures or an autoscaler.</li>
+<li>The same mechanism gives self-healing, scaling, rollouts and rollbacks.</li>
+</ul>
+<h3 id="rolling-updates-with-deployments">Rolling updates with Deployments</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-06-rolling-update.svg" alt="One new replica created and one old terminated at each step" loading="lazy" /></p>
+<p>Zero-downtime rollouts work best if apps are:</p>
+<ul>
+<li><strong>loosely coupled via APIs</strong>, so any microservice can be patched without affecting others</li>
+<li><strong>backward and forward compatible</strong>, so you can update without caring which client versions consume you</li>
+</ul>
+<p>Analogy: a car exposes a standard &quot;API&quot; (steering wheel, pedals). Re-map the engine or change the exhaust and the driver need not learn anything new.</p>
+<p><strong>Rollout with five stateless replicas:</strong> create one new-version replica, terminate one old, giving 4 old and 1 new; repeat until all five are new. Multiple replicas stay up, so clients see no downtime.</p>
+<p>Mechanics:</p>
+<ol>
+<li>Each microservice is a container, wrapped in a Pod, wrapped in a Deployment.</li>
+<li>A Deployment describes: replica count, container images, network ports and how to do rolling updates.</li>
+<li>You post the YAML; the ReplicaSet controller schedules the right number of Pods and keeps watching. The Deployment sits above the ReplicaSet, governing it and adding rollouts and rollbacks.</li>
+<li>To ship a vulnerability fix, edit the <strong>same Deployment YAML</strong> (new Pod spec) and re-post. Desired state now says five new Pods; observed is five old.</li>
+<li>The Deployment controller creates a <strong>new ReplicaSet</strong> (same Pod count, new version) and incrementally scales it up while scaling the old one down.</li>
+<li>Keep the manifest in version control.</li>
+</ol>
+<p>Figure 6.4: after one update, the first ReplicaSet manages no Pods and the second manages three live Pods.</p>
+<h3 id="rollbacks">Rollbacks</h3>
+<ul>
+<li>Old ReplicaSets wind down to zero Pods but <strong>keep their configuration</strong>, so rollback is the reverse of rollout: wind the old ReplicaSet up while the current one winds down (Figure 6.5).</li>
+<li>You can also insert delays, control pace and cadence, and probe the health of updated replicas.</li>
+</ul>
+<h2 id="6-2-create-a-deployment">6.2 Create a Deployment</h2>
+<p>Clone the repo, switch to branch <code>2025</code> and run from the <code>deployments</code> folder:</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+<span class="nb">cd</span><span class="w"> </span>deployments
+</code></pre>
+<pre class="hl"><code><span class="c1"># deploy.yml</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-deploy</span><span class="w">         </span><span class="c1"># Deployment name (must be valid DNS name)</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">               </span><span class="c1"># number of Pod replicas to deploy and manage</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-world</span>
+<span class="w">  </span><span class="nt">revisionHistoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<span class="w">  </span><span class="nt">progressDeadlineSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">300</span>
+<span class="w">  </span><span class="nt">minReadySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<span class="w">  </span><span class="nt">strategy</span><span class="p">:</span><span class="w">                  </span><span class="c1"># rolling update settings</span>
+<span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">RollingUpdate</span>
+<span class="w">    </span><span class="nt">rollingUpdate</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">maxUnavailable</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">      </span><span class="nt">maxSurge</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span><span class="w">                  </span><span class="c1"># below here is the Pod template</span>
+<span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-world</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-pod</span>
+<span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/k8sbook:1.0</span>
+<span class="w">        </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion: apps/v1</code>, <code>kind</code></td>
+<td>Create a Deployment from the <code>apps/v1</code> resource</td>
+</tr>
+<tr>
+<td><code>metadata.name</code></td>
+<td><code>hello-deploy</code>; use valid DNS names (alphanumerics, dot, dash)</td>
+</tr>
+<tr>
+<td><code>spec.replicas</code></td>
+<td>Ten Pod replicas of the template</td>
+</tr>
+<tr>
+<td><code>spec.selector</code></td>
+<td>Labels the Deployment and ReplicaSet controllers use to find the Pods they manage; <strong>must match</strong> <code>spec.template.metadata.labels</code> (both <code>app=hello-world</code>)</td>
+</tr>
+<tr>
+<td><code>spec.revisionHistoryLimit</code></td>
+<td>Keep the previous five ReplicaSets for rollback; more options but too many can bloat the object on large busy clusters</td>
+</tr>
+<tr>
+<td><code>spec.progressDeadlineSeconds</code></td>
+<td>Each new replica gets its own five-minute window before it is reported stalled</td>
+</tr>
+<tr>
+<td><code>spec.strategy</code></td>
+<td>How rollouts work (explained later)</td>
+</tr>
+<tr>
+<td><code>spec.template</code></td>
+<td>The Pod this Deployment manages</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy.yml
+</code></pre>
+<pre class="hl"><code>deployment.apps/hello-deploy created
+</code></pre>
+<ul>
+<li>The configuration is persisted in the cluster store as a <strong>record of intent</strong>, ten replicas are scheduled, and the Deployment and ReplicaSet controllers keep watching
+<ul>
+<li>kubectl sends your kubeconfig credentials with every command.</li>
+</ul>
+</li>
+</ul>
+<h3 id="inspecting-deployments">Inspecting Deployments</h3>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+</code></pre>
+<pre class="hl"><code>NAME           READY   UP-TO-DATE   AVAILABLE   AGE
+hello-deploy   10/10   10           10          105s
+</code></pre>
+<pre class="hl"><code>kubectl<span class="w"> </span>describe<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+</code></pre>
+<pre class="hl"><code>Name:                   hello-deploy
+Namespace:              default
+Annotations:            deployment.kubernetes.io/revision: 1
+Selector:               app=hello-world
+Replicas:               10 desired | 10 updated | 10 total | 10 available | 0 unavailable
+StrategyType:           RollingUpdate
+MinReadySeconds:        10
+RollingUpdateStrategy:  1 max unavailable, 1 max surge
+Pod Template:
+  Labels:  app=hello-world
+  Containers:
+   hello-pod:
+    Image:        nigelpoulton/k8sbook:1.0
+    Port:         8080/TCP
+&lt;SNIP&gt;
+OldReplicaSets:  &lt;none&gt;
+NewReplicaSet:   hello-deploy-54f5d46964 (10/10 replicas created)
+&lt;Snip&gt;
+</code></pre>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>rs
+</code></pre>
+<pre class="hl"><code>NAME                      DESIRED   CURRENT   READY   AGE
+hello-deploy-54f5d46964   10        10        10      3m45s
+</code></pre>
+<ul>
+<li>The ReplicaSet name is the Deployment name plus a <strong>crypto-hash of the Pod template</strong> (everything under <code>spec.template</code>)
+<ul>
+<li>Any change to the Pod template starts a rollout and a new ReplicaSet with a new hash.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span>describe<span class="w"> </span>rs<span class="w"> </span>hello-deploy-54f5d46964
+</code></pre>
+<pre class="hl"><code>Name:           hello-deploy-54f5d46964
+Namespace:      default
+Selector:       app=hello-world,pod-template-hash=54f5d46964
+Labels:         app=hello-world
+                pod-template-hash=54f5d46964
+Annotations:    deployment.kubernetes.io/desired-replicas: 10
+                deployment.kubernetes.io/max-replicas: 11
+                deployment.kubernetes.io/revision: 1
+Controlled By:  Deployment/hello-deploy
+Replicas:       10 current / 10 desired
+Pods Status:    10 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Pod Template:
+  Labels:  app=hello-world
+           pod-template-hash=54f5d46964
+  Containers:
+   hello-pod:
+    Image:        nigelpoulton/k8sbook:1.0
+    Port:         8080/TCP
+&lt;Snip&gt;
+</code></pre>
+<p>The ReplicaSet output mirrors the Deployment's because the Deployment controls the ReplicaSet's configuration, and the ReplicaSet's status rolls up into the Deployment's.</p>
+<h3 id="accessing-the-app">Accessing the app</h3>
+<p>You need a <strong>Service</strong> to reach the Pods (chapter 7). <code>lb.yml</code>:</p>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">lb-svc</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-world</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LoadBalancer</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">    </span><span class="nt">protocol</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TCP</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-world</span><span class="w">       </span><span class="c1"># send traffic to Pods with this label</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>lb.yml
+<span class="go">service/lb-svc created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>lb-svc
+<span class="go">NAME     TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)</span>
+<span class="go">lb-svc   LoadBalancer   10.100.247.251   localhost     8080:31086/TCP</span>
+</code></pre>
+<ul>
+<li>Browse to the <code>EXTERNAL-IP</code> on port 8080: <code>localhost:8080</code> on local Docker Desktop (some show a wrong <code>172</code> address; use <code>localhost</code>), or the public IP or DNS name in the cloud.</li>
+</ul>
+<h2 id="6-3-manually-scale-the-app">6.3 Manually scale the app</h2>
+<p>Two ways: <strong>imperative</strong> (<code>kubectl scale</code>) or <strong>declarative</strong> (edit YAML, re-post). Kubernetes prefers declarative.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>scale<span class="w"> </span>deploy<span class="w"> </span>hello-deploy<span class="w"> </span>--replicas<span class="w"> </span><span class="m">5</span>
+<span class="go">deployment.apps/hello-deploy scaled</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+<span class="go">NAME           READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">hello-deploy   5/5     5            5           29m</span>
+</code></pre>
+<p><strong>The catch:</strong> the cluster now has five replicas but your YAML still says ten. Later, updating the image in that YAML and re-posting also resets replicas to 10, maybe unwanted. Keep manifests in sync with the live environment, ideally by making all changes <strong>declaratively</strong>.</p>
+<p>Re-post to restore ten:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy.yml
+<span class="go">deployment.apps/hello-deploy configured</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+<span class="go">NAME           READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">hello-deploy   10/10   10           10          38m</span>
+</code></pre>
+<p>Scaling is almost instant; rolling updates are not.</p>
+<h2 id="6-4-perform-a-rolling-update">6.4 Perform a rolling update</h2>
+<ul>
+<li>Rollout, release, zero-downtime update and rolling update all mean the same here.</li>
+<li>The new version is <code>nigelpoulton/k8sbook:2.0</code> on Docker Hub; the book ignores CI/CD and version control to keep the focus.</li>
+<li><strong>All updates are replacement operations</strong>: Pods are immutable, so updating one means deleting and replacing it.</li>
+</ul>
+<p>Edit <code>deploy.yml</code> and change the image to 2.0:</p>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-deploy</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<span class="w">  </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-pod</span>
+<span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/k8sbook:2.0</span><span class="w">    </span><span class="c1"># update this line to 2.0</span>
+<span class="w">        </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+</code></pre>
+<p>Settings that govern the rollout:</p>
+<pre class="hl"><code><span class="nt">revisionHistoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">          </span><span class="c1"># keep the config from the five previous versions</span>
+<span class="nt">progressDeadlineSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">300</span><span class="w">     </span><span class="c1"># give each new replica five minutes to start</span>
+<span class="nt">minReadySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">              </span><span class="c1"># wait 10 seconds after the previous replica started</span>
+<span class="nt">strategy</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">RollingUpdate</span><span class="w">            </span><span class="c1"># incrementally replace replicas</span>
+<span class="w">  </span><span class="nt">rollingUpdate</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">maxUnavailable</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w">            </span><span class="c1"># can take one replica away during the update</span>
+<span class="w">    </span><span class="nt">maxSurge</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w">                  </span><span class="c1"># can add one extra replica during the update</span>
+</code></pre>
+<ul>
+<li><code>minReadySeconds</code> <strong>throttles</strong> the rollout: longer waits catch problems before all replicas are replaced with broken ones; in the real world set it large enough to trap common failures.</li>
+<li>With desired state 10: <code>maxSurge: 1</code> allows up to <strong>11</strong>, <code>maxUnavailable: 1</code> allows down to <strong>9</strong>, so Pods are replaced <strong>two at a time</strong>.</li>
+<li><strong>Labels</strong> tell Kubernetes which Pods to replace: the Deployment <code>selector</code> (<code>app=hello-world</code>) matches the template's Pod labels:</li>
+</ul>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-deploy</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span><span class="w">              </span><span class="c1"># the Deployment will manage all</span>
+<span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span><span class="w">         </span><span class="c1"># replicas on the cluster with</span>
+<span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-world</span><span class="w">   </span><span class="c1"># this label</span>
+<span class="w">  </span><span class="c1"># &lt;Snip&gt;</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hello-world</span><span class="w">   </span><span class="c1"># matches the label selector above</span>
+</code></pre>
+<ul>
+<li>The selector and labels are <strong>immutable</strong> after creation.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy.yml
+<span class="go">deployment.apps/hello-deploy configured</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>rollout<span class="w"> </span>status<span class="w"> </span>deployment<span class="w"> </span>hello-deploy
+<span class="go">Waiting for deployment "hello-deploy" rollout... 4 out of 10 new replicas...</span>
+<span class="go">Waiting for deployment "hello-deploy" rollout... 4 out of 10 new replicas...</span>
+<span class="go">Waiting for deployment "hello-deploy" rollout... 6 out of 10 new replicas...</span>
+<span class="go">^C</span>
+</code></pre>
+<ul>
+<li>Two Pods at a time with a 10-second wait: about a minute or two.</li>
+<li>Mid-rollout, <code>kubectl get deploy</code> can show 6 updated and 9 available (one fewer than 10 because <code>maxUnavailable=1</code>):</li>
+</ul>
+<pre class="hl"><code>NAME           READY   UP-TO-DATE   AVAILABLE   AGE
+hello-deploy   9/10    6            9           63m
+</code></pre>
+<h3 id="pausing-and-resuming-rollouts">Pausing and resuming rollouts</h3>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>rollout<span class="w"> </span>pause<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+<span class="go">deployment.apps/hello-deploy paused</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+<span class="go">Name:         hello-deploy</span>
+<span class="go">Namespace:    default</span>
+<span class="go">Annotations:  deployment.kubernetes.io/revision: 2</span>
+<span class="go">Selector:     app=hello-world</span>
+<span class="go">Replicas:     10 desired | 6 updated | 11 total | 9 available | 2 unavailable</span>
+<span class="go">StrategyType: RollingUpdate</span>
+<span class="go">MinReadySeconds: 10</span>
+<span class="go">RollingUpdateStrategy: 1 max unavailable, 1 max surge</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">Conditions:</span>
+<span class="go">  Type          Status  Reason</span>
+<span class="go">  ----          ------  ------</span>
+<span class="go">  Available     True    MinimumReplicasAvailable</span>
+<span class="go">  Progressing   Unknown DeploymentPaused</span>
+<span class="go">OldReplicaSets:  hello-deploy-54f5d46964 (3/3 replicas created)</span>
+<span class="go">NewReplicaSet:   hello-deploy-5f84c5b7b7 (6/6 replicas created)</span>
+</code></pre>
+<ul>
+<li>Revision 2 means this is the second release (revision 1 was the initial rollout); Progressing is paused; the old ReplicaSet manages 3 Pods and the new one 6.</li>
+<li>A <strong>scale-up during a rollout</strong> is balanced across both ReplicaSets: scaling to 20 by adding 10 gives about 3 new replicas to the old ReplicaSet and about 6 to the new one.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>rollout<span class="w"> </span>resume<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+<span class="go">deployment.apps/hello-deploy resumed</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+<span class="go">NAME           READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">hello-deploy   10/10   10           10          71m</span>
+</code></pre>
+<p>Refresh the browser to see the new version (it now says &quot;WebAssembly is coming!&quot; where 1.0 said &quot;K8s rocks!&quot;; the author may change it).</p>
+<h2 id="6-5-perform-a-rollback">6.5 Perform a rollback</h2>
+<pre class="hl"><code>kubectl<span class="w"> </span>rollout<span class="w"> </span><span class="nb">history</span><span class="w"> </span>deployment<span class="w"> </span>hello-deploy
+</code></pre>
+<pre class="hl"><code>deployment.apps/hello-deploy
+REVISION   CHANGE-CAUSE
+1          &lt;none&gt;
+2          &lt;none&gt;
+</code></pre>
+<ul>
+<li>Revision 1: initial release (1.0 image). Revision 2: the rollout to 2.0.</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>rs
+</code></pre>
+<pre class="hl"><code>NAME                      DESIRED   CURRENT   READY   AGE
+hello-deploy-5f84c5b7b7   10        10        10      27m
+hello-deploy-54f5d46964   0         0         0       93m
+</code></pre>
+<p><code>kubectl describe rs</code> on the old ReplicaSet still shows <code>Image: nigelpoulton/k8sbook:1.0</code>, so flipping back replaces all Pods with 1.0 Pods. (Rollbacks are updates: terminate Pods with the current image and replace them with Pods using another image, in this case older.)</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>rollout<span class="w"> </span>undo<span class="w"> </span>deployment<span class="w"> </span>hello-deploy<span class="w"> </span>--to-revision<span class="o">=</span><span class="m">1</span>
+</code></pre>
+<pre class="hl"><code>deployment.apps "hello-deploy" rolled back
+</code></pre>
+<ul>
+<li>This is <strong>imperative and not recommended</strong>, but convenient for quick rollbacks; update your source YAML afterwards.</li>
+<li>It is <strong>not instant</strong>: same rules as a rollout, two Pods at a time with a 10-second wait.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+<span class="go">NAME           READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">hello-deploy   9/10    6            9           96m</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>rollout<span class="w"> </span>status<span class="w"> </span>deployment<span class="w"> </span>hello-deploy
+<span class="go">Waiting for deployment "hello-deploy"... 6 out of 10 new replicas have been updated...</span>
+<span class="go">Waiting for deployment "hello-deploy"... 7 out of 10 new replicas have been updated...</span>
+<span class="go">Waiting for deployment "hello-deploy"... 8 out of 10 new replicas have been updated...</span>
+<span class="go">Waiting for deployment "hello-deploy"... 1 old replicas are pending termination...</span>
+<span class="go">Waiting for deployment "hello-deploy"... 9 of 10 updated replicas are available...</span>
+<span class="go">^C</span>
+</code></pre>
+<h3 id="rollouts-and-labels">Rollouts and labels</h3>
+<ul>
+<li>Deployments and ReplicaSets use <strong>labels and selectors</strong> to decide which Pods they own.</li>
+<li>Older Kubernetes let a Deployment <strong>seize</strong> static Pods whose labels matched
+<ul>
+<li>Example: five static Pods labelled <code>app=front-end</code> plus a Deployment asking for ten with that label would seize the five and create only five new ones, even if the static Pods ran a different app.</li>
+</ul>
+</li>
+<li>Modern Kubernetes adds a system-generated <strong><code>pod-template-hash</code></strong> label to Pods created by a Deployment (ReplicaSet), preventing that.</li>
+<li>The hash connects Deployment to ReplicaSet to Pods:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>deploy<span class="w"> </span>hello-deploy
+<span class="go">Name:           hello-deploy</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">NewReplicaSet:  hello-deploy-54f5d46964</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>rs<span class="w"> </span>hello-deploy-54f5d46964
+<span class="go">Name:      hello-deploy-54f5d46964</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">Selector:  app=hello-world,pod-template-hash=54f5d46964</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>--show-labels
+<span class="go">NAME                        READY   STATUS    LABELS</span>
+<span class="go">hello-deploy-54f5d46964..   1/1     Running   app=hello-world,pod-template-hash=54f5d46964</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<ul>
+<li>ReplicaSet selectors include <code>pod-template-hash</code>; Deployment selectors do not, which is fine since ReplicaSets manage the Pods. <strong>Do not modify</strong> this label.</li>
+</ul>
+<h2 id="6-6-clean-up">6.6 Clean up</h2>
+<pre class="hl"><code>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>deploy.yml
+kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>lb.yml
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Deployments manage stateless apps and add self-healing, scaling, rolling updates and rollbacks; they are <code>apps/v1</code> objects with a reconciliation-loop controller; use them declaratively.</li>
+<li>ReplicaSets create, terminate and count replicas; configure them only through the Deployment.</li>
+<li>Scale manually by editing YAML and re-posting, or let autoscalers react to demand.</li>
+<li>Rolling updates delete old Pods and replace them with new ones in a controlled way.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Deployment / ReplicaSet / Pod template</strong>: wrapper, replica manager, embedded Pod definition.</li>
+<li><strong>HPA, VPA, CA</strong>: autoscale Pods horizontally, Pod resources, and nodes.</li>
+<li><strong>Declarative vs imperative</strong>: desired outcome vs command lists.</li>
+<li><strong>maxSurge / maxUnavailable / minReadySeconds / progressDeadlineSeconds / revisionHistoryLimit</strong>: rollout controls.</li>
+<li><strong>pod-template-hash</strong>: label tying Pods to a ReplicaSet, hash of the Pod template.</li>
+<li><strong>Rollout / rollback</strong>: scale one ReplicaSet up while the other goes down.</li>
+<li><strong>Multi-dimensional autoscaling</strong>: combining scaling methods.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 6. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap07.xhtml</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-04-working-with-pods/">The Kubernetes Book 4: Working with Pods</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-05-virtual-clusters-with-namespaces/">The Kubernetes Book 5: Virtual Clusters with Namespaces</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-07-kubernetes-services/">The Kubernetes Book 7: Kubernetes Services</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-05-virtual-clusters-with-namespaces/">&larr; The Kubernetes Book 5: Virtual Clusters with Namespaces</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-07-kubernetes-services/">The Kubernetes Book 7: Kubernetes Services &rarr;</a></nav></main></body></html>

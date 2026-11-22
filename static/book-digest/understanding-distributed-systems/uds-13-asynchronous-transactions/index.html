@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 13: Asynchronous transactions</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-13-asynchronous-transactions">Understanding Distributed Systems 13: Asynchronous transactions</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 13 (end of Part II). Previous: <a href="/book-digest/understanding-distributed-systems/uds-12-transactions/">Understanding Distributed Systems 12: Transactions</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-14-and-15-http-caching-and-cdns/">Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs</a> (Part III, scalability).</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+<strong>2PC is a synchronous, blocking protocol</strong>: if the coordinator or any participant is slow or down, the transaction stalls, and participants hold <strong>locks</strong> meanwhile. That is unacceptable for <strong>long-running</strong> transactions (hours or days) or across <strong>organisations</strong> that will not let others block them. <strong>Asynchronous transactions</strong> use <strong>persistent messages</strong> that are processed <strong>exactly once</strong> (a cashier's check, in the real world). They are <strong>atomic but not isolated</strong>. Two implementations: the <strong>outbox pattern</strong> (replicate data to another store) and <strong>sagas</strong> (multi-step workflows with <strong>compensating transactions</strong>).</p>
+</blockquote>
+<h2 id="why-2pc-does-not-fit">Why 2PC does not fit</h2>
+<ul>
+<li>2PC is usually combined with a <strong>blocking concurrency control protocol like 2PL</strong>, so participants <strong>hold locks while waiting for the coordinator</strong>, blocking other transactions on the same objects.</li>
+<li>Its assumptions:
+<ul>
+<li>coordinator and participants are <strong>available</strong>, and the transaction is <strong>short-lived</strong></li>
+<li>Participant availability can be improved with state machine replication; you <strong>cannot</strong> fix transactions that take hours or days by nature</li>
+<li>And participants in <strong>different organisations</strong> may not want to grant each other the power to block their systems for transactions they do not control.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Real-world model: fund transfer between banks via a cashier's check.</strong> The issuing bank deducts the funds, the check is physically carried to the other bank and deposited. For it to work the <strong>check cannot be lost or deposited twice</strong>.</p>
+<p>Neither bank waited on the other, so it is an <strong>asynchronous (non-blocking) atomic transaction</strong>. The price: <strong>source and destination are inconsistent while the check is in transit</strong>, so such transactions are <strong>atomic but not isolated</strong>.</p>
+<p>Generalise: a check is just a <strong>message</strong>. Use <strong>persistent messages</strong> sent over the network, guaranteed to be <strong>processed exactly once</strong>.</p>
+<h2 id="13-1-outbox-pattern">13.1 Outbox pattern</h2>
+<p><strong>Scenario:</strong> a product catalogue service backed by a relational database wants <strong>advanced full-text search</strong>. Relational databases offer basic full-text search, but a dedicated service such as <strong>Elasticsearch</strong> (https://www.elastic.co/elasticsearch/) is needed for advanced cases.</p>
+<p>A common modern pattern is to <strong>replicate the same data to different stores tailored to different use cases</strong> (https://queue.acm.org/detail.cfm?id=3321612).</p>
+<ul>
+<li>On every add, change or delete the service must update <strong>both</strong> the database and the search service
+<ul>
+<li>Updating the DB then the search service and <strong>crashing in between</strong> leaves the system <strong>inconsistent</strong></li>
+<li>they need transactional treatment.</li>
+</ul>
+</li>
+<li><strong>2PC is a poor fit:</strong>
+<ul>
+<li>the database supports the <strong>X/Open XA</strong> 2PC standard (https://pubs.opengroup.org/onlinepubs/009680699/toc.pdf), but the search service <strong>does not</strong></li>
+<li>we would have to implement the protocol for it, and we do not want the catalogue service to <strong>block</strong> if search is briefly unavailable
+<ul>
+<li>Temporary inconsistency is acceptable: <strong>eventual consistency</strong> is enough.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p><strong>Solution: send a persistent message to the search service whenever a product changes.</strong> One implementation:</p>
+<p><img src="/book-digest/understanding-distributed-systems/img/outbox-pattern.svg" alt="Outbox pattern" loading="lazy" /></p>
+<ol>
+<li>In the <strong>same local ACID transaction</strong> as the product change, <strong>append the message to a dedicated <code>outbox</code> table</strong>. Because the relational database is ACID, <strong>the message is appended if and only if the transaction commits</strong> (https://microservices.io/patterns/data/transactional-outbox.html).</li>
+<li>A dedicated <strong>relay process</strong> monitors the outbox table. On a new message it <strong>sends it to the destination</strong> (the search service) and <strong>deletes it only after receiving a delivery acknowledgement</strong>.</li>
+<li><strong>Duplicates are possible:</strong> if the relay crashes after sending but before deleting, it resends on restart. To process <strong>exactly once</strong>, give each message an <strong>idempotency key</strong> so the destination <strong>de-duplicates</strong> (chapter 5.7).</li>
+<li>In practice the relay does not send directly to the destination: it forwards to a <strong>message channel</strong> such as <strong>Kafka</strong> (https://kafka.apache.org) or <strong>Azure Event Hubs</strong> (https://azure.microsoft.com/en-gb/services/event-hubs/) that delivers to one or more destinations <strong>in the order appended</strong> (chapter 23). Example open-source relay: <strong>Debezium</strong> (https://debezium.io/).</li>
+<li>Conceptually this is like <strong>state machine replication</strong>: the state is the catalogue's products, and replication runs through a <strong>log of operations</strong> (the outbox table).</li>
+</ol>
+<h2 id="13-2-sagas">13.2 Sagas</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/saga.svg" alt="Saga with compensation" loading="lazy" />
+<strong>Scenario:</strong> a travel booking service must <strong>atomically</strong> book a flight through one service and a hotel through another. Either request can fail; if one succeeds and the other fails, the first must be <strong>cancelled</strong>. Booking a trip thus needs several steps, <strong>some only needed on failure</strong>, so the simple outbox solution does not suffice.</p>
+<p><strong>Saga</strong> (&quot;Sagas&quot;: https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf): a distributed transaction composed of <strong>local transactions T1, T2, ..., Tn</strong>, where each <strong>Ti has a compensating local transaction Ci that undoes its changes</strong>. The saga guarantees <strong>either all local transactions succeed or, on failure, the compensating transactions undo the partial execution</strong>: atomicity.</p>
+<p><strong>Another view:</strong> each Ti <strong>assumes all the others will succeed</strong>: a likely but still a <strong>guess</strong>. When it is wrong, a mistake was made and an <strong>&quot;apology&quot;</strong> is issued in the form of compensations Ci, like an <strong>overbooked flight</strong> in the real world (&quot;Building on Quicksand&quot;: https://dsf.berkeley.edu/cs286/papers/quicksand-cidr2009.pdf).</p>
+<p><strong>Implementation with an orchestrator</strong> (the transaction coordinator) that manages local transactions across the <strong>participants</strong>. Here the travel service is the coordinator; the flight and hotel services are participants. The saga has three local transactions: <strong>T1 books a flight, T2 books a hotel, C1 cancels the flight booked by T1</strong>. Workflow:</p>
+<ol>
+<li>The coordinator sends the booking request <strong>T1</strong> to the flight service. If it fails, no harm: mark the transaction <strong>aborted</strong>.</li>
+<li>If T1 succeeds, send <strong>T2</strong> to the hotel service. If it succeeds, the transaction is <strong>successful</strong>: done.</li>
+<li>If the hotel booking <strong>fails</strong>, the transaction must abort: the coordinator sends <strong>C1</strong> to the flight service to cancel. Without it, the transaction stays inconsistent and <strong>atomicity breaks</strong>.</li>
+</ol>
+<ul>
+<li>The coordinator can talk to participants <strong>asynchronously via message channels</strong> to tolerate temporary failures.</li>
+<li>Because the transaction has several steps and the coordinator <strong>can fail at any time</strong>, it must <strong>persist the transaction's state as it advances</strong>: model it as a <strong>state machine</strong> and <strong>durably checkpoint</strong> the state on each transition
+<ul>
+<li>After a crash, or when another process is elected coordinator, it <strong>resumes from the last checkpoint</strong> (see &quot;Clarifying the Saga pattern&quot;: http://web.archive.org/web/20161205130022/http://kellabyte.com:80/2012/05/30/clarifying-the-saga-pattern).</li>
+</ul>
+</li>
+<li><strong>Caveat:</strong>
+<ul>
+<li>if the coordinator crashes after sending a request but <strong>before backing up its state</strong>, it resends on restart</li>
+<li>a timed-out request is retried too. So <strong>participants must de-duplicate</strong> messages and be <strong>idempotent</strong>.</li>
+</ul>
+</li>
+<li>You need not build orchestration engines yourself: <strong>AWS Step Functions</strong> (https://aws.amazon.com/step-functions/) and <strong>Azure Durable Functions</strong> (https://docs.microsoft.com/en-us/azure/azure-functions/durable/) provide managed workflows.</li>
+</ul>
+<h2 id="13-3-isolation">13.3 Isolation</h2>
+<p>We left 2PC's blocking behind but <strong>sacrificed isolation</strong>.</p>
+<p>It can be worked around, e.g. with <strong>semantic locks</strong> (&quot;Semantic ACID properties in multidatabases...&quot;: https://dl.acm.org/doi/10.5555/284472.284478): <strong>any data the saga modifies is marked with a dirty flag</strong>, cleared only at the end of the transaction.</p>
+<p>Another transaction that touches a dirty record can <strong>fail and roll back, or wait until the flag is cleared</strong>.</p>
+<h2 id="part-ii-summary-the-author-s">Part II summary (the author's)</h2>
+<p>Entire textbook chapters, even books, exist on these topics. You may never implement something like state machine replication from scratch, but <strong>seeing it once makes you a better &quot;user&quot; of the abstractions it provides</strong>. Two crucial insights:</p>
+<ol>
+<li><strong>Failures are unavoidable</strong> in distributed systems. What makes coordination algorithms complex is that they must <strong>tolerate failures</strong>: imagine how much simpler Raft would be with a reliable network and processes that could not crash. Fault tolerance matters at every level, hence Part IV.</li>
+<li><strong>Coordination is expensive</strong>: it adds complexity and hurts scalability and performance. Reduce it by:
+<ul>
+<li><strong>keeping coordination off the critical path</strong> (as chain replication does);</li>
+<li><strong>proceeding without coordination and &quot;apologising&quot;</strong> when an inconsistency is detected (as sagas do);</li>
+<li>using <strong>protocols that guarantee some form of consistency without coordination</strong>, like <strong>CRDTs</strong>.</li>
+</ul>
+</li>
+</ol>
+<blockquote>
+<p>[!note]- Terms to carry forward
+synchronous / asynchronous transaction · persistent message · exactly-once processing · outbox pattern · relay process · idempotency key · message channel · saga · compensating transaction · orchestrator · state machine checkpoint · semantic lock · dirty flag.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 13 and the Part II summary. https://understandingdistributed.systems/</li>
+<li>Sagas paper and the other pages linked above (cited by the book).</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-12-transactions/">Understanding Distributed Systems 12: Transactions</a> · <a href="/book-digest/understanding-distributed-systems/uds-14-and-15-http-caching-and-cdns/">Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs</a> · <a href="/book-digest/understanding-distributed-systems/uds-05-apis/">Understanding Distributed Systems 5: APIs</a> · <a href="/book-digest/spring-start-here/ch13-using-transactions-in-spring-apps/">Ch 13: Using transactions in Spring apps</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-12-transactions/">&larr; Understanding Distributed Systems 12: Transactions</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-14-and-15-http-caching-and-cdns/">Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs &rarr;</a></nav></main></body></html>

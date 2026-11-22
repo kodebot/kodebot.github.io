@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture: Appendix A, Guided Solutions</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-appendix-a-guided-solutions">Grokking Software Architecture: Appendix A, Guided Solutions</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), Appendix A. Previous: <a href="/book-digest/grokking-software-architecture/gsa-15-communicating-and-planning-architecture/">Grokking Software Architecture 15: Communicating and Planning Architecture</a>.</p>
+<blockquote>
+<p>[!abstract] Takeaways
+Model answers to each chapter's &quot;In Action&quot; mission. Use them to check your own reasoning (the numbers matter less than the reasoning).</p>
+<ul>
+<li><strong>Ch. 1-2:</strong> decision &quot;receipts&quot; and a full ADR for a cache TTL.</li>
+<li><strong>Ch. 3-5:</strong> refactor a God class, design four layers, plug ports and adapters.</li>
+<li><strong>Ch. 6-8:</strong> resource-oriented REST, async toxicity filter, polyglot persistence.</li>
+<li><strong>Ch. 9-11:</strong> cloud blueprint, resilience parameters, security ADR.</li>
+<li><strong>Ch. 12-15:</strong> modular-monolith ADR, CI/CD with expand/contract, telemetry and C4.</li>
+</ul>
+</blockquote>
+<h2 id="ch-1-a-mini-defensible-decision">Ch. 1: a mini defensible decision</h2>
+<p>Order-processing logic:</p>
+<ul>
+<li><strong>Option A:</strong> one main file. Pro: fastest to ship. Con: low maintainability, violates SoC.</li>
+<li><strong>Option B:</strong> three files (<code>dataReader</code>, <code>taxCalculator</code>, <code>receiptPrinter</code>). Pro: tax maths isolated. Con: small setup overhead passing data.</li>
+<li><strong>Decision:</strong> B, because upcoming discount features can't break receipt printing.</li>
+<li><strong>Lessons:</strong> Separation of Concerns; a small up-front cost is a deliberate trade for fewer regressions.</li>
+</ul>
+<h2 id="ch-2-adr-002-default-cache-ttl-for-user-profiles">Ch. 2: ADR-002, default cache TTL for user profiles</h2>
+<p>Slow profile queries on every page load. The 5-step process:</p>
+<ol>
+<li><strong>Spark:</strong> the profile page runs slow database queries per load.</li>
+<li><strong>Inquiry:</strong> prioritise <strong>Performance and Scalability</strong>, sacrifice <strong>Consistency</strong>.</li>
+<li><strong>Sketch:</strong> Tradeoff Triangle with the decision dot on the Performance/Scalability edge, away from Consistency.</li>
+<li><strong>Options:</strong> A no cache (perfect consistency, heavy DB load); <strong>B 5-minute TTL</strong>; C 24-hour TTL (too stale).</li>
+<li><strong>Decision:</strong> <strong>B</strong>, recorded as ADR-002.</li>
+</ol>
+<p>ADR parts:</p>
+<ul>
+<li><strong>Risk:</strong> a user uploads a new picture and sees no change.</li>
+<li><strong>Mitigation:</strong> explicitly <strong>clear the cache for their ID on &quot;Save&quot;</strong>.</li>
+<li><strong>Review trigger:</strong> database load drops significantly, or support receives stale-data complaints.</li>
+<li><strong>Share:</strong> &quot;FYI team, decided on a 5-minute cache TTL for user profiles... Link to ADR-002.&quot;</li>
+</ul>
+<h2 id="ch-3-structural-audit-of-processorder">Ch. 3: structural audit of <code>ProcessOrder</code></h2>
+<p>Comment each block: (1) validation (empty order or zero total), (2) external payment (<code>_gateway.Authorize</code>), (3) inventory DB (<code>_db.UpdateStock</code>), (4) email (<code>_smtpClient.Send</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Criterion</th>
+<th>Finding</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cohesion</td>
+<td>low: four responsibilities in one method</td>
+</tr>
+<tr>
+<td>Coupling</td>
+<td>tight: payment logic directly references DB and SMTP clients</td>
+</tr>
+<tr>
+<td>The &quot;and&quot; test</td>
+<td>fails: validates AND charges AND updates stock AND emails</td>
+</tr>
+<tr>
+<td>Refactor</td>
+<td><code>OrderValidator</code>, <code>PaymentService</code>, <code>InventoryManager</code>, <code>NotificationService</code>, coordinated by <code>OrderService</code> via constructor DI</td>
+</tr>
+</tbody>
+</table>
+<p>Payoff: reduced blast radius (email formatting can't crash payment), testable in isolation.</p>
+<h2 id="ch-4-four-layers">Ch. 4: four layers</h2>
+<p><strong>Blog</strong> (list posts, submit comment):</p>
+<ul>
+<li><strong>Presentation:</strong> <code>PostController</code>, <code>CommentController</code>, <code>PostViewModel</code>.</li>
+<li><strong>Application:</strong> <code>PostQueryService</code>, <code>CommentSubmissionService</code> (coordinates the use case, transactions, no domain maths).</li>
+<li><strong>Domain:</strong> <code>Post</code> and <code>Comment</code> (rich entities; a post must be Open to receive comments), <code>IPostRepository</code> interface.</li>
+<li><strong>Infrastructure:</strong> <code>SqlPostRepository</code>, <code>MongoPostRepository</code>, <code>AkismetSpamClient</code> (a tool; <em>deciding</em> what to do when it flags a comment lives in Application).</li>
+</ul>
+<p><strong>Banking transfer</strong> (high stakes):</p>
+<ul>
+<li><strong>Presentation:</strong> <code>AccountController</code>, <code>TransferRequest</code>, <code>AccountStatementViewModel</code>.</li>
+<li><strong>Application:</strong> <code>FundTransferService</code>, <code>StatementGenerationService</code>.</li>
+<li><strong>Domain:</strong> <code>Account</code> (owns <code>Debit()</code>/<code>Credit()</code>, enforces overdraft limits), <code>Money</code> (<strong>value object</strong>, can't add Yen to Dollars), <code>IAccountRepository</code>.</li>
+<li><strong>Infrastructure:</strong> <code>SqlAccountRepository</code>, <code>SwiftPaymentGateway</code>.</li>
+<li><strong>Cross-cutting:</strong> <code>AuditLogger</code>, <code>SecurityContext</code> via abstractions.</li>
+<li><strong>Tip:</strong> &quot;how to talk to a tool (SQL, API, SMTP)&quot; = Infrastructure; &quot;why the business allows an action (rules, limits, maths)&quot; = Domain.</li>
+</ul>
+<h2 id="ch-5-hexagonal-crypto-tracker">Ch. 5: hexagonal crypto tracker</h2>
+<ul>
+<li>
+<p><strong>Port</strong> (in Core):</p>
+<pre class="hl"><code><span class="k">interface</span><span class="w"> </span><span class="n">IPriceProviderPort</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">Task</span><span class="o">&lt;</span><span class="kt">decimal</span><span class="o">&gt;</span><span class="w"> </span><span class="n">GetBitcoinPrice</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+</li>
+<li>
+<p><strong>Core:</strong> <code>PortfolioManager(IPriceProviderPort)</code>; <code>CalculateTotalValue(btcAmount)</code> is <code>btcAmount * await _priceProvider.GetBitcoinPrice()</code>: pure maths, no JSON.</p>
+</li>
+<li>
+<p><strong>Fake adapter:</strong> <code>FakePriceAdapter</code> returns <code>50_000m</code>; test: 2 BTC gives <code>100_000m</code>.</p>
+</li>
+<li>
+<p><strong>Production wiring:</strong> <code>new PortfolioManager(new CoinGeckoAdapter())</code>; in ASP.NET Core use <code>builder.Services.AddScoped&lt;IPriceProviderPort, CoinGeckoAdapter&gt;()</code>.</p>
+</li>
+<li>
+<p><strong>Gains:</strong> domain ownership of the contract; offline deterministic tests; vendor independence (a Binance or CoinMarketCap adapter changes nothing in the core).</p>
+</li>
+</ul>
+<h2 id="ch-6-rest-contract-refactor">Ch. 6: REST contract refactor</h2>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Anti-pattern</th>
+<th>Refactor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Resource</td>
+<td><code>/api/changeUserAddress</code>, <code>/api/data/user_info</code></td>
+<td><code>/api/users/{id}</code> (or <code>/api/me</code>)</td>
+</tr>
+<tr>
+<td>Verbs</td>
+<td>POST for everything</td>
+<td><code>GET /api/users/{id}</code>; <code>PATCH</code> (partial) or <code>PUT</code> (full) to update</td>
+</tr>
+<tr>
+<td>Payload</td>
+<td>raw string <code>&quot;123 Main St, New York, NY&quot;</code></td>
+<td>extensible object</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code><span class="err">GET</span><span class="w"> </span><span class="err">/api/users/</span><span class="mi">123</span><span class="w"> </span><span class="mi">-</span><span class="err">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">,</span><span class="w"> </span><span class="nt">"fullName"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Archie Gumdrop"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"address"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"street"</span><span class="p">:</span><span class="w"> </span><span class="s2">"123 Main St"</span><span class="p">,</span><span class="w"> </span><span class="nt">"city"</span><span class="p">:</span><span class="w"> </span><span class="s2">"New York"</span><span class="p">,</span><span class="w"> </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"NY"</span><span class="p">,</span><span class="w"> </span><span class="nt">"zip"</span><span class="p">:</span><span class="w"> </span><span class="s2">"10001"</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+<span class="err">PATCH</span><span class="w"> </span><span class="err">/api/users/</span><span class="mi">123</span><span class="w"> </span><span class="p">{</span><span class="nt">"address"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">}}</span><span class="w"> </span><span class="mi">-</span><span class="err">&gt;</span><span class="w"> </span><span class="mi">200</span><span class="w"> </span><span class="err">OK</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="err">...</span><span class="p">,</span><span class="w"> </span><span class="nt">"updatedAt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-28T14:30:00Z"</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Never return raw primitives</strong>: objects can gain fields (e.g. &quot;Last Login&quot;) without breaking old clients.</li>
+<li><strong>Parallel development:</strong> once the JSON contract exists the frontend can mock it while you design the database.</li>
+</ul>
+<h2 id="ch-7-toxicity-filter-event-driven">Ch. 7: toxicity filter (event-driven)</h2>
+<ul>
+<li><strong>Event:</strong> <code>record CommentPosted(Guid CorrelationId, string Text, DateTime OccurredOn)</code>.</li>
+<li><strong>Producer:</strong> creates a <code>correlationId</code>, writes to a <code>Channel</code>, immediately logs &quot;HTTP 200 OK returned&quot; at <code>T+00s</code>.</li>
+<li><strong>Consumer:</strong> <code>await foreach (var @event in _channel.Reader.ReadAllAsync())</code>, <code>Task.Delay(3000)</code> to simulate the LLM, logs &quot;TOXICITY DETECTED&quot; with the same ID at <code>T+03s</code>.</li>
+<li><strong>Comparison:</strong> sync blocks the client 3+ seconds and an AI outage crashes the API; async gives temporal decoupling and one correlation ID across the boundary.</li>
+</ul>
+<h2 id="ch-8-polyglot-persistence-for-shop-zilla">Ch. 8: polyglot persistence for Shop-Zilla</h2>
+<table>
+<thead>
+<tr>
+<th>Subsystem</th>
+<th>Type</th>
+<th>Choice</th>
+<th>Constraint</th>
+<th>Trade-off accepted</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Shopping cart</td>
+<td>key-value</td>
+<td><strong>Redis</strong></td>
+<td>sub-millisecond writes for sessions</td>
+<td>strict structure and absolute durability</td>
+</tr>
+<tr>
+<td>General ledger and billing</td>
+<td>relational</td>
+<td><strong>PostgreSQL</strong></td>
+<td>strict ACID</td>
+<td>horizontal write scalability</td>
+</tr>
+<tr>
+<td>Similar products</td>
+<td>vector</td>
+<td><strong>Pinecone / pgvector</strong></td>
+<td>distance over embeddings</td>
+<td>exact keywords for semantic similarity</td>
+</tr>
+<tr>
+<td>Product catalogue</td>
+<td>document</td>
+<td><strong>MongoDB</strong></td>
+<td>variable schema per category</td>
+<td>cross-document transactions</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Three stress tests:</strong> the <strong>&quot;Bobby Tables&quot; test</strong> (any string concatenation in queries means parameterise); the <strong>N+1 check</strong> (eager load); the <strong>&quot;Amnesia&quot; test</strong> (don't use BASE for an ACID requirement).</p>
+<ul>
+<li><strong>Defence script:</strong> &quot;We use SQL for the money (we don't want to go to jail), Redis for speed, vectors for the AI features. Ledger in Mongo might double-charge customers.&quot;</li>
+<li><strong>Polyglot tax:</strong> multiple connection strings, migration pipelines and backups; default to PostgreSQL and add stores only when limits are hit.</li>
+</ul>
+<h2 id="ch-9-recommendation-engine-on-the-cloud">Ch. 9: Recommendation Engine on the cloud</h2>
+<ol>
+<li><strong>Compute:</strong> <strong>PaaS / managed containers</strong> (raw IaaS rejected as wasted engineering time). Trade-off: you surrender kernel/OS control for velocity.</li>
+<li><strong>Terraform (three resource blocks):</strong> <code>aws_fargate_service</code> (compute), <code>aws_elasticache_redis</code> (session cache), <code>aws_s3_bucket</code> (compiled ML model/CSV storage).</li>
+<li><strong>Immutable mindset (refusing the CTO's live patch):</strong> update the Terraform base image → spin up a patched <strong>Green</strong> beside <strong>Blue</strong> → shift traffic → destroy the old instance (&quot;cattle&quot;). Result: no drift, zero downtime, peer-reviewed in Git.</li>
+</ol>
+<h2 id="ch-10-resilience-parameters-flakypayments">Ch. 10: resilience parameters (FlakyPayments)</h2>
+<table>
+<thead>
+<tr>
+<th>Guardrail</th>
+<th>Value</th>
+<th>Why</th>
+<th>Trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Timeout</strong></td>
+<td><strong>2.0 s</strong> (monitoring shows healthy requests finish under 2 s; 8 s is far too long)</td>
+<td>free threads fast</td>
+<td>live checkout drops, site stays responsive</td>
+</tr>
+<tr>
+<td><strong>Retries and backoff</strong></td>
+<td><strong>max 3</strong>; backoff <strong>1 s, 2 s, 4 s</strong></td>
+<td>blips self-heal, no self-DDoS</td>
+<td>abandon after ~7 s total</td>
+</tr>
+<tr>
+<td><strong>Circuit breaker</strong></td>
+<td>open on <strong>5 consecutive failures</strong> or <strong>50% errors in a 10 s window</strong>; <strong>30 s</strong> cooldown</td>
+<td>stop wasting threads</td>
+<td>live payments blocked while open</td>
+</tr>
+<tr>
+<td><strong>Fallback</strong></td>
+<td>asynchronous queue <code>PENDING_PAYMENT</code>: save the cart and encrypted payment token, show a confirmation page</td>
+<td>no lost Black Friday sales</td>
+<td>moves to async processing</td>
+</tr>
+</tbody>
+</table>
+<p>Implementation: declarative policies at the infrastructure boundary (not hand-rolled <code>while</code>/<code>sleep</code>), domain vocabulary (<code>OrderStatus</code>) separate from <code>PaymentService</code>.</p>
+<h2 id="ch-11-adr-005-hardening-ingress-and-least-privilege">Ch. 11: ADR 005, hardening ingress and least privilege</h2>
+<p>Context: after the Ch. 3 split, there are no operational boundaries; public routes hit the orchestrator; a root database account (<code>postgres/admin</code>); API keys in raw config.</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Risk</th>
+<th>Action</th>
+<th>Benefit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>exposed entry points</td>
+<td>consolidate behind an <strong>API gateway</strong> with RS256 JWT validation (JWKS, <code>exp</code>, pinned algorithm)</td>
+<td>no direct internet exposure</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>God account</strong></td>
+<td>restricted user: <code>CREATE USER order_processor ...; GRANT SELECT, INSERT, UPDATE ON orders TO order_processor;</code> (no <code>DELETE</code>/<code>DROP</code>)</td>
+<td>RCE can't wipe tables</td>
+</tr>
+<tr>
+<td>3</td>
+<td>hardcoded secrets</td>
+<td>remove from source; local <code>.env</code> (git-ignored, <code>python-dotenv</code>) or cloud Secrets Manager; <code>os.getenv(...)</code></td>
+<td>no Git-history leaks; ready for rotation</td>
+</tr>
+<tr>
+<td>4</td>
+<td>developer laptops/CI</td>
+<td>mandatory <strong>MFA</strong></td>
+<td>stops lateral pivoting</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Positive:</strong> reduced blast radius, no Git leaks, defence in depth.</li>
+<li><strong>Negative:</strong> <code>.env</code> onboarding overhead; migrations (<code>ALTER TABLE</code>, <code>CREATE INDEX</code>) now need a separate pipeline runner under a distinct migration role.</li>
+</ul>
+<h2 id="ch-12-adr-001-stream-flix-mvp">Ch. 12: ADR 001, Stream-Flix MVP</h2>
+<ul>
+<li><strong>Context:</strong>
+<ul>
+<li>four-month MVP for VC funding</li>
+<li>one team of <strong>10</strong></li>
+<li>Day-1 microservices would burn three months on Kubernetes, network latency, distributed consistency and CI/CD, and mismatches Conway's Law.</li>
+</ul>
+</li>
+<li><strong>Options:</strong>
+<ul>
+<li>(1) 20 microservices (slow to market; severe Conway mismatch; Sagas/Outboxes)</li>
+<li>(2) <strong>modular monolith</strong> (fast; one team, one codebase; simple local transactions; extraction path via Strangler Fig).</li>
+</ul>
+</li>
+<li><strong>Decision:</strong> <strong>modular monolith</strong> with bounded contexts (User Management, Billing, Video Transcoding, Content Delivery) communicating only through interfaces, never through each other's tables.</li>
+<li><strong>Consequences:</strong> all components scale together; a Billing bug could crash everything.</li>
+<li><strong>Escape hatch triggers:</strong>
+<ul>
+<li><strong>organisational</strong> (growth beyond <strong>40 to 50 developers</strong> with merge conflicts and deployment jams) and <strong>technical</strong> (Video Transcoding consistently above <strong>80%</strong> of CPU/memory)</li>
+<li>Extract only the bottlenecked module (e.g. transcoding onto GPU instances).</li>
+</ul>
+</li>
+</ul>
+<h2 id="ch-13-shop-zilla-delivery-blueprint">Ch. 13: Shop-Zilla delivery blueprint</h2>
+<ol>
+<li><strong>Gated verification (CI):</strong> syntax and unit tests (G1) → <strong>architectural fitness functions</strong> (G2, a zoning officer rejecting circular dependencies) → bake the <strong>immutable container image</strong> (G3).</li>
+<li><strong>Promotion runway:</strong> Local workspace → <strong>ephemeral PR sandbox</strong> (temporary production replica, destroyed on merge) → the <strong>same immutable container</strong> to the production cluster; no permanent staging.</li>
+<li><strong>Zero-downtime release (rename <code>billing_address</code> to <code>address_invoice</code>):</strong></li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Node</th>
+<th>Schema</th>
+<th>App behaviour</th>
+<th>Flag X1</th>
+<th>Guarantee</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>D1 Expand</strong></td>
+<td>add nullable <code>address_invoice</code> beside <code>billing_address</code></td>
+<td>reads and writes legacy only</td>
+<td>off</td>
+<td>purely additive; no locks</td>
+</tr>
+<tr>
+<td><strong>D2 Migrate</strong></td>
+<td>both columns active</td>
+<td>dual-writes both; X1 flips the read path to the new column</td>
+<td>on</td>
+<td>turning X1 off instantly falls back</td>
+</tr>
+<tr>
+<td><strong>D3 Contract</strong></td>
+<td>backfill nulls, drop <code>billing_address</code></td>
+<td>new column only; flag pruned</td>
+<td>retired</td>
+<td>rename done with zero downtime or divergence</td>
+</tr>
+</tbody>
+</table>
+<h2 id="ch-14-telemetry-for-the-high-volume-tenant">Ch. 14: telemetry for the high-volume tenant</h2>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Layer</th>
+<th>Mechanism</th>
+<th>Tells us</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 Metrics</td>
+<td>application and database planes</td>
+<td>Four Golden Signals at gateway and DB pools</td>
+<td>p99 spikes and pool saturation</td>
+</tr>
+<tr>
+<td>2 Traces</td>
+<td>network and service boundaries</td>
+<td><code>correlation_id</code> in HTTP headers at the edge</td>
+<td>end-to-end journey</td>
+</tr>
+<tr>
+<td>2 Logs</td>
+<td>application threads</td>
+<td>structured JSON via OpenTelemetry-compliant sinks</td>
+<td>indexable context, not prose</td>
+</tr>
+<tr>
+<td>3 MDC</td>
+<td>thread-local storage</td>
+<td>keys <code>tenant_id</code>, <code>correlation_id</code>, <code>cart_size</code>, <code>execution_phase</code></td>
+<td>who and where, without polluting signatures</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Task 4 remedies:</strong> rejected <strong>vertical scaling</strong> (a band-aid); rejected <strong>indexing</strong> (doesn't fix 10,000 sequential N+1 round trips); <strong>accepted: bulk <code>WHERE id IN (...)</code> queries in <code>InventoryRepository</code> plus a hybrid L1 (in-memory) / L2 (Redis) cache</strong> isolating the mega-tenant.</p>
+<h2 id="ch-15-c4-audience-matrix-shop-zilla">Ch. 15: C4 audience matrix (Shop-Zilla)</h2>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>View</th>
+<th>Audience</th>
+<th>Scope</th>
+<th>Rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>System Context (&quot;10,000-foot&quot;)</td>
+<td>CEO, PMs, business</td>
+<td>one Shop-Zilla box; customers, warehouse managers; FlakyPayment Gateway, Shipping Provider API</td>
+<td><strong>no tech jargon</strong> (Kubernetes, Kafka, Docker, PostgreSQL)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Container (&quot;1,000-foot&quot;)</td>
+<td>engineering managers, SREs, DevOps, senior devs</td>
+<td>mobile app, Order and Inventory services, databases, event broker</td>
+<td>lines show network boundaries (HTTPS REST, AMQP)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Component (&quot;100-foot&quot;)</td>
+<td>feature squads</td>
+<td>inside Order Service: <code>OrderController</code> → <code>OrderProcessor</code> → <code>OrderRepository</code></td>
+<td>shows where new code belongs</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Code</td>
+<td>developers</td>
+<td>classes, methods</td>
+<td>skip manual class diagrams; govern with fitness functions</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>[!note]- Terms to carry forward
+decision receipt · ADR-002 · rich entity / value object · composition root · fake adapter · resource-oriented REST · PATCH vs PUT · correlation ID · polyglot tax · Blue-Green · resilience parameters · blast radius audit · escape hatch triggers · expand/contract nodes · MDC keys · C4 audience matrix.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), Appendix A. Pre-release; no public source page found.</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-15-communicating-and-planning-architecture/">Grokking Software Architecture 15: Communicating and Planning Architecture</a> · <a href="/book-digest/grokking-software-architecture/gsa-02-the-architects-toolkit/">Grokking Software Architecture 2: The Architect's Toolkit (a guide to defensible decisions)</a> · <a href="/book-digest/grokking-software-architecture/gsa-08-the-database-as-an-architectural-pillar/">Grokking Software Architecture 8: The Database as an Architectural Pillar</a> · <a href="/book-digest/grokking-software-architecture/gsa-13-cicd-delivery-lifecycle/">Grokking Software Architecture 13: Architecting for the Delivery Lifecycle (CI/CD)</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-15-communicating-and-planning-architecture/">&larr; Grokking Software Architecture 15: Communicating and Planning Architecture</a><a href="/book-digest/grokking-software-architecture/">Contents</a><span></span></nav></main></body></html>

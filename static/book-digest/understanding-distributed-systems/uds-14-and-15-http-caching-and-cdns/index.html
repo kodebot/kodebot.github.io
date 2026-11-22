@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-14-and-15-part-iii-intro-http-caching-cdns">Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), Part III introduction, chapters 14 and 15. Previous: <a href="/book-digest/understanding-distributed-systems/uds-13-asynchronous-transactions/">Understanding Distributed Systems 13: Asynchronous transactions</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Part III</strong> opens the scalability section; this note covers client-side caching (the replication pattern) and CDNs, with partitioning next.</li>
+<li><strong>HTTP caching</strong> works for safe methods (GET, HEAD) via <code>Cache-Control</code> (TTL) and <code>ETag</code> (version); stale entries revalidate with a conditional GET (<code>If-None-Match</code>).</li>
+<li><strong>Make static resources immutable</strong> and publish changes under a new URL: cache &quot;forever&quot;, and clients never see a mix of old and new files.</li>
+<li>A <strong>reverse proxy</strong> shares one cache across all clients and can also authenticate, compress, rate-limit and load-balance.</li>
+<li>A <strong>CDN</strong> is an overlay of reverse proxies whose main win is the network (lower latency than BGP routing), with caching layers on top; prefer it over building your own cache.</li>
+</ul>
+</div></div>
+<h2 id="part-iii-scalability-introduction">Part III: Scalability (introduction)</h2>
+<blockquote>
+<p>&quot;Treat servers like cattle, not pets.&quot; (Bill Baker)</p>
+</blockquote>
+<ul>
+<li>
+<p>In <strong>1996 only 1%</strong> of people worldwide had internet access</p>
+<ul>
+<li><strong>today over 65%</strong>. That grew the addressable market of online businesses and created the need for systems that handle <strong>millions of concurrent users</strong>.</li>
+</ul>
+</li>
+<li>
+<p>To scale, an app must run <strong>without performance degradation as load increases</strong>; as chapter 1 said, the only long-term solution is to architect it to <strong>scale horizontally</strong>.</p>
+</li>
+<li>
+<p>The part follows the journey of scaling <strong>Cruder</strong>, a simple CRUD web app: a <strong>single-page JavaScript app</strong> talking to an application server over a <strong>RESTful HTTP API</strong></p>
+<ul>
+<li>the server stores <strong>large files (images, videos) on its local disk</strong> and state in a <strong>relational database</strong></li>
+<li>app server and database share <strong>one machine</strong> on a compute platform like <strong>AWS EC2</strong></li>
+<li>the public IP is advertised by a <strong>managed DNS service</strong> like <strong>AWS Route 53</strong> (https://aws.amazon.com/route53/)
+<ul>
+<li>A browser resolves the domain via DNS (if not cached), opens a TLS connection and sends its first HTTP GET.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p>Fine for a proof of concept, <strong>not scalable or fault-tolerant</strong>. As requests grow the server needs more CPU, memory, disk and network and degrades</p>
+<ul>
+<li>the database slows as it stores and serves more while <strong>competing with the server for resources</strong>.</li>
+</ul>
+</li>
+<li>
+<p><strong>Scale up</strong></p>
+<ul>
+<li>(quickest): more processors or cores (more threads at once), more disks (RAID) for disk throughput, more NICs for network throughput, <strong>SSDs</strong> for lower random-access latency, more memory for fewer page faults</li>
+<li>Caveat: the app must be able to <strong>use</strong> the extra hardware (more cores do nothing for a single-threaded app), and eventually you hit a <strong>hard physical limit</strong> regardless of money.</li>
+</ul>
+</li>
+<li>
+<p><strong>Scale out</strong>:</p>
+<ul>
+<li>distribute across nodes</li>
+<li>more complex, but it pays off
+<ul>
+<li>First step: move the database to its own machine, so server and database no longer compete: an example of <strong>functional decomposition</strong> (breaking an app into components, each with a well-defined responsibility).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p><strong>Three general patterns</strong> to exploit and combine: <strong>functional decomposition</strong>, <strong>partitioning</strong> (split data into partitions spread across nodes) and <strong>replication</strong> (copy functionality or data across nodes, a.k.a. horizontal scaling).</p>
+</li>
+<li>
+<p>Ch. 14 client-side caching</p>
+<ul>
+<li>ch. 15 CDNs</li>
+<li>ch. 16 partitioning (range, hash)</li>
+<li>ch. 17 offloading large static files to a managed file store and Azure Storage's architecture</li>
+<li>ch. 18 load balancing at DNS, transport and application layers</li>
+<li>ch. 19 scaling a relational database with replication and partitioning, then NoSQL</li>
+<li>ch. 20 caching in front of the data store (&quot;deceptively simple&quot;, it can create subtle consistency and operational issues)</li>
+<li>ch. 21 scaling development across teams with independently deployable services and an <strong>API gateway</strong></li>
+<li>ch. 22 <strong>data plane vs control plane</strong></li>
+<li>ch. 23 <strong>asynchronous messaging</strong> so services communicate even when one is temporarily unavailable.</li>
+</ul>
+</li>
+</ul>
+<h2 id="chapter-14-http-caching">Chapter 14: HTTP caching</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-14-conditional-get.svg" alt="Revalidating a stale cache entry with a conditional GET" loading="lazy" />
+Cruder's server currently serves <strong>static</strong> resources (rarely change between requests: JavaScript, CSS) and <strong>dynamic</strong> ones (generated on the fly: a JSON user profile).</p>
+<p>A static resource can be <strong>cached by the client</strong> for some time so the next access needs <strong>no network call</strong>, reducing server load and response time. (This is the <strong>replication</strong> pattern; MDN guide: https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching.)</p>
+<p><strong>How it works.</strong> HTTP caching is limited to <strong>safe methods</strong> that do not alter server state, like <strong>GET or HEAD</strong>.</p>
+<ol>
+<li>A client requests a resource it has not accessed. The <strong>local cache</strong> intercepts, finds nothing, and <strong>fetches from the origin server</strong> for the client.</li>
+<li>The server marks the resource cacheable with response headers: <strong><code>Cache-Control</code></strong> (how long to cache: the <strong>TTL</strong>) and <strong><code>ETag</code></strong> (a <strong>version identifier</strong>). The cache stores the resource and returns it. (An <code>Age</code> header shows how many seconds the object has been in the cache.)</li>
+<li><strong>Later access:</strong> the cache checks whether the resource is still <strong>fresh</strong> (not expired). If so, it returns it <strong>immediately</strong>. Even if fresh from the client's view, the server may have updated it, so <strong>reads are not strongly consistent</strong>: an acceptable trade-off here.</li>
+<li>If <strong>expired (stale)</strong>, the cache sends a <strong>conditional GET</strong> with a header like <strong><code>If-None-Match</code></strong> carrying the stale resource's version. If a newer version exists the server returns it; if not, it replies <strong><code>304 Not Modified</code></strong>.</li>
+</ol>
+<p><strong>Make static resources immutable.</strong> They can then be cached &quot;forever&quot; (the HTTP spec's maximum is <strong>one year</strong>). To change one, publish a <strong>new resource under a new URL</strong> so clients must fetch it.</p>
+<ul>
+<li><strong>Bonus: atomic updates of related resources.</strong>
+<ul>
+<li>A new site release has an updated HTML index that references <strong>new URLs</strong> for the JS and CSS bundles</li>
+<li>A client sees either the old site or the new one depending on which index file it read, <strong>never a mix</strong> (old JS with new CSS).</li>
+</ul>
+</li>
+</ul>
+<p><strong>Read path vs write path.</strong> Reads (GET) are treated differently from writes (POST, PUT, DELETE) because there are <strong>orders of magnitude more reads</strong>: a pattern called <strong>CQRS</strong> (Command Query Responsibility Segregation: https://martinfowler.com/bliki/CQRS.html), another instance of functional decomposition.</p>
+<h3 id="14-1-reverse-proxies">14.1 Reverse proxies</h3>
+<p>A <strong>reverse proxy</strong> is a <strong>server-side proxy that intercepts all communication with clients</strong>; it is indistinguishable from the real server, so clients do not know there is an intermediary.</p>
+<ul>
+<li>Common use: <strong>cache static resources</strong>. The cache is <strong>shared among clients</strong>, so it cuts server load far more than any client-side cache.</li>
+<li>A middleman can also <strong>authenticate requests</strong> for the server
+<ul>
+<li><strong>compress responses</strong></li>
+<li><strong>rate-limit</strong> specific IPs or users, and <strong>load-balance</strong> across servers (explored in later chapters).</li>
+</ul>
+</li>
+<li><strong>NGINX</strong>
+<ul>
+<li>(https://www.nginx.com/) and <strong>HAProxy</strong> (https://www.haproxy.com/) are widely used</li>
+<li>But many reverse-proxy uses are <strong>commoditised by managed services</strong>, so rather than building a server-side cache, use a <strong>CDN</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="chapter-15-content-delivery-networks">Chapter 15: Content delivery networks</h2>
+<p>A <strong>CDN</strong> is an <strong>overlay network of geographically distributed caching servers (reverse proxies)</strong>, <strong>architected around the design limitations of the network protocols that run the internet</strong>. Clients hit URLs that resolve to CDN caching servers.</p>
+<p>On a request the CDN server checks its cache; if missing it <strong>transparently fetches from the origin server (our application server) using the original URL</strong>, caches the response and returns it.</p>
+<p>Examples: <strong>AWS CloudFront</strong> (https://aws.amazon.com/cloudfront/) and <strong>Akamai</strong> (https://www.akamai.com/).</p>
+<h3 id="15-1-overlay-network">15.1 Overlay network</h3>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-15-cdn-overlay.svg" alt="A CDN as an overlay of reverse proxies" loading="lazy" /></p>
+<p>You might think caching is the main benefit; it is actually <strong>the underlying network</strong>.</p>
+<ul>
+<li>The public internet is <strong>thousands of networks</strong>
+<ul>
+<li>its core routing protocol <strong>BGP</strong> was not designed for performance: it mainly uses the <strong>number of hops</strong> to cost a path and <strong>ignores latency and congestion</strong>.</li>
+</ul>
+</li>
+<li>A CDN is an <strong>overlay network</strong> built on top of the internet (see &quot;The Akamai Network&quot;: https://groups.cs.umass.edu/ramesh/wp-content/uploads/sites/3/2019/12/The-akamai-network-a-platform-for-high-performance-internet-applications.pdf) using techniques that cut response time and raise transfer bandwidth.</li>
+<li>Recall TCP (chapter 2):
+<ul>
+<li>latency matters</li>
+<li>No matter how fast the server, a client on the other side of the world sees <strong>over 100 ms</strong> just from network latency, <strong>physically limited by the speed of light</strong>, plus a higher error rate over long public-internet distances.</li>
+</ul>
+</li>
+<li>So CDN clusters are placed in <strong>many geographic locations</strong> near clients
+<ul>
+<li><strong>How do clients find the closest?</strong> <strong>Global DNS load balancing</strong> (https://landing.google.com/sre/sre-book/chapters/load-balancing-frontend/): a DNS extension that infers the client's location from its IP and returns the <strong>geographically closest clusters</strong>, also considering <strong>network congestion and cluster health</strong>.</li>
+</ul>
+</li>
+<li>CDN servers also sit at <strong>internet exchange points</strong>, where ISPs connect, so almost the whole path from origin to client runs on <strong>CDN links</strong>, with short low-latency hops at either end.</li>
+<li>The overlay's <strong>routing algorithms</strong> pick paths with lower latency and congestion based on <strong>continuously updated network health data</strong>, and exploit <strong>TCP optimisations</strong>: <strong>pools of persistent connections</strong> between servers (no setup overhead) and <strong>optimal TCP window sizes</strong> to maximise bandwidth.</li>
+<li>The overlay also speeds up <strong>dynamic resources that cannot be cached</strong>: the CDN becomes the application's <strong>frontend</strong>, shielding it from <strong>distributed denial-of-service (DDoS) attacks</strong> (https://en.wikipedia.org/wiki/Denial-of-service_attack).</li>
+</ul>
+<h3 id="15-2-caching">15.2 Caching</h3>
+<p>A CDN can have <strong>several caching layers</strong>: the top is <strong>edge clusters</strong> in different locations. <strong>Infrequently accessed content may be missing at the edge</strong>; the edge then fetches from the origin, more efficiently and reliably thanks to the overlay.</p>
+<ul>
+<li><strong>Trade-off:</strong> more edge clusters serve more dispersed clients, but the <strong>cache hit ratio</strong> (the likelihood of finding the object in the cache; a <strong>hit</strong> vs a <strong>miss</strong>) drops, so <strong>origin load rises</strong>.</li>
+<li><strong>Remedy:</strong> <strong>intermediate caching clusters</strong> in fewer locations that cache a larger fraction of the content.</li>
+<li>Within a cluster, content is <strong>partitioned across servers</strong> (no single server holds it all). Partitioning is a core scalability pattern: the next chapter.</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+scale up / out · functional decomposition · partitioning · replication · static vs dynamic resource · Cache-Control · TTL · ETag · If-None-Match · 304 Not Modified · fresh / stale · immutable resource · CQRS · reverse proxy · CDN · overlay network · edge cluster · cache hit ratio · global DNS load balancing.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), Part III intro, ch. 14-15. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-13-asynchronous-transactions/">Understanding Distributed Systems 13: Asynchronous transactions</a> · <a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning</a> · <a href="/book-digest/understanding-distributed-systems/uds-02-reliable-links/">Understanding Distributed Systems 2: Reliable links</a> · <a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">Understanding Distributed Systems 4: Discovery</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-13-asynchronous-transactions/">&larr; Understanding Distributed Systems 13: Asynchronous transactions</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-16-partitioning/">Understanding Distributed Systems 16: Partitioning &rarr;</a></nav></main></body></html>

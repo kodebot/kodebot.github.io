@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 12: ConfigMaps and Secrets</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-12-configmaps-and-secrets">The Kubernetes Book 12: ConfigMaps and Secrets</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 12. Previous: <a href="/book-digest/the-kubernetes-book/tkb-11-kubernetes-storage/">The Kubernetes Book 11: Kubernetes Storage</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-13-statefulsets/">The Kubernetes Book 13: StatefulSets</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Packaging an app and its configuration together is an <strong>anti-pattern</strong>; decouple them so you build <strong>one image</strong> and apply per-environment config at run time.</li>
+<li>A <strong>ConfigMap</strong> is a map of key-value pairs (up to <strong>1 MiB</strong>) for non-sensitive config; it has a <code>data</code> block, not <code>spec</code> and <code>status</code>.</li>
+<li>Inject into containers as <strong>environment variables</strong>, <strong>startup-command arguments</strong> or <strong>files in a volume</strong>. Only <strong>volumes</strong> receive live updates (after a minute or two).</li>
+<li><strong>Secrets</strong> work the same way but are <strong>not secure by default</strong>: base64 is encoding, not encryption, and most clusters store them unencrypted.</li>
+<li>A real secrets solution needs encryption at rest and in flight, strict RBAC, etcd protection, and often an external vault.</li>
+</ul>
+</div></div>
+<blockquote>
+<p>[!note] Anti-pattern
+Something that seems like a good idea but turns out to be a bad one (the book's definition).</p>
+</blockquote>
+<h2 id="12-1-the-big-picture">12.1 The big picture</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-12-coupled-vs-decoupled.svg" alt="Config baked into images versus config applied at run time" loading="lazy" /></p>
+<p>Most apps are an <strong>application</strong> plus a <strong>configuration</strong> (NGINX and Apache are useless until configured). Early cloud-native microservices packaged the two as one unit. Decoupling gives:</p>
+<ul>
+<li>reuse</li>
+<li>simpler development and testing</li>
+<li>simpler, less disruptive changes</li>
+</ul>
+<h3 id="the-coupled-world">The coupled world</h3>
+<p>A company with <strong>Dev</strong>, <strong>Test</strong> and <strong>Prod</strong> environments, each with its own network and security policies, credentials and certificates. Packaging config in the image means, for every app:</p>
+<ul>
+<li>build three images (dev, test, prod configs)</li>
+<li>store them in three repositories</li>
+<li>run a different configuration in each environment</li>
+</ul>
+<p>Even a typo fix needs a build, test, store and redeploy <strong>three times</strong>, and troubleshooting is harder because every update mixes code and config.</p>
+<h3 id="the-decoupled-world">The decoupled world</h3>
+<p>Build a <strong>hardened NGINX base image</strong> with no embedded configuration, then create three configs (app config, policy settings, credentials per environment) applied at run time. Result:</p>
+<ul>
+<li>one image built and tested once, stored in one repository, same version everywhere</li>
+<li>any developer can pull it, because it holds <strong>no sensitive data</strong></li>
+<li>code and config can be pushed <strong>independently</strong>: fix a homepage typo in the config and push it to existing containers in all three environments without replacing containers</li>
+<li>other teams reuse the base image with their own configs</li>
+</ul>
+<h2 id="12-2-configmap-theory">12.2 ConfigMap theory</h2>
+<p>A <strong>ConfigMap (CM)</strong> stores config outside Pods and injects it at run time. It is a first-class object in the <strong>core API group, v1</strong>, which means:</p>
+<ul>
+<li>stable (v1)</li>
+<li>long-standing (new things never go in the core group)</li>
+<li>definable in YAML</li>
+<li>manageable with kubectl</li>
+</ul>
+<p>Use ConfigMaps for <strong>non-sensitive</strong> data:</p>
+<ul>
+<li>environment variables</li>
+<li>configuration files (web server, database)</li>
+<li>hostnames</li>
+<li>Service names and ports</li>
+<li>account names</li>
+</ul>
+<p><strong>Never put sensitive data</strong> (certificates, passwords) in ConfigMaps: Kubernetes makes no effort to protect their contents. Use <strong>Secrets</strong> within a wider secrets-management solution.</p>
+<h3 id="how-configmaps-work">How ConfigMaps work</h3>
+<p>A ConfigMap holds a <strong>map of key-value pairs</strong>:</p>
+<ul>
+<li><strong>Keys</strong>: arbitrary names; alphanumerics, dashes, dots, underscores.</li>
+<li><strong>Values</strong>: anything, including whole multi-line config files.</li>
+<li><strong>Size limit</strong>: <strong>1 MiB</strong> (1,048,576 bytes).</li>
+</ul>
+<p>Three entries:</p>
+<pre class="hl"><code><span class="c1"># ConfigMap epl</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">epl</span>
+<span class="nt">data</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">Competition</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Premier League</span><span class="w">    </span><span class="c1"># 3 map entries (key: value pairs)</span>
+<span class="w">  </span><span class="nt">Season</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2024-2025</span>
+<span class="w">  </span><span class="nt">Champions</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Liverpool</span>
+</code></pre>
+<p>A value that is a complete config file:</p>
+<pre class="hl"><code><span class="c1"># ConfigMap cm2</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cm2</span>
+<span class="nt">data</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">test.conf</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span><span class="w">            </span><span class="c1"># key</span>
+<span class="w">    </span><span class="no">env = plex-test       # value starts here</span>
+<span class="w">    </span><span class="no">endpoint = 0.0.0.0:31001</span>
+<span class="w">    </span><span class="no">char = utf8</span>
+<span class="w">    </span><span class="no">vault = PLEX/test</span>
+<span class="w">    </span><span class="no">log-size = 512M</span>
+</code></pre>
+<p>Three ways to inject at run time:</p>
+<ol>
+<li>Environment variables</li>
+<li>Arguments to the container's startup command</li>
+<li>Files in a volume</li>
+</ol>
+<p>(Figure 12.1: the ConfigMap lives outside the app and its values map to environment variables and volumes apps already understand.) None needs Kubernetes knowledge added to the app; <strong>volumes are most flexible because they enable updates</strong>.</p>
+<p><strong>Kubernetes-native apps</strong> know they run on Kubernetes and talk to the API server, so they can read ConfigMaps directly and see live updates. But they only work on Kubernetes (<strong>lock-in</strong>). The book's examples use environment variables and volumes so existing apps need no rewrite.</p>
+<h2 id="12-3-hands-on-with-configmaps">12.3 Hands-on with ConfigMaps</h2>
+<p>Clone the repo, switch to <code>2025</code>, and run from the <code>configmaps</code> folder:</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+<span class="nb">cd</span><span class="w"> </span>configmaps
+</code></pre>
+<h3 id="creating-configmaps-imperatively">Creating ConfigMaps imperatively</h3>
+<p><code>kubectl create configmap</code> (shortened to <code>cm</code>) takes two data sources:</p>
+<ul>
+<li>literals: <code>--from-literal</code></li>
+<li>a file: <code>--from-file</code></li>
+</ul>
+<p>Windows users replace trailing backslashes with backticks.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>create<span class="w"> </span>configmap<span class="w"> </span>testmap1<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--from-literal<span class="w"> </span><span class="nv">shortname</span><span class="o">=</span>SAFC<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--from-literal<span class="w"> </span><span class="nv">longname</span><span class="o">=</span><span class="s2">"Sunderland Association Football Club"</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>cm<span class="w"> </span>testmap1
+<span class="go">Name:         testmap1</span>
+<span class="go">Namespace:    default</span>
+<span class="go">Labels:       &lt;none&gt;</span>
+<span class="go">Annotations:  &lt;none&gt;</span>
+<span class="go">Data</span>
+<span class="go">====</span>
+<span class="go">shortname:</span>
+<span class="go">----</span>
+<span class="go">SAFC</span>
+<span class="go">longname:</span>
+<span class="go">----</span>
+<span class="go">Sunderland Association Football Club</span>
+<span class="go">BinaryData</span>
+<span class="go">====</span>
+<span class="go">Events:  &lt;none&gt;</span>
+</code></pre>
+<p>It is just a map of key-value pairs dressed as a Kubernetes object. From a file (<code>cmfile.txt</code>, one line):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>create<span class="w"> </span>cm<span class="w"> </span>testmap2<span class="w"> </span>--from-file<span class="w"> </span>cmfile.txt
+<span class="go">configmap/testmap2 created</span>
+</code></pre>
+<h3 id="inspecting-configmaps">Inspecting ConfigMaps</h3>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>cm
+<span class="go">NAME       DATA   AGE</span>
+<span class="go">testmap1   2      11m</span>
+<span class="go">testmap2   1      2m23s</span>
+</code></pre>
+<p>(The book's header prints <code>AME</code>; shown as <code>NAME</code>.) For <code>testmap2</code> there is one entry; the <strong>key is the file name</strong> and the <strong>value is the file contents</strong>:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>cm<span class="w"> </span>testmap2
+<span class="go">Name:         testmap2</span>
+<span class="go">Namespace:    default</span>
+<span class="go">Labels:       &lt;none&gt;</span>
+<span class="go">Annotations:  &lt;none&gt;</span>
+<span class="go">Data</span>
+<span class="go">====</span>
+<span class="go">cmfile.txt:               # key</span>
+<span class="go">----</span>
+<span class="go">Kubernetes FTW!           # value</span>
+<span class="go">BinaryData</span>
+<span class="go">====</span>
+<span class="go">Events:  &lt;none&gt;</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>cm<span class="w"> </span>testmap2<span class="w"> </span>-o<span class="w"> </span>yaml
+<span class="go">apiVersion: v1</span>
+<span class="go">data:</span>
+<span class="go">  cmfile.txt: |</span>
+<span class="go">    Kubernetes FTW!</span>
+<span class="go">kind: ConfigMap</span>
+<span class="go">metadata:</span>
+<span class="go">  creationTimestamp: "2025-02-04T14:19:21Z"</span>
+<span class="go">  name: testmap2</span>
+<span class="go">  namespace: default</span>
+<span class="go">  resourceVersion: "18128"</span>
+<span class="go">  uid: 146da79c-aa09-4b10-8992-4dffa087dbfb</span>
+</code></pre>
+<p>There is no <code>spec</code> or <code>status</code>: ConfigMaps have <strong>no desired and observed state</strong>; they have a <code>data</code> block instead.</p>
+<h3 id="creating-configmaps-declaratively">Creating ConfigMaps declaratively</h3>
+<p>Two entries (<code>firstname</code>, <code>lastname</code>), with <code>data</code> instead of <code>spec</code>:</p>
+<pre class="hl"><code><span class="c1"># fullname.yml</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">multimap</span>
+<span class="nt">data</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">firstname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Nigel</span>
+<span class="w">  </span><span class="nt">lastname</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Poulton</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>fullname.yml
+<span class="go">configmap/multimap created</span>
+</code></pre>
+<p>One entry whose value is a whole config file; the <strong>pipe (<code>|</code>)</strong> tells Kubernetes to treat everything after it as a single value:</p>
+<pre class="hl"><code><span class="c1"># singlemap.yml</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">test-config</span>
+<span class="nt">data</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">test.conf</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span><span class="w">            </span><span class="c1"># key</span>
+<span class="w">    </span><span class="no">env = plex-test       # value</span>
+<span class="w">    </span><span class="no">endpoint = 0.0.0.0:31001</span>
+<span class="w">    </span><span class="no">char = utf8</span>
+<span class="w">    </span><span class="no">vault = PLEX/test</span>
+<span class="w">    </span><span class="no">log-size = 512M</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Object name</th>
+<th>Key</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test-config</code></td>
+<td><code>test.conf</code></td>
+<td><code>env = plex-test</code>, <code>endpoint = 0.0.0.0:31001</code>, <code>char = utf8</code>, <code>vault = PLEX/test</code>, <code>log-size = 512M</code></td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>singlemap.yml
+<span class="go">configmap/test-config created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>cm<span class="w"> </span>test-config
+<span class="go">Name:         test-config</span>
+<span class="go">Namespace:    default</span>
+<span class="go">Labels:       &lt;none&gt;</span>
+<span class="go">Annotations:  &lt;none&gt;</span>
+<span class="go">Data</span>
+<span class="go">====</span>
+<span class="go">test.conf:</span>
+<span class="go">----</span>
+<span class="go">env = plex-test</span>
+<span class="go">endpoint = 0.0.0.0:31001</span>
+<span class="go">char = utf8</span>
+<span class="go">vault = PLEX/test</span>
+<span class="go">log-size = 512M</span>
+<span class="go">BinaryData</span>
+<span class="go">====</span>
+<span class="go">Events:  &lt;none&gt;</span>
+</code></pre>
+<h3 id="injecting-configmap-data-into-pods-and-containers">Injecting ConfigMap data into Pods and containers</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-12-configmap-injection.svg" alt="Three ways to inject a ConfigMap into a container" loading="lazy" /></p>
+<p>Three ways: environment variables, startup-command arguments, volume files. The first two inject <strong>at creation only</strong>, with no update to a running container; volumes also inject at creation but <strong>push updates to live containers</strong>.</p>
+<h4 id="configmaps-and-environment-variables">ConfigMaps and environment variables</h4>
+<p>Figure 12.2: create the ConfigMap, map entries to env vars in the Pod template's <code>containers</code> section; at start they appear as ordinary Linux or Windows environment variables, so apps need no ConfigMap knowledge. <code>multimap</code> holds <code>firstname=Nigel</code> and <code>lastname=Poulton</code>. <code>podenv.yml</code> maps them (the variable names are capitalised to tell them apart; any name works):</p>
+<pre class="hl"><code><span class="c1"># podenv.yml (excerpt)</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="c1"># &lt;Snip&gt;</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ctr1</span>
+<span class="w">    </span><span class="nt">env</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FIRSTNAME</span><span class="w">         </span><span class="c1"># environment variable called FIRSTNAME</span>
+<span class="w">      </span><span class="nt">valueFrom</span><span class="p">:</span><span class="w">              </span><span class="c1"># based on</span>
+<span class="w">        </span><span class="nt">configMapKeyRef</span><span class="p">:</span><span class="w">      </span><span class="c1"># a ConfigMap</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">multimap</span><span class="w">      </span><span class="c1"># called "multimap"</span>
+<span class="w">          </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">firstname</span><span class="w">      </span><span class="c1"># populated by the "firstname" entry</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LASTNAME</span>
+<span class="w">      </span><span class="nt">valueFrom</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">configMapKeyRef</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">multimap</span>
+<span class="w">          </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">lastname</span>
+<span class="w">    </span><span class="c1"># &lt;Snip&gt;</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>podenv.yml
+<span class="go">pod/envpod created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>envpod<span class="w"> </span>--<span class="w"> </span>env<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>NAME
+<span class="go">HOSTNAME=envpod</span>
+<span class="go">FIRSTNAME=Nigel</span>
+<span class="go">LASTNAME=Poulton</span>
+</code></pre>
+<p>(Windows: replace <code>grep NAME</code> with <code>Select-String -Pattern 'NAME'</code>.) Environment variables are <strong>static</strong>: updating the map does not update <code>envpod</code>.</p>
+<h4 id="configmaps-and-container-startup-commands">ConfigMaps and container startup commands</h4>
+<p>Pass env vars as arguments to the startup command. <code>podstartup.yml</code> (container <code>args1</code>, busybox) uses the same mappings as above and adds a <code>command</code> line:</p>
+<pre class="hl"><code><span class="c1"># podstartup.yml (excerpt)</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">args1</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">busybox</span>
+<span class="w">    </span><span class="nt">env</span><span class="p">:</span><span class="w">                       </span><span class="c1"># same mappings as the previous example,</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FIRSTNAME</span><span class="w">          </span><span class="c1"># this time used by the startup command below</span>
+<span class="w">      </span><span class="nt">valueFrom</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">configMapKeyRef</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">multimap</span>
+<span class="w">          </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">firstname</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LASTNAME</span>
+<span class="w">      </span><span class="nt">valueFrom</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">configMapKeyRef</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">multimap</span>
+<span class="w">          </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">lastname</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">"/bin/sh"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-c"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"echo</span><span class="nv"> </span><span class="s">First</span><span class="nv"> </span><span class="s">name</span><span class="nv"> </span><span class="s">$(FIRSTNAME)</span><span class="nv"> </span><span class="s">last</span><span class="nv"> </span><span class="s">name</span><span class="nv"> </span><span class="s">$(LASTNAME)"</span><span class="w"> </span><span class="p p-Indicator">]</span>
+</code></pre>
+<p>(Figure 12.3: entries populate env vars, then the startup command references them.)</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>podstartup.yml
+<span class="go">pod/startup-pod created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>logs<span class="w"> </span>startup-pod<span class="w"> </span>-c<span class="w"> </span>args1
+<span class="go">First name Nigel last name Poulton</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>startup-pod
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">Environment:</span>
+<span class="go">  FIRSTNAME:  &lt;set to the key 'firstname' of config map 'multimap'&gt;</span>
+<span class="go">  LASTNAME:   &lt;set to the key 'lastname' of config map 'multimap'&gt;</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>It still uses env vars, so it has the same limit: ConfigMap updates are not pushed. The Pod prints once and completes; delete it:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>startup-pod
+<span class="go">pod "startup-pod" deleted</span>
+</code></pre>
+<h4 id="configmaps-and-volumes">ConfigMaps and volumes</h4>
+<p>The <strong>most flexible</strong> option: reference whole config files and get updates (they can take a minute or two to appear). Process (Figure 12.4):</p>
+<ol>
+<li>Create the ConfigMap.</li>
+<li>Define a ConfigMap volume in the Pod template.</li>
+<li>Mount the volume into the container.</li>
+<li>Entries appear as <strong>files</strong> inside the container.</li>
+</ol>
+<p><code>podvol.yml</code> defines Pod <code>cmvol</code>: volume <code>volmap</code> from <code>multimap</code>, mounted at <code>/etc/name</code>:</p>
+<pre class="hl"><code><span class="c1"># podvol.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cmvol</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">volmap</span><span class="w">              </span><span class="c1"># create a volume called "volmap"</span>
+<span class="w">    </span><span class="nt">configMap</span><span class="p">:</span><span class="w">                </span><span class="c1"># based on the ConfigMap</span>
+<span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">multimap</span><span class="w">          </span><span class="c1"># called "multimap"</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ctr</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">volumeMounts</span><span class="p">:</span><span class="w">             </span><span class="c1"># mount the "volmap" volume</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">volmap</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/name</span><span class="w">    </span><span class="c1"># into the container at "/etc/name"</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>podvol.yml
+<span class="go">pod/cmvol created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>cmvol<span class="w"> </span>--<span class="w"> </span>ls<span class="w"> </span>/etc/name
+<span class="go">firstname</span>
+<span class="go">lastname</span>
+</code></pre>
+<p>Two files, one per entry (use <code>cat</code> to see the contents). Now edit the map. <code>kubectl edit cm multimap</code> opens the YAML in your editor (<code>vi</code> on Linux and Mac, <code>notepad.exe</code> on Windows); alternatively edit the file elsewhere and <code>kubectl apply</code> it. Change the entries (the book changes them to <code>City</code> and <code>Country</code>):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>edit<span class="w"> </span>cm<span class="w"> </span>multimap
+<span class="gp"># </span>Please<span class="w"> </span>edit<span class="w"> </span>the<span class="w"> </span>object<span class="w"> </span>below.<span class="w"> </span>Lines<span class="w"> </span>beginning<span class="w"> </span>with<span class="w"> </span>a<span class="w"> </span><span class="s1">'#'</span><span class="w"> </span>will<span class="w"> </span>be<span class="w"> </span>ignored,
+<span class="gp"># </span>and<span class="w"> </span>an<span class="w"> </span>empty<span class="w"> </span>file<span class="w"> </span>will<span class="w"> </span>abort<span class="w"> </span>the<span class="w"> </span>edit.<span class="w"> </span>If<span class="w"> </span>an<span class="w"> </span>error<span class="w"> </span>occurs<span class="w"> </span><span class="k">while</span><span class="w"> </span>saving
+<span class="gp"># </span>this<span class="w"> </span>file<span class="w"> </span>will<span class="w"> </span>be<span class="w"> </span>reopened<span class="w"> </span>with<span class="w"> </span>the<span class="w"> </span>relevant<span class="w"> </span>failures.
+<span class="gp">#</span>
+<span class="go">apiVersion: v1</span>
+<span class="go">data:</span>
+<span class="go">  City: Macclesfield          # changed</span>
+<span class="go">  Country: UK                 # changed</span>
+<span class="go">kind: ConfigMap</span>
+<span class="go">metadata:</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>After a minute or so the container sees the change:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>cmvol<span class="w"> </span>--<span class="w"> </span>ls<span class="w"> </span>/etc/name
+<span class="go">City</span>
+<span class="go">Country</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>cmvol<span class="w"> </span>--<span class="w"> </span>cat<span class="w"> </span>/etc/name/Country
+<span class="go">UK</span>
+</code></pre>
+<p>The ConfigMap surfaces in the container filesystem through a volume, and the volume received your updates.</p>
+<h2 id="12-4-hands-on-with-secrets">12.4 Hands-on with Secrets</h2>
+<p>Secrets work like ConfigMaps (config injected at run time) but are meant for sensitive data (passwords, certificates, OAuth tokens) <strong>within a wider secrets-management solution</strong>. Everything about ConfigMaps applies.</p>
+<h3 id="are-kubernetes-secrets-secure">Are Kubernetes Secrets secure?</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-12-secret-workflow.svg" alt="Lifecycle of a Secret, with the insecure steps in red" loading="lazy" /></p>
+<p>Short answer: <strong>no</strong>. A secure system also needs:</p>
+<ul>
+<li>encryption of secrets at rest in the cluster store</li>
+<li>encryption in flight on the network</li>
+<li>protection when surfaced in nodes, Pods and containers</li>
+<li>least-privilege <strong>RBAC</strong> on API access to secrets</li>
+<li>controlled access to <strong>etcd</strong> nodes</li>
+<li>preventing privileged containers from reaching secrets</li>
+<li>preventing exposure through source repos like GitHub</li>
+<li>securely deleting secrets no longer needed</li>
+</ul>
+<p>Most new clusters do <strong>none</strong> of this: secrets sit <strong>unencrypted</strong> in the cluster store, travel in <strong>plain text</strong>, and mount as <strong>plain text</strong>. You can add:</p>
+<ul>
+<li><strong>EncryptionConfiguration</strong> objects for encryption at rest</li>
+<li>a <strong>service mesh</strong> to encrypt all network traffic</li>
+<li>strong <strong>RBAC</strong></li>
+<li>restricted access to control plane and etcd nodes</li>
+</ul>
+<p>Real-world clusters often use a service mesh and keep secrets in third-party vaults (HashiCorp Vault or cloud equivalents). Kubernetes has a native <strong>Secrets Store CSI Driver</strong> to integrate with external vaults. The book covers only what ships out of the box.</p>
+<p>A typical Kubernetes-Secrets-only workflow:</p>
+<ol>
+<li>You create the Secret; Kubernetes persists it <strong>unencrypted</strong> in the cluster store.</li>
+<li>You schedule a Pod with a container that uses it.</li>
+<li>Kubernetes sends the unencrypted Secret over the network to the node.</li>
+<li>The kubelet starts the Pod and containers.</li>
+<li>The runtime mounts the Secret into the container through an <strong>in-memory <code>tmpfs</code></strong> filesystem and decodes it from base64 to plain text.</li>
+<li>The app consumes it.</li>
+<li>Deleting the Pod deletes the node's copy (the cluster-store copy stays).</li>
+</ol>
+<p>Use case: a <strong>TLS termination proxy</strong>: one image with three different Secrets for three environments, each holding that environment's TLS certificates, loaded at run time (Figure 12.5).</p>
+<h3 id="creating-secrets">Creating Secrets</h3>
+<p>Most installs do not encrypt Secrets at rest or in flight, and even if you do, they always surface as <strong>plain text</strong> in containers so apps can use them. Imperatively (Windows: backticks for backslashes):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>generic<span class="w"> </span>creds<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--from-literal<span class="w"> </span><span class="nv">user</span><span class="o">=</span>nigelpoulton<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--from-literal<span class="w"> </span><span class="nv">pwd</span><span class="o">=</span>Password123
+</code></pre>
+<p>Kubernetes obscures values as <strong>base64</strong>:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>creds<span class="w"> </span>-o<span class="w"> </span>yaml
+<span class="go">apiVersion: v1</span>
+<span class="go">kind: Secret</span>
+<span class="go">data:</span>
+<span class="go">  pwd: UGFzc3dvcmQxMjM=</span>
+<span class="go">  user: bmlnZWxwb3VsdG9u</span>
+<span class="go">&lt;Snip&gt;</span>
+</code></pre>
+<p>Decoding needs no key (needs the <code>base64</code> utility, or use an online decoder):</p>
+<pre class="hl"><code><span class="gp">$ </span><span class="nb">echo</span><span class="w"> </span><span class="nv">UGFzc3dvcmQxMjM</span><span class="o">=</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d
+<span class="go">Password123</span>
+</code></pre>
+<p>This proves <strong>base64 is not security</strong>: never store Secrets on GitHub or similar, since anyone with access can read them. Declaratively:</p>
+<pre class="hl"><code><span class="c1"># tkb-secret.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Secret</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb-secret</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">chapter</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">configmaps</span>
+<span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Opaque</span>
+<span class="nt">data</span><span class="p">:</span><span class="w">                          </span><span class="c1"># change to "stringData" for plain text entries</span>
+<span class="w">  </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bmlnZWxwb3VsdG9u</span>
+<span class="w">  </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">UGFzc3dvcmQxMjM=</span>
+</code></pre>
+<p>(Either form must stay out of public repos.)</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>tkb-secret.yml
+<span class="go">secret/tkb-secret created</span>
+</code></pre>
+<p>Inspect with <code>kubectl get</code> and <code>kubectl describe</code>.</p>
+<h3 id="using-secrets-in-pods">Using Secrets in Pods</h3>
+<p>Secrets inject as environment variables, command-line arguments or volumes; volumes are most flexible. <code>secretpod.yml</code> mounts <code>tkb-secret</code> as volume <code>secret-vol</code> at <code>/etc/tkb</code>:</p>
+<pre class="hl"><code><span class="c1"># secretpod.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">secret-pod</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">topic</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">secrets</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">secret-vol</span><span class="w">           </span><span class="c1"># volume name</span>
+<span class="w">    </span><span class="nt">secret</span><span class="p">:</span><span class="w">                    </span><span class="c1"># volume type</span>
+<span class="w">      </span><span class="nt">secretName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tkb-secret</span><span class="w">   </span><span class="c1"># populate the volume with this Secret</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">secret-ctr</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx</span>
+<span class="w">    </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">secret-vol</span><span class="w">         </span><span class="c1"># mount the volume defined above</span>
+<span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="s">"/etc/tkb"</span><span class="w">    </span><span class="c1"># into this path</span>
+</code></pre>
+<p>Secret volumes are mounted <strong>read-only</strong> automatically, to prevent accidental changes by containers or apps. Deploying sends the unencrypted Secret to the node's kubelet, and the runtime mounts it with <code>tmpfs</code>:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>secretpod.yml
+<span class="go">pod/secret-pod created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>secret-pod<span class="w"> </span>--<span class="w"> </span>ls<span class="w"> </span>/etc/tkb
+<span class="go">password</span>
+<span class="go">username</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>secret-pod<span class="w"> </span>--<span class="w"> </span>cat<span class="w"> </span>/etc/tkb/password
+<span class="go">Password123</span>
+</code></pre>
+<p>One file per entry, in <strong>plain text</strong> so apps can use them. As you used a volume, updates to the Secret reach the app. A complete solution needs encryption at rest and in flight, API access control, restricted etcd access, handling of privileged containers, keeping Secret manifests off public repos, and more; most real solutions keep secret data in a third-party vault outside Kubernetes.</p>
+<h2 id="12-5-clean-up">12.5 Clean up</h2>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods
+<span class="go">NAME         READY   STATUS    RESTARTS   AGE</span>
+<span class="go">cmvol        1/1     Running   0          27m</span>
+<span class="go">envpod       1/1     Running   0          22m</span>
+<span class="go">secret-pod   1/1     Running   0          16m</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>cm
+<span class="go">NAME               DATA   AGE</span>
+<span class="go">kube-root-ca.crt   1      71m      # don't delete this one</span>
+<span class="go">multimap           2      19m</span>
+<span class="go">test-config        1      17m</span>
+<span class="go">testmap1           2      24m</span>
+<span class="go">testmap2           1      22m</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>secrets
+<span class="go">NAME         TYPE     DATA   AGE</span>
+<span class="go">creds        Opaque   2      4m55s</span>
+<span class="go">tkb-secret   Opaque   2      3m35s</span>
+</code></pre>
+<p>Delete (Pods can take a few seconds):</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>delete<span class="w"> </span>pods<span class="w"> </span>cmvol<span class="w"> </span>envpod<span class="w"> </span>secret-pod
+kubectl<span class="w"> </span>delete<span class="w"> </span>cm<span class="w"> </span>multimap<span class="w"> </span>test-config<span class="w"> </span>testmap1<span class="w"> </span>testmap2
+kubectl<span class="w"> </span>delete<span class="w"> </span>secrets<span class="w"> </span>creds<span class="w"> </span>tkb-secret
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>ConfigMaps and Secrets decouple apps from config; both are first-class API objects, creatable imperatively and declaratively and inspectable with kubectl.</li>
+<li>ConfigMaps hold app config parameters and whole files; Secrets are for sensitive data in a wider secrets-management solution.</li>
+<li>Inject via env vars, container start commands or volumes; <strong>volumes are preferred</strong> as they propagate changes to live containers.</li>
+<li>Kubernetes does <strong>not</strong> encrypt Secrets in the cluster store or in transit by default.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>ConfigMap (cm)</strong>: key-value config, <code>data</code> block, 1 MiB limit.</li>
+<li><strong><code>--from-literal</code> / <code>--from-file</code></strong>: imperative creation sources.</li>
+<li><strong><code>configMapKeyRef</code> / ConfigMap volume</strong>: env-var and file injection.</li>
+<li><strong>Secret</strong>: like a ConfigMap, base64-encoded, not encrypted by default.</li>
+<li><strong><code>data</code> vs <code>stringData</code></strong>: base64 vs plain-text entries.</li>
+<li><strong>tmpfs</strong>: in-memory filesystem used to mount Secrets.</li>
+<li><strong>EncryptionConfiguration, Secrets Store CSI Driver, Vault</strong>: real secrets management.</li>
+<li><strong>Kubernetes-native app</strong>: reads the API directly; lock-in.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 12. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap13.xhtml</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-11-kubernetes-storage/">The Kubernetes Book 11: Kubernetes Storage</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-13-statefulsets/">The Kubernetes Book 13: StatefulSets</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-11-kubernetes-storage/">&larr; The Kubernetes Book 11: Kubernetes Storage</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-13-statefulsets/">The Kubernetes Book 13: StatefulSets &rarr;</a></nav></main></body></html>

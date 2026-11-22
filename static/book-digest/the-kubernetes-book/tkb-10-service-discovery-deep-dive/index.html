@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 10: Service Discovery Deep Dive</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-10-service-discovery-deep-dive">The Kubernetes Book 10: Service Discovery Deep Dive</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 10. Previous: <a href="/book-digest/the-kubernetes-book/tkb-09-wasm-on-kubernetes/">The Kubernetes Book 9: Wasm on Kubernetes</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-11-kubernetes-storage/">The Kubernetes Book 11: Kubernetes Storage</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Apps need two things to call each other: the <strong>name</strong> of the other app's Service (the developer's job) and a way to turn it into an IP (Kubernetes' job).</li>
+<li>The <strong>cluster DNS</strong> (CoreDNS, fronted by the <code>kube-dns</code> Service in <code>kube-system</code>) is the built-in <strong>service registry</strong>; it registers every new Service automatically.</li>
+<li>Every container's <code>/etc/resolv.conf</code> points at the cluster DNS and lists <strong>search domains</strong>, so short names resolve in the local Namespace.</li>
+<li><strong>ClusterIPs</strong> live on a virtual <strong>service network</strong> with no routes; <strong>kube-proxy</strong> programs each node's kernel to redirect ClusterIP traffic to healthy Pod IPs.</li>
+<li>Across Namespaces you must use the <strong>FQDN</strong> <code>&lt;service&gt;.&lt;namespace&gt;.svc.cluster.local</code>.</li>
+</ul>
+</div></div>
+<h2 id="10-1-setting-the-scene">10.1 Setting the scene</h2>
+<ul>
+<li>Clusters run hundreds or thousands of microservices, most behind their own Service with a reliable name and IP
+<ul>
+<li>When one app talks to another it really talks to the other's <strong>Service</strong></li>
+<li>(Figure 10.1: <code>app-a</code> calls <code>app-b</code> through its Service.)</li>
+</ul>
+</li>
+<li>Two requirements for one app to call another:
+<ol>
+<li>Know the name of the other app's Service: <strong>the developer's job</strong>.</li>
+<li>Convert the name to an IP: <strong>Kubernetes' job</strong>.</li>
+</ol>
+</li>
+<li>Figure 10.2 flow:
+<ol>
+<li>The developer configures <code>app-a</code> to talk to <code>app-b</code>.</li>
+<li><code>app-a</code> asks Kubernetes for <code>app-b</code>'s IP.</li>
+<li>Kubernetes returns the IP.</li>
+<li><code>app-a</code> sends requests to that IP.</li>
+</ol>
+</li>
+<li>Step 1 is the only manual one.</li>
+</ul>
+<h2 id="10-2-the-service-registry">10.2 The service registry</h2>
+<ul>
+<li>A <strong>service registry</strong> maintains a list of Service names and their IPs.</li>
+<li>Every cluster has a built-in <strong>cluster DNS</strong> as its registry: a Kubernetes-native app on the control plane, running as <strong>two or more Pods</strong> managed by a <strong>Deployment</strong> (usually <code>coredns</code> or <code>kube-dns</code>) and fronted by its own Service, <strong>always named <code>kube-dns</code></strong> (Figure 10.3).</li>
+</ul>
+<p>The Pods (normally the <code>registry.k8s.io/coredns/coredns</code> image; some clusters use another image and call Pods and Deployment <code>kube-dns</code>):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>kube-dns
+<span class="go">NAME                       READY   STATUS    RESTARTS   AGE</span>
+<span class="go">coredns-76f75df574-d6nn5   1/1     Running   0          13d</span>
+<span class="go">coredns-76f75df574-n7qzk   1/1     Running   0          13d</span>
+</code></pre>
+<p>The Deployment (keeps the right number of DNS Pods):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>kube-dns
+<span class="go">NAME      READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">coredns   2/2     2            2            13d</span>
+</code></pre>
+<p>The Service (always <code>kube-dns</code>, but a different IP per cluster; Kubernetes configures every container to use this IP):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>kube-dns
+<span class="go">NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                  AGE</span>
+<span class="go">kube-dns   ClusterIP   10.96.0.10   &lt;none&gt;        53/UDP,53/TCP,9153/TCP   13d</span>
+</code></pre>
+<h2 id="10-3-service-registration">10.3 Service registration</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-10-service-registration.svg" alt="What happens when a new Service is created" loading="lazy" /></p>
+<p>It is <strong>automatic</strong>. Three steps:</p>
+<ol>
+<li>Give the Service a name (<strong>developer</strong>).</li>
+<li>Assign the Service an IP (<strong>Kubernetes</strong>).</li>
+<li>Register the name and IP with the cluster DNS (<strong>Kubernetes</strong>).</li>
+</ol>
+<p>Example: deploy a web app behind a Service called <code>valkyrie-web</code>. Kubernetes ensures the name is unique, assigns a ClusterIP and registers both with the cluster DNS.</p>
+<ul>
+<li>It works because the cluster DNS <strong>watches the API server</strong> for new Services and registers each one. Your apps need no registration logic.</li>
+</ul>
+<p>Figure 10.4 flow:</p>
+<ol>
+<li>You post a YAML with a Deployment and a Service; it is authenticated and authorised.</li>
+<li>Kubernetes allocates a ClusterIP and persists the config in the cluster store.</li>
+<li>The cluster DNS sees the new Service and registers <strong>A and SRV records</strong>.</li>
+<li>Associated <strong>EndpointSlices</strong> are created to hold healthy Pod IPs matching the label selector.</li>
+<li><strong>kube-proxy</strong> on every node sees the new objects and creates local routing rules (<strong>IPVS</strong>) so requests to the ClusterIP reach Pods.</li>
+</ol>
+<h2 id="10-4-service-discovery">10.4 Service discovery</h2>
+<p>Apps use names but need IPs.</p>
+<p>Example: apps <code>enterprise</code> and <code>cerritos</code>; Services <code>ent</code> and <code>cer</code> (Figure 10.5).</p>
+<table>
+<thead>
+<tr>
+<th>App</th>
+<th>Service name</th>
+<th>ClusterIP</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Enterprise</td>
+<td><code>ent</code></td>
+<td><code>192.168.201.240</code></td>
+</tr>
+<tr>
+<td>Cerritos</td>
+<td><code>cer</code></td>
+<td><code>192.168.200.217</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The enterprise developers configure the app with the name <code>cer</code>. The container sends <code>cer</code> to the cluster DNS, gets the ClusterIP back, and sends the request to that IP.</li>
+<li>Kubernetes makes this work by configuring each container's <strong><code>/etc/resolv.conf</code></strong> with the cluster DNS IP, plus <strong>search domains</strong> to append to <strong>unqualified names</strong> (short names like <code>ent</code>)
+<ul>
+<li>Appending turns <code>ent</code> into an FQDN such as <code>ent.default.svc.cluster.local</code>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>cat<span class="w"> </span>/etc/resolv.conf
+<span class="go">search default.svc.cluster.local svc.cluster.local cluster.local</span>
+<span class="go">nameserver 10.96.0.10          # ClusterIP of internal cluster DNS</span>
+<span class="go">options ndots:5</span>
+</code></pre>
+<p>The <code>nameserver</code> matches the <code>kube-dns</code> Service:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>kube-dns
+<span class="go">NAME       TYPE        CLUSTER-IP   PORT(S)                  AGE</span>
+<span class="go">kube-dns   ClusterIP   10.96.0.10   53/UDP,53/TCP,9153/TCP   13d</span>
+</code></pre>
+<h3 id="clusterip-routing">ClusterIP routing</h3>
+<ul>
+<li>ClusterIPs are on a special <strong>service network</strong> and <strong>there are no routes to it</strong>
+<ul>
+<li>Each container sends ClusterIP traffic to its <strong>default gateway</strong> (where a system sends traffic when it does not know where else to send it, hoping the next device does).</li>
+</ul>
+</li>
+<li>The gateway is the node, which has no route either, so it sends it to its own default gateway. That makes the <strong>node's kernel</strong> process the traffic.</li>
+<li>Every node runs <strong>kube-proxy</strong>, a controller watching the API server for new Services and EndpointSlices
+<ul>
+<li>It creates <strong>kernel rules</strong> that intercept ClusterIP traffic and redirect it to individual Pod IPs.</li>
+</ul>
+</li>
+<li>So whenever a node's kernel handles traffic for a ClusterIP, it redirects it to a healthy Pod matching the Service's label selector.</li>
+</ul>
+<h3 id="summary">Summary</h3>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-10-dns-lookup-flow.svg" alt="Name lookup and ClusterIP redirection step by step" loading="lazy" /></p>
+<ol>
+<li>The app sends to <code>cer</code>.</li>
+<li>The container asks the cluster DNS (from <code>/etc/resolv.conf</code>) for the IP.</li>
+<li>The DNS returns the ClusterIP.</li>
+<li>No route exists, so the traffic goes to the container's default gateway, then the node, then the node's default gateway.</li>
+<li>The node's kernel redirects it to a Pod IP matching the selector.</li>
+</ol>
+<h2 id="10-5-service-discovery-and-namespaces">10.5 Service discovery and Namespaces</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-10-namespace-fqdn.svg" alt="Short names resolve in the local Namespace; FQDNs reach other Namespaces" loading="lazy" /></p>
+<ul>
+<li>Every object gets a name in the cluster address space, partitioned by Namespaces. The <strong>cluster domain</strong> is usually <strong><code>cluster.local</code></strong>, and names must be unique within it.</li>
+<li>FQDN format: <code>&lt;object-name&gt;.&lt;namespace&gt;.svc.cluster.local</code>. Example: Service <code>cer</code> in <code>default</code> is <code>cer.default.svc.cluster.local</code>.</li>
+<li>With Namespaces <code>dev</code> and <code>prod</code>:
+<ul>
+<li><code>dev</code>: <code>&lt;service-name&gt;.dev.svc.cluster.local</code></li>
+<li><code>prod</code>: <code>&lt;service-name&gt;.prod.svc.cluster.local</code></li>
+</ul>
+</li>
+<li>Names must be unique <strong>within</strong> a Namespace, not across them, so both can have an identical <code>cer</code> Service (Figure 10.7), letting you run parallel dev and prod configs on one cluster.</li>
+<li><strong>Short names</strong> (<code>ent</code>, <code>cer</code>) reach Services in the <strong>local</strong> Namespace; you need <strong>FQDNs</strong> for remote Namespaces.</li>
+</ul>
+<h3 id="service-discovery-example">Service discovery example</h3>
+<p><code>sd-example.yml</code> (folder <code>service-discovery</code>) deploys Figure 10.8: two Namespaces, two Deployments, two Services and a standalone <code>jump</code> Pod in <code>dev</code> only. The Deployments and Services share names because they are in different Namespaces. The book shows it snipped; it is one file, so one block with <code>---</code> separators:</p>
+<pre class="hl"><code><span class="c1"># sd-example.yml</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Namespace</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dev</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Namespace</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">enterprise</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dev</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/k8sbook:text-dev</span>
+<span class="w">        </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">enterprise-ctr</span>
+<span class="w">        </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">enterprise</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nigelpoulton/k8sbook:text-prod</span>
+<span class="w">        </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">enterprise-ctr</span>
+<span class="w">        </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ent</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dev</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">enterprise</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterIP</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ent</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prod</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">enterprise</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterIP</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jump</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dev</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">terminationGracePeriodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jump</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu</span>
+<span class="w">    </span><span class="nt">tty</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">stdin</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>sd-example.yml
+<span class="go">namespace/dev created</span>
+<span class="go">namespace/prod created</span>
+<span class="go">deployment.apps/enterprise created</span>
+<span class="go">deployment.apps/enterprise created</span>
+<span class="go">service/ent created</span>
+<span class="go">service/ent created</span>
+<span class="go">pod/jump-pod created</span>
+</code></pre>
+<p>(The book's output prints <code>pod/jump-pod</code> although the Pod is named <code>jump</code>.) Check each Namespace (trimmed):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>all<span class="w"> </span>--namespace<span class="w"> </span>dev
+<span class="go">NAME                         READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">deployment.apps/enterprise   2/2     2            2           51s</span>
+
+<span class="go">NAME          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE</span>
+<span class="go">service/ent   ClusterIP   10.96.138.186   &lt;none&gt;        8080/TCP   51s</span>
+<span class="go">&lt;Snip&gt;</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>all<span class="w"> </span>--namespace<span class="w"> </span>prod
+<span class="go">NAME                         READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">deployment.apps/enterprise   2/2     2            2           1m24s</span>
+
+<span class="go">NAME          TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE</span>
+<span class="go">service/ent   ClusterIP   10.96.147.32   &lt;none&gt;        8080/TCP   1m25s</span>
+<span class="go">&lt;snip&gt;</span>
+</code></pre>
+<p>Plan: log on to <code>jump</code>, check <code>/etc/resolv.conf</code>, connect to <code>ent</code> locally, connect to <code>ent</code> in <code>prod</code>. Each version of the app returns a different message.</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>jump<span class="w"> </span>--namespace<span class="w"> </span>dev<span class="w"> </span>--<span class="w"> </span>bash
+<span class="gp">root@jump:/# </span>cat<span class="w"> </span>/etc/resolv.conf
+<span class="go">search dev.svc.cluster.local svc.cluster.local cluster.local</span>
+<span class="go">nameserver 10.96.0.10</span>
+<span class="go">options ndots:5</span>
+</code></pre>
+<p>The search domain includes <code>dev.svc.cluster.local</code>. Install curl and call the local Service:</p>
+<pre class="hl"><code><span class="gp"># </span>apt-get<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>curl<span class="w"> </span>-y
+<span class="go">&lt;snip&gt;</span>
+
+<span class="gp"># </span>curl<span class="w"> </span>ent:8080
+<span class="go">Hello from the DEV Namespace!</span>
+<span class="go">Hostname: enterprise-76fc64bd9-lvzsn</span>
+</code></pre>
+<p>The container appended <code>dev.svc.cluster.local</code>, asked the cluster DNS, got the local ClusterIP, and the node's kernel trapped the traffic and redirected it to a Pod. Now the remote Namespace:</p>
+<pre class="hl"><code><span class="gp"># </span>curl<span class="w"> </span>ent.prod.svc.cluster.local:8080
+<span class="go">Hello from the PROD Namespace!</span>
+<span class="go">Hostname: enterprise-5cfcd578d7-nvzlp</span>
+</code></pre>
+<p>Short names resolve to the local Namespace; you need FQDNs across Namespaces. Type <code>exit</code> to leave.</p>
+<h2 id="10-6-troubleshooting-service-discovery">10.6 Troubleshooting service discovery</h2>
+<p>The cluster DNS parts, all in <code>kube-system</code> with label <code>k8s-app=kube-dns</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pods</td>
+<td>Managed by the <code>coredns</code> Deployment</td>
+</tr>
+<tr>
+<td>Service</td>
+<td>ClusterIP Service <code>kube-dns</code>, port 53 TCP/UDP</td>
+</tr>
+<tr>
+<td>EndpointSlices</td>
+<td>Names prefixed <code>kube-dns</code></td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>kube-dns
+<span class="go">NAME      READY   UP-TO-DATE   AVAILABLE   AGE</span>
+<span class="go">coredns   2/2     2            2           14d</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>kube-dns
+<span class="go">NAME                       READY   STATUS    RESTARTS   AGE</span>
+<span class="go">coredns-76f75df574-6q7k7   1/1     Running   0          14d</span>
+<span class="go">coredns-76f75df574-krnr7   1/1     Running   0          14d</span>
+</code></pre>
+<p>Logs from a healthy DNS Pod (use a Pod name from your cluster):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>logs<span class="w"> </span>coredns-76f75df574-n7qzk<span class="w"> </span>-n<span class="w"> </span>kube-system
+<span class="go">.:53</span>
+<span class="go">[INFO] plugin/reload: Running configuration SHA512 = 591cf328cccc12b...</span>
+<span class="go">CoreDNS-1.11.1</span>
+<span class="go">linux/arm64, go1.20.7, ae2bbc2</span>
+</code></pre>
+<p>Check the Service and EndpointSlice. The <code>kube-dns</code> ClusterIP <strong>must match</strong> the nameserver in every container's <code>/etc/resolv.conf</code>, otherwise DNS requests go to the wrong place:</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>kube-dns<span class="w"> </span>-n<span class="w"> </span>kube-system
+<span class="go">NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                  AGE</span>
+<span class="go">kube-dns   ClusterIP   10.96.0.10   &lt;none&gt;        53/UDP,53/TCP,9153/TCP   14d</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>endpointslice<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>kube-dns
+<span class="go">NAME             ADDRESSTYPE   PORTS       ENDPOINTS                 AGE</span>
+<span class="go">kube-dns-jb72g   IPv4          9153,53,53  10.244.1.9,10.244.1.14    14d</span>
+</code></pre>
+<p>Then deeper troubleshooting:</p>
+<ul>
+<li>Start a Pod with networking tools (<code>ping</code>, <code>traceroute</code>, <code>curl</code>, <code>dig</code>, <code>nslookup</code>). A popular image: <code>registry.k8s.io/e2e-test-images/jessie-dnsutils</code>
+<ul>
+<li>browse the repo at explore.ggcr.dev for newer versions.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>dnsutils<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--image<span class="w"> </span>registry.k8s.io/e2e-test-images/jessie-dnsutils:1.7
+</code></pre>
+<ul>
+<li>Test the cluster DNS by resolving the <code>kubernetes</code> Service (exists on every cluster, exposes the API server to Pods):</li>
+</ul>
+<pre class="hl"><code><span class="gp"># </span>nslookup<span class="w"> </span>kubernetes
+<span class="go">Server:         10.96.0.10</span>
+<span class="go">Address:        10.96.0.10#53</span>
+<span class="go">Name:   kubernetes.default.svc.cluster.local</span>
+<span class="go">Address: 10.96.0.1</span>
+</code></pre>
+<p>The first two lines show the cluster DNS IP; the last two show the FQDN and ClusterIP (verify with <code>kubectl get svc kubernetes</code>).</p>
+<ul>
+<li>Errors like <code>nslookup: can't resolve kubernetes</code> mean DNS is not working. A possible fix: <strong>delete the coredns Pods</strong> so the Deployment recreates them (exit <code>dnsutils</code> first):</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>kube-system<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>kube-dns
+<span class="go">pod "coredns-76f75df574-d6nn5" deleted</span>
+<span class="go">pod "coredns-76f75df574-n7qzk" deleted</span>
+</code></pre>
+<p>Re-run <code>kubectl get pods -n kube-system -l k8s-app=kube-dns</code> to see them restart, then test DNS again.</p>
+<h2 id="10-7-clean-up">10.7 Clean up</h2>
+<pre class="hl"><code>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>dnsutils
+kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>sd-example.yml
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>The cluster DNS is the service registry for registration and discovery
+<ul>
+<li>it watches the API server for new Services and registers their names and IPs. The kubelet configures every container to use it.</li>
+</ul>
+</li>
+<li>It resolves Service names to ClusterIPs:
+<ul>
+<li>stable virtual IPs on the service network, which has no routes</li>
+<li><strong>kube-proxy</strong> configures every node to redirect ClusterIP traffic to Pod IPs on the Pod network.</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Service registry / cluster DNS</strong>: CoreDNS Pods plus <code>kube-dns</code> Service in <code>kube-system</code>.</li>
+<li><strong>Service registration</strong>: automatic name and IP registration (A and SRV records).</li>
+<li><strong><code>/etc/resolv.conf</code>, search domains, unqualified name, FQDN</strong>.</li>
+<li><strong>Service network / ClusterIP</strong>: virtual IPs with no routes.</li>
+<li><strong>kube-proxy</strong>: programs kernel rules (IPVS) to redirect to Pod IPs.</li>
+<li><strong>Cluster domain</strong>: <code>cluster.local</code>.</li>
+<li><strong><code>&lt;service&gt;.&lt;namespace&gt;.svc.cluster.local</code></strong>: FQDN format.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 10. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap11.xhtml</li>
+<li>Image registry browser mentioned: explore.ggcr.dev</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-05-virtual-clusters-with-namespaces/">The Kubernetes Book 5: Virtual Clusters with Namespaces</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-07-kubernetes-services/">The Kubernetes Book 7: Kubernetes Services</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-11-kubernetes-storage/">The Kubernetes Book 11: Kubernetes Storage</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-09-wasm-on-kubernetes/">&larr; The Kubernetes Book 9: Wasm on Kubernetes</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-11-kubernetes-storage/">The Kubernetes Book 11: Kubernetes Storage &rarr;</a></nav></main></body></html>

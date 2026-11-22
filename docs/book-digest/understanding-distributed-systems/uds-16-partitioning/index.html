@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 16: Partitioning</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-16-partitioning">Understanding Distributed Systems 16: Partitioning</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 16. Previous: <a href="/book-digest/understanding-distributed-systems/uds-14-and-15-http-caching-and-cdns/">Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-17-file-storage/">Understanding Distributed Systems 17: File storage</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+When data outgrows one machine, split it into <strong>partitions (shards)</strong>, each small enough for a node. As a bonus, request load spreads over more nodes. Requests are routed by a <strong>gateway</strong> that knows the key-to-partition mapping (kept in a coordination service). Two ways to map keys: <strong>range partitioning</strong> (sorted ranges, fast range scans, hotspot risk) and <strong>hash partitioning</strong> (even spread, but plain <code>hash mod N</code> reshuffles most keys when N changes, which <strong>consistent hashing</strong> fixes). <strong>Rebalancing</strong> moves data when nodes come and go.</p>
+</blockquote>
+<h2 id="why-partition-and-what-it-costs">Why partition and what it costs</h2>
+<ul>
+<li>Data eventually <strong>does not fit on one machine</strong>: split into partitions small enough for individual nodes. The <strong>capacity to handle requests</strong> also grows, since access load is spread.</li>
+<li>A request must be <strong>routed</strong> to the responsible node(s). A <strong>gateway service (a reverse proxy)</strong> usually does this
+<ul>
+<li>the mapping of data to partitions and nodes is typically held by a <strong>fault-tolerant coordination service like etcd or ZooKeeper</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Not a free lunch</strong>, it adds a lot of complexity:</p>
+<ul>
+<li>a <strong>gateway</strong> is needed to route requests;</li>
+<li><strong>roll-ups</strong> across partitions must be pulled from several partitions and aggregated (think of a <code>GROUP BY</code> across partitions);</li>
+<li><strong>transactions</strong> are needed to atomically update data spanning partitions, which <strong>limits scalability</strong>;</li>
+<li>a partition accessed <strong>much more often</strong> than others limits the system's ability to scale (<strong>hotspot</strong>);</li>
+<li><strong>adding or removing partitions at run time</strong> is hard since data must move between nodes.</li>
+</ul>
+<p><strong>Why right after CDNs?</strong> A <strong>cache lends itself well to partitioning</strong>: it generally needs no atomic cross-partition updates and no cross-partition aggregations.</p>
+<p><strong>Prerequisite:</strong> the number of possible keys must be <strong>very large</strong>. A boolean key with two values allows <strong>at most two partitions</strong>.</p>
+<h2 id="16-1-range-partitioning">16.1 Range partitioning</h2>
+<p>Split the data by <strong>key range into lexicographically sorted partitions</strong>. To make <strong>range scans fast</strong>, each partition is usually stored <strong>in sorted order on disk</strong>.</p>
+<ul>
+<li><strong>Challenge 1: boundaries.</strong>
+<ul>
+<li>An even split of the key range works if keys are roughly uniform</li>
+<li>otherwise (e.g. an English dictionary) partitions are <strong>unbalanced</strong>, some with many more entries.</li>
+</ul>
+</li>
+<li><strong>Challenge 2: hotspots.</strong>
+<ul>
+<li>Access patterns can concentrate load</li>
+<li>If data is range-partitioned <strong>by date</strong>, <strong>all requests for the current day go to one node</strong></li>
+<li>Workaround: add a <strong>random prefix</strong> to the partition keys, at the price of more complexity.</li>
+</ul>
+</li>
+<li><strong>Rebalancing:</strong>
+<ul>
+<li>when data or requests grow, add nodes; when they shrink, remove nodes to cut cost</li>
+<li>Adding and removing nodes to balance load is <strong>rebalancing</strong></li>
+<li>It must <strong>minimise disruption</strong> (the system keeps serving requests), so <strong>minimise the data transferred</strong>.</li>
+<li><strong>Static partitioning:</strong>
+<ul>
+<li>create <strong>many more partitions than needed</strong> at start and assign several per node</li>
+<li>A new node takes some partitions from existing nodes, keeping balance</li>
+<li>Drawback:
+<ul>
+<li><strong>the number of partitions is fixed</strong>, and hard to get right: <strong>too many add overhead and slow things down, too few limit scalability</strong></li>
+<li>some partitions may still be hotter than others.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Dynamic partitioning:</strong>
+<ul>
+<li>create partitions <strong>on demand</strong></li>
+<li>Start with <strong>one partition</strong>; when it grows above a size or gets <strong>too hot</strong>, <strong>split it into two sub-partitions</strong> with about half the data each and move one to a new node</li>
+<li>When two adjacent partitions become small or <strong>cold</strong> enough, <strong>merge</strong> them.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="16-2-hash-partitioning">16.2 Hash partitioning</h2>
+<p>Use a <strong>hash function</strong> that deterministically maps a key (string) to a seemingly random number in a range (e.g. 0 to 2^64 - 1), so key hashes are <strong>uniformly distributed</strong>. Assign a subset of the hashes to each partition, e.g. <strong><code>hash(key) mod N</code></strong> with N partitions.</p>
+<ul>
+<li>Partitions get about the <strong>same number of entries</strong>, but this <strong>does not remove hotspots</strong> if access is not uniform: a single very popular key overloads its partition's node
+<ul>
+<li>Fix: <strong>split the partition further</strong> (more partitions) or <strong>split the key into sub-keys</strong> with a <strong>random prefix</strong>.</li>
+</ul>
+</li>
+<li><strong>Problem with modulo:</strong>
+<ul>
+<li>when a partition is added, <strong>most keys change assignment</strong> and must be <strong>shuffled</strong>, which is extremely expensive (network bandwidth and more)</li>
+<li>Ideally only <strong>K/N</strong> keys move (K keys, N partitions)</li>
+<li>A widely used strategy with that property is <strong>consistent hashing</strong> (&quot;Consistent Hashing and Random Trees&quot;: https://www.cs.princeton.edu/courses/archive/fall09/cos518/papers/chash.pdf).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/understanding-distributed-systems/img/consistent-hashing.svg" alt="Consistent hashing" loading="lazy" /></p>
+<p><strong>Consistent hashing:</strong> a hash function <strong>randomly maps both partition identifiers and keys onto a circle</strong>; each key is assigned to the <strong>closest partition that appears clockwise</strong> on the circle. When a <strong>new partition is added, only the keys that now map to it need to be reassigned</strong> (in the book's example, adding P4 reassigns the key 'for' to P4 while all other assignments stay).</p>
+<ul>
+<li><strong>Drawback vs range partitioning:</strong>
+<ul>
+<li>the <strong>sort order across partitions is lost</strong>, so you cannot efficiently scan everything in order</li>
+<li>Data <strong>within</strong> one partition can still be sorted by a <strong>secondary key</strong>.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+partition / shard · gateway · coordination service · range partitioning · hash partitioning · hotspot · random key prefix · rebalancing · static vs dynamic partitioning · split / merge · hash(key) mod N · consistent hashing.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 16. https://understandingdistributed.systems/</li>
+<li>Karger et al., consistent hashing paper as linked above (cited by the book).</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-14-and-15-http-caching-and-cdns/">Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs</a> · <a href="/book-digest/understanding-distributed-systems/uds-17-file-storage/">Understanding Distributed Systems 17: File storage</a> · <a href="/book-digest/understanding-distributed-systems/uds-19-data-storage/">Understanding Distributed Systems 19: Data storage</a> · <a href="/book-digest/understanding-distributed-systems/uds-10-replication/">Understanding Distributed Systems 10: Replication</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-14-and-15-http-caching-and-cdns/">&larr; Understanding Distributed Systems 14 and 15: Part III intro, HTTP caching, CDNs</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-17-file-storage/">Understanding Distributed Systems 17: File storage &rarr;</a></nav></main></body></html>

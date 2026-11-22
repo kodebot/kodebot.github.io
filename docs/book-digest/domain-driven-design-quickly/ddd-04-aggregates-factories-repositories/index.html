@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>DDD Quickly 4: Aggregates, Factories and Repositories</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/domain-driven-design-quickly/">Domain Driven Design Quickly</a></div>
+<main>
+<h1 id="ddd-quickly-4-aggregates-factories-and-repositories">DDD Quickly 4: Aggregates, Factories and Repositories</h1>
+<p>Source: Abel Avram, <em>Domain Driven Design Quickly</em> (InfoQ, 2006), end of chapter &quot;Model-Driven Design&quot;: Aggregates, Factories, Repositories (pp. 42-56). Previous: <a href="/book-digest/domain-driven-design-quickly/ddd-03-model-driven-design-and-building-blocks/">DDD Quickly 3: Model-driven design and its building blocks</a>. Next: <a href="/book-digest/domain-driven-design-quickly/ddd-05-refactoring-toward-deeper-insight/">DDD Quickly 5: Refactoring toward deeper insight</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+Domain objects have a <strong>life cycle</strong>: created, used in memory, stored, retrieved, archived, deleted. Three patterns manage it:</p>
+<ul>
+<li><strong>Aggregate</strong>: defines <strong>ownership and boundaries</strong>; one <strong>root entity</strong> is the only thing outsiders may hold, so invariants stay enforceable.</li>
+<li><strong>Factory</strong>: encapsulates <strong>creation</strong> of complex objects and aggregates.</li>
+<li><strong>Repository</strong>: encapsulates <strong>finding and storing</strong> objects, giving the illusion of an in-memory collection.</li>
+</ul>
+</blockquote>
+<p><img src="/book-digest/domain-driven-design-quickly/img/ddd-04-object-lifecycle.svg" alt="A domain object's life cycle and who handles each step" loading="lazy" /></p>
+<h2 id="aggregates">Aggregates</h2>
+<p><strong>Problem.</strong> A model has many associated objects forming a complex net.</p>
+<p>Each traversable association needs a software mechanism that enforces it, and real associations end up in code and often in the database (a one-to-one customer-account link means a reference between two objects and a relationship between two tables).</p>
+<p>The challenge is less to make a model complete and more to make it <strong>simple and understandable</strong>: eliminate or simplify relations unless they embed deep understanding of the domain.</p>
+<p><strong>Reduce associations:</strong></p>
+<ol>
+<li>Remove associations not essential to the model (they exist in the domain but not in your model).</li>
+<li><strong>Reduce multiplicity with a constraint</strong>: if many objects satisfy a relationship, the right constraint may leave only one.</li>
+<li>Turn <strong>bidirectional into unidirectional</strong>: each car has an engine and each engine a car; simplify to &quot;the car has an engine&quot;.</li>
+</ol>
+<ul>
+<li>One-to-many can often become an association between one object and a collection; many-to-many (mostly bidirectional) is the worst for life-cycle management.</li>
+</ul>
+<p><strong>Remaining problem.</strong> Take a banking system with customer personal data (name, address, phones, job) and account data (number, balance, operations). On archiving or deleting a customer you must remove every reference; on a change you must update it throughout and keep data integrity.</p>
+<p>That is usually left to the database via <strong>transactions</strong>, but a carelessly designed model brings high database contention and poor performance; solve what you can in the model.</p>
+<p>You also must enforce <strong>invariants</strong> (rules that must hold whenever data changes), hard when many objects hold references to changing data; invariants often apply to closely related objects, not discrete ones, yet cautious locking makes users interfere pointlessly and the system unusable.</p>
+<p><strong>Solution: Aggregates.</strong> An Aggregate is a <strong>group of associated objects treated as one unit for data changes</strong>, with a <strong>boundary</strong> separating inside from outside and <strong>one root</strong>.</p>
+<ul>
+<li>The <strong>root is an Entity</strong> and the only object accessible from outside
+<ul>
+<li>It can reference any aggregate object, and internal objects can reference each other, but <strong>outside objects may reference only the root</strong>.</li>
+</ul>
+</li>
+<li>Entities inside the boundary have <strong>local identity</strong>, meaningful only inside the aggregate; the root has <strong>global identity</strong> and is <strong>responsible for maintaining the invariants</strong>.</li>
+</ul>
+<p><img src="/book-digest/domain-driven-design-quickly/img/aggregate-boundary.svg" alt="Aggregate boundary" loading="lazy" /></p>
+<p><strong>How it keeps data integrity:</strong></p>
+<ul>
+<li>Outsiders can only change the root or ask it to act; the root changes the other objects, an operation contained and controllable inside the aggregate.</li>
+<li>Delete the root from memory and the other objects go too, since nothing else references them.</li>
+<li>When a change to the root indirectly affects internals, the root enforces the invariants
+<ul>
+<li>If external objects reached internal ones directly, the logic to enforce invariants would leak into external objects, which is undesirable.</li>
+</ul>
+</li>
+<li>The root may give <strong>transient references</strong> to internals for use in one operation only (the external object must not keep them), e.g. <strong>pass copies of Value Objects</strong>
+<ul>
+<li>what happens to those copies cannot hurt the aggregate.</li>
+</ul>
+</li>
+<li><strong>Storage:</strong> if aggregate objects live in a database, <strong>only the root should be obtainable through queries</strong>; the others are reached by traversing associations.</li>
+<li>Objects inside an aggregate <strong>may hold references to roots of other aggregates</strong>.</li>
+</ul>
+<p><strong>Pattern (quoted idea):</strong> cluster entities and value objects into aggregates and define a boundary around each; choose one entity as root and control all access through it; external objects hold references to the root only; because the root controls access, it &quot;cannot be blindsided by changes to the internals&quot;, which makes enforcing all invariants practical.</p>
+<p><strong>Example:</strong> <code>Customer</code> is the root; <code>Address</code> and <code>ContactInfo</code> (home phone, work phone, fax, e-mail) are internal. If the address is needed outside, pass a copy.</p>
+<h2 id="factories">Factories</h2>
+<p><strong>Problem.</strong> Entities and aggregates are often too complex to create in the root entity's constructor, and that contradicts the domain, where things are created by other things (electronics on assembly lines): &quot;it is like having the printer build itself&quot;.</p>
+<p>If creation is laborious, the client needs knowledge of the object's internal structure, relationships and rules, which <strong>breaks encapsulation</strong>; if the client is in the application layer, part of the domain has moved outside and the design is messed up.</p>
+<p>(Real-life analogy: being handed plastic, rubber, metal and silicon and told to build your own printer.) Combining creation with the object's other responsibilities gives ungainly designs.</p>
+<p><strong>Factory</strong>: encapsulates the knowledge needed for object creation; especially useful for aggregates: creating the root creates everything inside and enforces all invariants.</p>
+<ul>
+<li>
+<p><strong>Creation must be atomic.</strong></p>
+<ul>
+<li>Half-created objects are in an undefined state</li>
+<li>for an aggregate, all objects subject to invariants must be created with the root
+<ul>
+<li>Immutable value objects must have all attributes initialised to valid state</li>
+<li>If an object cannot be created properly, <strong>raise an exception</strong></li>
+</ul>
+</li>
+<li>never return an invalid value.</li>
+</ul>
+</li>
+<li>
+<p><strong>Pattern:</strong></p>
+<ul>
+<li>shift the responsibility of creating complex objects and aggregates to a separate object, which may have no domain responsibility but is part of the domain design</li>
+<li>provide an interface that encapsulates all complex assembly and does not require the client to reference the concrete classes</li>
+<li>create whole aggregates as a unit.</li>
+</ul>
+</li>
+<li>
+<p>Implementation patterns come from <em>Design Patterns</em> by Gamma et al.: <strong>Factory Method</strong> and <strong>Abstract Factory</strong> (the book approaches them from domain modelling, not design-pattern theory).</p>
+</li>
+<li>
+<p><strong>Factory Method:</strong></p>
+<ul>
+<li>a method that contains and hides the knowledge to create another object</li>
+<li>Useful when a client wants to create an object belonging to an aggregate: add a method to the aggregate root that creates it, enforces invariants and returns a reference or a copy</li>
+<li><strong>Example:</strong> a <code>Container</code> holds components of a type</li>
+<li>The client calls <code>createComponent(Type t)</code>; the container instantiates the concrete class based on the type, adds it to its collection, and returns a copy.</li>
+</ul>
+</li>
+<li>
+<p><strong>Dedicated Factory object</strong></p>
+<ul>
+<li>when construction is more complex or creates a series of objects</li>
+<li><strong>Example:</strong> a module computing the route a car can follow from departure to destination under a constraint (shortest, fastest, cheapest); routes can carry user annotations to be saved</li>
+<li><code>RouteFactory.createRoute(constraint)</code> builds a <code>Route</code> with cities, using a <strong>Route ID generator</strong> for the unique identity an entity needs.</li>
+</ul>
+</li>
+<li>
+<p><strong>Caveats:</strong></p>
+<ul>
+<li>a factory must violate an object's encapsulation, so do it carefully</li>
+<li>When something changes that affects construction rules or invariants, <strong>update the factory</strong></li>
+<li>Factories are tightly tied to what they build: a weakness, but also a strength, since for an aggregate the creation logic belongs to none of its objects, and a Factory holds the rules and invariants while the objects stay simple.</li>
+</ul>
+</li>
+<li>
+<p><strong>Entity factories vs value-object factories:</strong> values are immutable and <strong>valid and final at creation</strong>; entities are mutable (respecting invariants when changed) and <strong>need identity</strong>.</p>
+</li>
+<li>
+<p><strong>Reconstitution:</strong></p>
+<ul>
+<li>factories also <strong>reconstitute</strong> objects that existed and were stored. That differs from creating: the object <strong>already has an identity</strong></li>
+<li>and invariant violations are handled differently: for new objects it ends in an exception, but objects recreated from a database must be <strong>repaired</strong> to remain functional, or data is lost.</li>
+</ul>
+</li>
+<li>
+<p><strong>When a plain constructor is enough:</strong></p>
+<ul>
+<li>construction is not complicated</li>
+<li>creation involves no other objects and all attributes arrive via the constructor</li>
+<li>the client cares about the implementation or wants to choose the <strong>Strategy</strong></li>
+<li>the class <strong>is the type</strong> (no hierarchy, no concrete implementations to choose from).</li>
+</ul>
+</li>
+</ul>
+<h2 id="repositories">Repositories</h2>
+<p><img src="/book-digest/domain-driven-design-quickly/img/ddd-04-repository-vs-database.svg" alt="A repository versus going straight to the database" loading="lazy" />
+<strong>Problem.</strong> A client needs references to existing objects to use them: by creating them or by traversing an association from another object (e.g. to get a value object of an aggregate you ask the root, so you need a reference to the root). Demanding that in large apps forces objects to hold references they would not otherwise keep, <strong>increasing coupling</strong> with unneeded associations.</p>
+<p><strong>Tempting shortcut: go to the database.</strong> Many objects (aggregate roots are entities, probably persisted) are obtainable from the database. But the database is <strong>infrastructure</strong>:</p>
+<ul>
+<li>Clients must know how to build SQL queries and handle record sets, exposing internals
+<ul>
+<li>such code scatters across the domain, the model &quot;has to deal with lots of infrastructure details instead of domain concepts&quot;.</li>
+</ul>
+</li>
+<li>Changing the database means changing all that scattered code.</li>
+<li>A client may restore an object <strong>internal to an aggregate</strong>, breaking its encapsulation with unknown consequences.</li>
+<li>If infrastructure makes access easy, developers add traversable associations (muddling the model) or pull exact data with queries, so <strong>domain logic moves into queries and client code</strong> and entities become mere data containers
+<ul>
+<li>The technical complexity swamps client code, developers &quot;dumb down&quot; the domain layer, the model becomes irrelevant, and the domain focus is lost.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Repository</strong>: encapsulates all the logic to obtain object references so domain objects do not deal with infrastructure to get other objects; the model regains clarity and focus.</p>
+<ul>
+<li>It may hold references to some objects:
+<ul>
+<li>an object created is saved in it and retrieved later</li>
+<li>if it does not have a requested object it fetches it from storage. It acts as storage for <strong>globally accessible objects</strong>.</li>
+</ul>
+</li>
+<li>It may include a <strong>Strategy</strong>:
+<ul>
+<li>one persistence store or another, different locations for different types</li>
+<li>The domain model is <strong>decoupled from storing objects and from the persistence infrastructure</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Pattern:</strong> for each type needing global access, create an object that gives <strong>the illusion of an in-memory collection of all objects of that type</strong>, reachable through a well-known global interface.</p>
+<p>Provide methods to <strong>add and remove</strong> (encapsulating the actual insert or delete in the store); provide methods that <strong>select by criteria</strong> and return fully instantiated objects or collections, encapsulating the storage and query technology.</p>
+<p><strong>Provide repositories only for aggregate roots that need direct access.</strong> Keep the client on the model; delegate storage and access.</p>
+<ul>
+<li>The repository may contain detailed infrastructure information, but <strong>its interface stays simple and pure domain</strong>. Select an entity by passing its identity
+<ul>
+<li>other criteria from object attributes (the repository compares all objects against the set)</li>
+<li>extras such as counts.</li>
+</ul>
+</li>
+<li><strong>Example:</strong> <code>CustomerRepository</code> with <code>findCustomer(string id)</code> and <code>addCustomer(Customer)</code>; <code>findCustomer(&quot;C0123&quot;)</code> returns the customer, found or reconstituted.</li>
+<li><strong>Specification:</strong> a more complex criteria object, e.g. <code>findCustomers(Criteria c)</code> for &quot;customers whose name starts with 'J'&quot; returning John (C7265), Joe (C8433), Jane (C9771).</li>
+</ul>
+<p><strong>Factory vs Repository.</strong> Both manage the life cycle of domain objects. The Factory creates objects; the Repository handles <strong>already existing</strong> ones (it may cache locally but usually reads from persistent storage).</p>
+<p>A repository can look like a factory because it &quot;creates&quot; objects, but that is <strong>reconstitution, not creation from scratch</strong>. Do not mix them: the Factory creates new objects, the Repository finds existing ones.</p>
+<p>To add a new object: create it with the Factory, then give it to the Repository to store (client: <code>createCustomer(&quot;C0123&quot;)</code> returns the customer; <code>addCustomer(C0123)</code>; the repository does <code>insertRow</code>).</p>
+<p>Another way to say it: Factories are &quot;pure domain&quot;; Repositories may link to infrastructure, e.g. the database.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+life cycle of a domain object · aggregate · aggregate root · boundary · invariant · local vs global identity · transient reference · factory · factory method · abstract factory · reconstitution · repository · specification · Strategy.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Abel Avram, <em>Domain Driven Design Quickly</em> (InfoQ, 2006), pp. 42-56. http://www.infoq.com/minibooks/domain-driven-design-quickly</li>
+<li>Gamma, Helm, Johnson, Vlissides, <em>Design Patterns</em> (Addison-Wesley, 1994), cited by the book for Factory Method and Abstract Factory.</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/domain-driven-design-quickly/ddd-03-model-driven-design-and-building-blocks/">DDD Quickly 3: Model-driven design and its building blocks</a> · <a href="/book-digest/domain-driven-design-quickly/ddd-05-refactoring-toward-deeper-insight/">DDD Quickly 5: Refactoring toward deeper insight</a> · <a href="/book-digest/spring-start-here/ch14-data-persistence-with-spring-data/">Ch 14: Implementing data persistence with Spring Data</a></p>
+<nav class="pager"><a href="/book-digest/domain-driven-design-quickly/ddd-03-model-driven-design-and-building-blocks/">&larr; DDD Quickly 3: Model-driven design and its building blocks</a><a href="/book-digest/domain-driven-design-quickly/">Contents</a><a href="/book-digest/domain-driven-design-quickly/ddd-05-refactoring-toward-deeper-insight/">DDD Quickly 5: Refactoring toward deeper insight &rarr;</a></nav></main></body></html>

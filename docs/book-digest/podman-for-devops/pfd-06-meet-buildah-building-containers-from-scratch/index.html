@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 6: Meet Buildah, building containers from scratch</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-6-meet-buildah-building-containers-from-scratch">Podman for DevOps 6: Meet Buildah, building containers from scratch</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 6 (Part 2: Building your container from scratch with Buildah). Previous: <a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">Podman for DevOps 5: Implementing storage for the container's data</a>. Next: <a href="/book-digest/podman-for-devops/pfd-07-integrating-with-existing-application-build-processes/">Podman for DevOps 7: Integrating with existing application build processes</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>An image is a stack of <strong>immutable COW layers</strong>; a Dockerfile (or <strong>Containerfile</strong>, same syntax) is a list of instructions run in order. Only <strong><code>RUN</code>, <code>COPY</code>, <code>ADD</code></strong> create filesystem layers; <code>CMD</code>, <code>ENV</code>, <code>LABEL</code>, <code>EXPOSE</code> and similar add <strong>metadata-only</strong> (empty) layers.</li>
+<li><code>podman build</code> has no learning curve from Docker and builds <strong>rootless</strong> without a daemon; <code>--layers=false</code> squashes layers.</li>
+<li><strong>Buildah</strong> (Apache 2.0, in the same containers family) is the scriptable builder: <code>from</code>, <code>run</code>, <code>config</code>, <code>copy</code>, <code>add</code>, <code>mount</code>, <code>commit</code>, <code>build</code>. Its <strong>working containers</strong> are short-lived and are <strong>not</strong> shown by <code>podman ps</code> without <code>--external</code>.</li>
+<li>Three strategies: <strong>from an existing base image</strong>, <strong>from scratch</strong> (install packages into the mounted empty root with <code>dnf --installroot</code>), <strong>from a Dockerfile</strong>.</li>
+<li>Layer caching trades <strong>build speed and deduplication</strong> against <strong>filesystem complexity</strong>.</li>
+</ul>
+</div></div>
+<h2 id="6-1-building-basic-images-with-podman">6.1 Building basic images with Podman</h2>
+<p>An OCI image is a set of <strong>immutable layers</strong> stacked with copy-on-write logic. A build creates layers in a precise order, then pushes them to a registry that stores them as tar archives plus metadata (the manifest, the image index and the image configuration from chapter 2).</p>
+<h3 id="builds-under-the-hood">Builds under the hood</h3>
+<ul>
+<li>The most common approach is the <strong>Dockerfile</strong>: the main Docker build file, a plain list of actions executed in order. It became a standard of OCI image builds. <strong>Containerfile</strong> is the brand-neutral name with <strong>identical syntax</strong>, supported natively by Podman; the book uses the two interchangeably.</li>
+</ul>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/fedora</span>
+<span class="k">RUN</span><span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>httpd<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>dnf<span class="w"> </span>clean<span class="w"> </span>all<span class="w"> </span>-y
+<span class="k">COPY</span><span class="w"> </span>index.html<span class="w"> </span>/var/www/html
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/usr/sbin/httpd"</span><span class="p">,</span><span class="w"> </span><span class="s2">"-DFOREGROUND"</span><span class="p">]</span>
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FROM</code></td>
+<td>the base image the build starts from</td>
+</tr>
+<tr>
+<td><code>RUN</code></td>
+<td>executes commands during the build (here, install packages with <code>dnf</code>)</td>
+</tr>
+<tr>
+<td><code>COPY</code></td>
+<td>copies files or directories from the build directory into the image</td>
+</tr>
+<tr>
+<td><code>CMD</code></td>
+<td>the command to execute when the container starts</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>RUN</code> and <code>COPY</code> results are cached in <strong>intermediate layers</strong> (temporary images), reused on later builds when nothing changed in that layer. The engine automates this: temporary containers run the instruction and <strong>commit</strong>. All intermediate layers are read-only and merged by the overlay graph driver.</li>
+<li><strong>Squashing</strong> layers into one avoids a negative effect on overlay performance; Podman lets you choose between caching and not.</li>
+<li><strong>Only <code>RUN</code>, <code>COPY</code> and <code>ADD</code> create real layers</strong> (they change the filesystem); every other instruction (like <code>CMD</code>) produces an <strong>empty layer with metadata only</strong>. Keep the number of <code>RUN</code>, <code>COPY</code> and <code>ADD</code> instructions limited: too many layers is a poor pattern and hurts graph-driver performance.</li>
+<li><strong>Image history</strong> (<code>podman inspect myhttpd</code>) shows each layer's action. Entries marked <code>&quot;empty_layer&quot;: true</code> (<code>LABEL</code>, <code>ENV</code>, <code>CMD</code>) are metadata; <code>ADD ...tar</code>, the <code>dnf install</code> and <code>COPY</code> entries are real layers. The last three entries match the Dockerfile exactly, including the <code>CMD</code> that adds only metadata to the image config.</li>
+</ul>
+<h3 id="dockerfile-and-containerfile-instructions">Dockerfile and Containerfile instructions</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-06-build-instructions-and-layers.svg" alt="Which instructions create image layers" loading="lazy" /></p>
+<p>All instructions follow <code>INSTRUCTION arguments</code> (with <code># comments</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>FROM &lt;image&gt;[:&lt;tag&gt;]</code></strong></td>
+<td>first instruction of a build stage; the base image</td>
+</tr>
+<tr>
+<td><strong><code>RUN &lt;command&gt;</code></strong></td>
+<td>runs in a <strong>temporary container</strong> using the build's filesystem; the binary or script must exist in the base image or an earlier layer; creates a layer, so <strong>chain commands</strong>: <code>RUN dnf upgrade -y &amp;&amp; \</code> <code>dnf install httpd -y &amp;&amp; \</code> <code>dnf clean all -y</code></td>
+</tr>
+<tr>
+<td><strong><code>COPY &lt;src&gt;... &lt;dest&gt;</code></strong></td>
+<td>copies from the build directory into the image; <code>--chown=&lt;user&gt;:&lt;group&gt;</code> sets ownership directly</td>
+</tr>
+<tr>
+<td><strong><code>ADD &lt;src&gt;... &lt;dest&gt;</code></strong></td>
+<td>like COPY but also takes <strong>remote URLs</strong> and <strong>auto-extracts tar files</strong></td>
+</tr>
+<tr>
+<td><strong><code>ENTRYPOINT</code></strong></td>
+<td>the executed command; receives arguments from the command line (<code>podman run &lt;image&gt; &lt;arguments&gt;</code>) or from <code>CMD</code>; <strong>cannot be overridden</strong> by command-line arguments (in the book's words). Exec form <code>[&quot;command&quot;,&quot;param1&quot;]</code> or shell form; <strong>default is <code>bash -c</code></strong>, so <code>ps aux</code> becomes <code>bash -c &quot;ps aux&quot;</code>. Teams often replace it with a custom script for finer control</td>
+</tr>
+<tr>
+<td><strong><code>CMD</code></strong></td>
+<td>default arguments passed to the ENTRYPOINT: exec form, parameter form (for a custom ENTRYPOINT) or shell form</td>
+</tr>
+<tr>
+<td><strong><code>LABEL &lt;k&gt;=&lt;v&gt;</code></strong></td>
+<td>image metadata at build or run time</td>
+</tr>
+<tr>
+<td><strong><code>EXPOSE &lt;port&gt;/&lt;protocol&gt;</code></strong></td>
+<td>metadata about listening ports; <strong>not forwarded by default</strong></td>
+</tr>
+<tr>
+<td><strong><code>ENV &lt;k&gt;=&lt;v&gt;</code></strong></td>
+<td>environment variables for following build steps and at runtime (a <code>RUN</code> can set its own, scoped to that instruction)</td>
+</tr>
+<tr>
+<td><strong><code>VOLUME</code></strong></td>
+<td>a volume created at runtime in Podman's default volume directory (<code>[&quot;/path&quot;]</code> or <code>/path</code>; see chapter 5)</td>
+</tr>
+<tr>
+<td><strong><code>USER</code></strong></td>
+<td>user and optional group for following <code>RUN</code>, <code>CMD</code>, <code>ENTRYPOINT</code>: <code>USER &lt;username&gt;[:&lt;group&gt;]</code> or <code>USER &lt;UID&gt;[:&lt;GID&gt;]</code></td>
+</tr>
+<tr>
+<td><strong><code>WORKDIR</code></strong></td>
+<td>working directory during the build, retained at runtime</td>
+</tr>
+<tr>
+<td><strong><code>ONBUILD</code></strong></td>
+<td>a trigger run when the image is used as a parent in another build: <code>ONBUILD ADD . /opt/app</code>, <code>ONBUILD RUN /opt/bin/custom-build /opt/app/src</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="running-builds-with-podman">Running builds with Podman</h3>
+<p>Same commands and syntax as Docker, so <strong>no learning curve</strong>. A real advantage: Podman builds <strong>rootless</strong> with fork/exec; Docker's build talks to a daemon on a Unix socket.</p>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>myhttpd<span class="w"> </span>.
+STEP<span class="w"> </span><span class="m">1</span>/4:<span class="w"> </span>FROM<span class="w"> </span>docker.io/library/fedora
+STEP<span class="w"> </span><span class="m">2</span>/4:<span class="w"> </span>RUN<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>httpd<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>dnf<span class="w"> </span>clean<span class="w"> </span>all<span class="w"> </span>-y
+--&gt;<span class="w"> </span>50a981094eb
+STEP<span class="w"> </span><span class="m">3</span>/4:<span class="w"> </span>COPY<span class="w"> </span>index.html<span class="w"> </span>/var/www/html
+--&gt;<span class="w"> </span>73f8702c5e0
+STEP<span class="w"> </span><span class="m">4</span>/4:<span class="w"> </span>CMD<span class="w"> </span><span class="o">[</span><span class="s2">"/usr/sbin/httpd"</span>,<span class="w"> </span><span class="s2">"-DFOREGROUND"</span><span class="o">]</span>
+COMMIT<span class="w"> </span>myhttpd
+--&gt;<span class="w"> </span>e773bfee6f2
+Successfully<span class="w"> </span>tagged<span class="w"> </span>localhost/myhttpd:latest
+</code></pre>
+<ul>
+<li>Layers persist as cache until <code>podman image prune</code>. <code>FROM</code> pulls the base if missing. <code>RUN</code> executes as <code>bash -c '...'</code>; with no ENTRYPOINT, <code>CMD</code> becomes <code>bash -c '/usr/sbin/httpd -DFOREGROUND'</code>.</li>
+</ul>
+<p><strong>A custom web-server example</strong> shows several practices:</p>
+<pre class="hl"><code><span class="k">FROM</span><span class="w"> </span><span class="s">docker.io/library/fedora</span>
+<span class="c"># Install required packages</span>
+<span class="k">RUN</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail<span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>dnf<span class="w"> </span>upgrade<span class="w"> </span>-y<span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>dnf<span class="w"> </span>install<span class="w"> </span>httpd<span class="w"> </span>-y<span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>dnf<span class="w"> </span>clean<span class="w"> </span>all<span class="w"> </span>-y<span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>rm<span class="w"> </span>-rf<span class="w"> </span>/var/cache/dnf/*
+<span class="c"># Custom webserver configs for rootless execution</span>
+<span class="k">RUN</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail<span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sed<span class="w"> </span>-i<span class="w"> </span><span class="s1">'s|Listen 80|Listen 8080|'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/etc/httpd/conf/httpd.conf<span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sed<span class="w"> </span>-i<span class="w"> </span><span class="s1">'s|ErrorLog "logs/error_log"|ErrorLog /dev/stderr|'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/etc/httpd/conf/httpd.conf<span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>sed<span class="w"> </span>-i<span class="w"> </span><span class="s1">'s|CustomLog "logs/access_log" combined|CustomLog /dev/stdout combined|'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/etc/httpd/conf/httpd.conf<span class="p">;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>chown<span class="w"> </span><span class="m">1001</span><span class="w"> </span>/var/run/httpd
+
+<span class="c"># Copy web content</span>
+<span class="k">COPY</span><span class="w"> </span>index.html<span class="w"> </span>/var/www/html
+<span class="c"># Define content volume</span>
+<span class="k">VOLUME</span><span class="w"> </span><span class="s">/var/www/html</span>
+<span class="c"># Copy container entrypoint.sh script</span>
+<span class="k">COPY</span><span class="w"> </span>entrypoint.sh<span class="w"> </span>/entrypoint.sh
+<span class="c"># Declare exposed ports</span>
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">8080</span>
+<span class="c"># Declare default user</span>
+<span class="k">USER</span><span class="w"> </span><span class="s">1001</span>
+<span class="k">ENTRYPOINT</span><span class="w"> </span><span class="p">[</span><span class="s2">"/entrypoint.sh"</span><span class="p">]</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"httpd"</span><span class="p">]</span>
+</code></pre>
+<p>What it illustrates:</p>
+<ul>
+<li><strong>Minimal packages:</strong> clean the package cache after installing <code>httpd</code> to shrink the image.</li>
+<li><strong>Fail-safe chained commands:</strong> <code>set -euo pipefail</code> stops the build if any command fails; the <code>\</code> splits lines for readability.</li>
+<li><strong>Non-root process:</strong> workarounds (permissions, group ownership) let <code>httpd</code> run as generic user <strong>1001</strong>, a security best practice that reduces the attack surface (unnecessary with rootless containers).</li>
+<li><strong>Logs to stdout and stderr</strong> by editing <code>httpd.conf</code> with <code>sed</code>.</li>
+<li><strong><code>EXPOSE 8080</code></strong>, and a <strong><code>CMD [&quot;httpd&quot;]</code></strong> with no arguments to show how ENTRYPOINT interacts with CMD.</li>
+</ul>
+<p>The <code>entrypoint.sh</code> script checks whether the container runs as root and inspects the first CMD argument:</p>
+<pre class="hl"><code><span class="ch">#!/bin/sh</span>
+<span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="nv">$UID</span><span class="w"> </span>!<span class="o">=</span><span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Running as user </span><span class="nv">$UID</span><span class="s2">"</span>
+<span class="k">fi</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">"</span><span class="nv">$1</span><span class="s2">"</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">"httpd"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Starting custom httpd server"</span>
+<span class="w">    </span><span class="nb">exec</span><span class="w"> </span><span class="nv">$1</span><span class="w"> </span>-DFOREGROUND
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Starting container with custom arguments"</span>
+<span class="w">    </span><span class="nb">exec</span><span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span>
+<span class="k">fi</span>
+</code></pre>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>myhttpd<span class="w"> </span>.
+$<span class="w"> </span>podman<span class="w"> </span>images<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>myhttpd
+localhost/myhttpd<span class="w">  </span>latest<span class="w">  </span>6dc90348520c<span class="w">  </span><span class="m">2</span><span class="w"> </span>minutes<span class="w"> </span>ago<span class="w">  </span><span class="m">248</span><span class="w"> </span>MB
+$<span class="w"> </span>podman<span class="w"> </span>tag<span class="w"> </span>localhost/myhttpd<span class="w"> </span>quay.io/&lt;username&gt;/myhttpd:v1.0<span class="w">     </span><span class="c1"># ready for push (chapter 9)</span>
+$<span class="w"> </span>podman<span class="w"> </span>inspect<span class="w"> </span>myhttpd<span class="w"> </span>--format<span class="w"> </span><span class="s1">'{{ .RootFS.Layers }}'</span><span class="w">            </span><span class="c1"># 5 layers incl. the Fedora base</span>
+$<span class="w"> </span>podman<span class="w"> </span>image<span class="w"> </span>tree<span class="w"> </span>myhttpd
+Image<span class="w"> </span>ID:<span class="w"> </span>4067fa24786a<span class="w">   </span>Tags:<span class="w"> </span><span class="o">[</span>localhost/myhttpd:latest<span class="o">]</span><span class="w">   </span>Size:<span class="w"> </span><span class="m">317</span>.6MB
+Image<span class="w"> </span>Layers
+├──<span class="w"> </span>ID:<span class="w"> </span>38f7d1e80c77<span class="w"> </span>Size:<span class="w"> </span><span class="m">186</span>.2MB<span class="w"> </span>Top<span class="w"> </span>Layer<span class="w"> </span>of:<span class="w"> </span><span class="o">[</span>docker.io/library/fedora:latest<span class="o">]</span>
+├──<span class="w"> </span>ID:<span class="w"> </span>3d6a999a163f<span class="w"> </span>Size:<span class="w"> </span><span class="m">131</span>.3MB
+├──<span class="w"> </span>ID:<span class="w"> </span>6fc772abb506<span class="w"> </span>Size:<span class="w"> </span><span class="m">15</span>.87kB
+├──<span class="w"> </span>ID:<span class="w"> </span>778ad0afa90a<span class="w"> </span>Size:<span class="w"> </span><span class="m">3</span>.584kB
+└──<span class="w"> </span>ID:<span class="w"> </span>da726f9c0cf9<span class="w"> </span>Size:<span class="w"> </span><span class="m">2</span>.048kB<span class="w"> </span>Top<span class="w"> </span>Layer<span class="w"> </span>of:<span class="w"> </span><span class="o">[</span>localhost/myhttpd:latest<span class="o">]</span>
+</code></pre>
+<ul>
+<li><strong>Squash:</strong> <code>podman build -t myhttpd --layers=false .</code> leaves <strong>two layers</strong> (base plus one squashed). <strong>Trade-off:</strong> a minimal overlay, but you rebuild the whole image for every configuration change, with no cache.</li>
+<li><strong>Rootless vs rootful:</strong> rootless builds are valued (no privilege needed), rootful (<code># podman build -t myhttpd .</code>) is fully supported, storing layers under <code>/var/lib/containers/storage/</code>.</li>
+</ul>
+<h2 id="6-2-introducing-buildah-podman-s-companion">6.2 Introducing Buildah, Podman's companion</h2>
+<ul>
+<li>Plain Dockerfile builds suit teams keeping existing pipelines, but offer <strong>rigid workflow logic</strong> with no scripting. The Podman community created <strong>Buildah</strong> (pronounced &quot;build-ah&quot;) to manage OCI builds with several strategies; its images are fully portable and Docker-compatible.</li>
+<li><strong>Open source, Apache 2.0</strong> (https://github.com/containers/buildah). <strong>Podman vendors Buildah's libraries</strong>: the statically linked Go Podman binary embeds the Buildah packages for basic builds.</li>
+<li><strong>Shared libraries:</strong> <code>containers/image</code> (image life cycle and registries) and <code>containers/storage</code> (image and container layers), now under <code>containers/container-libs</code> (https://github.com/containers/container-libs).</li>
+<li><strong>Two build modes in parallel:</strong> Dockerfile/Containerfile builds (<code>buildah build</code>, alias <code>buildah bud</code>) and <strong>native Buildah commands that replicate Dockerfile instructions</strong>, making builds scriptable with shell conditionals, loops and variables (<code>RUN</code> becomes <code>buildah run</code>).</li>
+<li><strong>Rootless and socket-free;</strong> every build runs in <strong>working containers</strong> on top of the base image.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Equivalent / purpose</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>buildah from</code></td>
+<td>start a <strong>working container</strong> from a base image</td>
+<td><code>buildah from fedora</code></td>
+</tr>
+<tr>
+<td><code>buildah run</code></td>
+<td>the <code>RUN</code> instruction; <code>--</code> separates options from the command</td>
+<td><code>buildah run &lt;ID&gt; -- dnf install -y nginx</code></td>
+</tr>
+<tr>
+<td><code>buildah config</code></td>
+<td>metadata instructions (entrypoint, cmd, port, label...)</td>
+<td><code>buildah config --entrypoint /entrypoint.sh &lt;ID&gt;</code></td>
+</tr>
+<tr>
+<td><code>buildah add</code></td>
+<td><code>ADD</code>: files, directories, URLs</td>
+<td><code>buildah add &lt;ID&gt; index.php /var/www.html</code></td>
+</tr>
+<tr>
+<td><code>buildah copy</code></td>
+<td><code>COPY</code></td>
+<td><code>buildah copy &lt;ID&gt; entrypoint.sh /</code></td>
+</tr>
+<tr>
+<td><code>buildah commit</code></td>
+<td>create the final image from the working container (usually last)</td>
+<td><code>buildah commit &lt;ID&gt; myhttpd</code></td>
+</tr>
+<tr>
+<td><code>buildah build</code></td>
+<td>like <code>podman build</code>; <code>buildah build [options] [context]</code></td>
+<td><code>buildah build -t &lt;imageName&gt; .</code></td>
+</tr>
+<tr>
+<td><code>buildah containers</code></td>
+<td>list working containers and base images (aliases <code>ls</code>, <code>ps</code>)</td>
+<td><code>buildah containers</code></td>
+</tr>
+<tr>
+<td><code>buildah rm</code></td>
+<td>remove working containers (<code>-a</code> removes all; alias <code>delete</code>)</td>
+<td><code>buildah rm &lt;ID&gt;</code></td>
+</tr>
+<tr>
+<td><code>buildah mount</code></td>
+<td>mount a working container's root filesystem (no argument lists mounts)</td>
+<td><code>buildah mount &lt;ID&gt;</code></td>
+</tr>
+<tr>
+<td><code>buildah images</code></td>
+<td>list local images; <code>--json</code></td>
+<td><code>buildah images --json</code></td>
+</tr>
+<tr>
+<td><code>buildah tag</code></td>
+<td>name and tag a local image</td>
+<td><code>buildah tag myapp quay.io/packt/myapp:latest</code></td>
+</tr>
+<tr>
+<td><code>buildah push</code></td>
+<td>push to a registry or a local directory in Docker or OCI format</td>
+<td><code>buildah push &lt;ID&gt; docker://&lt;URL&gt;/repository:tag</code>; <code>buildah push &lt;ID&gt; oci:&lt;/path/to/dir&gt;:image:tag</code></td>
+</tr>
+<tr>
+<td><code>buildah pull</code></td>
+<td>pull from a registry, OCI archive or directory</td>
+<td><code>buildah pull dir:&lt;/path/to/dir&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<p>Each has a man page: <code>man buildah-&lt;command&gt;</code> (e.g. <code>man buildah-run</code>).</p>
+<p><strong>Minimal example (Fedora with httpd), in a few lines you can put in a script:</strong></p>
+<pre class="hl"><code>$<span class="w"> </span><span class="nv">container</span><span class="o">=</span><span class="k">$(</span>buildah<span class="w"> </span>from<span class="w"> </span>fedora<span class="k">)</span>
+$<span class="w"> </span>buildah<span class="w"> </span>run<span class="w"> </span><span class="nv">$container</span><span class="w"> </span>--<span class="w"> </span>dnf<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>httpd<span class="p">;</span><span class="w"> </span>dnf<span class="w"> </span>clean<span class="w"> </span>all
+$<span class="w"> </span>buildah<span class="w"> </span>config<span class="w"> </span>--cmd<span class="w"> </span><span class="s2">"httpd -DFOREGROUND"</span><span class="w"> </span><span class="nv">$container</span>
+$<span class="w"> </span>buildah<span class="w"> </span>config<span class="w"> </span>--port<span class="w"> </span><span class="m">80</span><span class="w"> </span><span class="nv">$container</span>
+$<span class="w"> </span>buildah<span class="w"> </span>commit<span class="w"> </span><span class="nv">$container</span><span class="w"> </span>myhttpd
+$<span class="w"> </span>buildah<span class="w"> </span>tag<span class="w"> </span>myhttpd<span class="w"> </span>registry.example.com/myhttpd:v0.0.1
+</code></pre>
+<ul>
+<li><code>buildah from</code> pulls the image from an allowed registry and starts a <strong>working container</strong>, printing its name; capturing it in <code>$container</code> is the common pattern for scripts.</li>
+<li><strong>The &quot;secret weapon&quot; is <code>buildah mount</code>:</strong> the container's root filesystem is mapped to a host path, so you modify files directly from the host instead of <code>add</code> and <code>copy</code>.</li>
+<li><strong>Containers differ:</strong> Buildah containers are <strong>short-lived entities to be modified and committed</strong>; Podman containers run long-lived workloads. <code>podman ps</code> does not show Buildah containers without <strong><code>--external</code></strong>.</li>
+<li><strong>Integration:</strong> Ansible (native connection plugins for working containers); CI pipelines such as <strong>Jenkins, Tekton, GitLab CI/CD</strong> (Tekton Hub has Buildah tasks: https://hub.tekton.dev/tekton/task/buildah; Tekton: https://tekton.dev/); Buildah can run <strong>inside a container</strong>; <strong>Shipwright</strong> (https://github.com/shipwright-io/build), an extensible Kubernetes build framework using custom resource definitions, offers Buildah as a build tool.</li>
+</ul>
+<h2 id="6-3-preparing-our-environment">6.3 Preparing our environment</h2>
+<p>Install Buildah (lab OS: Fedora 40):</p>
+<table>
+<thead>
+<tr>
+<th>Distribution</th>
+<th>Commands</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fedora and DNF-based</td>
+<td><code>$ sudo dnf -y install buildah</code></td>
+</tr>
+<tr>
+<td>Debian Bullseye or later</td>
+<td><code>$ sudo apt-get update</code> then <code>$ sudo apt-get -y install buildah</code></td>
+</tr>
+<tr>
+<td>CentOS Stream 9</td>
+<td><code>$ sudo dnf install -y buildah</code></td>
+</tr>
+<tr>
+<td>RHEL 8</td>
+<td><code>$ sudo yum module enable -y container-tools:1.0</code> then <code>$ sudo yum module install -y buildah</code> (as printed in the book)</td>
+</tr>
+<tr>
+<td>RHEL 9</td>
+<td><code>$ sudo dnf -y install container-tools</code></td>
+</tr>
+<tr>
+<td>Arch Linux</td>
+<td><code>$ sudo pacman -S buildah</code></td>
+</tr>
+<tr>
+<td>Ubuntu 20.10 or later</td>
+<td><code>$ sudo apt-get -y update</code> then <code>$ sudo apt-get -y install buildah</code></td>
+</tr>
+<tr>
+<td>Gentoo</td>
+<td><code>$ sudo emerge app-emulation/libpod</code> (as printed)</td>
+</tr>
+<tr>
+<td>From source</td>
+<td>https://github.com/containers/buildah/blob/main/install.md#building-from-scratch</td>
+</tr>
+</tbody>
+</table>
+<p>Buildah also runs as a container, with nested builds (chapter 7).</p>
+<p><strong>Verify:</strong> <code>buildah images</code> as a user and as root shows the same lists as <code>podman images</code> (shared stores: rootless vs system-wide). A test script builds a minimal Python 3 image on Alpine:</p>
+<pre class="hl"><code><span class="ch">#!/bin/bash</span>
+
+<span class="nv">BASE_IMAGE</span><span class="o">=</span>alpine
+<span class="nv">TARGET_IMAGE</span><span class="o">=</span>python3-minimal
+
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="nv">$UID</span><span class="w"> </span>!<span class="o">=</span><span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"### Running build test as unprivileged user"</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"### Running build test as root"</span>
+<span class="k">fi</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s2">"### Testing container creation"</span>
+<span class="nv">container</span><span class="o">=</span><span class="k">$(</span>buildah<span class="w"> </span>from<span class="w"> </span><span class="nv">$BASE_IMAGE</span><span class="k">)</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="nv">$?</span><span class="w"> </span>-ne<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Error initializing working container"</span>
+<span class="k">fi</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s2">"### Testing run command"</span>
+buildah<span class="w"> </span>run<span class="w"> </span><span class="nv">$container</span><span class="w"> </span>apk<span class="w"> </span>add<span class="w"> </span>--update<span class="w"> </span>python3<span class="w"> </span>py3-pip
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="nv">$?</span><span class="w"> </span>-ne<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Error on run build action"</span>
+<span class="k">fi</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s2">"### Testing image commit"</span>
+buildah<span class="w"> </span>commit<span class="w"> </span><span class="nv">$container</span><span class="w"> </span><span class="nv">$TARGET_IMAGE</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="nv">$?</span><span class="w"> </span>-ne<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Error committing final image"</span>
+<span class="k">fi</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s2">"### Removing working container"</span>
+buildah<span class="w"> </span>rm<span class="w"> </span><span class="nv">$container</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="nv">$?</span><span class="w"> </span>-ne<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Error removing working container"</span>
+<span class="k">fi</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s2">"### Build test completed successfully!"</span>
+<span class="nb">exit</span><span class="w"> </span><span class="m">0</span>
+</code></pre>
+<p>It runs the same for root and non-privileged users; test the result with <code>$ podman run -it python3-minimal /usr/bin/python3</code>.</p>
+<p><strong>Configuration files</strong> (shared with Podman; from <code>containers-common</code> on Fedora; see chapter 3):</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/usr/share/containers/mounts.conf</code></td>
+<td>files and directories auto-mounted in a Buildah working container</td>
+</tr>
+<tr>
+<td><code>/etc/containers/registries.conf</code></td>
+<td>registries allowed for search, pull and push</td>
+</tr>
+<tr>
+<td><code>/usr/share/containers/policy.json</code></td>
+<td>image signature verification</td>
+</tr>
+<tr>
+<td><code>/usr/share/containers/seccomp.json</code></td>
+<td>allowed and prohibited syscalls</td>
+</tr>
+<tr>
+<td><code>/usr/share/containers/containers.conf</code></td>
+<td>Podman-specific settings, also used by Buildah</td>
+</tr>
+</tbody>
+</table>
+<h2 id="6-4-choosing-our-build-strategy">6.4 Choosing our build strategy</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-06-buildah-build-strategies.svg" alt="Three ways to build an image" loading="lazy" /></p>
+<p>Three strategies:</p>
+<ol>
+<li><strong>From an existing base image</strong> (e.g. extend a prebuilt application-server image with troubleshooting tools or libraries, or add your own PHP modules and application files to the <code>httpd</code> library image).</li>
+<li><strong>From scratch</strong> (a legacy app needing old libraries no longer in current distributions; also a way to distribute <strong>super-minimal images</strong>, even single-file images with one static binary). In practice you always start from some initial image, so it is similar to strategy 1.</li>
+<li><strong>From a Dockerfile</strong> (Buildah parses it and ends up in one of the previous strategies; good for sharing build steps with a team or community).</li>
+</ol>
+<ul>
+<li><strong>Why build your own:</strong> you can't always find your configuration or tool bundle; you may bundle your own configuration; <strong>security constraints</strong> demand reduced attack surfaces; in enterprises images are almost always built <strong>from scratch or from minimal bases</strong>.</li>
+<li>There is no ultimate answer: look for prebuilt images first, fall back to from-scratch, and use Dockerfiles to share.</li>
+</ul>
+<h2 id="6-5-building-images-from-scratch">6.5 Building images from scratch</h2>
+<p>Podman and Buildah <strong>share storage</strong>, so previous examples fill the cache. Start a working container from nothing:</p>
+<pre class="hl"><code><span class="c1"># buildah from scratch</span>
+<span class="c1"># buildah containers</span>
+CONTAINER<span class="w"> </span>ID<span class="w">  </span>BUILDER<span class="w">  </span>IMAGE<span class="w"> </span>ID<span class="w">  </span>IMAGE<span class="w"> </span>NAME<span class="w">  </span>CONTAINER<span class="w"> </span>NAME
+af69b9547db9<span class="w">     </span>*<span class="w">               </span>scratch<span class="w">     </span>working-container
+<span class="c1"># buildah run working-container bash</span>
+executable<span class="w"> </span>file<span class="w"> </span><span class="sb">`</span>bash<span class="sb">`</span><span class="w"> </span>not<span class="w"> </span>found<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="nv">$PATH</span>:<span class="w"> </span>No<span class="w"> </span>such<span class="w"> </span>file<span class="w"> </span>or<span class="w"> </span>directory
+</code></pre>
+<p>The scratch image is not listed in <code>buildah images</code>, and the container is <strong>empty</strong>: no executables.</p>
+<p><strong>Fill it from the host's package manager</strong> (mount, then use <code>--installroot</code>):</p>
+<pre class="hl"><code><span class="c1"># buildah mount working-container</span>
+/var/lib/containers/storage/overlay/b5034cc8.../merged
+<span class="c1"># scratchmount=$(buildah mount working-container)</span>
+<span class="c1"># dnf install --installroot $scratchmount --releasever 40 bash coreutils --setopt install_weak_deps=false -y</span>
+<span class="c1"># buildah run working-container bash</span>
+bash-5.2#<span class="w"> </span>cat<span class="w"> </span>/etc/fedora-release
+Fedora<span class="w"> </span>release<span class="w"> </span><span class="m">40</span><span class="w"> </span><span class="o">(</span>Forty<span class="o">)</span>
+</code></pre>
+<ul>
+<li><strong>Rootless:</strong> Buildah runs the mount in another namespace, so with a driver other than <code>vfs</code> the mount may not be visible from the host; run the commands in a <strong><code>podman unshare</code></strong> shell.</li>
+<li>On a Fedora release other than 40 you must import Fedora 40's GPG keys or add <strong><code>--nogpgcheck</code></strong>.</li>
+</ul>
+<p><strong>Add a command script and metadata</strong>, then commit:</p>
+<pre class="hl"><code><span class="c1"># cat command.sh</span>
+<span class="c1">#!/bin/bash</span>
+cat<span class="w"> </span>/etc/fedora-release
+/usr/bin/date
+<span class="c1"># chmod +x command.sh</span>
+<span class="c1"># buildah unmount working-container</span>
+<span class="c1"># buildah copy working-container ./command.sh /usr/bin</span>
+<span class="c1"># buildah config --cmd /usr/bin/command.sh working-container</span>
+<span class="c1"># buildah config --created-by "Podman for DevOps example" working-container</span>
+<span class="c1"># buildah config --label name=fedora-date working-container</span>
+<span class="c1"># buildah commit working-container fedora-date</span>
+<span class="c1"># buildah rm working-container</span>
+<span class="c1"># podman images</span>
+localhost/fedora-date<span class="w">  </span>latest<span class="w">  </span>e24a2fafde<span class="w">  </span>About<span class="w"> </span>a<span class="w"> </span>minute<span class="w"> </span>ago<span class="w">  </span><span class="m">366</span><span class="w"> </span>MB
+<span class="c1"># podman run -ti localhost/fedora-date:latest</span>
+Fedora<span class="w"> </span>release<span class="w"> </span><span class="m">40</span><span class="w"> </span><span class="o">(</span>Forty<span class="o">)</span>
+Tue<span class="w"> </span>Nov<span class="w"> </span><span class="m">01</span><span class="w"> </span><span class="m">21</span>:18:29<span class="w"> </span>UTC<span class="w"> </span><span class="m">2024</span>
+</code></pre>
+<p><code>podman inspect</code> shows labels (<code>io.buildah.version</code>: <code>1.37.3</code>, <code>name</code>: <code>fedora-date</code>), the <code>created_by</code> history entry and annotations. <code>buildah copy</code> lets you inject files <strong>without handling the mount yourself</strong>.</p>
+<blockquote>
+<p>[!tip] Minimal base images
+Building from scratch is not typical; often a Fedora or Alpine base plus packages is enough. Some distributions ship <strong>minimal flavours</strong> (e.g. <code>fedora-minimal</code>) with fewer packages and smaller images.</p>
+</blockquote>
+<h2 id="6-6-building-images-from-a-dockerfile">6.6 Building images from a Dockerfile</h2>
+<pre class="hl"><code><span class="c"># Start from latest fedora container base image</span>
+<span class="k">FROM</span><span class="w"> </span><span class="s">fedora:latest</span>
+
+<span class="c"># Update the container base image</span>
+<span class="k">RUN</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Updating all fedora packages"</span><span class="p">;</span><span class="w"> </span>dnf<span class="w"> </span>-y<span class="w"> </span>update<span class="p">;</span><span class="w"> </span>dnf<span class="w"> </span>-y<span class="w"> </span>clean<span class="w"> </span>all
+
+<span class="c"># Install the httpd package</span>
+<span class="k">RUN</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Installing httpd"</span><span class="p">;</span><span class="w"> </span>dnf<span class="w"> </span>-y<span class="w"> </span>install<span class="w"> </span>httpd
+
+<span class="c"># Expose the http port 80</span>
+<span class="k">EXPOSE</span><span class="w"> </span><span class="s">80</span>
+
+<span class="c"># Set the default command to run once the container will be started</span>
+<span class="k">CMD</span><span class="w"> </span><span class="p">[</span><span class="s2">"/usr/sbin/httpd"</span><span class="p">,</span><span class="w"> </span><span class="s2">"-DFOREGROUND"</span><span class="p">]</span>
+</code></pre>
+<pre class="hl"><code><span class="o">[</span>webserver<span class="o">]</span><span class="c1"># buildah build -f Dockerfile -t myhttpdservice .</span>
+STEP<span class="w"> </span><span class="m">1</span>/6:<span class="w"> </span>FROM<span class="w"> </span>fedora:latest
+STEP<span class="w"> </span><span class="m">2</span>/6:<span class="w"> </span>MAINTAINER<span class="w"> </span>podman-book<span class="w"> </span><span class="c1"># this should be an email</span>
+STEP<span class="w"> </span><span class="m">3</span>/6:<span class="w"> </span>RUN<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Updating all fedora packages"</span><span class="p">;</span><span class="w"> </span>dnf<span class="w"> </span>-y<span class="w"> </span>update<span class="p">;</span><span class="w"> </span>dnf<span class="w"> </span>-y<span class="w"> </span>clean<span class="w"> </span>all
+STEP<span class="w"> </span><span class="m">4</span>/6:<span class="w"> </span>RUN<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Installing httpd"</span><span class="p">;</span><span class="w"> </span>dnf<span class="w"> </span>-y<span class="w"> </span>install<span class="w"> </span>httpd
+STEP<span class="w"> </span><span class="m">5</span>/6:<span class="w"> </span>EXPOSE<span class="w"> </span><span class="m">80</span>
+STEP<span class="w"> </span><span class="m">6</span>/6:<span class="w"> </span>CMD<span class="w"> </span><span class="o">[</span><span class="s2">"/usr/sbin/httpd"</span>,<span class="w"> </span><span class="s2">"-DFOREGROUND"</span><span class="o">]</span>
+COMMIT<span class="w"> </span>myhttpdservice
+Successfully<span class="w"> </span>tagged<span class="w"> </span>localhost/myhttpdservice:latest
+</code></pre>
+<ul>
+<li><code>-f</code> names the Dockerfile (default <code>Dockerfile</code>); <code>-t</code> names and tags (default tag <code>latest</code>); the final argument is the build directory (<code>.</code>). (The book's listing shows six steps because its output includes a <code>MAINTAINER</code> step that is not in the printed Dockerfile.)</li>
+<li>Run and test:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># buildah images</span>
+localhost/myhttpdservice<span class="w">  </span>latest<span class="w">  </span>14a2226710e7<span class="w">  </span><span class="m">2</span><span class="w"> </span>minutes<span class="w"> </span>ago<span class="w">  </span><span class="m">497</span><span class="w"> </span>MB
+<span class="c1"># podman run -d localhost/myhttpdservice:latest</span>
+<span class="c1"># podman logs 133584ab526f...        # shows the AH00558 ServerName warning and the container IP 10.88.0.4</span>
+<span class="c1"># curl 10.88.0.4                     # "Test Page for the HTTP Server on Fedora"</span>
+<span class="c1"># ip a show dev cni-podman0          # inet 10.88.0.1/16: the container IP is in this network</span>
+</code></pre>
+<h3 id="the-layers-option">The <code>--layers</code> option</h3>
+<ul>
+<li>Added in <strong>Buildah 1.2</strong> to switch layer caching on or off. <strong>Per the book, the default is <code>--layers=false</code></strong>: no intermediate layers kept, all changes squashed into one layer. Enable caching with <code>export BUILDAH_LAYERS=true</code>.</li>
+<li><strong>Trade-offs of keeping layers:</strong> more storage at first, but <strong>layers are shared across images</strong> (10 images with the same base layers store and pull them once), saving space and bandwidth. The downside: each layer adds union-filesystem complexity, slightly slower start and more kernel merge overhead.</li>
+<li><strong>Trade-offs of squashing:</strong> faster startup and <strong>permanent removal of files deleted in upper layers</strong> (which otherwise stay hidden but present), but it <strong>destroys deduplication</strong>, so total storage may grow with several similar images.</li>
+<li>Verdict: you trade a bit of filesystem complexity for large gains in build speed and storage efficiency.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<p>The chapter covered image creation: Podman builds, the Buildah companion, its commands, and the three build strategies (from a base image, from scratch, from a Dockerfile). It is only an introduction; the next chapter goes further.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+Dockerfile, Containerfile · intermediate layer · empty layer · <code>RUN</code>/<code>COPY</code>/<code>ADD</code> · ENTRYPOINT vs CMD · <code>ONBUILD</code> · <code>podman image tree</code> · <code>--layers</code> · Buildah working container · <code>buildah from/run/config/copy/commit/mount</code> · <code>from scratch</code> · <code>--installroot</code> · squashing.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 6; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>Buildah: https://github.com/containers/buildah ; project tutorials: https://github.com/containers/buildah/tree/main/docs/tutorials</li>
+<li>containers/image: https://github.com/containers/image ; containers/storage: https://github.com/containers/storage ; container-libs: https://github.com/containers/container-libs</li>
+<li>Tekton: https://tekton.dev/ ; Tekton Hub Buildah task: https://hub.tekton.dev/tekton/task/buildah ; Shipwright: https://github.com/shipwright-io/build</li>
+<li>How to use Podman inside a container: https://www.redhat.com/sysadmin/podman-inside-container</li>
+<li>How to build tiny container images: https://www.redhat.com/sysadmin/tiny-containers</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">Podman for DevOps 5: Implementing storage for the container's data</a> · <a href="/book-digest/podman-for-devops/pfd-02-comparing-podman-and-docker/">Podman for DevOps 2: Comparing Podman and Docker</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-05-implementing-storage-for-the-containers-data/">&larr; Podman for DevOps 5: Implementing storage for the container&#x27;s data</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-07-integrating-with-existing-application-build-processes/">Podman for DevOps 7: Integrating with existing application build processes &rarr;</a></nav></main></body></html>

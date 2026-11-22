@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Podman for DevOps 2: Comparing Podman and Docker</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/podman-for-devops/">Podman For Devops</a></div>
+<main>
+<h1 id="podman-for-devops-2-comparing-podman-and-docker">Podman for DevOps 2: Comparing Podman and Docker</h1>
+<p>Source: Alessandro Arrichiello and Gianni Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 2. Previous: <a href="/book-digest/podman-for-devops/pfd-01-introduction-to-container-technology/">Podman for DevOps 1: Introduction to container technology</a>. Next: <a href="/book-digest/podman-for-devops/pfd-03-running-the-first-container/">Podman for DevOps 3: Running the first container</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Docker is daemon-centric:</strong> the CLI and REST API talk to a long-running <code>dockerd</code>, which uses <code>containerd</code> and <code>runc</code>. If the daemon stops, containers suffer.</li>
+<li><strong>Podman is daemonless:</strong> the <code>podman</code> binary is both CLI and engine, using fork/exec. <strong>Conmon</strong> (one small monitor per container) sits between Podman and the OCI runtime, so containers survive after Podman exits.</li>
+<li>Podman is built from community libraries: <strong>libpod</strong>, containers/image, containers/storage, <strong>Buildah</strong>, <strong>Netavark</strong>, Conmon, and the <strong>crun</strong> or <strong>runc</strong> runtimes.</li>
+<li><strong>Rootless</strong> containers use a user namespace with a UID map; the CLI is <strong>Docker-compatible</strong> (<code>alias docker=podman</code>).</li>
+<li>Podman adds <strong>pods</strong> and Kubernetes or systemd generation; both tools use OCI images and runtimes.</li>
+</ul>
+</div></div>
+<p>The chapter compares the two engines architecturally and by usage. If you have little Docker experience you can skip it and come back later. No setup is needed; to replay the examples you need Podman (installed in chapter 3) and Docker.</p>
+<h2 id="2-1-docker-container-daemon-architecture">2.1 Docker container daemon architecture</h2>
+<ul>
+<li>Docker appeared in <strong>2013</strong>. It used <strong>LXC</strong> as its runtime, then replaced it with its own <strong>libcontainer</strong>.</li>
+<li><strong>Three pillars:</strong> the Docker <strong>daemon</strong>, the <strong>REST API</strong> and the <strong>CLI</strong> (Figure 2.1: client or remote API in, daemon out to registries and containers).</li>
+<li>The daemon is the most critical piece and must always run; &quot;otherwise, your beloved containers will not survive for long&quot;.</li>
+</ul>
+<h3 id="the-docker-daemon">The Docker daemon</h3>
+<p>A <strong>daemon</strong> is a background process providing services. The Docker daemon:</p>
+<ul>
+<li>listens for Docker API requests</li>
+<li>handles, manages and checks running containers</li>
+<li>manages images, networks and storage volumes</li>
+<li>interacts with external or remote registries</li>
+</ul>
+<h3 id="interacting-with-the-daemon">Interacting with the daemon</h3>
+<ul>
+<li>Through the Unix socket <code>/var/run/docker.sock</code>. Depending on the distribution, give non-root users permission or add them to the <code>docker</code> group. Permissions on Fedora 40:</li>
+</ul>
+<pre class="hl"><code><span class="c1"># ls -la /var/run/docker.sock</span>
+srw-rw----.<span class="w"> </span><span class="m">1</span><span class="w"> </span>root<span class="w"> </span>docker<span class="w"> </span><span class="m">0</span><span class="w"> </span>Aug<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="m">12</span>:48<span class="w"> </span>/var/run/docker.sock
+</code></pre>
+<ul>
+<li><strong>No other authentication by default.</strong> Do not expose the daemon to untrusted networks: <strong>access to the socket is equivalent to passwordless root</strong> on the host.</li>
+</ul>
+<h3 id="the-docker-rest-api">The Docker REST API</h3>
+<p>Anything the CLI does is available: list, create, inspect, get logs, export, start or stop, kill, rename, pause containers. List cached images over the socket with <code>curl</code>:</p>
+<pre class="hl"><code><span class="c1"># curl --unix-socket /var/run/docker.sock \</span>
+<span class="w">    </span>http://localhost/v1.41/images/json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq
+</code></pre>
+<p>The output is detailed JSON (trimmed here to the key fields). The example pre-fetched a RHEL Universal Base Image 9 minimal, <strong>only 200 MB</strong>:</p>
+<pre class="hl"><code><span class="p">[</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"Containers"</span><span class="p">:</span><span class="w"> </span><span class="mi">-1</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"Created"</span><span class="p">:</span><span class="w"> </span><span class="mi">1724036893</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"Id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:a95dd4643de6c46ee41ea5d8b7bb4049ce82453e8ec9c8238b14e729219541fe"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"Labels"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"architecture"</span><span class="p">:</span><span class="w"> </span><span class="s2">"x86_64"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"build-date"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2024-08-19T03:00:40"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"com.redhat.component"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ubi9-container"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"io.buildah.version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1.29.0"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"io.k8s.display-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Red Hat Universal Base Image 9"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ubi9"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"9.4"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"RepoDigests"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="s2">"registry.access.redhat.com/ubi9/ubi@sha256:9e6a89ab2a9224712391c77fab2ab01009e387aff42854826427aaf18b98b1ff"</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"RepoTags"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">      </span><span class="s2">"registry.access.redhat.com/ubi9/ubi:9.4-1181.1724035907"</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"Size"</span><span class="p">:</span><span class="w"> </span><span class="mi">212442936</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"VirtualSize"</span><span class="p">:</span><span class="w"> </span><span class="mi">212442936</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">]</span>
+</code></pre>
+<p>The API suits machine-to-machine integration, not humans.</p>
+<h3 id="docker-client-commands">Docker client commands</h3>
+<p>The CLI has <strong>over 30 commands</strong>. The most common:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build</code></td>
+<td>build an image from a Dockerfile</td>
+</tr>
+<tr>
+<td><code>cp</code></td>
+<td>copy files between container and local filesystem</td>
+</tr>
+<tr>
+<td><code>exec</code></td>
+<td>run a command in a running container</td>
+</tr>
+<tr>
+<td><code>images</code></td>
+<td>list images</td>
+</tr>
+<tr>
+<td><code>inspect</code></td>
+<td>low-level information on Docker objects</td>
+</tr>
+<tr>
+<td><code>kill</code>, <code>stop</code>, <code>start</code>, <code>restart</code>, <code>rm</code></td>
+<td>control containers</td>
+</tr>
+<tr>
+<td><code>load</code>, <code>save</code></td>
+<td>load an image from or save it to a tar archive</td>
+</tr>
+<tr>
+<td><code>login</code></td>
+<td>log in to a registry</td>
+</tr>
+<tr>
+<td><code>logs</code></td>
+<td>fetch a container's logs</td>
+</tr>
+<tr>
+<td><code>ps</code></td>
+<td>list running containers</td>
+</tr>
+<tr>
+<td><code>pull</code>, <code>push</code></td>
+<td>pull from or push to a registry</td>
+</tr>
+<tr>
+<td><code>rmi</code></td>
+<td>remove images</td>
+</tr>
+<tr>
+<td><code>run</code></td>
+<td>run a command in a new container</td>
+</tr>
+<tr>
+<td><code>create</code></td>
+<td>create a container without starting it</td>
+</tr>
+<tr>
+<td><code>tag</code></td>
+<td>create a <code>TARGET_IMAGE</code> tag referring to <code>SOURCE_IMAGE</code></td>
+</tr>
+</tbody>
+</table>
+<p>The client instructs the daemon, so <strong>the daemon must be running</strong> before using the client or API.</p>
+<h3 id="docker-images">Docker images</h3>
+<ul>
+<li>Docker's image format packages binary data and metadata as a template for containers. Since <strong>version 1.12</strong> Docker adopted an image spec that evolved into the <strong>OCI Image Format Specification</strong>.</li>
+<li>The first spec already had: a list of layers, creation date, operating system, CPU architecture, and configuration parameters for the runtime.</li>
+<li>A <strong>layer</strong> is a set of filesystem changes; it holds no environment variables or default arguments (those live in the <strong>image manifest</strong>).</li>
+<li>Layers are merged into one view, usually by a <strong>union filesystem</strong>; a running container gets a <strong>read/write ephemeral layer</strong> lost on destruction.</li>
+</ul>
+<h3 id="docker-registries">Docker registries</h3>
+<ul>
+<li>A <strong>registry</strong> holds image metadata and layers for many daemons. The daemon is an HTTP API <strong>client</strong> of the registry.</li>
+<li><strong>Docker Hub</strong> is the preconfigured default (SaaS by the Docker company). <strong>Quay.io</strong> is a free SaaS alternative hosted by Red Hat. An <strong>on-premises registry</strong> is one command:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>-p<span class="w"> </span><span class="m">5000</span>:5000<span class="w"> </span>--restart<span class="o">=</span>always<span class="w"> </span>--name<span class="w"> </span>registry<span class="w"> </span>registry:2
+</code></pre>
+<p>More: https://docs.docker.com/registry/deploying/.</p>
+<h3 id="what-a-running-docker-architecture-looks-like">What a running Docker architecture looks like</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-02-docker-architecture.svg" alt="Docker: CLI to daemon to containerd to runc" loading="lazy" /></p>
+<ul>
+<li>The daemon (<code>dockerd</code>) is accompanied by <strong>containerd</strong>, which decouples container management (kernel interaction included) from the daemon, follows the OCI standard and uses <strong>runc</strong> (Figure 2.2).</li>
+</ul>
+<pre class="hl"><code><span class="c1"># systemctl status docker</span>
+●<span class="w"> </span>docker.service<span class="w"> </span>-<span class="w"> </span>Docker<span class="w"> </span>Application<span class="w"> </span>Container<span class="w"> </span>Engine
+<span class="w">   </span>Active:<span class="w"> </span>active<span class="w"> </span><span class="o">(</span>running<span class="o">)</span><span class="w"> </span>since<span class="w"> </span>Tue<span class="w"> </span><span class="m">2024</span>-09-03<span class="w"> </span><span class="m">20</span>:01:46<span class="w"> </span>UTC<span class="p">;</span><span class="w"> </span>4min<span class="w"> </span>0s<span class="w"> </span>ago
+<span class="w">   </span>Main<span class="w"> </span>PID:<span class="w"> </span><span class="m">3970</span><span class="w"> </span><span class="o">(</span>dockerd<span class="o">)</span>
+<span class="w">   </span>CGroup:<span class="w"> </span>/system.slice/docker.service
+<span class="w">           </span>└─3970<span class="w"> </span>/usr/bin/dockerd<span class="w"> </span>-H<span class="w"> </span>fd://<span class="w"> </span>--containerd<span class="o">=</span>/run/containerd/containerd.sock
+</code></pre>
+<ul>
+<li><code>containerd.service</code> runs with one child, <strong><code>containerd-shim-runc-v2</code></strong>, matching Figure 2.2. <code>docker ps</code> then lists the container (the example runs <code>centos/httpd-24-centos7:latest</code>).</li>
+<li>Chain: a container started through <strong>runc</strong>, managed by the <strong>containerd</strong> service, configured through the <strong>Docker daemon</strong>.</li>
+</ul>
+<h3 id="containerd-architecture-figures-2-3-and-2-4">containerd architecture (Figures 2.3 and 2.4)</h3>
+<ul>
+<li><strong>Two subsystems:</strong> the <strong>bundle service</strong> (extracts bundles from disk images) and the <strong>runtime service</strong> (executes bundles to create containers).</li>
+<li><strong>Modules</strong> linking subsystems:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Executor</td>
+<td>implements the container runtime (the Runtimes block)</td>
+</tr>
+<tr>
+<td>Supervisor</td>
+<td>monitors and reports container state</td>
+</tr>
+<tr>
+<td>Snapshot</td>
+<td>manages filesystem snapshots</td>
+</tr>
+<tr>
+<td>Events</td>
+<td>collects and consumes events</td>
+</tr>
+<tr>
+<td>Metrics</td>
+<td>exports metrics through the metrics API</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Flow:</strong> pull metadata and content through a <strong>distribution controller</strong>; unpack with the <strong>bundle controller</strong> into snapshots that compose bundles; run the bundle through the <strong>runtime controller</strong>.</li>
+</ul>
+<h2 id="2-2-podman-daemonless-architecture">2.2 Podman daemonless architecture</h2>
+<p><img src="/book-digest/podman-for-devops/img/pfd-02-podman-architecture.svg" alt="Podman: no daemon, conmon keeps the container running" loading="lazy" /></p>
+<ul>
+<li><strong>Podman = POD MANager</strong>: a daemonless engine managing containers, images, storage volumes and network resources. After installation <strong>there is no service to start</strong>.</li>
+<li>The <code>podman</code> binary is both <strong>CLI</strong> and <strong>container engine</strong> that orchestrates the runtime.</li>
+</ul>
+<h3 id="podman-commands-and-rest-api">Podman commands and REST API</h3>
+<p>Curated list: https://docs.podman.io/en/latest/Commands.html. Common commands (a Docker-compatible CLI):</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build</code></td>
+<td>build from a Containerfile or Dockerfile</td>
+</tr>
+<tr>
+<td><code>cp</code>, <code>exec</code>, <code>events</code>, <code>images</code>, <code>inspect</code>, <code>kill</code>, <code>load</code>, <code>login</code>, <code>logs</code>, <code>ps</code>, <code>pull</code>, <code>push</code>, <code>restart</code>, <code>rm</code>, <code>rmi</code>, <code>run</code>, <code>save</code>, <code>start</code>, <code>stop</code>, <code>tag</code></td>
+<td>as in Docker</td>
+</tr>
+<tr>
+<td><code>generate</code></td>
+<td>generate Kubernetes YAML or systemd units</td>
+</tr>
+<tr>
+<td><code>pod</code></td>
+<td>manage pods</td>
+</tr>
+<tr>
+<td><code>system</code></td>
+<td>disk usage, container migration, REST API services, storage management, pruning</td>
+</tr>
+<tr>
+<td><code>unshare</code></td>
+<td>run a command in a modified user namespace</td>
+</tr>
+<tr>
+<td><code>volume</code></td>
+<td>list, prune, create, inspect volumes</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>No daemon on a socket is needed. You can <strong>optionally</strong> run a Podman service on a Unix socket for the native REST API:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>system<span class="w"> </span>service<span class="w"> </span>--time<span class="w"> </span><span class="m">0</span><span class="w"> </span>unix://tmp/podman.sock
+</code></pre>
+<ul>
+<li><strong>Default sockets:</strong> <code>unix://run/podman/podman.sock</code> for rootful services; <code>unix://run/user/&lt;UID&gt;/podman/podman.sock</code> for non-root.</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>curl<span class="w"> </span>--unix-socket<span class="w"> </span>/tmp/podman.sock<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>http://d/v3.0.0/libpod/images/json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</code></pre>
+<p>OpenAPI docs: https://docs.podman.io/en/latest/_static/api.html. (<code>jq</code> pretty-prints the JSON.) The REST API and systemd socket activation return in chapter 3.</p>
+<h3 id="podman-building-blocks">Podman building blocks</h3>
+<p><img src="/book-digest/podman-for-devops/img/pfd-02-podman-building-blocks.svg" alt="The libraries and tools Podman is built from" loading="lazy" /></p>
+<p>Podman follows open standards, relying on community projects:</p>
+<table>
+<thead>
+<tr>
+<th>Block</th>
+<th>Component</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Container life cycle</td>
+<td>the <strong>libpod</strong> library (https://github.com/containers/podman/tree/main/libpod)</td>
+</tr>
+<tr>
+<td>Container runtime</td>
+<td>OCI-compliant runtimes, <strong>crun</strong> and <strong>runc</strong></td>
+</tr>
+<tr>
+<td>Image management</td>
+<td><code>containers/image</code> Go libraries, used by engines and registries (https://github.com/containers/container-libs/tree/main/image)</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><code>containers/storage</code> Go library: layers, images, volumes (https://github.com/containers/container-libs/tree/main/storage)</td>
+</tr>
+<tr>
+<td>Image builds</td>
+<td><strong>Buildah</strong>, a tool and library (https://github.com/containers/buildah)</td>
+</tr>
+<tr>
+<td>Runtime monitoring</td>
+<td><strong>Conmon</strong>, shared with CRI-O (https://github.com/containers/conmon)</td>
+</tr>
+<tr>
+<td>Networking</td>
+<td><strong>Netavark</strong>, Rust-based stack</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Netavark:</strong> introduced in Podman <strong>4.0</strong> with CNI as the new default; <strong>CNI deprecated in 5.0</strong>. The default network uses the <strong>bridge</strong> driver; <strong>bridge, macvlan and ipvlan</strong> are supported; plugins via the plugin API (https://github.com/containers/netavark/blob/main/plugin-API.md).</p>
+<h3 id="the-libpod-library">The libpod library</h3>
+<p>Written in Go; the key to Podman's birth; implements the engine's high-level functions. Scope:</p>
+<ul>
+<li><strong>Image formats</strong> (OCI and Docker): authenticate, pull, store layers and metadata, build, push.</li>
+<li><strong>Container life cycle:</strong> create, run, stop, kill, resume, delete, exec in running containers, logging.</li>
+<li><strong>Containers and pods:</strong> pods are sandboxed container groups sharing namespaces (UTS, IPC, network, and optionally PID) and managed together.</li>
+<li><strong>Rootless</strong> containers and pods with no privilege escalation.</li>
+<li><strong>Resource isolation</strong> through cgroups, with CLI options for memory and CPU reservation or storage read/write rate limits.</li>
+<li>A <strong>Docker-compatible CLI</strong>, and a <strong>Docker-compatible REST API</strong> on local Unix sockets (not enabled by default) covering everything the CLI does.</li>
+</ul>
+<p>libpod calls runtimes, Conmon, <code>containers/storage</code>, <code>containers/image</code>, Buildah and Netavark.</p>
+<h3 id="the-runc-and-crun-oci-runtimes">The runc and crun OCI runtimes</h3>
+<ul>
+<li>The engine orchestrates; the <strong>runtime</strong> acts. Standard: the <strong>OCI Runtime Specification</strong> (https://github.com/opencontainers/runtime-spec; lifecycle doc: https://github.com/opencontainers/runtime-spec/blob/master/runtime.md).</li>
+<li><strong>runc</strong> (https://github.com/opencontainers/runc) is the most widely adopted; born <strong>2015</strong> when Docker spun out its plumbing. It includes <strong>libcontainer</strong>, a Go package that creates containers with namespaces, cgroups, capabilities and filesystem access controls (a former independent Docker project).</li>
+<li>libcontainer bootstraps a container from namespace isolation to running the binary as <strong>PID 1</strong>. The runtime calls it to:
+<ul>
+<li>consume the mount point and metadata from Podman</li>
+<li>start the isolated process using the <code>clone()</code> and <code>unshare()</code> syscalls</li>
+<li>set up cgroup reservations</li>
+<li>set up SELinux, seccomp and AppArmor rules</li>
+</ul>
+</li>
+<li>It also initialises namespaces and file descriptors, creates the <strong>rootFS</strong> and bind mounts, exports logs, manages seccomp, SELinux and AppArmor, and creates and maps users and groups.</li>
+<li>Namespace creation happens in the <strong><code>nsexec()</code></strong> function of the <code>nsenter</code> package: <strong>C code embedded in Go through cgo</strong> (https://github.com/opencontainers/runc/blob/master/libcontainer/nsenter/nsexec.c). Interface methods: https://github.com/opencontainers/runc/blob/master/libcontainer/container_linux.go.</li>
+<li><strong>crun</strong> (https://github.com/containers/crun) is a fast, low-memory OCI runtime <strong>written in C</strong>, usable as a library. runc and crun are interchangeable; neither is for manual use.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>crun advantage</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Smaller binary</td>
+<td>about <strong>50 times smaller</strong> than runc</td>
+</tr>
+<tr>
+<td>Faster</td>
+<td>quicker at instrumenting the container under the same conditions</td>
+</tr>
+<tr>
+<td>Less memory</td>
+<td><strong>under half</strong> of runc's; helps with massive deployments and IoT; allows very low limits (4 MB and possibly less)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Why crun became Podman's default on Fedora:</strong> <strong>Fedora 31 (2019)</strong> defaulted to cgroup v2 (https://www.redhat.com/sysadmin/fedora-31-control-group-v2); runc could not manage it yet; crun could (v1 and v2), so the switch was nearly seamless. runc gained support from <strong>v1.0.0-rc93</strong>. (Chapter 1 gave Fedora 33; the two chapters differ.)</li>
+<li><strong>Switch runtimes with a flag:</strong></li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>--runtime<span class="w"> </span>/usr/bin/runc<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>fedora<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Hello World"</span>
+$<span class="w"> </span>podman<span class="w"> </span>--runtime<span class="w"> </span>/usr/bin/crun<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>fedora<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Hello World"</span>
+</code></pre>
+<ul>
+<li>Both support <strong>eBPF</strong> (user-defined programs run in a sandbox VM in the kernel, no kernel recompile; used for networking, security, observability, tracing) and <strong>CRIU</strong> (Checkpoint Restore in Userspace: freeze a running container, save its state to disk, resume later).</li>
+</ul>
+<h3 id="conmon">Conmon</h3>
+<p>Which process launches the runtime, and what monitors the container? <strong>Conmon</strong> (https://github.com/containers/conmon) sits between the engine and the runtime; <strong>one instance per container</strong>. Order seen with a tracing tool (Figure 2.5):</p>
+<ol>
+<li>The engine runs Conmon, which <strong>detaches and daemonises</strong> itself.</li>
+<li>Conmon runs the runtime instance, which starts the container and <strong>exits</strong>.</li>
+<li>Conmon keeps running as the monitoring interface while the engine process has exited.</li>
+</ol>
+<p>Three nginx containers show three Conmon processes:</p>
+<pre class="hl"><code><span class="c1"># for i in {1..3}; do podman run -d --rm docker.io/library/nginx; done</span>
+<span class="c1"># ps aux | grep conmon</span>
+root<span class="w"> </span><span class="m">4272</span><span class="w"> </span>...<span class="w"> </span>/usr/bin/conmon<span class="w"> </span>--api-version<span class="w"> </span><span class="m">1</span><span class="w"> </span>-c<span class="w"> </span>775cb306...<span class="w"> </span>-u<span class="w"> </span>775cb306...<span class="w"> </span>-r<span class="w"> </span>/usr/bin/crun<span class="w"> </span><span class="o">[</span>..omitted<span class="w"> </span>output<span class="o">]</span>
+root<span class="w"> </span><span class="m">4341</span><span class="w"> </span>...<span class="w"> </span>/usr/bin/conmon<span class="w"> </span>--api-version<span class="w"> </span><span class="m">1</span><span class="w"> </span>-c<span class="w"> </span>5abde0da...<span class="w"> </span>-u<span class="w"> </span>5abde0da...<span class="w"> </span>-r<span class="w"> </span>/usr/bin/crun<span class="w"> </span><span class="o">[</span>..omitted<span class="w"> </span>output<span class="o">]</span>
+root<span class="w"> </span><span class="m">4409</span><span class="w"> </span>...<span class="w"> </span>/usr/bin/conmon<span class="w"> </span>--api-version<span class="w"> </span><span class="m">1</span><span class="w"> </span>-c<span class="w"> </span>9cd5e446...<span class="w"> </span>-u<span class="w"> </span>9cd5e446...<span class="w"> </span>-r<span class="w"> </span>/usr/bin/crun<span class="w"> </span><span class="o">[</span>..omitted<span class="w"> </span>output<span class="o">]</span>
+</code></pre>
+<ul>
+<li>Even after Podman exits you can attach to the container through Conmon; Conmon sends <strong>logs to files or the systemd journal</strong>. It is lightweight, written in <strong>C</strong>, with Go bindings to pass config between manager and runtime. It acts as a small dedicated daemon for each container.</li>
+</ul>
+<h3 id="rootless-containers">Rootless containers</h3>
+<ul>
+<li>Standard users run their own containers, with better isolation, and the fork/exec daemonless approach makes it easy:</li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--rm<span class="w"> </span>docker.io/library/nginx
+</code></pre>
+<ul>
+<li>Podman creates a <strong>user namespace</strong> and maps UIDs with a <strong><code>uid_map</code></strong> file (see <code>man user_namespaces</code>), so container root maps to an ordinary host user.</li>
+<li>Storage is under the user's home, usually <strong><code>$HOME/.local/share/containers/storage</code></strong>.</li>
+<li>Networking for rootless containers differs from rootful; chapter 10 compares them.</li>
+</ul>
+<h3 id="oci-images">OCI images</h3>
+<p>Podman and <code>containers/image</code> implement the <strong>OCI Image Format Specification</strong> (https://github.com/opencontainers/image-spec). An OCI image is:</p>
+<ul>
+<li>a <strong>manifest</strong></li>
+<li>an optional <strong>image index</strong></li>
+<li>an <strong>image layout</strong></li>
+<li>one or more <strong>filesystem layer changeset archives</strong></li>
+<li>an <strong>image configuration</strong> document (layer order, arguments, environment)</li>
+<li>a <strong>conversion document</strong> (how translation occurs)</li>
+<li>an <strong>Artifacts Guidance</strong> document (packaging content other than images)</li>
+<li>a named <strong>descriptor</strong> (type, metadata, content address)</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Manifest</strong></td>
+<td>content-addressable; image layers and config for one architecture and OS (Linux x86_64); https://github.com/opencontainers/image-spec/blob/main/manifest.md</td>
+</tr>
+<tr>
+<td><strong>Image index</strong></td>
+<td>list of manifests for different architectures (amd64, arm64, 386) and OSes, with annotations; .../image-index.md</td>
+</tr>
+<tr>
+<td><strong>Image layout</strong></td>
+<td>directory structure of blobs; locations of manifests, the image index (JSON) and configuration; <code>index.json</code> references the manifest blob; .../image-layout.md</td>
+</tr>
+<tr>
+<td><strong>Filesystem layers</strong></td>
+<td>tar archives (gzip or zstd) applied in order as <strong>changesets</strong>; Podman uses <strong>overlayfs</strong> as its graph driver; .../layer.md</td>
+</tr>
+<tr>
+<td><strong>Image configuration</strong></td>
+<td>layer composition and execution parameters (entry points, volumes, arguments, environment) plus metadata; <strong>immutable</strong>: changing it creates a derived image; .../config.md</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Worked example: an alpine image on disk (Figure 2.6)</strong></p>
+<pre class="hl"><code># tree alpine/
+alpine/
+├── blobs
+│   └── sha256
+│       ├── 03014f0323753134bf6399ffbe26dcd75e89c6a7429adfab392d64706649f07b
+│       ├── 696d33ca1510966c426bdcc0daf05f75990d68c4eb820f615edccf7b971935e7
+│       └── a0d0a0d46f8b52473982a3c466318f479767577551a53ffc9074c9fa7035982e
+├── index.json
+└── oci-layout
+</code></pre>
+<p><code>index.json</code> has a one-item <code>manifests</code> array whose digest equals a blob's filename (the <strong>manifest</strong>):</p>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"schemaVersion"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"manifests"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"mediaType"</span><span class="p">:</span><span class="w"> </span><span class="s2">"application/vnd.oci.image.manifest.v1+json"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"digest"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:03014f0323753134bf6399ffbe26dcd75e89c6a7429adfab392d64706649f07b"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"size"</span><span class="p">:</span><span class="w"> </span><span class="mi">348</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"annotations"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"org.opencontainers.image.ref.name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"latest"</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<p>The manifest (<code>cat alpine/blobs/sha256/03014f... | jq</code>) references the config and one layer; digests again match blob filenames:</p>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"schemaVersion"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"config"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"mediaType"</span><span class="p">:</span><span class="w"> </span><span class="s2">"application/vnd.oci.image.config.v1+json"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"digest"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:696d33ca1510966c426bdcc0daf05f75990d68c4eb820f615edccf7b971935e7"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"size"</span><span class="p">:</span><span class="w"> </span><span class="mi">585</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"layers"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"mediaType"</span><span class="p">:</span><span class="w"> </span><span class="s2">"application/vnd.oci.image.layer.v1.tar+gzip"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"digest"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sha256:a0d0a0d46f8b52473982a3c466318f479767577551a53ffc9074c9fa7035982e"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"size"</span><span class="p">:</span><span class="w"> </span><span class="mi">2814446</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<p>The config blob holds metadata, environment, command, <strong>DiffID</strong> layer references and creation history:</p>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"created"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2021-08-27T17:19:45.758611523Z"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"architecture"</span><span class="p">:</span><span class="w"> </span><span class="s2">"amd64"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"os"</span><span class="p">:</span><span class="w"> </span><span class="s2">"linux"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"config"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"Env"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"Cmd"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"/bin/sh"</span><span class="p">]</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"rootfs"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"layers"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"diff_ids"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"sha256:e2eb06d8af8218cfec8210147357a68b7e13f7c485b991c288c2d01dc228bb68"</span><span class="p">]</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"history"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"created"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2021-08-27T17:19:45.553092363Z"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"created_by"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/bin/sh -c #(nop) ADD file:aad4290d... in / "</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"created"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2021-08-27T17:19:45.758611523Z"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"created_by"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/bin/sh -c #(nop) CMD [\"/bin/sh\"]"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"empty_layer"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<p>The third blob is the layer, a gzipped tar:</p>
+<pre class="hl"><code><span class="c1"># file alpine/blobs/sha256/a0d0a0d4...</span>
+gzip<span class="w"> </span>compressed<span class="w"> </span>data,<span class="w"> </span>original<span class="w"> </span>size<span class="w"> </span>modulo<span class="w"> </span><span class="m">2</span>^32<span class="w"> </span><span class="m">5865472</span>
+</code></pre>
+<h2 id="2-3-the-main-differences-between-docker-and-podman">2.3 The main differences between Docker and Podman</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Docker</th>
+<th>Podman</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Architecture</td>
+<td><strong>daemon-centric</strong></td>
+<td><strong>daemonless</strong>: binary is CLI and engine, with <strong>Conmon</strong> orchestrating and monitoring the runtime</td>
+</tr>
+<tr>
+<td>Default runtime</td>
+<td>runc</td>
+<td><strong>crun</strong> in most distributions</td>
+</tr>
+<tr>
+<td>Rootless</td>
+<td>added recently; was first in Podman</td>
+<td>first engine with it</td>
+</tr>
+<tr>
+<td>Pods</td>
+<td>create a container, then attach others to its network namespace</td>
+<td>native pods: <code>podman pod create</code>, then <code>podman run --pod</code></td>
+</tr>
+<tr>
+<td>Kubernetes</td>
+<td>none built in</td>
+<td><code>podman generate kube</code> makes Kubernetes YAML for a running container</td>
+</tr>
+<tr>
+<td>systemd</td>
+<td>external</td>
+<td><code>podlet</code> generates a systemd unit from a <code>podman run</code> command (<strong>as the book states it</strong>)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Runtime defaults by distribution:</strong> Fedora and <strong>RHEL 9</strong>: crun; the conservative <strong>RHEL 8</strong>: runc with crun optional; <strong>RHEL 10</strong> ships <strong>only crun</strong>, considered stable and production-ready. The book skips a performance comparison.</li>
+<li><strong>CLI similarity:</strong> Docker was born <strong>2013</strong>, Podman <strong>2017</strong> (4 years later). Podman kept the look and feel; early claims: <code>alias docker=podman</code> works for existing scripts, and a package places a fake <code>docker</code> under <code>/usr/bin</code> pointing to Podman. Docker-built images are OCI compatible. Table 2.1 compares commands (attach, build, commit, cp, create, diff, events, exec, export, history, images, import, info, inspect, kill, load, login, logs...) with Podman extras such as <code>auto-update</code>, <code>container</code>, <code>generate</code>, <code>healthcheck</code>, <code>image</code>, <code>init</code>.</li>
+<li><strong>Pod example:</strong></li>
+</ul>
+<pre class="hl"><code>$<span class="w"> </span>podman<span class="w"> </span>pod<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>mypod
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>--pod<span class="w"> </span>mypod<span class="w"> </span>-d<span class="w"> </span>docker.io/library/nginx
+</code></pre>
+<ul>
+<li><strong>Real-world adoption:</strong> the <strong>OpenStack</strong> project adopted Podman as the default manager for its containerised services when deployed with <strong>TripleO</strong>, orchestrated by systemd on control plane and compute nodes.</li>
+</ul>
+<h3 id="running-a-container">Running a container</h3>
+<p>Docker: client to daemon to runtime (Figure 2.7). Podman talks <strong>directly</strong> to the registry, storage, and the kernel through the runtime (a process, not a daemon), with Conmon in between (Figure 2.8). <strong>Core difference: daemon-centric versus fork/exec.</strong></p>
+<p><strong>Concerns Docker users raised about the daemon:</strong></p>
+<ul>
+<li>a <strong>single point of failure</strong></li>
+<li><strong>resource consumption</strong></li>
+<li>poor <strong>rootless</strong> support because of per-user Docker and containerd daemons</li>
+</ul>
+<p>For the end user the command is nearly identical, and options stay as close as possible to Docker's:</p>
+<pre class="hl"><code>$<span class="w"> </span>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--rm<span class="w"> </span>docker.io/library/nginx
+$<span class="w"> </span>podman<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--rm<span class="w"> </span>docker.io/library/nginx
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<p>The chapter compared architectures and usage and showed the community projects behind Podman (OCI specs, runc, crun). The authors say the book is not a debate on whether Podman beats Docker and that everyone should be grateful to Docker for bringing containers to the masses. Understanding internals pays off in troubleshooting and performance tuning.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+daemon · dockerd · containerd · containerd-shim · libcontainer · libpod · Conmon · crun vs runc · Netavark · CNI · eBPF · CRIU · OCI manifest, index, layout, layer, config · uid_map · pod · fork/exec.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Arrichiello and Salinetti, <em>Podman for DevOps</em>, 2nd ed. (Packt, 2026), ch. 2; https://learning.oreilly.com/library/view/podman-for-devops/9781835886625/</li>
+<li>Rootless containers with Podman: The basics: https://developers.redhat.com/blog/2020/09/25/rootless-containers-with-podman-the-basics</li>
+<li>How to transition from Docker to Podman: https://developers.redhat.com/blog/2020/11/19/transitioning-from-docker-to-podman</li>
+<li>cgroup v2: https://github.com/opencontainers/runc/blob/master/docs/cgroup-v2.md</li>
+<li>An introduction to crun: https://www.redhat.com/sysadmin/introduction-crun</li>
+<li>eBPF Documentation: https://ebpf.io/what-is-ebpf/</li>
+<li>Docker registry deployment: https://docs.docker.com/registry/deploying/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/podman-for-devops/pfd-01-introduction-to-container-technology/">Podman for DevOps 1: Introduction to container technology</a> · <a href="/book-digest/podman-for-devops/pfd-03-running-the-first-container/">Podman for DevOps 3: Running the first container</a></p>
+<nav class="pager"><a href="/book-digest/podman-for-devops/pfd-01-introduction-to-container-technology/">&larr; Podman for DevOps 1: Introduction to container technology</a><a href="/book-digest/podman-for-devops/">Contents</a><a href="/book-digest/podman-for-devops/pfd-03-running-the-first-container/">Podman for DevOps 3: Running the first container &rarr;</a></nav></main></body></html>

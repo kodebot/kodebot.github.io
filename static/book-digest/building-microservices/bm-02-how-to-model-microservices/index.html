@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 2: How to Model Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-2-how-to-model-microservices">Building Microservices 2: How to Model Microservices</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 2. Previous: <a href="/book-digest/building-microservices/bm-01-what-are-microservices/">Building Microservices 1: What Are Microservices?</a>. Next: <a href="/book-digest/building-microservices/bm-03-splitting-the-monolith/">Building Microservices 3: Splitting the Monolith</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A good boundary maximises <strong>independent change and deployment</strong>. Microservices are just <strong>modular decomposition with a network between modules</strong>, so structured-programming prior art applies: <strong>information hiding, cohesion, coupling</strong>.</li>
+<li><strong>Cohesion</strong>: &quot;the code that changes together, stays together.&quot; <strong>Coupling</strong>: a change to one service should not force a change to another. <strong>Constantine's law</strong>: a structure is stable if cohesion is strong and coupling is low.</li>
+<li>Coupling types from loose to tight: <strong>domain</strong>, <strong>pass-through</strong>, <strong>common</strong>, <strong>content</strong>. Avoid content coupling; <strong>temporal coupling</strong> (both services up at once) is a related concern.</li>
+<li><strong>Domain-driven design</strong> gives the main tools: <strong>ubiquitous language</strong>, <strong>aggregates</strong> (one aggregate in one microservice), <strong>bounded contexts</strong>. <strong>Event storming</strong> surfaces the domain model collaboratively.</li>
+<li>Domain and organisation are Newman's default boundary drivers; <strong>volatility, data and technology</strong> can also drive splits. Layered (horizontal) splits across teams are an anti-pattern.</li>
+</ul>
+</div></div>
+<h2 id="2-1-introducing-musiccorp">2.1 Introducing MusicCorp</h2>
+<p>A fictional online retailer, formerly brick-and-mortar, used for examples throughout (composite; see <a href="/book-digest/building-microservices/bm-01-what-are-microservices/">Building Microservices 1: What Are Microservices?</a>). Its bet: make changes as easily as possible, so &quot;microservices for the win&quot;.</p>
+<h2 id="2-2-what-makes-a-good-microservice-boundary">2.2 What makes a good microservice boundary?</h2>
+<ul>
+<li>Services must be <strong>changed, deployed and released independently</strong>; the ability to change one in isolation is vital.</li>
+<li>Microservices are another form of <strong>modular decomposition</strong>, with network interaction and its challenges, so lean on prior art in modular software. Three key concepts: <strong>information hiding</strong>
+<ul>
+<li><strong>cohesion</strong></li>
+<li><strong>coupling</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="information-hiding">Information hiding</h3>
+<ul>
+<li><strong>David Parnas</strong>
+<ul>
+<li>developed it to find the best module boundaries (1971, &quot;On the Criteria to Be Used in Decomposing Systems into Modules&quot;)</li>
+<li>Hide as many details as possible behind the boundary</li>
+<li>Benefits modules should give:</li>
+<li><strong>Improved development time:</strong> independent development allows parallel work and reduces the cost of adding developers.</li>
+<li><strong>Comprehensibility:</strong> each module can be understood in isolation, so the whole is easier to understand.</li>
+<li><strong>Flexibility:</strong> modules change independently and can be recombined for new functionality.</li>
+</ul>
+</li>
+<li>Having modules does not guarantee these outcomes; it depends on how boundaries are formed
+<ul>
+<li>Parnas: &quot;The connections between modules are the assumptions which the modules make about each other.&quot; <strong>Fewer assumptions mean fewer connections</strong>, so a developer who knows how a module is used can change it without breaking callers</li>
+<li>With microservices you can also <strong>deploy</strong> the change alone</li>
+<li>(Adrian Colyer has summarised Parnas's papers in terms of microservices.)</li>
+</ul>
+</li>
+</ul>
+<h3 id="cohesion">Cohesion</h3>
+<ul>
+<li>&quot;The code that changes together, stays together&quot; (the book could not find the original source).</li>
+<li>We optimise for ease of changing <strong>business functionality</strong>, so group related behaviour so a change lands in one place and ships as soon as possible
+<ul>
+<li>Scattered behaviour means many services released together, slower and riskier</li>
+<li>Related functionality spread across the system means <strong>weak cohesion</strong>; we want <strong>strong cohesion</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="coupling">Coupling</h3>
+<ul>
+<li>Loosely coupled services mean a change to one does not require a change to another
+<ul>
+<li>that is the whole point. A classic mistake is an <strong>integration style that tightly binds services</strong>, so internal changes force consumer changes.</li>
+</ul>
+</li>
+<li>A loosely coupled service knows as little as it needs about its collaborators
+<ul>
+<li>Limit the <strong>number of different types of calls</strong>: chatty communication can lead to tight coupling as well as performance problems.</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-interplay">The interplay</h3>
+<ul>
+<li>Related functionality spread out means changes ripple across boundaries (tighter coupling)
+<ul>
+<li><strong>Constantine's law:</strong> &quot;A structure is stable if cohesion is strong and coupling is low.&quot; (Newman earlier attributed this to Larry Constantine; the text now credits <strong>Albert Endres and Dieter Rombach</strong>, <em>A Handbook of Software and Systems Engineering</em>, 2003.)</li>
+</ul>
+</li>
+<li>Stability of boundaries matters: a contract that keeps changing in backward-incompatible ways forces consumers to change.</li>
+<li><strong>Cohesion</strong>
+<ul>
+<li>is the relationship between things <strong>inside</strong> a boundary; <strong>coupling</strong> is the relationship <strong>across</strong> a boundary</li>
+<li>There is no absolute best organisation, only trade-offs to balance for your context</li>
+<li>Parts of a system may change so much that stability is impossible (Snap CI example in chapter 3).</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-3-types-of-coupling">2.3 Types of coupling</h2>
+<p>Not all coupling is bad; some is unavoidable. The goal is to reduce it. The book synthesises a model from structured design (Yourdon and Constantine, <em>Structured Design</em>, 1976; Meilir Page-Jones, <em>The Practical Guide to Structured Systems Design</em>, 1980; both out of print).</p>
+<p><img src="/book-digest/building-microservices/img/bm-02-coupling-spectrum.svg" alt="Four types of coupling from loose to tight, with temporal coupling as a related concern" loading="lazy" /></p>
+<h3 id="domain-coupling">Domain coupling</h3>
+<ul>
+<li>One microservice <strong>needs another's functionality</strong>. Example: Order Processor calls <strong>Warehouse</strong> to reserve stock and <strong>Payment</strong> to take payment; Warehouse and Payment do not interact.</li>
+<li>Largely unavoidable and a <strong>loose</strong> form
+<ul>
+<li>But one service depending on many downstream services can mean <strong>too much logic centralised</strong>, and it becomes worse as more complex data flows</li>
+<li>Share only what you must and send the minimum data.</li>
+</ul>
+</li>
+</ul>
+<h3 id="temporal-coupling-a-note">Temporal coupling (a note)</h3>
+<ul>
+<li>In distributed systems it means <strong>one service needs another to do something at the same time</strong> for the operation to complete. A synchronous HTTP call from Order Processor to Warehouse needs Warehouse up at that moment
+<ul>
+<li>if not, the operation fails and the caller <strong>blocks</strong>, risking resource contention.</li>
+</ul>
+</li>
+<li>Not always bad, but it gets harder to scale as interactions multiply. One way to avoid it: <strong>asynchronous communication</strong>, such as a message broker.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-domain-and-temporal-coupling.svg" alt="Domain coupling and temporal coupling in the order flow" loading="lazy" /></p>
+<h3 id="pass-through-coupling">Pass-through coupling</h3>
+<ul>
+<li>A service passes data on <strong>purely because a downstream service needs it</strong> (Page-Jones called it &quot;tramp coupling&quot;)
+<ul>
+<li>Among the most problematic implementation couplings: the caller must know about the downstream service and how it works.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>Order Processor sends a <strong>Shipping Manifest</strong> (address and shipping type) to Warehouse, which passes it to Shipping</li>
+<li>If Shipping changes the format, Warehouse <strong>and</strong> Order Processor change.</li>
+</ul>
+</li>
+<li>Fixes:
+<ol>
+<li><strong>Bypass the intermediary:</strong> Order Processor calls Shipping directly. But it increases domain coupling, and now it must reserve stock with Warehouse, dispatch via Shipping, then update stock, pushing logic into Order Processor.</li>
+<li><strong>Hide the manifest requirement:</strong> Warehouse takes the information in its own contract and <strong>builds the manifest locally</strong>. Shipping's contract changes become invisible to Order Processor.</li>
+<li><strong>Treat it as an opaque blob:</strong> Order Processor still sends the manifest via Warehouse, but Warehouse does not look inside it. A format change touches Order Processor and Shipping only.</li>
+</ol>
+</li>
+<li>Even with option 2, adding a <strong>Customs Declaration</strong> for international shipping still needs all three to change if it is a required parameter
+<ul>
+<li>if optional, Shipping can deploy alone. You gain control over <strong>when and how</strong> changes roll out and avoid a lockstep rollout.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-pass-through-coupling.svg" alt="The pass-through problem and three ways to reduce it" loading="lazy" /></p>
+<h3 id="common-coupling">Common coupling</h3>
+<ul>
+<li>Two or more services use a <strong>common set of data</strong>: a shared database, shared memory or a shared filesystem. A change to the data's structure hits several services at once.</li>
+<li><strong>Benign case:</strong> multiple services reading static, read-only <strong>reference data</strong> (countries) from a shared database; Newman is relaxed about it.</li>
+<li><strong>Problem case:</strong>
+<ul>
+<li>Order Processor and Warehouse both <strong>read and write</strong> a shared Order table's Status column (Order Processor sets PLACED, PAID, COMPLETED; Warehouse sets PICKING, SHIPPED)</li>
+<li>Can one change break the other's view?</li>
+</ul>
+</li>
+<li>A <strong>finite state machine</strong> forbids invalid transitions (PLACED to PAID allowed; PLACED straight to PICKING not)
+<ul>
+<li>But if two services share the responsibility, how do they agree what is allowed? (Sagas, chapter 6.)</li>
+</ul>
+</li>
+<li><strong>Solution:</strong>
+<ul>
+<li>let <strong>one microservice manage the order state</strong>. The Order service is the <strong>source of truth</strong></li>
+<li>Warehouse and Order Processor send <strong>requests</strong>, which the Order service may <strong>reject</strong> (for example PLACED to SHIPPED).</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Treat a request to a microservice as something the downstream service can reject if it is invalid.</div><div class="callout-body">
+<p></p>
+</div></div>
+<ul>
+<li><strong>Anti-pattern:</strong> an Order service that is only a <strong>thin wrapper over database CRUD</strong> (like an object with private fields and public getters and setters): behaviour has leaked to consumers, so cohesion is weak and you are back to coordinating state transitions across services.</li>
+<li>Shared resources also cause <strong>resource contention</strong>:
+<ul>
+<li>a shared database can be overloaded by one expensive query</li>
+<li>So common coupling is sometimes fine, but often not, and speaks to weak cohesion.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-order-state-machine.svg" alt="An order state machine, illustrative" loading="lazy" /></p>
+<h3 id="content-coupling">Content coupling</h3>
+<ul>
+<li>An upstream service <strong>reaches into the internals of a downstream service and changes its state</strong>, most commonly writing directly to another service's database
+<ul>
+<li>Unlike common coupling (you know it is a shared, external dependency), ownership becomes unclear.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>Order Processor delegates state change and the valid-transition decision to the Order service, but <strong>Warehouse updates the order table directly</strong>, bypassing its checks</li>
+<li>At best duplicated logic, at worst inconsistent rules and orders in odd states</li>
+<li>The table's internal structure is exposed, so changing the Order service is risky.</li>
+</ul>
+</li>
+<li>The database effectively becomes part of the <strong>external contract</strong> with no way to say what is shared and what is hidden: &quot;information hiding has gone out of the window&quot;
+<ul>
+<li>Some call it <strong>pathological coupling</strong>.</li>
+</ul>
+</li>
+<li>Fix: Warehouse sends requests to the Order service. <strong>Avoid content coupling.</strong></li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-common-vs-content-coupling.svg" alt="Common coupling with a source of truth versus content coupling that bypasses the owner" loading="lazy" /></p>
+<h2 id="2-4-just-enough-domain-driven-design">2.4 Just enough domain-driven design</h2>
+<p>The main mechanism for finding boundaries is the <strong>domain itself</strong>, using <strong>domain-driven design (DDD)</strong> (Eric Evans, <em>Domain-Driven Design</em>, 2004). Three concepts matter here:</p>
+<table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Ubiquitous language</strong></td>
+<td>A common language, used in code and in describing the domain, to aid communication</td>
+</tr>
+<tr>
+<td><strong>Aggregate</strong></td>
+<td>A collection of objects managed as a single entity, typically a real-world concept</td>
+</tr>
+<tr>
+<td><strong>Bounded context</strong></td>
+<td>An explicit boundary within a business domain that provides functionality to the wider system but hides complexity</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ubiquitous-language">Ubiquitous language</h3>
+<p>Use the <strong>same terms in code as the users do</strong>.</p>
+<ul>
+<li><strong>Counter-example (a large bank, corporate liquidity):</strong>
+<ul>
+<li>the product owner talked about &quot;haircuts&quot; and &quot;end-of-day sweeps&quot;, but the code used a generic &quot;<strong>IBM banking model</strong>&quot; where a loan, a share purchase and a credit card were all an &quot;arrangement&quot;</li>
+<li>The code was shorn of domain understanding, analysts kept re-explaining, and work was spent translating</li>
+<li>Working the real-world language into the code made stories easier to understand and implement.</li>
+</ul>
+</li>
+</ul>
+<h3 id="aggregate">Aggregate</h3>
+<ul>
+<li>Think of an aggregate as a <strong>representation of a real domain concept</strong> (Order, Invoice, Stock Item), with <strong>state, identity and a life cycle</strong> that can be implemented as a <strong>state machine</strong>
+<ul>
+<li>An Order aggregate may contain line items that only have meaning inside it.</li>
+</ul>
+</li>
+<li>Treat aggregates as <strong>self-contained units</strong>:
+<ul>
+<li>state-transition code lives with the state</li>
+<li><strong>One aggregate is managed by one microservice</strong>, though a microservice may manage several aggregates.</li>
+</ul>
+</li>
+<li>Other services either <strong>request a change</strong> or <strong>react to events</strong> from the aggregate's owner. The aggregate <strong>can say no</strong>; ideally illegal transitions are impossible.</li>
+<li>Aggregates relate to each other (Customer to Orders and Wishlists)
+<ul>
+<li>Within one service this can be a <strong>foreign key</strong>; across services you need another way</li>
+<li>Storing a raw ID (a Finance ledger with a <code>CustID</code> column) leaves the relationship <strong>implicit</strong>, visible only in the code.</li>
+</ul>
+</li>
+<li>Better: store a <strong>URI</strong> (explicit and, in REST, dereferenceable), or a pseudo-URI scheme such as <strong>SoundCloud's</strong> <code>soundcloud:tracks:123</code> (Phil Calçado, &quot;Pattern: Using Pseudo-URIs with Microservices&quot;), which is human-readable and can support lookup code.</li>
+<li>Aggregate design is subjective; start from the <strong>mental model of the system's users</strong>, and treat implementation as secondary.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-aggregate-references.svg" alt="How aggregates relate across services, and making the reference explicit" loading="lazy" /></p>
+<h3 id="bounded-context">Bounded context</h3>
+<ul>
+<li>Typically a <strong>larger organisational boundary</strong> with explicit responsibilities
+<ul>
+<li>It <strong>hides implementation detail</strong> (the types of forklift truck in the warehouse are nobody else's concern) and <strong>contains one or more aggregates</strong>, some exposed outside, some hidden</li>
+<li>Context relationships become <strong>inter-service dependencies</strong> when mapped to services.</li>
+</ul>
+</li>
+<li>MusicCorp's <strong>warehouse</strong> and <strong>finance</strong> departments are two bounded contexts, each with an explicit interface (inventory reports, pay slips) and private detail (forklifts, calculators).</li>
+<li><strong>Hidden models:</strong>
+<ul>
+<li>the warehouse's picker and shelves are internal</li>
+<li>finance's general ledger entries are internal
+<ul>
+<li><strong>Shared models:</strong> finance needs stock information to value the company, so <strong>Stock Item</strong> appears in both</li>
+<li>The warehouse's internal Stock Item holds <strong>shelf locations</strong></li>
+</ul>
+</li>
+<li>the shared representation holds only a <strong>count</strong>, and it may be worth naming it differently (<strong>Stock Count</strong>; finance may call it an <strong>asset</strong>).</li>
+</ul>
+</li>
+<li>The same real-world thing can mean different things in different contexts, and each stores different information (finance: value; warehouse: location)
+<ul>
+<li>You may still link both to a global concept of the item and look up shared data (name, supplier) with a reference.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-bounded-context-shared-model.svg" alt="A shared model: the warehouse's Stock Item versus finance's view" loading="lazy" /></p>
+<h3 id="mapping-aggregates-and-bounded-contexts-to-microservices">Mapping aggregates and bounded contexts to microservices</h3>
+<ul>
+<li>Both are <strong>units of cohesion with well-defined interfaces</strong>, so both work as service boundaries. <strong>Start with services covering whole bounded contexts</strong> (fewer services)
+<ul>
+<li>later split further, remembering <strong>an aggregate should not be split across microservices</strong>.</li>
+</ul>
+</li>
+<li><strong>Turtles all the way down:</strong>
+<ul>
+<li>bounded contexts nest</li>
+<li>Warehouse could decompose into order fulfilment, inventory management and goods receiving</li>
+<li>Think coarse first, then subdivide along nested contexts when you need the benefit.</li>
+</ul>
+</li>
+<li>You can <strong>hide a later split</strong>:
+<ul>
+<li>Warehouse split into <strong>Inventory</strong> (Stock Items) and <strong>Shipping</strong> (Shipments) can still present one coarse-grained Warehouse API</li>
+<li>It is an implementation decision, another form of information hiding.</li>
+</ul>
+</li>
+<li>Nesting also simplifies testing: consumers stub the coarse API only, and you can run all warehouse-context services together in a larger-scoped test while stubbing other collaborators (chapter 9).</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-nested-bounded-contexts.svg" alt="A coarse Warehouse service split internally into Inventory and Shipping" loading="lazy" /></p>
+<h3 id="event-storming">Event storming</h3>
+<p>Developed by <strong>Alberto Brandolini</strong>: a collaborative exercise to surface a domain model, bringing technical and non-technical stakeholders together instead of an architect modelling alone, so the model is shared and joined-up. The result can drive event-driven <strong>or</strong> request-response systems.</p>
+<p><strong>Logistics:</strong></p>
+<ul>
+<li>Everyone in one room: users, subject matter experts, product owners (hard to schedule, especially in a pandemic).</li>
+<li>Brandolini suggests removing chairs; Newman (bad back) agrees on big space and notes it may not suit everyone. Pin large rolls of <strong>brown paper</strong> on walls.</li>
+<li><strong>Sticky notes</strong> in different colours for different concepts.</li>
+</ul>
+<p><strong>Process:</strong></p>
+<ol>
+<li><strong>Domain events</strong> (orange): facts, such as &quot;Order Placed&quot; or &quot;Payment Received&quot;. Newman's joke: events are the most numerous and orange notes are hard to get.</li>
+<li><strong>Commands</strong> (blue): human decisions that cause events; reveals the system boundary and key human actors. Do not let the current implementation warp the picture.</li>
+<li><strong>Aggregates</strong> (yellow): the noun in an event (&quot;Order&quot;) suggests an aggregate; &quot;Placed&quot; part of its life cycle. Cluster commands and events around it; see how aggregates relate.</li>
+<li><strong>Bounded contexts</strong>: group aggregates, which most commonly follow the organisation's structure.</li>
+</ol>
+<ul>
+<li>Further reading: Brandolini's <em>EventStorming</em> (Leanpub, in progress at publication).</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-event-storming-steps.svg" alt="The four steps of event storming" loading="lazy" /></p>
+<h2 id="2-5-the-case-for-ddd-for-microservices">2.5 The case for DDD for microservices</h2>
+<ol>
+<li><strong>Bounded contexts are explicitly about hiding information</strong>, so following DDD gives you information hiding (vital for stable boundaries) whether you notice or not.</li>
+<li>A <strong>ubiquitous language</strong> gives a shared vocabulary for APIs and event formats and helps decide how far to standardise language within contexts.</li>
+<li>Changes are usually changes to business capabilities; decomposing along bounded contexts isolates changes to one service and lets you deploy quickly.</li>
+<li>DDD puts the <strong>business domain at the heart</strong> of the software, building domain expertise, empathy for users and communication; it fits stream-aligned teams and helps tear down silos between IT and the business.</li>
+</ol>
+<h2 id="2-6-alternatives-to-business-domain-boundaries">2.6 Alternatives to business-domain boundaries</h2>
+<p>Newman often uses several methods with DDD.</p>
+<h3 id="volatility">Volatility</h3>
+<ul>
+<li><strong>Volatility-based decomposition</strong>
+<ul>
+<li>extracts the <strong>frequently changing</strong> parts into their own services</li>
+<li>Sound when the driver is <strong>fast time to market</strong>, but not as the only way: if the problem is scaling, it will not help much.</li>
+</ul>
+</li>
+<li>The same thinking appears in Gartner's <strong>bimodal IT</strong> (&quot;Mode 1&quot; systems of record, slow; &quot;Mode 2&quot; systems of innovation, fast)
+<ul>
+<li>Newman dislikes it: oversimplified, fixed view of the world (MusicCorp went from a web page listing stock, ordering by phone, to online ordering requiring a digitised warehouse), a place to dump hard-to-change things, and changes in innovation systems often need changes in systems of record</li>
+<li>&quot;Organizations adopting bimodal IT do end up having two speeds—slow and slower.&quot;</li>
+</ul>
+</li>
+</ul>
+<h3 id="data">Data</h3>
+<ul>
+<li>Data can drive decomposition, for example limiting which services handle <strong>PII</strong> to reduce breach risk and simplify oversight and GDPR.</li>
+<li><strong>PaymentCo</strong>
+<ul>
+<li>(a real payment company, name changed) handles full credit card data at a volume needing <strong>PCI Level 1</strong> (quarterly external assessment)</li>
+<li>To limit audit scope it split the system into a <strong>green zone</strong> (never sees card data, exempt from a full PCI audit) and a <strong>red zone</strong> (handles card data, in scope), with a <strong>gateway</strong> diverting calls</li>
+<li>Card data must <strong>never flow into the green zone</strong>, in either direction, or the separation breaks (chapter 11).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-paymentco-zones.svg" alt="PaymentCo's red and green zones around card data" loading="lazy" /></p>
+<h3 id="technology">Technology</h3>
+<ul>
+<li>A need for a different <strong>runtime model</strong> (for example Rust for performance) forces a boundary
+<ul>
+<li>different databases can coexist in one service, different runtimes cannot. As a <strong>general</strong> decomposition driver it yields the classic three-tier architecture, often a poor outcome.</li>
+</ul>
+</li>
+</ul>
+<h3 id="organisational">Organisational</h3>
+<ul>
+<li><strong>Conway's law</strong>
+<ul>
+<li>again: how you organise drives your architecture</li>
+<li>A boundary whose ownership <strong>cuts across teams</strong> rarely works well (shared ownership is fraught, chapter 15)</li>
+<li>Consider existing structure, and perhaps change it to support the architecture you want.</li>
+</ul>
+</li>
+<li>If the organisation changes, a service may need splitting if two teams now own parts of it
+<ul>
+<li>often only the owner changes. Example: moving supplier ordering from warehousing to a dedicated forecasting team is easy if a <strong>Supplier Ordering</strong> microservice exists, harder if it was embedded in a larger system.</li>
+</ul>
+</li>
+<li><strong>Anti-pattern story (California client):</strong>
+<ul>
+<li>a public global app was split for a new team in Brazil as a <strong>front half</strong> (stateless website) and a <strong>back half</strong> (an <strong>RPC interface over a data store</strong>): in effect a repository layer made into a service</li>
+<li>Both changed together, calls were low-level, brittle and chatty, needing RPC batching: &quot;onion architecture&quot; that &quot;made me cry&quot;</li>
+<li>A better split: each team owns a <strong>vertical slice</strong> (related front end plus data access).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-horizontal-vs-vertical-split.svg" alt="A horizontal split across teams versus vertical slices" loading="lazy" /></p>
+<h3 id="layering-inside-versus-outside">Layering inside versus outside</h3>
+<p>Newman is not a fan of horizontally layered architecture, but layering is fine <strong>inside</strong> a microservice. The problem is when layers become the mechanism for drawing service and ownership boundaries.</p>
+<h3 id="mixing-models-and-exceptions">Mixing models and exceptions</h3>
+<ul>
+<li>Do not be dogmatic: follow information hiding and the coupling/cohesion interplay and you avoid the worst pitfalls of any mechanism (and likely end up domain-oriented).</li>
+<li>Mechanisms interact:
+<ul>
+<li>volatility-based extraction that crosses organisational boundaries brings <strong>delivery contention</strong></li>
+<li>a domain-based Warehouse may still need splitting if part must be C++ and part Kotlin.</li>
+</ul>
+</li>
+<li>Newman's own default:
+<ul>
+<li><strong>organisational and domain-driven boundaries</strong></li>
+<li>Which factors dominate depends on your problem</li>
+<li>&quot;If someone says 'The only way to do this is X!' they are likely just selling you more dogma.&quot;</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-02-boundary-drivers.svg" alt="Forces that influence where a service boundary goes" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>A good boundary gives low coupling and strong cohesion; understanding the domain helps find those seams, and aligning services to bounded contexts preserves them.</li>
+<li>Recommended reading: Eric Evans, <em>Domain-Driven Design</em>; Vaughn Vernon, <em>Implementing Domain-Driven Design</em> (2013) and <em>Domain-Driven Design Distilled</em> (2016).</li>
+<li>Next: how to migrate an existing monolith.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Information hiding, cohesion, coupling, Constantine's law</strong>.</li>
+<li><strong>Domain, pass-through, common, content and temporal coupling</strong>.</li>
+<li><strong>Ubiquitous language, aggregate, bounded context, event storming</strong>.</li>
+<li><strong>State machine, source of truth, pseudo-URI</strong>.</li>
+<li><strong>Volatility-based decomposition, bimodal IT, PCI zones</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 2. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch02.html</li>
+<li>Parnas (1971), &quot;On the Criteria to Be Used in Decomposing Systems into Modules&quot;: https://oreil.ly/BnVVg</li>
+<li>Phil Calçado, &quot;Pattern: Using Pseudo-URIs with Microservices&quot;: https://oreil.ly/xOYMr</li>
+<li>Others as cited by the book without links:
+<ul>
+<li>Parnas, &quot;Information Distribution Aspects of Design Methodology&quot;</li>
+<li>Yourdon and Constantine (1976)</li>
+<li>Page-Jones (1980)</li>
+<li>Endres and Rombach (2003)</li>
+<li>Evans (2004)</li>
+<li>Vernon (2013, 2016)</li>
+<li>Brandolini, <em>EventStorming</em></li>
+<li>Gartner's bimodal IT.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-01-what-are-microservices/">Building Microservices 1: What Are Microservices?</a></li>
+<li><a href="/book-digest/building-microservices/bm-03-splitting-the-monolith/">Building Microservices 3: Splitting the Monolith</a></li>
+<li><a href="/book-digest/domain-driven-design-quickly/ddd-03-model-driven-design-and-building-blocks/">DDD Quickly 3: Model-driven design and its building blocks</a></li>
+<li><a href="/book-digest/domain-driven-design-quickly/ddd-06-preserving-model-integrity-and-bounded-context/">DDD Quickly 6: Preserving model integrity: bounded context, continuous integration, context map</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-01-what-are-microservices/">&larr; Building Microservices 1: What Are Microservices?</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-03-splitting-the-monolith/">Building Microservices 3: Splitting the Monolith &rarr;</a></nav></main></body></html>

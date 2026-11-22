@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Ch 10: Implementing REST endpoints</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/spring-start-here/">Spring Start Here</a></div>
+<main>
+<h1 id="ch-10-implementing-rest-endpoints">Ch 10: Implementing REST endpoints</h1>
+<p>Source: Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 10. Previous: <a href="/book-digest/spring-start-here/ch09-spring-web-scopes/">Ch 9: Using the Spring web scopes</a>. Book projects: <code>ssh_ch10_ex1</code> to <code>ssh_ch10_ex7</code>, <code>ssh_ch10_openapi</code>. Appendices C (HTTP) and D (JSON) support this chapter.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>
+<p>A <strong>REST endpoint is a controller action mapped to an HTTP method and path</strong>, but it returns <strong>data</strong> instead of a view name.</p>
+</li>
+<li>
+<p>Use <code>@RestController</code> (= <code>@Controller</code> + <code>@ResponseBody</code>).</p>
+</li>
+<li>
+<p>Returned objects become <strong>JSON</strong> by default.</p>
+</li>
+<li>
+<p>Control status and headers with <strong><code>ResponseEntity</code></strong>.</p>
+</li>
+<li>
+<p>Handle exceptions centrally with <strong><code>@RestControllerAdvice</code></strong> + <strong><code>@ExceptionHandler</code></strong>.</p>
+</li>
+<li>
+<p>Read large client data with <strong><code>@RequestBody</code></strong>.</p>
+</li>
+<li>
+<p>The author's warning: today AI tools generate many REST services, but you must check them; wrong request/response shapes cause functional bugs and security vulnerabilities.</p>
+</li>
+</ul>
+</div></div>
+<h2 id="10-1-why-rest">10.1 Why REST</h2>
+<p>REST (representational state transfer) services are among the most common ways two apps communicate: web client to backend, mobile app to backend, even backend to backend. You expose functionality as <strong>endpoints</strong>; since it is a service reached over a web protocol, it is a <strong>web service</strong>.</p>
+<p>Same Spring MVC mechanism as chapter 7, with one change: the dispatcher servlet is told <strong>not to look for a view</strong>, so the view resolver disappears and the returned data goes straight into the HTTP response.</p>
+<p><img src="/book-digest/spring-start-here/img/rest-vs-view-flow.svg" alt="Web page flow vs REST flow" loading="lazy" /></p>
+<p><strong>Problems REST calls can bring</strong> (always ask what happens if a call fails, whether data could become inconsistent, and how to show an error):</p>
+<ul>
+<li>An endpoint that takes long may <strong>time out</strong> and break communication.</li>
+<li>Sending a lot of data in one call can <strong>time out</strong>; more than a few megabytes is usually the wrong choice.</li>
+<li>Too many concurrent calls can overload the backend.</li>
+<li>The network is <strong>never 100% reliable</strong>; any call may fail.</li>
+</ul>
+<p>For API design best practices the author recommends <em>API Design Patterns</em> by J. J. Geewax (Manning, 2021).</p>
+<h2 id="10-2-first-endpoints">10.2 First endpoints</h2>
+<p>Dependency is the same web starter:</p>
+<pre class="hl"><code><span class="nt">&lt;dependency&gt;</span>
+<span class="w">  </span><span class="nt">&lt;groupId&gt;</span>org.springframework.boot<span class="nt">&lt;/groupId&gt;</span>
+<span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>spring-boot-starter-webmvc<span class="nt">&lt;/artifactId&gt;</span>
+<span class="nt">&lt;/dependency&gt;</span>
+</code></pre>
+<p><strong><code>ssh_ch10_ex1</code>:</strong> <code>@ResponseBody</code> says the method's return value is the response body, not a view name.</p>
+<pre class="hl"><code><span class="nd">@Controller</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">HelloController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@GetMapping</span><span class="p">(</span><span class="s">"/hello"</span><span class="p">)</span>
+<span class="w">    </span><span class="nd">@ResponseBody</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">hello</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"Hello!"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Repeating it per method is duplication (<code>/ciao</code> too), so use <strong><code>@RestController</code></strong> (<code>ssh_ch10_ex2</code>):</p>
+<pre class="hl"><code><span class="nd">@RestController</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">HelloController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@GetMapping</span><span class="p">(</span><span class="s">"/hello"</span><span class="p">)</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">hello</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"Hello!"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nd">@GetMapping</span><span class="p">(</span><span class="s">"/ciao"</span><span class="p">)</span><span class="w">  </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">ciao</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"Ciao!"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>If you use neither <code>@ResponseBody</code> nor <code>@RestController</code>, the dispatcher servlet assumes the returned string is a view name and looks for that view.</p>
+<h3 id="testing-endpoints-two-tools-every-developer-should-know">Testing endpoints: two tools every developer should know</h3>
+<ul>
+<li><strong>Postman</strong> (GUI): https://www.postman.com/. Choose the method, enter the URI, press Send; shows status, time, size, body, headers. Add parameters, headers or body as needed.</li>
+<li><strong>cURL</strong> (command line; useful over SSH on a VM or in batch scripts): https://curl.se/</li>
+</ul>
+<pre class="hl"><code>curl<span class="w"> </span>http://localhost:8080/hello<span class="w">          </span><span class="c1"># GET is the default, prints: Hello!</span>
+curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span>http://localhost:8080/hello<span class="w">   </span><span class="c1"># -X names the method explicitly</span>
+curl<span class="w"> </span>-v<span class="w"> </span>http://localhost:8080/hello<span class="w">       </span><span class="c1"># -v shows request, response status, headers, body</span>
+</code></pre>
+<p>Verbose output shows <code>&gt; GET /hello HTTP/1.1</code>, <code>&lt; HTTP/1.1 200</code>, <code>Content-Type: text/plain;charset=UTF-8</code>, <code>Content-Length: 6</code>, then body <code>Hello!</code>.</p>
+<h2 id="10-3-managing-the-http-response">10.3 Managing the HTTP response</h2>
+<p>The response carries <strong>headers</strong> (short values), a <strong>body</strong> (larger data) and a <strong>status</strong> (short result code).</p>
+<table>
+<thead>
+<tr>
+<th>Part of <code>ResponseEntity</code></th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status (<code>.status()</code>)</td>
+<td>200 OK, 202 Accepted, 400 Bad Request, 404, 500</td>
+</tr>
+<tr>
+<td>Headers (<code>.header()</code>)</td>
+<td>short values, e.g. <code>continent: Europe</code></td>
+</tr>
+<tr>
+<td>Body (<code>.body()</code>)</td>
+<td>the data, as JSON by default, e.g. <code>{ &quot;name&quot;: &quot;France&quot; }</code></td>
+</tr>
+</tbody>
+</table>
+<p>Spring's defaults: 200 if no exception, 404 for a missing resource, 400 for a request it could not understand, 500 for a server exception.</p>
+<h3 id="10-3-1-objects-as-the-body-ssh-ch10-ex3">10.3.1 Objects as the body (<code>ssh_ch10_ex3</code>)</h3>
+<p>Return an object and Spring turns it into a string, <strong>JSON</strong> by default (JSON basics in Appendix D). An object that models data exchanged between two apps is a <strong>DTO (data transfer object)</strong>.</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Country</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">population</span><span class="p">;</span><span class="w">     </span><span class="c1">// millions</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">Country</span><span class="w"> </span><span class="nf">of</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">population</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Country</span><span class="w"> </span><span class="n">country</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Country</span><span class="p">();</span>
+<span class="w">        </span><span class="n">country</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="n">name</span><span class="p">);</span>
+<span class="w">        </span><span class="n">country</span><span class="p">.</span><span class="na">setPopulation</span><span class="p">(</span><span class="n">population</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">country</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// getters, setters</span>
+<span class="p">}</span>
+</code></pre>
+<p><strong>Author's note:</strong> since Java 16 you can use <strong>records</strong> (concise immutable data carriers). He strongly advocates immutability at application boundaries and recommends records for HTTP request and response bodies unless something prevents it.</p>
+<pre class="hl"><code><span class="nd">@RestController</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CountryController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@GetMapping</span><span class="p">(</span><span class="s">"/france"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Country</span><span class="w"> </span><span class="nf">france</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">Country</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"France"</span><span class="p">,</span><span class="w"> </span><span class="mi">67</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nd">@GetMapping</span><span class="p">(</span><span class="s">"/all"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Country</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">countries</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">Country</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"France"</span><span class="p">,</span><span class="w"> </span><span class="mi">67</span><span class="p">),</span><span class="w"> </span><span class="n">Country</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"Spain"</span><span class="p">,</span><span class="w"> </span><span class="mi">47</span><span class="p">));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"France"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"population"</span><span class="p">:</span><span class="w"> </span><span class="mi">67</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="p">[</span>
+<span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"France"</span><span class="p">,</span><span class="w"> </span><span class="nt">"population"</span><span class="p">:</span><span class="w"> </span><span class="mi">67</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Spain"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"population"</span><span class="p">:</span><span class="w"> </span><span class="mi">47</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">]</span>
+</code></pre>
+<p>Lists use brackets; objects use curly braces separated by commas. JSON is the near-universal choice; XML or YAML are possible by plugging in a custom converter, but the author skips that as rarely needed.</p>
+<h3 id="10-3-2-status-and-headers-with-responseentity-ssh-ch10-ex4">10.3.2 Status and headers with <code>ResponseEntity</code> (<code>ssh_ch10_ex4</code>)</h3>
+<p>Spring defaults:</p>
+<ul>
+<li><strong>200 OK</strong>: no exception on the server.</li>
+<li><strong>404 Not Found</strong>: resource does not exist.</li>
+<li><strong>400 Bad Request</strong>: part of the request could not be matched to what the server expected.</li>
+<li><strong>500 Server Error</strong>: an exception on the server; usually the client can do nothing, someone must fix the backend.</li>
+</ul>
+<p>For a custom status or headers return a <code>ResponseEntity</code>:</p>
+<pre class="hl"><code><span class="nd">@GetMapping</span><span class="p">(</span><span class="s">"/france"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="o">&lt;</span><span class="n">Country</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">france</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">Country</span><span class="w"> </span><span class="n">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Country</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"France"</span><span class="p">,</span><span class="w"> </span><span class="mi">67</span><span class="p">);</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">ResponseEntity</span>
+<span class="w">          </span><span class="p">.</span><span class="na">status</span><span class="p">(</span><span class="n">HttpStatus</span><span class="p">.</span><span class="na">ACCEPTED</span><span class="p">)</span><span class="w">                  </span><span class="c1">// 202 Accepted</span>
+<span class="w">          </span><span class="p">.</span><span class="na">header</span><span class="p">(</span><span class="s">"continent"</span><span class="p">,</span><span class="w"> </span><span class="s">"Europe"</span><span class="p">)</span>
+<span class="w">          </span><span class="p">.</span><span class="na">header</span><span class="p">(</span><span class="s">"capital"</span><span class="p">,</span><span class="w"> </span><span class="s">"Paris"</span><span class="p">)</span>
+<span class="w">          </span><span class="p">.</span><span class="na">header</span><span class="p">(</span><span class="s">"favorite_food"</span><span class="p">,</span><span class="w"> </span><span class="s">"cheese and wine"</span><span class="p">)</span>
+<span class="w">          </span><span class="p">.</span><span class="na">body</span><span class="p">(</span><span class="n">c</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<p>In Postman: status shows <strong>202 Accepted</strong>, the JSON body is intact, and the three headers are in the Headers tab.</p>
+<h3 id="10-3-3-exceptions-at-the-endpoint-level">10.3.3 Exceptions at the endpoint level</h3>
+<p>Exceptions often signal business situations: a payment endpoint throws when the account has too little money, and the client should learn the specific reason.</p>
+<p><strong>Approach 1: catch in the controller (<code>ssh_ch10_ex5</code>).</strong></p>
+<pre class="hl"><code><span class="c1">// NotEnoughMoneyException.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">NotEnoughMoneyException</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">RuntimeException</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// PaymentService.java</span>
+<span class="nd">@Service</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">PaymentDetails</span><span class="w"> </span><span class="nf">processPayment</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w">   </span><span class="c1">// test stub</span>
+<span class="w">        </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">NotEnoughMoneyException</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// PaymentDetails.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentDetails</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">amount</span><span class="p">;</span>
+<span class="w">    </span><span class="cm">/* getters, setters */</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ErrorDetails.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ErrorDetails</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">message</span><span class="p">;</span>
+<span class="w">    </span><span class="cm">/* getters, setters */</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// PaymentController.java</span>
+<span class="nd">@RestController</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">PaymentService</span><span class="w"> </span><span class="n">paymentService</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">PaymentController</span><span class="p">(</span><span class="n">PaymentService</span><span class="w"> </span><span class="n">paymentService</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">paymentService</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">paymentService</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/payment"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="nf">makePayment</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">PaymentDetails</span><span class="w"> </span><span class="n">paymentDetails</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">paymentService</span><span class="p">.</span><span class="na">processPayment</span><span class="p">();</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="p">.</span><span class="na">status</span><span class="p">(</span><span class="n">HttpStatus</span><span class="p">.</span><span class="na">ACCEPTED</span><span class="p">).</span><span class="na">body</span><span class="p">(</span><span class="n">paymentDetails</span><span class="p">);</span>
+<span class="w">      </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">NotEnoughMoneyException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ErrorDetails</span><span class="w"> </span><span class="n">errorDetails</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ErrorDetails</span><span class="p">();</span>
+<span class="w">        </span><span class="n">errorDetails</span><span class="p">.</span><span class="na">setMessage</span><span class="p">(</span><span class="s">"Not enough money to make the payment."</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="p">.</span><span class="na">badRequest</span><span class="p">().</span><span class="na">body</span><span class="p">(</span><span class="n">errorDetails</span><span class="p">);</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>POST to <code>/payment</code> returns <strong>400 Bad Request</strong> with the error message in the body. It works but couples exception logic to one action and duplicates when many endpoints need it.</p>
+<p><strong>Approach 2 (the author's preference): a REST controller advice (<code>ssh_ch10_ex6</code>).</strong> It is an <strong>aspect</strong> that intercepts exceptions thrown by controller actions (compare chapter 6). The controller only handles the happy path:</p>
+<pre class="hl"><code><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/payment"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="o">&lt;</span><span class="n">PaymentDetails</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">makePayment</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">PaymentDetails</span><span class="w"> </span><span class="n">paymentDetails</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">paymentService</span><span class="p">.</span><span class="na">processPayment</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="p">.</span><span class="na">status</span><span class="p">(</span><span class="n">HttpStatus</span><span class="p">.</span><span class="na">ACCEPTED</span><span class="p">).</span><span class="na">body</span><span class="p">(</span><span class="n">paymentDetails</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ExceptionControllerAdvice.java</span>
+<span class="nd">@RestControllerAdvice</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ExceptionControllerAdvice</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@ExceptionHandler</span><span class="p">(</span><span class="n">NotEnoughMoneyException</span><span class="p">.</span><span class="na">class</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="o">&lt;</span><span class="n">ErrorDetails</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">exceptionNotEnoughMoneyHandler</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">ErrorDetails</span><span class="w"> </span><span class="n">errorDetails</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ErrorDetails</span><span class="p">();</span>
+<span class="w">      </span><span class="n">errorDetails</span><span class="p">.</span><span class="na">setMessage</span><span class="p">(</span><span class="s">"Not enough money to make the payment."</span><span class="p">);</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="p">.</span><span class="na">badRequest</span><span class="p">().</span><span class="na">body</span><span class="p">(</span><span class="n">errorDetails</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/spring-start-here/img/exception-advice.svg" alt="Controller advice" loading="lazy" /></p>
+<ul>
+<li>The advice method is an <strong>exception handler</strong>; <code>@ExceptionHandler</code> says which exception triggers it.</li>
+<li>Need details of the exception? Add a parameter of the handled exception type to the handler method; Spring passes the instance in.</li>
+</ul>
+<h3 id="sidebar-contract-first-with-openapi-ssh-ch10-openapi">Sidebar: contract-first with OpenAPI (<code>ssh_ch10_openapi</code>)</h3>
+<p>Many projects describe the API first in a specification language (method, path, variables, request and response bodies), then <strong>generate</strong> part of the implementation.</p>
+<ul>
+<li><strong>Benefits:</strong> consistency across the project; the contract is easier to share between teams and technologies than Java code; documentation is generated automatically.</li>
+<li>Out of scope for the book. For more: <em>Designing APIs with Swagger and OpenAPI</em> by Joshua S. Ponelat and Lukas L. Rosenstock (Manning, 2022).</li>
+</ul>
+<p><img src="/book-digest/spring-start-here/img/contract-first.svg" alt="Contract-first workflow" loading="lazy" /></p>
+<p>Dependency and generator plugin (partial, from the book):</p>
+<pre class="hl"><code><span class="nt">&lt;dependency&gt;</span>
+<span class="w">   </span><span class="nt">&lt;groupId&gt;</span>org.springdoc<span class="nt">&lt;/groupId&gt;</span>
+<span class="w">   </span><span class="nt">&lt;artifactId&gt;</span>springdoc-openapi-starter-webmvc-ui<span class="nt">&lt;/artifactId&gt;</span>
+<span class="w">   </span><span class="nt">&lt;version&gt;</span>2.8.5<span class="nt">&lt;/version&gt;</span>
+<span class="nt">&lt;/dependency&gt;</span>
+
+<span class="nt">&lt;plugin&gt;</span>
+<span class="w">  </span><span class="nt">&lt;groupId&gt;</span>org.openapitools<span class="nt">&lt;/groupId&gt;</span>
+<span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>openapi-generator-maven-plugin<span class="nt">&lt;/artifactId&gt;</span>
+<span class="w">  </span><span class="nt">&lt;version&gt;</span>7.11.0<span class="nt">&lt;/version&gt;</span>
+<span class="w">  </span><span class="nt">&lt;executions&gt;</span>
+<span class="w">     </span><span class="nt">&lt;execution&gt;</span>
+<span class="w">         </span><span class="nt">&lt;goals&gt;&lt;goal&gt;</span>generate<span class="nt">&lt;/goal&gt;&lt;/goals&gt;</span>
+<span class="w">         </span><span class="nt">&lt;configuration&gt;</span>
+<span class="w">           </span><span class="nt">&lt;inputSpec&gt;</span>${project.basedir}/src/main/resources/openapi.yml<span class="nt">&lt;/inputSpec&gt;</span>
+<span class="w">         </span><span class="nt">&lt;/configuration&gt;</span>
+<span class="w">     </span><span class="nt">&lt;/execution&gt;</span>
+<span class="w">  </span><span class="nt">&lt;/executions&gt;</span>
+<span class="nt">&lt;/plugin&gt;</span>
+</code></pre>
+<p>Contract (<code>openapi.yml</code>):</p>
+<pre class="hl"><code><span class="nt">openapi</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3.0.3</span>
+<span class="nt">info</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">title</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Payment API</span>
+<span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">API for processing payments</span>
+<span class="w">  </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.0.0</span>
+<span class="nt">paths</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">/payment</span><span class="p">:</span><span class="w">                        </span><span class="c1"># endpoint path</span>
+<span class="w">    </span><span class="nt">post</span><span class="p">:</span><span class="w">                          </span><span class="c1"># HTTP method</span>
+<span class="w">       </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Make a payment</span>
+<span class="w">       </span><span class="nt">operationId</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">makePayment</span><span class="w">    </span><span class="c1"># name of the generated Java method</span>
+<span class="w">       </span><span class="nt">requestBody</span><span class="p">:</span>
+<span class="w">         </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Payment details</span>
+<span class="w">         </span><span class="nt">required</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">         </span><span class="nt">content</span><span class="p">:</span>
+<span class="w">           </span><span class="nt">application/json</span><span class="p">:</span>
+<span class="w">             </span><span class="nt">schema</span><span class="p">:</span>
+<span class="w">               </span><span class="nt">$ref</span><span class="p">:</span><span class="w"> </span><span class="s">'#/components/schemas/PaymentDetails'</span>
+<span class="w">       </span><span class="nt">responses</span><span class="p">:</span>
+<span class="w">         </span><span class="s">'200'</span><span class="p p-Indicator">:</span>
+<span class="w">           </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Payment processed successfully</span>
+<span class="w">           </span><span class="nt">content</span><span class="p">:</span>
+<span class="w">             </span><span class="nt">application/json</span><span class="p">:</span>
+<span class="w">               </span><span class="nt">schema</span><span class="p">:</span>
+<span class="w">                 </span><span class="nt">$ref</span><span class="p">:</span><span class="w"> </span><span class="s">'#/components/schemas/PaymentDetails'</span>
+<span class="nt">components</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">schemas</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">PaymentDetails</span><span class="p">:</span>
+<span class="w">       </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">object</span>
+<span class="w">       </span><span class="nt">properties</span><span class="p">:</span>
+<span class="w">         </span><span class="nt">amount</span><span class="p">:</span>
+<span class="w">           </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">number</span>
+<span class="w">           </span><span class="nt">format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">double</span>
+<span class="w">           </span><span class="nt">example</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100.50</span>
+</code></pre>
+<p>Building generates classes; you implement the generated interface:</p>
+<pre class="hl"><code><span class="nd">@RestController</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentController</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">PaymentApi</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Override</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="o">&lt;</span><span class="n">PaymentDetails</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">makePayment</span><span class="p">(</span><span class="n">PaymentDetails</span><span class="w"> </span><span class="n">paymentDetails</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// business logic here</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><strong>AI-assisted tip (author):</strong> generate the API contract separately from the implementation. Have an AI tool draft the OpenAPI file, <strong>review the YAML carefully</strong>, then build to generate Java, then implement the logic. One concern at a time, and design problems show up earlier.</p>
+<h2 id="10-4-request-body-ssh-ch10-ex7">10.4 Request body (<code>ssh_ch10_ex7</code>)</h2>
+<p>Use the request body for larger data. The author's rule of thumb: anything over <strong>50 to 100 characters</strong>. Annotate the action parameter with <code>@RequestBody</code>. Spring assumes JSON and decodes it into the parameter type; if it cannot, the response is <strong>400 Bad Request</strong>.</p>
+<pre class="hl"><code><span class="nd">@RestController</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">private</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">Logger</span><span class="w"> </span><span class="n">logger</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Logger</span><span class="p">.</span><span class="na">getLogger</span><span class="p">(</span><span class="n">PaymentController</span><span class="p">.</span><span class="na">class</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span>
+
+<span class="w">  </span><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/payment"</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">public</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="o">&lt;</span><span class="n">PaymentDetails</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">makePayment</span><span class="p">(</span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">PaymentDetails</span><span class="w"> </span><span class="n">paymentDetails</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">logger</span><span class="p">.</span><span class="na">info</span><span class="p">(</span><span class="s">"Received payment "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">paymentDetails</span><span class="p">.</span><span class="na">getAmount</span><span class="p">());</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="p">.</span><span class="na">status</span><span class="p">(</span><span class="n">HttpStatus</span><span class="p">.</span><span class="na">ACCEPTED</span><span class="p">).</span><span class="na">body</span><span class="p">(</span><span class="n">paymentDetails</span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Postman: pick POST, body type raw JSON, e.g. <code>{&quot;amount&quot;: 1000}</code>. cURL:</p>
+<pre class="hl"><code>curl<span class="w"> </span>-v<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/payment<span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"amount": 1000}'</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span>
+</code></pre>
+<p><strong>Can an HTTP GET have a request body?</strong> Before 2014 the HTTP spec did not allow it, so no client or server did. The spec changed in 2014 and now allows it, which still confuses readers of old articles.</p>
+<p>It is <strong>not recommended</strong>, and many tools block it on purpose: GET was designed to be <strong>cacheable, safe, and identified only by the URL</strong>. The book cites section 4.3.1 of RFC 7231: https://tools.ietf.org/html/rfc7231#page-24.</p>
+<h2 id="chapter-summary-book">Chapter summary (book)</h2>
+<ul>
+<li>REST services are a simple way for two apps to communicate.</li>
+<li>Spring MVC supports REST endpoints: use <code>@ResponseBody</code> on the method or <code>@RestController</code> on the class. Otherwise the dispatcher servlet looks for a view.</li>
+<li>A method can return the body and rely on default statuses; use <code>ResponseEntity</code> to control status and headers.</li>
+<li>Exceptions can be handled in the action (couples logic to that action, risks duplication) or in a REST controller advice class.</li>
+<li>An endpoint gets data from the client through request parameters, path variables, or the HTTP request body (<code>@RequestBody</code>).</li>
+</ul>
+<h2 id="terms-to-carry-forward">Terms to carry forward</h2>
+<p>REST · endpoint · web service · <code>@ResponseBody</code> · <code>@RestController</code> · JSON · DTO · record · <code>ResponseEntity</code> · HTTP status (200, 202, 400, 404, 500) · <code>@RestControllerAdvice</code> · <code>@ExceptionHandler</code> · contract-first · OpenAPI · <code>@RequestBody</code> · Postman · cURL.</p>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 10. https://www.manning.com/books/spring-start-here-second-edition (unverified)</li>
+<li>RFC 7231, section 4.3.1 (GET): https://tools.ietf.org/html/rfc7231#page-24</li>
+<li>J. J. Geewax, <em>API Design Patterns</em> (Manning, 2021); Joshua S. Ponelat and Lukas L. Rosenstock, <em>Designing APIs with Swagger and OpenAPI</em> (Manning, 2022): both cited by the book.</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/spring-start-here/ch08-web-apps-with-spring-boot-and-spring-mvc/">Ch 8: Implementing web apps with Spring Boot and Spring MVC</a> · <a href="/book-digest/spring-start-here/ch06-aspects-with-spring-aop/">Ch 6: Using aspects with Spring AOP</a> · <a href="/book-digest/spring-start-here/ch11-consuming-rest-endpoints/">Ch 11: Consuming REST endpoints</a></p>
+<nav class="pager"><a href="/book-digest/spring-start-here/ch09-spring-web-scopes/">&larr; Ch 9: Using the Spring web scopes</a><a href="/book-digest/spring-start-here/">Contents</a><a href="/book-digest/spring-start-here/ch11-consuming-rest-endpoints/">Ch 11: Consuming REST endpoints &rarr;</a></nav></main></body></html>

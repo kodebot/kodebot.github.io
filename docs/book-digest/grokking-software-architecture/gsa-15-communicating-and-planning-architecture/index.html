@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 15: Communicating and Planning Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-15-communicating-and-planning-architecture">Grokking Software Architecture 15: Communicating and Planning Architecture</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 15 (final chapter). Previous: <a href="/book-digest/grokking-software-architecture/gsa-14-quality-and-observability/">Grokking Software Architecture 14: Architecting for Quality and Observability</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-appendix-a-guided-solutions/">Grokking Software Architecture: Appendix A, Guided Solutions</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The best design is worthless if you can't convince the team and stakeholders. Architecture is a <strong>human coordination</strong> task.</li>
+<li>Escape the <strong>Whiteboard Box Trap</strong> with the <strong>C4 model</strong>: Context, Containers, Components, Code. Every box: <strong>name + type</strong>; every arrow: <strong>protocol + intent</strong>; <strong>stay at one level</strong>.</li>
+<li>Tailor the message: <strong>L1</strong> for business, <strong>L2</strong> for ops/SRE/security, <strong>L3</strong> for developers.</li>
+<li>Reach consensus with an <strong>RFC</strong> (future tense, fluid), record it as an <strong>ADR</strong> (past tense, immutable). Use <strong>disagree and commit</strong>; separate <strong>two-way</strong> from <strong>one-way doors</strong>.</li>
+<li>De-risk with time-boxed <strong>spikes</strong> (throw the code away) and a <strong>Minimum Viable Architecture</strong> with metric-based evolution triggers.</li>
+<li>Use <strong>AI as an adversarial reviewer</strong>, never as the owner of the decision.</li>
+</ul>
+</div></div>
+<h2 id="15-2-why-good-diagrams-matter">15.2 Why good diagrams matter</h2>
+<p>A contractor handing you a napkin labelled &quot;The Foundation&quot; gets fired; teams routinely build multimillion-dollar systems from equally ambiguous diagrams.</p>
+<p><strong>The Whiteboard Box Trap:</strong> a box labelled &quot;Order Service&quot; could be a C# class, a Docker container, a microservice on five AWS instances, or a logical layer. Three developers form three mental models (a folder; a new Kubernetes cluster; the whole billing pipeline).</p>
+<p>A good diagram uses <strong>strict scoping, clear boundaries, standard nomenclature and the audience's needs</strong>, not everything at once (not streetlights, highways and tectonic plates on one map).</p>
+<h2 id="15-3-the-c4-model">15.3 The C4 model</h2>
+<p>Created by <strong>Simon Brown</strong> (between <strong>2006 and 2011</strong>; https://c4model.com, tooling https://structurizr.com). Four zoomable levels, like Google Maps: continent (Context), country (Containers), city (Components), house (Code).</p>
+<p><strong>History:</strong> the <strong>Method Wars</strong> of the late 1980s and early 1990s (Booch's bubbles, OMT's rounded rectangles, others' clouds) led <strong>Booch, Rumbaugh and Jacobson (&quot;The Three Amigos&quot;)</strong> to merge at Rational Software in <strong>1994</strong>; the <strong>OMG</strong> adopted <strong>UML</strong> in <strong>1997</strong>.</p>
+<p>UML's rigid notation (dozens of diagram types) became a bureaucratic paper mill of thousand-page class diagrams that were obsolete within hours; Agile threw it out, and ad-hoc boxes replaced it. C4 is the middle ground.</p>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Purpose</th>
+<th>Audience</th>
+<th>Example label</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1 System Context</strong></td>
+<td>the system as one opaque box; users and external systems; <strong>no tech jargon</strong> (Docker, Redis, C#)</td>
+<td>product managers, business stakeholders, new engineers</td>
+<td><code>Shop-Zilla System [Software System]</code></td>
+</tr>
+<tr>
+<td><strong>2 Containers</strong></td>
+<td>independently deployable or runnable units that run code or hold data (<strong>not necessarily Docker</strong>); technologies, network and data boundaries</td>
+<td>core engineers, ops, SREs, security, architects</td>
+<td><code>Order Service [Container: C# / .NET Web API]</code></td>
+</tr>
+<tr>
+<td><strong>3 Components</strong></td>
+<td>internal modules and layer boundaries of one container</td>
+<td>developers in that repository</td>
+<td><code>Order Processor [Component: Domain Logic Module]</code></td>
+</tr>
+<tr>
+<td><strong>4 Code</strong></td>
+<td>class layouts, entity-relationship, or the code itself; usually <strong>auto-generated</strong> (IDE plugins, PlantUML, fitness functions)</td>
+<td>developers and tooling</td>
+<td><code>OrderValidationComponent : AbstractValidator</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Level 2 detail: sync vs async arrows</strong></p>
+<ul>
+<li>Order Service to Order Database is a <strong>synchronous &quot;phone call&quot;</strong>: it needs certainty the row is committed now (money, receipts).</li>
+<li>Order Service to Billing is a <strong>&quot;sticky note&quot;</strong>:
+<ul>
+<li>it posts &quot;Order #1042 was placed&quot; to the broker and walks away</li>
+<li>billing may process it in 3 seconds or 3 minutes</li>
+<li>a billing crash has <strong>zero blast radius</strong> on checkout.</li>
+</ul>
+</li>
+<li><strong>Draw it:</strong> a synchronous link is a direct line (tightly bound in time); an asynchronous link <strong>interposes the broker box</strong>: producer to broker, then a separate arrow broker to consumer.</li>
+</ul>
+<p><img src="/book-digest/grokking-software-architecture/img/c4-container-diagram.svg" alt="C4 Level 2: containers of the Shop-Zilla checkout" loading="lazy" /></p>
+<p><strong>Level 3</strong> (Order Service container): Order Controller receives API traffic, an Order Validation Component checks input, an Order Processor Component applies domain rules, an Order Repository Component saves.</p>
+<p><strong>Level 4</strong> example (PlantUML text kept beside the code):</p>
+<pre class="hl"><code>@startuml
+OrderController -&gt; OrderProcessor : Validate(Order)
+OrderProcessor -&gt; InventoryGateway : CheckStock(ItemId)
+InventoryGateway --&gt; OrderProcessor : StockAvailable
+@enduml
+</code></pre>
+<p>Add <strong>architecture-as-code linters</strong> (NetArchTest, ArchUnit): &quot;core business classes may not talk to low-level database driver files&quot;: the build fails on a shortcut around the ports.</p>
+<p><strong>Three golden rules</strong></p>
+<ol>
+<li><strong>Every box has a label AND a type:</strong> <code>Inventory Service [Container: Go Web API]</code>, <code>Inventory DB [Container: MySQL Database]</code>.</li>
+<li><strong>Every arrow describes intent:</strong> <code>Sends OrderPlaced Event via AMQP</code>, <code>Queries inventory levels via SQL/TCP</code>.</li>
+<li><strong>Pick a level and stay there:</strong> don't mix business value paths and code class loops on one canvas.</li>
+</ol>
+<p>Reading: Simon Brown, <em>Software Architecture for Developers</em> (https://leanpub.com/software-architecture-for-developers).</p>
+<p><strong>Starting on Monday:</strong> don't hold a meeting to &quot;adopt a standard&quot;; draw a clean L2 or L3 in your next ticket and let colleagues copy it. Tools: PlantUML, C4-Builder, Excalidraw, Miro for speed; then <strong>Mermaid.js</strong> or <strong>Structurizr</strong>.</p>
+<h2 id="15-4-tailoring-communication">15.4 Tailoring communication</h2>
+<p>Showing a Level 3 component diagram (Entity Framework repository paths) to the CFO means a shelved proposal &quot;due to a lack of business alignment&quot;. Translate between <strong>strategy and source code</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Level</th>
+<th>They care about</th>
+<th>Avoid</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Business / product</strong></td>
+<td>L1</td>
+<td>conversion rates, budgets, time to market, user experience</td>
+<td>REST, Docker, PostgreSQL, Inversion of Control</td>
+</tr>
+<tr>
+<td><strong>Infrastructure / SRE / security</strong></td>
+<td>L2 (+ network topology: VPCs, gateways, read replicas, broker clustering)</td>
+<td>availability SLAs, blast radius, security, scalability; where data crosses network partitions, secret handling, timeout/retry tolerances, autoscaling</td>
+<td>code interfaces, libraries, domain validation</td>
+</tr>
+<tr>
+<td><strong>Software engineers</strong></td>
+<td>L3</td>
+<td>maintainability, interfaces, repo structure, testability; ports, layer boundaries, request/response payload separation, CI fitness functions</td>
+<td>business metrics, manual deployment scripts</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Pitch example</strong></p>
+<ul>
+<li><strong>Wrong:</strong> &quot;break the monolith into microservice boundaries connected via event streams to eliminate blocking database thread pools...&quot; (blank stares).</li>
+<li><strong>Right:</strong>
+<ul>
+<li>&quot;On Black Friday surges checkout crashes and we lose <strong>$30,000 an hour</strong></li>
+<li>A separate asynchronous billing service lets customers keep ordering even when third-party processors are slow, protecting conversion and revenue.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="15-5-consensus-rfcs-and-design-reviews">15.5 Consensus: RFCs and design reviews</h2>
+<p>&quot;If you want to kill a technical idea, put it in front of a committee.&quot; Unstructured reviews argue over database choices and tab spacing. Build consensus <strong>in writing first</strong>.</p>
+<p><strong>The asynchronous pipeline</strong></p>
+<ol>
+<li><strong>Scribing:</strong> draft a lightweight proposal (context, choices, quality-attribute impact).</li>
+<li><strong>Asynchronous feedback:</strong> a strict multi-day window for inline comments and edge cases.</li>
+<li><strong>Design review gate:</strong> a targeted live sync only for contested items.</li>
+<li><strong>ADR receipt:</strong> lock the RFC and archive the conclusion as an immutable ADR in the repo (ch. 2).</li>
+</ol>
+<p><strong>RFC anatomy</strong></p>
+<ol>
+<li><strong>Context and problem statement.</strong></li>
+<li><strong>System requirements and scope</strong> (non-negotiables, success boundaries, <strong>non-goals</strong>).</li>
+<li><strong>Proposed architectural options</strong> (at least two, pros and cons by quality attributes).</li>
+<li><strong>Recommendation</strong> (data-backed).</li>
+</ol>
+<p><strong>Worked sample: RFC-024 (Shop-Zilla)</strong> (status: approved, archived to ADR-012)</p>
+<ul>
+<li><strong>Problem:</strong>
+<ul>
+<li>the monolith's checkout shares one database thread pool with live catalogue queries</li>
+<li>Black Friday catalogue reads exhaust connections, cascading latency that fails payment authorisations: <strong>$30k/hour</strong> lost.</li>
+</ul>
+</li>
+<li><strong>Requirements:</strong> sustain <strong>5,000 catalogue reads/s</strong>; a catalogue lockup has <strong>zero blast radius</strong> on checkout; ship in <strong>3 weeks</strong> with <strong>3 backend developers</strong>.</li>
+<li><strong>Non-goals:</strong> no refactor of the payment gateway, billing schemas, multi-region replicas or warehouse fulfilment.</li>
+<li><strong>Option A:</strong> keep one datastore, scale up: no code change, but locks remain a single point of failure and cost scales exponentially.</li>
+<li><strong>Option B:</strong> decouple inventory into an asynchronous microservice: isolated resources and a bounded context, but a sync worker and temporary eventual consistency.</li>
+<li><strong>Recommendation:</strong> <strong>B</strong>, with a dedicated MySQL instance, accepting slight eventual consistency on browsing to guarantee checkout availability.</li>
+</ul>
+<p><strong>RFC vs ADR (legislative bill vs law)</strong></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>RFC</th>
+<th>ADR</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Phase</td>
+<td>pre-decision: proposal, feedback, adversarial alignment</td>
+<td>post-decision: archive, tracking, governance</td>
+</tr>
+<tr>
+<td>Tense</td>
+<td>future/present: &quot;we are proposing A and evaluating B&quot;</td>
+<td>past: &quot;we chose B because of timeline constraints&quot;</td>
+</tr>
+<tr>
+<td>Mutability</td>
+<td>fluid; changes with reviews</td>
+<td>immutable, versioned in Git; only superseded by a new ADR</td>
+</tr>
+<tr>
+<td>Location</td>
+<td>wikis, collaborative boards, PR threads</td>
+<td>repository under <code>/docs/adrs/</code> (or wiki)</td>
+</tr>
+</tbody>
+</table>
+<p>Reading: Richards and Ford, <em>Fundamentals of Software Architecture</em>.</p>
+<p><strong>Driving live reviews</strong></p>
+<ul>
+<li><strong>Pre-read rule:</strong> no one reads the RFC aloud; unprepared attendees observe.</li>
+<li><strong>Assign a timekeeper and a note-taker.</strong></li>
+<li><strong>Police rabbit holes:</strong> &quot;That is an implementation detail; capture it in the ticket and return to the container integration paths.&quot;</li>
+</ul>
+<p><strong>Winning buy-in:</strong> don't pitch docs as &quot;keeping files clean&quot;. Frame it as waste reduction: &quot;Last sprint we stalled three days on conflicting assumptions about the connection pool and the queue; twenty minutes writing a two-page RFC avoids that and protects the deadline.&quot;</p>
+<p><strong>Technical dissent: the three-tier escalation (disagree and commit)</strong></p>
+<ol>
+<li><strong>Isolate the true constraint:</strong> map choices to real constraints (&quot;does A or B violate our three-week window?&quot;).</li>
+<li><strong>Quantify the cost of reversal:</strong>
+<ul>
+<li><strong>Two-way doors</strong> (a date-format or logging library): pick the lowest setup effort and move on.</li>
+<li><strong>One-way doors</strong> (splitting the database, choosing a cloud provider or language): need deep synchronous reviews and spikes.</li>
+</ul>
+</li>
+<li><strong>Executive gate:</strong> for a deadlocked one-way door, someone decides. <strong>Disagree and commit:</strong> log the minority view in the ADR, sign off, and everyone aligns behind it.</li>
+</ol>
+<h2 id="15-6-de-risking-spikes-and-mvas">15.6 De-risking: spikes and MVAs</h2>
+<p>A design is a list of <strong>assumptions</strong> (the database handles the writes, the vendor API stays under 200 ms, the broker won't mangle schemas). Test risky ones before committing resources.</p>
+<h3 id="architectural-spike">Architectural spike</h3>
+<p>A <strong>brief, strictly time-boxed</strong> experiment to evaluate unknowns and gather baselines (a recon scout). Example: before migrating transactional inventory to a document store, one engineer gets <strong>48 hours</strong> to write a throwaway script firing <strong>10,000 simulated inventory mutations</strong> at a mock database.</p>
+<ul>
+<li><strong>Spike code is trash code:</strong> never merged into production branches (no review, no edge-case handling, no tests); delete or archive it.</li>
+<li><strong>Strict time box:</strong> one or two business days; if viability can't be shown, the option is too complex or volatile.</li>
+<li>AI can generate sample schemas, mock drivers and throwaway configs, and act as an adversarial reviewer first.</li>
+</ul>
+<h3 id="minimum-viable-architecture-mva">Minimum Viable Architecture (MVA)</h3>
+<p>The leanest end-to-end design supporting the required quality attributes without early complexity; it avoids the perfection traps of ch. 2 (six months of multi-region clustering for zero users).</p>
+<ul>
+<li><strong>Early stage:</strong> a thin single-container <strong>modular monolith</strong> with one database (priority: time to market).</li>
+<li><strong>Scale stage:</strong> because modules are behind port boundaries (ch. 5), billing can later move to async workers without rewriting core rules.</li>
+<li>Not sloppy code or skipped tests: a footprint matched to current scale. Reading: <em>Building Evolutionary Architectures</em>.</li>
+</ul>
+<p><strong>Architectural inflection points (triggers) for Shop-Zilla</strong></p>
+<ol>
+<li><strong>Database connection lockout:</strong> CPU pinned at <strong>100%</strong>, or the database drops more than <strong>1%</strong> of orders for lack of connections.</li>
+<li><strong>Domain team split:</strong> the organisation grows from <strong>3 to 12</strong> developers; merge friction justifies separate services.</li>
+<li><strong>Asymmetric scaling surge:</strong> on a sale, <strong>49,500 of 50,000</strong> users are browsing and searching (heavy reads) while only <strong>500</strong> swipe a card (heavy write). Splitting Inventory lets you run <strong>50 cheap read-only instances</strong> while checkout stays small, isolated and fast.</li>
+</ol>
+<h2 id="15-7-ai-as-a-brainstorming-partner">15.7 AI as a brainstorming partner</h2>
+<p>You lean toward patterns you know; AI can be an unbiased challenger. A generic prompt (&quot;a good backend architecture for e-commerce&quot;) yields buzzwords. Use the <strong>adversarial prompt blueprint</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 Role and persona</td>
+<td>&quot;Take on the role of a Principal Software Architect and an aggressive Risk Scout.&quot;</td>
+</tr>
+<tr>
+<td>2 Local constraints</td>
+<td>&quot;Time to Market 3 weeks, team of 3 backend developers.&quot;</td>
+</tr>
+<tr>
+<td>3 Proposed blueprint</td>
+<td>&quot;A synchronous REST wrapper connecting our Order Container to a local database.&quot;</td>
+</tr>
+<tr>
+<td>4 Adversarial attack</td>
+<td>&quot;Identify structural failure vectors and data-integrity risks under high concurrency. Be critical but fair.&quot;</td>
+</tr>
+<tr>
+<td>5 Constrained alternative</td>
+<td>&quot;Propose an alternative MVA that fits our timeline.&quot;</td>
+</tr>
+<tr>
+<td>6 Trade-off summary</td>
+<td>&quot;Summarise the liabilities of my plan and compare with the alternative.&quot;</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Warning:</strong> never paste proprietary source code or connection keys into a commercial model; describe integrations abstractly.</li>
+<li><strong>Hansel and Gretel trap:</strong> never surrender accountability (see &quot;AI Didn't Ruin Your Codebase. You Did.&quot;: https://www.linkedin.com/pulse/ai-didnt-ruin-your-codebase-you-did-codeliftsleep-sdnse).</li>
+<li><strong>Three risks</strong>
+<ul>
+<li><strong>Prompt injection and data security:</strong> leaking boundaries or keys into public models.</li>
+<li><strong>Hallucinated trade-offs:</strong> confident fabricated performance numbers or compatibility claims.</li>
+<li><strong>Capacity-planning illusion:</strong> AI cannot estimate real latency or compute thresholds without baseline data.</li>
+</ul>
+</li>
+</ul>
+<h2 id="15-8-the-dork-side-the-first-software-diagram-1947">15.8 The Dork Side: the first software diagram (1947)</h2>
+<p>In the mid-1940s programming <strong>ENIAC</strong> (18,000 vacuum tubes) meant physically rerouting coaxial cables across plugboards and flipping dials; early programmers included Kathleen Antonelli, Jean Bartik and Frances Spence.</p>
+<p>In <strong>1945</strong> <strong>John von Neumann</strong> wrote <em>First Draft of a Report on the EDVAC</em> proposing <strong>stored-program architecture</strong> (data and instructions as binary in the same memory). But then logic became <strong>invisible</strong>, and humans could not audit state by eye.</p>
+<ul>
+<li>In <strong>1947</strong>, at the <strong>Institute for Advanced Study (Princeton)</strong>, von Neumann and <strong>Herman Goldstine</strong> published <em>Planning and Coding of Problems for an Electronic Computing Instrument</em>, arguing it was &quot;absolute madness&quot; to code complex logic without first mapping its paths, and introduced the <strong>Flow Diagram</strong> (ancestor of the flowchart).</li>
+<li>Vocabulary: <strong>operation boxes</strong> (rectangles: variable updates), <strong>alternative boxes</strong> (diamonds: conditional forks), <strong>substitution boxes</strong> (index mutations in loops).</li>
+<li>Lesson: as systems get more abstract and distributed, diagrams must become clearer and more precise.</li>
+</ul>
+<h2 id="15-9-mission-checklist-recap">15.9 Mission, checklist, recap</h2>
+<p><strong>Mission: a C4 Level 2 Container diagram for the fragmented checkout.</strong> Product brief: browser frontend (catalogue, real-time stock, &quot;Place Order&quot;); immediate card authorisation through an external <strong>Payment Gateway API</strong> and a &quot;Success&quot; screen; stock checks must not lock the order-history database; a finalised order sends a <strong>shipping manifest</strong> to an external <strong>warehouse fulfilment system</strong>.</p>
+<p>Solve: (1) containers and databases as distinct boxes; (2) data isolation (no service touches a foreign database); (3) label <strong>every</strong> arrow with protocol and intent (HTTPS REST, gRPC, AMQP, SQL/TCP) deciding sync vs async; (4) place the two external systems visibly outside the boundary.</p>
+<p>Check that a warehouse outage cannot block checkout. (Guided solution in Appendix A; the diagram above is the model layout.)</p>
+<p><strong>Closing (the author's):</strong> stay curious; &quot;A journey of 1,000 miles begins with a single step&quot; (Lao Tzu); every time you refuse a lazy shortcut, document a decision, and defend a boundary you take that step. Sign-off: &quot;Code Hard. Lift Heavy. Sleep More.&quot;</p>
+<p><strong>Recap:</strong> standard blueprints beat whiteboard amnesia; abstractions target audiences; RFCs vs ADRs; escalate with disagree-and-commit; spikes and MVAs destroy unknowns; AI maps options but architects stay accountable; diagrams have made invisible logic visible since 1947.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+Whiteboard Box Trap · C4 (Context, Containers, Components, Code) · UML · Structurizr · PlantUML · RFC · ADR · pre-read rule · two-way / one-way door · disagree and commit · architectural spike · Minimum Viable Architecture · inflection point · adversarial prompt · Hansel and Gretel Trap · Flow Diagram.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 15. Pre-release; no public source page found.</li>
+<li>C4 model: https://c4model.com · Structurizr: https://structurizr.com</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-14-quality-and-observability/">Grokking Software Architecture 14: Architecting for Quality and Observability</a> · <a href="/book-digest/grokking-software-architecture/gsa-appendix-a-guided-solutions/">Grokking Software Architecture: Appendix A, Guided Solutions</a> · <a href="/book-digest/grokking-software-architecture/gsa-02-the-architects-toolkit/">Grokking Software Architecture 2: The Architect's Toolkit (a guide to defensible decisions)</a> · <a href="/book-digest/grokking-software-architecture/gsa-12-monoliths-vs-microservices/">Grokking Software Architecture 12: The Great Debate: Monoliths vs Microservices</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-14-quality-and-observability/">&larr; Grokking Software Architecture 14: Architecting for Quality and Observability</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-appendix-a-guided-solutions/">Grokking Software Architecture: Appendix A, Guided Solutions &rarr;</a></nav></main></body></html>

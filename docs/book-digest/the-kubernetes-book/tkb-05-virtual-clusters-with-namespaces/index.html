@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 5: Virtual Clusters with Namespaces</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-5-virtual-clusters-with-namespaces">The Kubernetes Book 5: Virtual Clusters with Namespaces</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 5. Previous: <a href="/book-digest/the-kubernetes-book/tkb-04-working-with-pods/">The Kubernetes Book 4: Working with Pods</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-06-kubernetes-deployments/">The Kubernetes Book 6: Kubernetes Deployments</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Namespaces</strong> divide one cluster into virtual clusters; they are not Linux kernel namespaces.</li>
+<li>They give <strong>soft isolation</strong> and <strong>soft multi-tenancy</strong>: separate quotas, users, RBAC and policies, but a compromised workload can still affect other Namespaces.</li>
+<li>Strong isolation between tenants needs <strong>separate clusters</strong> on their own hardware.</li>
+<li>Most objects are namespaced; Nodes and PersistentVolumes are cluster-scoped. New objects land in <code>default</code> unless told otherwise.</li>
+<li>Set the Namespace per command (<code>-n</code>), in the manifest (<code>metadata.namespace</code>), or in your kubeconfig context.</li>
+</ul>
+</div></div>
+<h2 id="5-1-intro-to-namespaces">5.1 Intro to Namespaces</h2>
+<table>
+<thead>
+<tr>
+<th>Namespace type</th>
+<th>Partitions</th>
+<th>Into</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Linux kernel namespaces</td>
+<td>Operating systems</td>
+<td>Virtual operating systems called <strong>containers</strong></td>
+</tr>
+<tr>
+<td>Kubernetes Namespaces</td>
+<td>Kubernetes clusters</td>
+<td>Virtual clusters called <strong>Namespaces</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The book capitalises &quot;Namespace&quot; for the Kubernetes API resource.</li>
+<li>Namespaces provide <strong>soft isolation</strong> and <strong>soft multi-tenancy</strong>
+<ul>
+<li>Example: separate Namespaces for dev, test and qa, each with its own quotas and policies</li>
+<li>But a compromised workload in one can easily impact others.</li>
+</ul>
+</li>
+<li><code>kubectl api-resources</code> shows which objects are namespaced
+<ul>
+<li>Non-namespaced objects such as <strong>Nodes</strong> and <strong>PersistentVolumes</strong> are <strong>cluster-scoped</strong> and cannot be deployed to a Namespace.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>kubectl<span class="w"> </span>api-resources
+</code></pre>
+<pre class="hl"><code>NAME                    SHORTNAMES   ...   NAMESPACED   KIND
+nodes                   no                 false        Node
+persistentvolumeclaims  pvc                true         PersistentVolumeClaim
+persistentvolumes       pv                 false        PersistentVolume
+pods                    po                 true         Pod
+podtemplates                               true         PodTemplate
+replicationcontrollers  rc                 true         ReplicationController
+resourcequotas          quota              true         ResourceQuota
+secrets                                    true         Secret
+serviceaccounts         sa                 true         ServiceAccount
+services                svc                true         Service
+&lt;Snip&gt;
+</code></pre>
+<ul>
+<li>Unless you say otherwise, objects go to the <strong>default</strong> Namespace.</li>
+</ul>
+<h2 id="5-2-namespace-use-cases">5.2 Namespace use cases</h2>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-05-soft-vs-hard-isolation.svg" alt="Namespaces give soft isolation; separate clusters give strong isolation" loading="lazy" /></p>
+<ul>
+<li>Namespaces let multiple <strong>tenants</strong> share a cluster. &quot;Tenant&quot; is loose: applications, teams, departments, even external customers.</li>
+<li>Most common: tenants within one organisation. Example production split matching the org chart:
+<ul>
+<li><code>finance</code> for Finance apps</li>
+<li><code>hr</code> for HR apps</li>
+<li><code>corporate-ops</code> for Corporate apps</li>
+</ul>
+</li>
+<li>Each Namespace can have its own users, permissions, resource quotas and policies.</li>
+<li>External tenants are less common because soft isolation cannot stop a compromised workload escaping to other Namespaces
+<ul>
+<li>The most common strong-isolation approach at the time of writing: each tenant on <strong>its own cluster and hardware</strong>.</li>
+</ul>
+</li>
+<li>Figure 5.1: a single cluster with two Namespaces shares nodes and control plane (compromise spreads), versus two separate clusters on dedicated hardware.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Pros</th>
+<th>Cons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Namespaces</td>
+<td>Lightweight, easy to manage</td>
+<td>Soft isolation only</td>
+</tr>
+<tr>
+<td>Multiple clusters</td>
+<td>Strong isolation</td>
+<td>Higher cost, more management overhead</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5-3-default-namespaces">5.3 Default Namespaces</h2>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>namespaces
+</code></pre>
+<pre class="hl"><code>NAME              STATUS   AGE
+default           Active   2d
+kube-system       Active   2d
+kube-public       Active   2d
+kube-node-lease   Active   2d
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>default</code></td>
+<td>Where new objects go when none is specified</td>
+</tr>
+<tr>
+<td><code>kube-system</code></td>
+<td>Control plane components such as the internal DNS service and the metrics server</td>
+</tr>
+<tr>
+<td><code>kube-public</code></td>
+<td>Objects that must be readable by anyone</td>
+</tr>
+<tr>
+<td><code>kube-node-lease</code></td>
+<td>Node heartbeats and node leases</td>
+</tr>
+</tbody>
+</table>
+<p><code>ns</code> abbreviates <code>namespace</code> in kubectl:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>describe<span class="w"> </span>ns<span class="w"> </span>default
+</code></pre>
+<pre class="hl"><code>Name:         default
+Labels:       kubernetes.io/metadata.name=default
+Annotations:  &lt;none&gt;
+Status:       Active
+No resource quota.
+No LimitRange resource.
+</code></pre>
+<p>Filter with <code>-n</code> or <code>--namespace</code>; use <code>--all-namespaces</code> for every Namespace:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>--namespace<span class="w"> </span>kube-system
+</code></pre>
+<pre class="hl"><code>NAME                 TYPE           CLUSTER-IP      EXTERNAL-IP   PORT(S)
+kube-dns             ClusterIP      10.43.0.10      &lt;none&gt;        53/UDP,53/TCP,9153...
+metrics-server       ClusterIP      10.43.4.203     &lt;none&gt;        443/TCP
+traefik-prometheus   ClusterIP      10.43.49.213    &lt;none&gt;        9100/TCP
+traefik              LoadBalancer   10.43.222.75    &lt;pending&gt;     80:31716/TCP,443:31...
+</code></pre>
+<h2 id="5-4-creating-and-managing-namespaces">5.4 Creating and managing Namespaces</h2>
+<p>Clone the repo, switch to the <code>2025</code> branch and run commands from the <code>namespaces</code> directory:</p>
+<pre class="hl"><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nigelpoulton/TKB.git
+<span class="nb">cd</span><span class="w"> </span>TKB
+git<span class="w"> </span>fetch<span class="w"> </span>origin
+git<span class="w"> </span>checkout<span class="w"> </span>-b<span class="w"> </span><span class="m">2025</span><span class="w"> </span>origin/2025
+</code></pre>
+<ul>
+<li>Namespaces are <strong>first-class resources in the core v1 API group</strong>: stable, long-standing, manageable imperatively and declaratively.</li>
+</ul>
+<p>Imperative:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>create<span class="w"> </span>ns<span class="w"> </span>hydra
+</code></pre>
+<pre class="hl"><code>namespace/hydra created
+</code></pre>
+<p>Declarative, <code>shield-ns.yml</code>:</p>
+<pre class="hl"><code><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Namespace</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">env</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">marvel</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>shield-ns.yml
+<span class="go">namespace/shield created</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>ns
+<span class="go">NAME     STATUS   AGE</span>
+<span class="go">&lt;Snip&gt;</span>
+<span class="go">hydra    Active   49s</span>
+<span class="go">shield   Active   3s</span>
+</code></pre>
+<p>(The book jokes that Shield and Hydra, bitter enemies in the Marvel Cinematic Universe, should not share a cluster separated only by Namespaces.) Delete hydra:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>delete<span class="w"> </span>ns<span class="w"> </span>hydra
+</code></pre>
+<pre class="hl"><code>namespace "hydra" deleted
+</code></pre>
+<h3 id="configure-kubectl-for-a-specific-namespace">Configure kubectl for a specific Namespace</h3>
+<p>Adding <code>-n</code> everywhere is painful; set it on your kubeconfig context instead:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>config<span class="w"> </span>set-context<span class="w"> </span>--current<span class="w"> </span>--namespace<span class="w"> </span>shield
+</code></pre>
+<pre class="hl"><code>Context "tkb" modified.
+</code></pre>
+<p>All future <code>kubectl get</code> commands now target <code>shield</code> (empty at this point).</p>
+<h2 id="5-5-deploying-objects-to-namespaces">5.5 Deploying objects to Namespaces</h2>
+<ul>
+<li>Most objects are namespaced; new ones go to <code>default</code> unless told otherwise.</li>
+<li>Two ways to target a Namespace:
+<ul>
+<li><strong>Imperatively:</strong> add <code>-n</code> or <code>--namespace</code> to commands.</li>
+<li><strong>Declaratively:</strong> set <code>metadata.namespace</code> in the manifest.</li>
+</ul>
+</li>
+</ul>
+<p><code>app.yml</code> in the <code>namespaces</code> folder defines a ServiceAccount, a Service and a Pod, all targeting <code>shield</code>:</p>
+<pre class="hl"><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ServiceAccount</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield</span><span class="w">     </span><span class="c1"># Namespace</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield</span><span class="w">     </span><span class="c1"># Namespace</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">the-bus</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LoadBalancer</span>
+<span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">    </span><span class="nt">targetPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8080</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">env</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">marvel</span>
+<span class="nn">---</span>
+<span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shield</span><span class="w">     </span><span class="c1"># Namespace</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">triskelion</span>
+<span class="c1"># &lt;Snip&gt;</span>
+</code></pre>
+<pre class="hl"><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>app.yml
+</code></pre>
+<pre class="hl"><code>serviceaccount/default configured
+service/the-bus configured
+pod/triskelion created
+</code></pre>
+<p>(A warning about a missing ServiceAccount annotation is harmless.) Verify (no <code>-n shield</code> needed if your context is set):</p>
+<pre class="hl"><code><span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>shield
+<span class="go">NAME         READY   STATUS    RESTARTS   AGE</span>
+<span class="go">triskelion   1/1     Running   0          48s</span>
+
+<span class="gp">$ </span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>shield
+<span class="go">NAME      TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)          AGE</span>
+<span class="go">the-bus   LoadBalancer   10.43.30.174   localhost     8080:31112/TCP   52s</span>
+</code></pre>
+<p>Connect to the <code>EXTERNAL-IP</code> on port 8080. Some Docker Desktop clusters wrongly show a <code>172</code> address; use <code>localhost:8080</code> instead.</p>
+<pre class="hl"><code>curl<span class="w"> </span>localhost:8080
+</code></pre>
+<pre class="hl"><code>&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;title&gt;AOS&lt;/title&gt;
+&lt;Snip&gt;
+</code></pre>
+<p>Connecting works exactly as for an app in the default Namespace.</p>
+<h3 id="clean-up">Clean up</h3>
+<p>Deleting the Namespace deletes everything in it (Pod, Service and ServiceAccount), possibly taking a few seconds:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>delete<span class="w"> </span>ns<span class="w"> </span>shield
+</code></pre>
+<pre class="hl"><code>namespace "shield" deleted
+</code></pre>
+<p>Reset the context, otherwise future commands target the deleted Namespace and return nothing:</p>
+<pre class="hl"><code>kubectl<span class="w"> </span>config<span class="w"> </span>set-context<span class="w"> </span>--current<span class="w"> </span>--namespace<span class="w"> </span>default
+</code></pre>
+<pre class="hl"><code>Context "tkb" modified.
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Namespaces divide a cluster for resource and accounting purposes; each can have its own users, RBAC rules and quotas, with policies applied selectively.</li>
+<li>They are not a strong isolation boundary, so they do not give hard multi-tenancy.</li>
+<li>Without a Namespace at deploy time, objects go to <code>default</code>.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Namespace</strong>: a virtual cluster inside a cluster (not a kernel namespace).</li>
+<li><strong>Soft isolation / multi-tenancy</strong>: separation by policy and quota, not a security boundary.</li>
+<li><strong>Cluster-scoped</strong>: not namespaced (Nodes, PersistentVolumes).</li>
+<li><strong>default, kube-system, kube-public, kube-node-lease</strong>: pre-created Namespaces.</li>
+<li><strong>Tenant</strong>: an app, team, department or customer sharing a cluster.</li>
+<li><strong>kubeconfig context Namespace</strong>: default Namespace for kubectl.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 5. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap06.xhtml</li>
+<li>https://github.com/nigelpoulton/TKB.git</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-04-working-with-pods/">The Kubernetes Book 4: Working with Pods</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-06-kubernetes-deployments/">The Kubernetes Book 6: Kubernetes Deployments</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-04-working-with-pods/">&larr; The Kubernetes Book 4: Working with Pods</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-06-kubernetes-deployments/">The Kubernetes Book 6: Kubernetes Deployments &rarr;</a></nav></main></body></html>

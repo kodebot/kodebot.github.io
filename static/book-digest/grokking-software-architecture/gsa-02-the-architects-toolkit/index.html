@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Grokking Software Architecture 2: The Architect&#x27;s Toolkit (a guide to defensible decisions)</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/grokking-software-architecture/">Grokking Software Architecture</a></div>
+<main>
+<h1 id="grokking-software-architecture-2-the-architect-s-toolkit-a-guide-to-defensible-decisions">Grokking Software Architecture 2: The Architect's Toolkit (a guide to defensible decisions)</h1>
+<p>Source: Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 2. Previous: <a href="/book-digest/grokking-software-architecture/gsa-01-the-architects-compass/">Grokking Software Architecture 1: The Architect's Compass (it's all about tradeoffs)</a>. Next: <a href="/book-digest/grokking-software-architecture/gsa-03-principles-of-sound-structure/">Grokking Software Architecture 3: The Principles of Sound Structure</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Toolkit for the 5-step process: <strong>-ilities + constraints</strong> (Inquiry), <strong>Tradeoff Triangle and weighted decision model</strong> (Options), <strong>ADR</strong> (Decision).</li>
+<li><strong>No perfect architecture</strong>; every choice has a price (time, money, energy, flexibility). Write down <strong>what you optimise for and what you explicitly do not</strong>.</li>
+<li>The architect is <strong>Explainer-in-Chief, Decision Scribe, Boundary Keeper, Risk Scout</strong>.</li>
+<li><strong>CAP theorem</strong>: during a network partition you must pick <strong>Consistency or Availability</strong>.</li>
+<li>Day-one skills: <strong>ask, do not guess; state your box (constraints); read the history (ADRs)</strong>.</li>
+</ul>
+</div></div>
+<h2 id="2-2-the-myth-of-perfect-architecture">2.2 The myth of &quot;perfect&quot; architecture</h2>
+<p>Chasing it means never shipping. Experienced engineers pick the option <strong>whose downsides they can live with today</strong>, knowing every shortcut is a <strong>technical-debt loan repaid with interest</strong>.</p>
+<ul>
+<li><strong>Prove a decision was right with metrics</strong>:
+<ul>
+<li>maintenance time saved, falling bug rates, shorter onboarding</li>
+<li>E.g</li>
+<li>critical incidents <strong>5 per month to 1</strong>
+<ul>
+<li>time to deliver a feature <strong>2 weeks to 3 days</strong> (see <em>Software Architecture Metrics</em>, Ciceri, Ford et al.: https://www.amazon.com/Software-Architecture-Metrics-Studies-Improve/dp/1098112237).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Red flags of &quot;perfect&quot; thinking:</strong>
+<ul>
+<li><strong>Abstraction Fever:</strong> &quot;add another layer, just in case&quot; (harder to debug for a problem you do not have).</li>
+<li><strong>Future-Proof Fallacy:</strong> &quot;support any database imaginable&quot; (complexity now for theoretical flexibility, and no database supported well).</li>
+<li><strong>&quot;Over the Rainbow&quot; Syndrome:</strong> &quot;optimise performance later&quot; (no plan, no quality goals defined).</li>
+</ul>
+</li>
+<li>Habit: state &quot;for this feature we optimise for speed to market; we are intentionally <strong>not</strong> optimising for sub-50 ms latency.&quot;</li>
+</ul>
+<h2 id="2-3-the-architect-s-four-roles">2.3 The architect's four roles</h2>
+<ul>
+<li><strong>Explainer-in-Chief:</strong>
+<ul>
+<li>explain the <strong>why</strong> constantly (why this database, pattern, not the others)</li>
+<li>Architecture is <strong>50% communication</strong>; the best technical idea does not auto-win, the <strong>most persuasively communicated</strong> does (you campaign like a politician)</li>
+<li>A precise shared vocabulary (&quot;Adapter pattern&quot;, &quot;Idempotency&quot;, &quot;Circuit Breaker&quot;) ends weeks of design debate</li>
+<li>Exercise: explain the Adapter pattern to a non-technical person (&quot;a universal plug connecting an American laptop to a European outlet&quot;).</li>
+</ul>
+</li>
+<li><strong>Decision Scribe:</strong> prevent <strong>&quot;decision amnesia&quot;</strong> (forgetting why six months ago) with <strong>Architecture Decision Records</strong> (see 2.7), including why you <strong>rejected</strong> alternatives.</li>
+<li><strong>Boundary Keeper:</strong>
+<ul>
+<li>enforce <strong>Separation of Concerns</strong>: no business logic leaking into UI code, database queries not taking over the system (like the Matrix agents)</li>
+<li>In modern teams you are more a <strong>Technical Advisor</strong> helping teams own their boundaries by showing the cost of logic leaks</li>
+<li>Result: maintainable, testable, changes do not cause unexpected breaks.</li>
+</ul>
+</li>
+<li><strong>Risk Scout:</strong> find scary unknowns early (&quot;can this library handle our scale? is this cloud service right?&quot;) with small experiments called <strong>spikes</strong> (chapter 15).</li>
+</ul>
+<h2 id="2-4-the-ilities-your-vocabulary-of-quality">2.4 The &quot;-ilities&quot;: your vocabulary of quality</h2>
+<p>Each quality has a <strong>price</strong>: <strong>99.999% (&quot;five nines&quot;) availability is exponentially costlier than 99.9%; sub-50 ms performance needs far more investment than 800 ms</strong>. Ask the business: &quot;which matter most and how much are we willing to pay?&quot;</p>
+<table>
+<thead>
+<tr>
+<th>Quality</th>
+<th>The question</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Reliability</strong></td>
+<td>right thing even when things go wrong, working under pressure?</td>
+</tr>
+<tr>
+<td><strong>Maintainability</strong></td>
+<td>how easy to find a bug, change, understand (&quot;don't make me think&quot;)?</td>
+</tr>
+<tr>
+<td><strong>Scalability</strong></td>
+<td>if users <strong>10x overnight</strong>, scale gracefully or die?</td>
+</tr>
+<tr>
+<td><strong>Performance</strong></td>
+<td><strong>latency</strong> (response time) and <strong>throughput</strong> (work per unit time)</td>
+</tr>
+<tr>
+<td><strong>Security</strong></td>
+<td>protect data, prevent unauthorised access, sanitise and validate inputs?</td>
+</tr>
+<tr>
+<td><strong>Testability</strong></td>
+<td>how easily can you prove it works?</td>
+</tr>
+<tr>
+<td><strong>Observability</strong></td>
+<td>can you tell what is happening inside from outputs (logs, metrics, traces)?</td>
+</tr>
+</tbody>
+</table>
+<p>Extended family: <strong>Portability</strong> (e.g. AWS to Azure), <strong>Interoperability</strong>, <strong>Usability</strong> (no 350-page manual), <strong>Availability</strong> (often a percentage like five nines), <strong>Resilience</strong> (bounces back when a service fails).</p>
+<p><strong>Never guess priorities; get them from the business:</strong></p>
+<ul>
+<li><strong>New feature, you must ASK</strong> (&quot;optimise Performance but low Maintainability and longer, or Speed to Ship but slow: which for V1?&quot;).</li>
+<li><strong>Implicit task (e.g. a &quot;site crashes under load&quot; bug), you must STATE to confirm</strong> (&quot;this improves Reliability but is complex: 2 days and delays the other feature; top priority?&quot;).</li>
+<li><strong>Exercise:</strong> per feature pick <strong>two non-negotiable -ilities</strong>, <strong>one you deliberately do not optimise</strong>, and <strong>state the consequence</strong> (e.g. recommendation engine: prioritise Performance and Scalability, de-prioritise Maintainability for V1, revisit after launch).</li>
+</ul>
+<h3 id="maintainability-in-action-javascript">Maintainability in action (JavaScript)</h3>
+<p>Before: one <code>processOrder(cartItems)</code> summing prices, applying a hardcoded 10% discount (<code>* 0.10</code>) and 8% tax (<code>* 0.08</code>): three jobs, <strong>magic numbers</strong>.</p>
+<p>After: constants <code>DISCOUNT_RATE = 0.10</code>, <code>TAX_RATE = 0.08</code> and small functions <code>calculateSubtotal</code> (<code>reduce</code>), <code>applyDiscount(amount, rate)</code> (<code>amount * (1 - rate)</code>), <code>addTax(amount, rate)</code> (<code>amount * (1 + rate)</code>), composed in <code>processOrder</code>.</p>
+<p><strong>Smell test:</strong> if describing a function needs the word <strong>&quot;and&quot;</strong>, it is hard to maintain (the &quot;S&quot; in SOLID, ch. 3). Still hardcoded, so a rate change needs a deployment; a better design stores it in a database.</p>
+<h3 id="testability-in-action-dependency-injection">Testability in action: Dependency Injection</h3>
+<ul>
+<li>Before:
+<ul>
+<li><code>ReportGeneratorBefore</code> constructs <code>new DatabaseConnection(&quot;live_connection_string&quot;)</code> inside its constructor, so it is <strong>tightly coupled</strong> (components so interdependent that a change ripples; like pistons and crankshaft of an engine)</li>
+<li>A unit test cannot control the data: the real connection returns 2 rows, the test expects 3, so it fails.</li>
+</ul>
+</li>
+<li>After:
+<ul>
+<li>
+<p><strong>Dependency Injection</strong>, an object <strong>receives</strong> its dependencies instead of creating them:</p>
+<pre class="hl"><code><span class="kr">constructor</span><span class="p">(</span><span class="nx">dbConnection</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">this</span><span class="p">.</span><span class="nx">dbConnection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">dbConnection</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+</li>
+<li>
+<p>The test injects <code>fakeDb = { getData: (query) =&gt; [&quot;row1&quot;,&quot;row2&quot;,&quot;row3&quot;] }</code> and passes</p>
+</li>
+<li>
+<p>The class now depends on an <strong>abstraction</strong> (any object with <code>getData</code>).</p>
+</li>
+</ul>
+</li>
+<li>Table:
+<ul>
+<li>coupling tight to loose</li>
+<li>testability low (needs a real DB, slow, brittle) to high (fake data, fast, reliable)</li>
+<li>flexibility low to high (swap <code>dbConnection</code> for any matching object).</li>
+</ul>
+</li>
+</ul>
+<h3 id="performance-in-action-caching">Performance in action: caching</h3>
+<p>A <strong>cache</strong> is a high-speed temporary store (RAM: Redis, Memcached) serving a subset of data far faster than the database. Before: <code>getDashboardSummary(userId)</code> runs <code>getProfile</code>, <code>getOrders</code>, <code>getActivity</code> at ~500 ms each = <strong>1500 ms</strong>; 100 simultaneous users = <strong>300 slow queries</strong>.</p>
+<p>After: check <code>cache.get(&quot;dashboard:&quot;+userId)</code> (~5 ms); on a <strong>miss</strong> run the three queries, <code>cache.set(key, data, CACHE_TTL_SECONDS = 600)</code> (10 min). First load 1505 ms, all others <strong>5 ms</strong> (about <strong>300x faster</strong>).</p>
+<ul>
+<li><strong>Cost:</strong>
+<ul>
+<li>more <strong>complexity</strong> (a new component to deploy and monitor) and weaker <strong>consistency</strong> (a new order may not show for up to 10 minutes)</li>
+<li>Make it visible: &quot;is a 10-minute delay acceptable for 300x faster?&quot; (usually yes for a dashboard).</li>
+</ul>
+</li>
+<li>The book uses <strong>Scaffolding</strong>: concepts introduced here (&quot;what and why&quot;) return in ch. 3 (&quot;how&quot;).</li>
+</ul>
+<h2 id="2-5-constraints-the-box">2.5 Constraints: the box</h2>
+<p>Constraints are the walls of the box; ignoring them gives designs that cannot be built.</p>
+<ul>
+<li><strong>Time</strong>
+<ul>
+<li>(real deadline, what if late?)</li>
+<li><strong>People</strong> (team, skills, learning curve)</li>
+<li><strong>Money</strong> (cloud, licences, team time)</li>
+<li><strong>Technology</strong> (existing systems, mandated cloud or language)</li>
+<li><strong>Risk</strong> (appetite: life-support system vs a social app for pet pictures).</li>
+</ul>
+</li>
+<li>Vocabulary:
+<ul>
+<li><strong>-ilities = NFRs = CFRs</strong> (the qualities wanted, &quot;what good looks like&quot;)</li>
+<li><strong>constraints</strong> (the limits)</li>
+<li><strong>architecture</strong> = choose a design whose most-valued qualities fit safely inside the limits you have.</li>
+</ul>
+</li>
+<li><strong>&quot;Good enough for now&quot; example (Node.js/Express):</strong>
+<ul>
+<li>export user data as CSV by <strong>tomorrow</strong> (audit)</li>
+<li>The dream is a background worker, message queue and notification service (a week of work)</li>
+<li>The optimal solution generates the CSV <strong>directly in the request</strong>: <code>app.get('/export-user-data', ...)</code> fetches <code>db.fetchUserData(userId)</code>, 404 if missing, builds <code>id,name,email</code> headers and a row, sets <code>Content-Type: text/csv</code> and <code>Content-Disposition: attachment; filename=&quot;user_data_&lt;id&gt;.csv&quot;</code></li>
+<li>Flaws (not scalable; times out on large data) but it meets the need in hours</li>
+<li>Dialling down -ilities is a <strong>privilege of the industry</strong>: in <strong>finance or healthcare</strong>, Security, Reliability and Data Integrity are <strong>permanent, non-negotiable</strong> constraints</li>
+<li>A great ADR candidate.</li>
+</ul>
+</li>
+<li><strong>Pro move: &quot;say the quiet part out loud&quot;</strong>: &quot;team of three juniors, tiny budget, six weeks&quot; eliminates whole classes of options. Constraints are a <strong>focusing force</strong>, not the enemy.</li>
+</ul>
+<h2 id="2-6-case-study-the-35-headed-hydra">2.6 Case study: the 35-headed Hydra</h2>
+<p>The book's anchor case: rebuilding a large enterprise app, a <strong>commercial credit scorecard for a large regional bank</strong> (used to decide lending of millions). <strong>35 scorecards</strong> (hotels, construction, auto dealers, retail...) with unique, overlapping rules; built <strong>20 years earlier</strong>; one shared-rule change meant hunting through dozens of files.</p>
+<ul>
+<li><strong>Risk:</strong> unsupported third-party component libraries with <strong>unpatchable security vulnerabilities</strong> affecting nearly every UI page; unacceptable for a low-risk-appetite bank.</li>
+<li><strong>Technology:</strong> dead-end stack, no easy modern replacements.</li>
+<li><strong>Time:</strong> a &quot;simple&quot; one-line change took <strong>1 to 2 days</strong>; a new scorecard was a <strong>multi-week project</strong>.</li>
+<li><strong>People:</strong> team split between <strong>firefighting the old system and building the new</strong>; constant context switching.</li>
+<li><strong>Money:</strong> huge <strong>Total Cost of Ownership (TCO)</strong>: lifetime cost including maintenance, hosting, support and <strong>opportunity cost</strong> (features not built).</li>
+<li>Had the original teams mapped constraints and documented tradeoffs in ADRs they would have seen the warning signs years earlier.</li>
+</ul>
+<h2 id="2-7-architecture-decision-records-adrs">2.7 Architecture Decision Records (ADRs)</h2>
+<p>A defensible decision is one you can <strong>explain in two minutes to a non-technical person</strong> and that <strong>still makes sense in six months</strong>. ADR concept popularised by Michael Nygard (https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions); repository of resources: https://github.com/joelparkerhenderson/architecture-decision-record.</p>
+<ul>
+<li><strong>ADR vs design doc (RFC, tech spec):</strong>
+<ul>
+<li>a design doc is a broad, heavily debated blueprint of a feature, often obsolete soon</li>
+<li>an <strong>ADR covers one significant decision</strong>, is short, and lives forever in the repo (compared again in ch. 15).</li>
+</ul>
+</li>
+<li><strong>When to write one, the S.O.S. test (any &quot;yes&quot;):</strong>
+<ul>
+<li><strong>S</strong>ignificant (changes how other parts work: swap a library, change the database)</li>
+<li><strong>O</strong>nerous to change (nightmare to rewrite in six months)</li>
+<li><strong>S</strong>urprising (nonstandard; a future dev asks &quot;why?&quot;). Otherwise a code comment. (Fowler: architecture is &quot;the important stuff... whatever that is&quot;.)</li>
+</ul>
+</li>
+<li><strong>The 8 parts:</strong>
+<ul>
+<li><strong>Metadata</strong> (date, status such as Accepted or Rejected, participants)</li>
+<li><strong>Context</strong> (problem and forces)</li>
+<li><strong>Options considered</strong> (2-3 realistic)</li>
+<li><strong>Criteria</strong> (which -ilities and constraints drive it)</li>
+<li><strong>Tradeoffs</strong> (gain and price of each)</li>
+<li><strong>Decision</strong> (choice and why, linked to criteria)</li>
+<li><strong>Risks and mitigations</strong></li>
+<li><strong>Review date or trigger</strong>
+<ul>
+<li>(&quot;after launch&quot;, &quot;above 10,000 users&quot;)</li>
+<li>Popular formal template: <strong>MADR</strong> (https://github.com/adr/madr/blob/develop/template/adr-template.md)</li>
+<li>Consistency beats the exact template</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Real example, ADR-001 &quot;Choose Session Storage for Web App&quot;</strong>
+<ul>
+<li>(users had to log in on every screen): date Nov 2, 2023, Accepted, participants S
+<ul>
+<li>Smith (Lead), A</li>
+<li>Jones, P</li>
+<li>Lee</li>
+<li>Options: <strong>in-memory</strong> (fastest and simplest, but <strong>lost on restart and not shared across servers</strong>)</li>
+<li><strong>Redis</strong> (very low latency, shared, but a new service to run)</li>
+<li><strong>database table</strong>
+<ul>
+<li>(durable and simple ops, but higher latency and extra load on the primary DB)</li>
+<li>Criteria: availability, performance (latency), deployment simplicity, cost</li>
+<li><strong>Decision: Redis</strong> (prioritising high availability and low latency)</li>
+<li>Risk: Redis outage logs out all users</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>mitigation: configure Redis for high availability and sensible <strong>TTL</strong> session timeouts
+<ul>
+<li>Review: after multi-region deployment or <strong>above 10,000 concurrent sessions</strong></li>
+<li>File naming <code>docs/adr/001-session-storage.md</code> (sequential number to reference &quot;see ADR-001&quot;, slug to find it)</li>
+</ul>
+</li>
+<li>keep ADRs <strong>in the repo</strong> so structural history sits beside the code.</li>
+</ul>
+</li>
+<li><strong>Why ADRs save money:</strong>
+<ul>
+<li><strong>faster onboarding</strong> (hours instead of days of a senior's time)</li>
+<li><strong>no decision churn</strong></li>
+<li><strong>prevents knowledge drain</strong> when people leave</li>
+<li><strong>cheaper mistakes</strong> (a one-page comparison vs three weeks building the wrong thing).</li>
+</ul>
+</li>
+<li><strong>Best practices:</strong>
+<ul>
+<li>keep them <strong>lightweight</strong></li>
+<li><strong>central and accessible</strong> (wiki or <code>docs/adr</code>)</li>
+<li>only <strong>significant</strong> decisions (too many dilute value). Introduce by writing one for your next task and linking it in your PR.</li>
+</ul>
+</li>
+<li><strong>AI help:</strong>
+<ul>
+<li>feed meeting notes to an assistant for an 8-part draft, or point it at <code>docs/adr/</code> to query past rules</li>
+<li>but a human must <strong>verify facts, own tradeoffs, sign</strong></li>
+<li>beware <strong>documentation fatigue</strong>.</li>
+</ul>
+</li>
+<li><strong>Lifecycle from document to code:</strong>
+<ul>
+<li><strong>Ticket</strong> links the ADR (e.g. &quot;must comply with docs/adr/004-stripe-integration.md&quot;)</li>
+<li><strong>Code</strong> respects it</li>
+<li><strong>Fitness functions</strong> (automated architecture tests, e.g. <strong>ArchUnit</strong>, <strong>NDepend</strong>) fail the build if &quot;UI cannot talk to the Database&quot; is violated (https://www.thoughtworks.com/insights/articles/fitness-function-driven-development; more in ch. 4)</li>
+<li><strong>Pull Request</strong> is the enforcer (architectural compliance review). &quot;The ADR is the law, the ticket is the assignment, the PR is the police officer.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-8-the-tradeoff-triangle">2.8 The Tradeoff Triangle</h2>
+<p>Make priorities visible in 30 seconds: draw a triangle, label corners with <strong>three competing priorities</strong> (classic: <strong>Speed to Ship, Cost to Operate, Ease to Change</strong>), put a <strong>dot</strong> where today's decision lands, explain it aloud (&quot;V1: dot close to Speed to Ship; OK with higher operating cost for a quarter and less ease of change until feedback&quot;).</p>
+<p>Corners can differ per decision (Security, User Experience, Performance). Use it to turn a vague argument into a priority check.</p>
+<ul>
+<li><strong>NFRs / CFRs (non-/cross-functional requirements):</strong>
+<ul>
+<li>how well a system performs, not what it does (a car's function is to drive; NFRs are top speed, safety rating, fuel efficiency)</li>
+<li>Some teams say &quot;cross-functional&quot; so the business does not de-prioritise them</li>
+<li>Day-one trio: <strong>Reliability, Security, Scalability</strong> (the foundation).</li>
+</ul>
+</li>
+</ul>
+<h3 id="2-8-1-weighted-decision-model">2.8.1 Weighted Decision Model</h3>
+<p>Turns &quot;feels&quot; into a scored grid: <strong>list options</strong> (2-3); <strong>define criteria</strong>; <strong>assign weights summing to 1.0</strong>; <strong>score 1 (poor) to 5 (excellent)</strong>, multiply by weight and sum. Session storage with Availability = 0.6, Performance = 0.3, Simplicity = 0.1:</p>
+<table>
+<thead>
+<tr>
+<th>Criterion</th>
+<th>Weight</th>
+<th>In-memory</th>
+<th>Redis</th>
+<th>Database</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Availability</td>
+<td>0.6</td>
+<td>1 (0.6)</td>
+<td>5 (3.0)</td>
+<td>4 (2.4)</td>
+</tr>
+<tr>
+<td>Performance</td>
+<td>0.3</td>
+<td>5 (1.5)</td>
+<td>4 (1.2)</td>
+<td>2 (0.6)</td>
+</tr>
+<tr>
+<td>Simplicity</td>
+<td>0.1</td>
+<td>5 (0.5)</td>
+<td>3 (0.3)</td>
+<td>4 (0.4)</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td>1.0</td>
+<td>2.60</td>
+<td><strong>4.50 (winner)</strong></td>
+<td>3.40</td>
+</tr>
+</tbody>
+</table>
+<p>If priorities shift to Performance the winner may flip. Book repo script: https://github.com/realworldbooks/Grokking_Software_Architecture (Chapter 02, Weighted_Decision_Model). <strong>Benefits:</strong> forces explicit criteria, shows the effect of changing priorities, yields a one-line rationale for the ADR.</p>
+<p><strong>Downside:</strong> ratings are subjective (one engineer's 5 is another's 3); the real value is the <strong>conversation about priorities</strong>.</p>
+<h2 id="2-9-the-dork-side-cap-theorem">2.9 The Dork Side: CAP theorem</h2>
+<p>Ticketing system, servers in <strong>New York and London</strong> syncing the remaining ticket count; a <strong>shark bites the transatlantic cable</strong> = a <strong>partition</strong> (a communication break dividing nodes into groups that cannot talk). A New York customer buys a ticket:</p>
+<ul>
+<li><strong>Choose Consistency:</strong> refuse until London confirms: data stays perfectly consistent but the user sees a spinner (Availability sacrificed).</li>
+<li><strong>Choose Availability:</strong> sell it; but if a London user bought the <strong>last ticket one second earlier</strong> you sold it twice (consistency sacrificed).</li>
+<li><strong>CAP theorem:</strong>
+<ul>
+<li>formulated by <strong>Eric Brewer</strong>, unveiled in <strong>2000</strong> at the PODC symposium keynote &quot;Towards Robust Distributed Systems&quot; (https://www.researchgate.net/publication/221343719_Towards_robust_distributed_systems)</li>
+<li>formalised by <strong>Seth Gilbert and Nancy Lynch in 2002</strong>. A distributed system can provide only <strong>two of three</strong>:</li>
+<li><strong>Consistency:</strong> all users share a common view; new writes are seen by all later requests.</li>
+<li><strong>Availability:</strong> always responds without error, possibly with slightly stale data.</li>
+<li><strong>Partition tolerance:</strong> keeps operating though servers split into groups that cannot communicate.</li>
+</ul>
+</li>
+<li>It is a <strong>specific Tradeoff Triangle</strong>
+<ul>
+<li>Over a network <strong>partitions are inevitable</strong>, so P is a <strong>requirement</strong> and the real choice is <strong>C vs A</strong></li>
+<li><strong>Exception:</strong>
+<ul>
+<li>within one highly reliable network (e.g. a single AWS region) architects can pick <strong>CA</strong></li>
+<li>across the internet or between data centres assume partitions and choose <strong>CP or AP</strong></li>
+</ul>
+</li>
+<li>In microservices, different services can choose differently (e.g. <strong>PaymentService CP</strong>, <strong>ShoppingCartService AP</strong>; ch. 12).</li>
+</ul>
+</li>
+<li><strong>What engineers need:</strong>
+<ul>
+<li>recognise the tradeoff, ask &quot;are we okay with slightly stale data for better availability?&quot; <strong>Bank transfer leans to Consistency</strong> (delay beats a wrong balance)</li>
+<li><strong>social feed leans to Availability</strong> (stale post beats an error page).</li>
+</ul>
+</li>
+<li><strong>Friendster (ch. 1):</strong> chose C at all costs, sacrificed A (40-second loads); Facebook and others chose A: a billion-dollar decision.</li>
+</ul>
+<h2 id="2-10-mission-checklist-recap">2.10 Mission, checklist, recap</h2>
+<ul>
+<li><strong>Day-one three:</strong> <strong>Ask, do not guess</strong> (which -ilities matter); <strong>State your box</strong> (constraints); <strong>Read the history</strong> (where ADRs live).</li>
+<li><strong>Mission:</strong>
+<ul>
+<li>name a small decision (e.g. default cache timeout, API retries)</li>
+<li>pick <strong>two -ilities</strong> and <strong>one to sacrifice</strong></li>
+<li>sketch the Speed/Cost/Change triangle</li>
+<li>compare 2-3 pros and cons per option</li>
+<li>complete the ADR template and commit it (e.g. <code>docs/adr/0001-cache-ttl-policy.md</code>)</li>
+<li>post a one-liner (&quot;decided on a 5-minute cache TTL for user profiles, optimising Performance, accepting slight staleness&quot;)
+<ul>
+<li><strong>Win condition:</strong> a teammate understands your choice in under two minutes.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Recap:</strong>
+<ul>
+<li>no perfect architecture</li>
+<li>-ilities are the vocabulary and criteria</li>
+<li>constraints are focusing forces</li>
+<li>the Triangle exposes competing priorities</li>
+<li>ADRs record significant choices</li>
+<li>CAP forces a C vs A tradeoff</li>
+<li>the architect is Explainer-in-Chief, Decision Scribe, Boundary Keeper, Risk Scout. Mapping to the 5 steps: -ilities and constraints for Inquiry, Triangle for Options, ADR for Decision.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+-ilities · NFR / CFR · constraints · technical debt loan · Abstraction Fever · Future-Proof Fallacy · decision amnesia · ADR · S.O.S. test · fitness function · Tradeoff Triangle · weighted decision model · tight vs loose coupling · Dependency Injection · cache · TTL · TCO · partition · CAP (CP vs AP).</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Matt Erman, <em>Grokking Software Architecture</em> (Manning, MEAP V07), ch. 2. Pre-release; no public source page found.</li>
+<li>Brewer, &quot;Towards Robust Distributed Systems&quot; (PODC 2000): https://www.researchgate.net/publication/221343719_Towards_robust_distributed_systems</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/grokking-software-architecture/gsa-01-the-architects-compass/">Grokking Software Architecture 1: The Architect's Compass (it's all about tradeoffs)</a> · <a href="/book-digest/grokking-software-architecture/gsa-03-principles-of-sound-structure/">Grokking Software Architecture 3: The Principles of Sound Structure</a> · <a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">Understanding Distributed Systems 24: Part IV intro and common failure causes</a> · <a href="/book-digest/understanding-distributed-systems/uds-20-caching/">Understanding Distributed Systems 20: Caching</a></p>
+<nav class="pager"><a href="/book-digest/grokking-software-architecture/gsa-01-the-architects-compass/">&larr; Grokking Software Architecture 1: The Architect&#x27;s Compass (it&#x27;s all about tradeoffs)</a><a href="/book-digest/grokking-software-architecture/">Contents</a><a href="/book-digest/grokking-software-architecture/gsa-03-principles-of-sound-structure/">Grokking Software Architecture 3: The Principles of Sound Structure &rarr;</a></nav></main></body></html>

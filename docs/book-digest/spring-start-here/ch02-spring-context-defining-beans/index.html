@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Ch 2: The Spring context, defining beans</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/spring-start-here/">Spring Start Here</a></div>
+<main>
+<h1 id="ch-2-the-spring-context-defining-beans">Ch 2: The Spring context, defining beans</h1>
+<p>Source: Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 2 (pp. 23-52). Previous: <a href="/book-digest/spring-start-here/ch01-spring-in-the-real-world/">Ch 1: Spring in the real world</a>. Book projects: <code>ssh_ch2_ex1</code> to <code>ssh_ch2_ex6</code>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Spring can only manage objects it knows about.</li>
+<li>The <strong>context</strong> is a place in your app's memory holding the objects Spring manages; each such object is a <strong>bean</strong>.</li>
+<li>Three ways to put a bean in:</li>
+</ul>
+<ol>
+<li><strong><code>@Bean</code> methods</strong>: full control over creation.</li>
+<li><strong>Stereotype annotations</strong> like <code>@Component</code>: least code.</li>
+<li><strong><code>registerBean()</code></strong>: programmatic, for conditional logic.</li>
+</ol>
+<p><img src="/book-digest/spring-start-here/img/spring-context.svg" alt="Your app memory contains plain objects (invisible to Spring) and the Spring context, whose beans get framework features" loading="lazy" /></p>
+<ul>
+<li><strong>Definition (book):</strong> a bean is an object instance that has been added to the Spring context; once there, Spring manages it entirely and can connect framework capabilities to it.</li>
+<li><strong>Not every object must be a bean.</strong> Only the ones Spring needs to &quot;know&quot; so it can attach features to them. (Illustrative: a short-lived <code>StringBuilder</code> inside a method stays plain.)</li>
+<li>By default Spring knows none of your objects.</li>
+</ul>
+</div></div>
+<h2 id="2-1-setup-the-skeleton-project-ssh-ch2-ex1">2.1 Setup: the skeleton project (<code>ssh_ch2_ex1</code>)</h2>
+<p>The book's running example is a <code>Parrot</code> class with a <code>name</code> (any class works; <code>Foo</code> is fine).</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Parrot</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// getters and setters omitted</span>
+<span class="p">}</span>
+</code></pre>
+<p>Maven <code>pom.xml</code> dependency (Java 25 LTS, Spring 7.0.1 in the book):</p>
+<pre class="hl"><code><span class="nt">&lt;dependency&gt;</span>
+<span class="w">  </span><span class="nt">&lt;groupId&gt;</span>org.springframework<span class="nt">&lt;/groupId&gt;</span>
+<span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>spring-context<span class="nt">&lt;/artifactId&gt;</span>
+<span class="w">  </span><span class="nt">&lt;version&gt;</span>7.0.1<span class="nt">&lt;/version&gt;</span>
+<span class="nt">&lt;/dependency&gt;</span>
+</code></pre>
+<ul>
+<li><strong>Spring is modular:</strong>
+<ul>
+<li>add only the parts you use. <code>spring-context</code> is enough here. All Spring dependencies live in the <code>org.springframework</code> group</li>
+<li>look them up in the Spring reference, no need to memorise.</li>
+</ul>
+</li>
+<li><strong>Creating the context:</strong></li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AnnotationConfigApplicationContext</span><span class="p">();</span>
+</code></pre>
+<p><code>AnnotationConfigApplicationContext</code> is the implementation for annotation-based config (the most common). The book advises not to dive into the context class hierarchy yet: you would lose the essentials.</p>
+<ul>
+<li>Java 25 note: the book's listings alternate between <code>public static void main(String[] args)</code> and the Java 25 shorthand <code>static void main()</code>.</li>
+</ul>
+<h2 id="2-2-way-1-the-bean-annotation">2.2 Way 1: the <code>@Bean</code> annotation</h2>
+<p>Three steps:</p>
+<p><img src="/book-digest/spring-start-here/img/bean-steps.svg" alt="Three steps to add a bean with @Bean" loading="lazy" /></p>
+<p><strong>Step 1, config class</strong> (a special class telling Spring what to do, e.g. create beans, enable features):</p>
+<pre class="hl"><code><span class="nd">@Configuration</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p><strong>Step 2, <code>@Bean</code> method</strong> (<code>ssh_ch2_ex2</code>):</p>
+<pre class="hl"><code><span class="nd">@Configuration</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Bean</span>
+<span class="w">    </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="w">        </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Koko"</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Naming convention:</strong>
+<ul>
+<li>the method name is a noun, not a verb, because the method <em>represents the object</em></li>
+<li>It also becomes the <strong>bean name</strong> (&quot;parrot&quot;)</li>
+<li>Do not confuse the <em>bean name</em> (&quot;parrot&quot;) with the <em>parrot's name</em> attribute (&quot;Koko&quot;); the latter means nothing to Spring.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Step 3, start the context with it, then fetch the bean:</strong></p>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AnnotationConfigApplicationContext</span><span class="p">(</span><span class="n">ProjectConfig</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">Parrot</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">Parrot</span><span class="p">.</span><span class="na">class</span><span class="p">);</span><span class="w">   </span><span class="c1">// no cast needed</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span><span class="w">            </span><span class="c1">// Koko</span>
+</code></pre>
+<ul>
+<li><code>getBean(Type)</code> looks up by type. If no bean of that type exists, Spring throws.</li>
+</ul>
+<h3 id="any-object-can-be-a-bean">Any object can be a bean</h3>
+<pre class="hl"><code><span class="nd">@Bean</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">hello</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s">"Hello"</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="nd">@Bean</span><span class="w"> </span><span class="n">Integer</span><span class="w"> </span><span class="nf">ten</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Usage</span>
+<span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">String</span><span class="p">.</span><span class="na">class</span><span class="p">);</span><span class="w">   </span><span class="c1">// Hello</span>
+<span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">Integer</span><span class="p">.</span><span class="na">class</span><span class="p">);</span><span class="w">  </span><span class="c1">// 10</span>
+</code></pre>
+<p>Prints <code>Koko</code>, <code>Hello</code>, <code>10</code>. The type is irrelevant to Spring. (Real apps rarely register a <code>String</code> or <code>Integer</code>; this just proves the point.)</p>
+<h3 id="several-beans-of-the-same-type-ssh-ch2-ex3">Several beans of the same type (<code>ssh_ch2_ex3</code>)</h3>
+<pre class="hl"><code><span class="nd">@Bean</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot1</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Koko"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="nd">@Bean</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot2</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Miki"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="nd">@Bean</span><span class="w"> </span><span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot3</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Riki"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/spring-start-here/img/getbean-ambiguity.svg" alt="Several beans of one type: lookup by type fails, lookup by name or @Primary works" loading="lazy" /></p>
+<ul>
+<li>Asking by type alone fails with:
+<code>NoUniqueBeanDefinitionException: No qualifying bean of type 'main.Parrot' available: expected single matching bean but found 3: parrot1,parrot2,parrot3</code>. Spring cannot guess which you mean.</li>
+<li><strong>Fix 1, by name:</strong>
+<ul>
+<li><code>context.getBean(&quot;parrot2&quot;, Parrot.class)</code> returns Miki</li>
+<li>The bean name defaults to the <code>@Bean</code> method name (this is why the exception message lists <code>parrot1,parrot2,parrot3</code>).</li>
+</ul>
+</li>
+<li><strong>Fix 2, <code>@Primary</code></strong> (<code>ssh_ch2_ex4</code>): Spring's default choice when several beans match and no name is given. Only one bean per type may be primary.</li>
+</ul>
+<pre class="hl"><code><span class="nd">@Bean</span>
+<span class="nd">@Primary</span>
+<span class="n">Parrot</span><span class="w"> </span><span class="nf">parrot2</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Miki"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="2-3-way-2-stereotype-annotations-ssh-ch2-ex5">2.3 Way 2: stereotype annotations (<code>ssh_ch2_ex5</code>)</h2>
+<p>Annotate the <strong>class</strong>, and Spring creates the instance itself. <code>@Component</code> is the most basic stereotype annotation (others come later).</p>
+<p><img src="/book-digest/spring-start-here/img/component-scan.svg" alt="@Component plus @ComponentScan creates the bean" loading="lazy" /></p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Parrot</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">getName</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setName</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ProjectConfig.java</span>
+<span class="nd">@Configuration</span>
+<span class="nd">@ComponentScan</span><span class="p">(</span><span class="n">basePackages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"com.example.beans"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Gotcha:</strong> <code>@Component</code> alone does nothing. By default Spring does <em>not</em> scan for stereotype annotations; <code>@ComponentScan</code> with the package(s) switches that on.</li>
+<li>The config class is still needed but has no bean methods. You can mix <code>@Bean</code> and stereotypes in one app (later chapters).</li>
+<li>Fetching works the same; but note the result:</li>
+</ul>
+<pre class="hl"><code><span class="n">Parrot</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">Parrot</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">p</span><span class="p">);</span><span class="w">            </span><span class="c1">// default toString, proves the bean exists</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span><span class="w">  </span><span class="c1">// null: Spring only calls the constructor, it did not set a name</span>
+</code></pre>
+<h3 id="postconstruct-act-right-after-creation"><code>@PostConstruct</code>: act right after creation</h3>
+<p>With <code>@Component</code> you lose the chance to configure the instance (no method body like <code>@Bean</code>). <code>@PostConstruct</code> is the fix: Spring calls that method right after the constructor finishes.</p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Parrot</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="nd">@PostConstruct</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">init</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Kiki"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>Prints <code>Kiki</code>. The annotation comes from Jakarta EE, not Spring, so it needs an explicit dependency (APIs removed from the JDK must be added back):</p>
+<pre class="hl"><code><span class="nt">&lt;dependency&gt;</span>
+<span class="w">  </span><span class="nt">&lt;groupId&gt;</span>jakarta.annotation<span class="nt">&lt;/groupId&gt;</span>
+<span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>jakarta.annotation-api<span class="nt">&lt;/artifactId&gt;</span>
+<span class="w">  </span><span class="nt">&lt;version&gt;</span>2.1.1<span class="nt">&lt;/version&gt;</span>
+<span class="nt">&lt;/dependency&gt;</span>
+</code></pre>
+<p><strong><code>@PreDestroy</code></strong> is the mirror: runs just before Spring closes and clears the context (also from JSR-250). The author advises avoiding it for anything important, because Spring may fail to clear the context and never call it. Example risk: closing a database connection in it.</p>
+<p><img src="/book-digest/spring-start-here/img/bean-lifecycle.svg" alt="Bean lifecycle: constructor, @PostConstruct, in use, @PreDestroy" loading="lazy" /></p>
+<h3 id="bean-vs-stereotype-when-to-use-which-the-book-s-table-2-1"><code>@Bean</code> vs stereotype: when to use which (the book's table 2.1)</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>@Bean</code></th>
+<th>Stereotype (<code>@Component</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Control over creation</td>
+<td>Full: you build and configure the object in the method body</td>
+<td>Only after Spring creates it (e.g. via <code>@PostConstruct</code>)</td>
+</tr>
+<tr>
+<td>Instances per class</td>
+<td>As many as you like</td>
+<td>One</td>
+</tr>
+<tr>
+<td>Which classes</td>
+<td>Any, even library or JDK types (<code>String</code>, <code>Integer</code>)</td>
+<td>Only classes you own (you must edit the class to annotate it)</td>
+</tr>
+<tr>
+<td>Boilerplate</td>
+<td>A method per bean</td>
+<td>None</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Rule of thumb from the book:</strong> use stereotype annotations as much as possible (less code); use <code>@Bean</code> only when you cannot (e.g. a library class you cannot annotate, or you need several instances or custom setup).</p>
+<h2 id="2-4-way-3-programmatic-registerbean-ssh-ch2-ex6">2.4 Way 3: programmatic, <code>registerBean()</code> (<code>ssh_ch2_ex6</code>)</h2>
+<p>Available from Spring 5 (book's claim). Use it when <code>@Bean</code> and stereotypes are not enough, typically <strong>conditional registration</strong>, which annotations cannot express:</p>
+<pre class="hl"><code><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">condition</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">registerBean</span><span class="p">(</span><span class="n">b1</span><span class="p">);</span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">registerBean</span><span class="p">(</span><span class="n">b2</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<p>Book scenario: an app reads parrots, some green and some orange, and registers only the green ones.</p>
+<p>Signature:</p>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">registerBean</span><span class="p">(</span>
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">beanName</span><span class="p">,</span><span class="w">                         </span><span class="c1">// null if you don't need a name</span>
+<span class="w">    </span><span class="n">Class</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">beanClass</span><span class="p">,</span><span class="w">                      </span><span class="c1">// e.g. Parrot.class</span>
+<span class="w">    </span><span class="n">Supplier</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">supplier</span><span class="p">,</span><span class="w">                    </span><span class="c1">// returns the instance to add</span>
+<span class="w">    </span><span class="n">BeanDefinitionCustomizer</span><span class="p">...</span><span class="w"> </span><span class="n">customizers</span><span class="w">  </span><span class="c1">// optional, e.g. make it primary</span>
+<span class="p">);</span>
+</code></pre>
+<ul>
+<li><code>Supplier</code> is the functional interface from <code>java.util.function</code>: returns a value, takes no parameters.</li>
+<li><code>BeanDefinitionCustomizer</code> configures bean characteristics; varargs, so it can be omitted.</li>
+</ul>
+<p>Example: empty <code>@Configuration</code> class, <code>Parrot</code> is a plain POJO with no annotations:</p>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AnnotationConfigApplicationContext</span><span class="p">(</span><span class="n">ProjectConfig</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+
+<span class="n">Parrot</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Parrot</span><span class="p">();</span>
+<span class="n">x</span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Kiki"</span><span class="p">);</span>
+<span class="n">Supplier</span><span class="o">&lt;</span><span class="n">Parrot</span><span class="o">&gt;</span><span class="w"> </span><span class="n">parrotSupplier</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+
+<span class="n">context</span><span class="p">.</span><span class="na">registerBean</span><span class="p">(</span><span class="s">"parrot1"</span><span class="p">,</span><span class="w"> </span><span class="n">Parrot</span><span class="p">.</span><span class="na">class</span><span class="p">,</span><span class="w"> </span><span class="n">parrotSupplier</span><span class="p">);</span>
+
+<span class="n">Parrot</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">getBean</span><span class="p">(</span><span class="n">Parrot</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span><span class="w">   </span><span class="c1">// Kiki</span>
+</code></pre>
+<p>Making it primary via a customizer:</p>
+<pre class="hl"><code><span class="n">context</span><span class="p">.</span><span class="na">registerBean</span><span class="p">(</span><span class="s">"parrot1"</span><span class="p">,</span><span class="w"> </span><span class="n">Parrot</span><span class="p">.</span><span class="na">class</span><span class="p">,</span><span class="w"> </span><span class="n">parrotSupplier</span><span class="p">,</span>
+<span class="w">        </span><span class="n">bc</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">bc</span><span class="p">.</span><span class="na">setPrimary</span><span class="p">(</span><span class="kc">true</span><span class="p">));</span>
+</code></pre>
+<p>Historical note (book): early Spring configured everything in XML; this book uses only modern approaches.</p>
+<h2 id="decision-guide-which-way">Decision guide: which way?</h2>
+<p><img src="/book-digest/spring-start-here/img/which-way.svg" alt="Which way to define a bean" loading="lazy" /></p>
+<h2 id="chapter-summary-book">Chapter summary (book)</h2>
+<ul>
+<li>The context (IoC container) manages objects wired into Spring features (DI, transactions, security, testing); these objects are beans.</li>
+<li>Three ways in: <code>@Bean</code>, stereotype annotations such as <code>@Component</code>, <code>registerBean()</code>.</li>
+<li><code>@Bean</code> = full control, good for third-party classes and advanced config. Stereotypes = preferred for your own classes (less boilerplate).</li>
+<li>Several beans of one type need a name or <code>@Primary</code> to disambiguate.</li>
+<li>Lifecycle callbacks such as <code>@PostConstruct</code> customise initialisation after creation.</li>
+<li>Defining beans correctly is the foundation for the next chapters.</li>
+</ul>
+<h2 id="terms-to-carry-forward">Terms to carry forward</h2>
+<p>Spring context / application context · bean · bean name · <code>@Configuration</code> · <code>@Bean</code> · <code>@Primary</code> · stereotype annotation · <code>@Component</code> · <code>@ComponentScan</code> · <code>@PostConstruct</code> / <code>@PreDestroy</code> · <code>registerBean()</code> · <code>Supplier</code> · <code>NoUniqueBeanDefinitionException</code>.</p>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 2. https://www.manning.com/books/spring-start-here-second-edition (unverified)</li>
+<li>Spring Framework reference: https://docs.spring.io/spring-framework/reference/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/spring-start-here/ch01-spring-in-the-real-world/">Ch 1: Spring in the real world</a></p>
+<nav class="pager"><a href="/book-digest/spring-start-here/ch01-spring-in-the-real-world/">&larr; Ch 1: Spring in the real world</a><a href="/book-digest/spring-start-here/">Contents</a><a href="/book-digest/spring-start-here/ch03-spring-context-wiring-beans/">Ch 3: The Spring context, wiring beans &rarr;</a></nav></main></body></html>

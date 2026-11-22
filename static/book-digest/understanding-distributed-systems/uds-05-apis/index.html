@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 5: APIs</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-5-apis">Understanding Distributed Systems 5: APIs</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 5 (end of Part I). Previous: <a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">Understanding Distributed Systems 4: Discovery</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-06-and-07-system-models-and-failure-detection/">Understanding Distributed Systems 6 and 7: Part II intro, system models, failure detection</a> (Part II, coordination).</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+A server's <strong>API</strong> is an <strong>adapter</strong> that turns messages from the link into calls on its business logic. This chapter walks through designing a <strong>RESTful HTTP API</strong>: model <strong>resources</strong> with URLs, pick <strong>request methods</strong> (know which are <em>safe</em> and <em>idempotent</em>), return correct <strong>status codes</strong>, describe it with an <strong>IDL</strong> (OpenAPI), <strong>evolve it without breaking clients</strong>, and make requests <strong>idempotent</strong> so clients can retry safely after timeouts.</p>
+</blockquote>
+<h2 id="communication-styles">Communication styles</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-05-api-adapter.svg" alt="The API adapts link messages to business-logic calls" loading="lazy" /></p>
+<ul>
+<li><strong>Direct:</strong>
+<ul>
+<li>client talks straight to the server; <strong>both must be up</strong> for it to succeed</li>
+<li><strong>Indirect:</strong> through a <strong>broker</strong> (messaging): sender writes to a <strong>message channel</strong>, the receiver reads from it later</li>
+<li>Indirect fits when the &quot;both up&quot; guarantee is not needed or is hard to get (chapter 23).</li>
+</ul>
+</li>
+<li>This chapter: direct <strong>request-response</strong>, &quot;like a function call but across process boundaries and over the network&quot;.</li>
+<li><strong>Messages are serialised in a language-agnostic format.</strong>
+<ul>
+<li>The choice sets serialisation speed, human readability and how hard evolution is
+<ul>
+<li><strong>JSON</strong> (https://www.ecma-international.org/publications-and-standards/standards/ecma-404/) is self-describing and readable but verbose and costly to parse</li>
+</ul>
+</li>
+<li><strong>Protocol Buffers</strong> (https://developers.google.com/protocol-buffers) is leaner and faster but not human-readable.</li>
+</ul>
+</li>
+<li><strong>Synchronous:</strong>
+<ul>
+<li>the client blocks waiting for the response (inefficient, blocks threads)</li>
+<li><strong>Asynchronous:</strong> the outbound adapter invokes a callback on response</li>
+<li>JavaScript, C# and Go hide callbacks with <strong>async/await</strong>.</li>
+</ul>
+</li>
+<li><strong>Technologies:</strong>
+<ul>
+<li>HTTP and <strong>gRPC</strong> (https://grpc.io/). Internal server-to-server APIs usually use a high-performance RPC framework like gRPC</li>
+<li>public external APIs tend to use HTTP because browsers easily make HTTP calls from JavaScript.</li>
+</ul>
+</li>
+<li><strong>REST</strong>
+<ul>
+<li>(Fielding's dissertation: https://www.ics.uci.edu/~fielding/pubs/dissertation/rest_arch_style.htm) is a set of principles for elegant, scalable HTTP APIs</li>
+<li>an API following them is <strong>RESTful</strong>
+<ul>
+<li>Among them: requests are <strong>stateless</strong> (each carries everything needed), and responses are labelled <strong>cacheable or non-cacheable</strong> (a cacheable response can be reused for an equivalent later request).</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-1-http">5.1 HTTP</h2>
+<ul>
+<li>
+<p>A request-response protocol (https://en.wikipedia.org/wiki/Hypertext_Transfer_Protocol): the client sends a request to the server's <strong>API endpoint</strong>, the server replies</p>
+<ul>
+<li>An HTTP 1.1 message is text: a <strong>start line</strong> (request: what it is for; response: success or failure), <strong>headers</strong> (key-value metadata) and an optional <strong>body</strong>.</li>
+</ul>
+</li>
+<li>
+<p><strong>Stateless</strong>: everything the server needs is in the request. Uses <strong>TCP</strong> for reliability; over <strong>TLS</strong> it is <strong>HTTPS</strong>.</p>
+</li>
+<li>
+<p><strong>HTTP 1.1</strong></p>
+<ul>
+<li>keeps the connection open by default, but a new request cannot be issued until the previous response arrives: <strong>head-of-line (HOL) blocking</strong></li>
+<li>A browser fetching several images downloads them one at a time</li>
+<li><strong>Pipelining</strong> (https://en.wikipedia.org/wiki/HTTP_pipelining) is allowed for some requests but still suffers HOL blocking (one slow response blocks those after it)</li>
+<li>The usual fix, <strong>more connections</strong>, costs memory and sockets.</li>
+</ul>
+</li>
+<li>
+<p><strong>HTTP/2</strong></p>
+<ul>
+<li>(RFC 7540: https://tools.ietf.org/html/rfc7540): built to fix 1.1's limits</li>
+<li><strong>binary</strong>, and <strong>multiplexes concurrent request-response transactions (streams)</strong> on one connection. In early 2020 about half the most-visited sites used it.</li>
+</ul>
+</li>
+<li>
+<p><strong>HTTP/3</strong>:</p>
+<ul>
+<li>based on <strong>UDP</strong> with its own transport protocol to address TCP's shortcomings: with HTTP/2 a packet loss on the TCP connection blocks <strong>all</strong> streams (HOL), with HTTP/3 only <strong>one</strong> stream is interrupted</li>
+<li>(References: https://www.youtube.com/watch?v=rlN4F1oyaRM, https://blog.cloudflare.com/http-3-vs-http-2/)</li>
+</ul>
+</li>
+<li>
+<p>The book illustrates with HTTP 1.1.</p>
+</li>
+</ul>
+<h2 id="5-2-resources">5.2 Resources</h2>
+<p>Example: a product-catalogue service (customers browse; admins create, update, delete). An HTTP server hosts <strong>resources</strong> (a document, image, collection of resources: physical or abstract). A <strong>URL</strong> identifies a resource by its location.</p>
+<ul>
+<li><code>https://www.example.com/products?sort=price</code>: protocol, hostname, resource name, <strong>query string</strong> (extra parameters affecting handling, here the sort order)
+<ul>
+<li>Without the query string it is the <strong><code>/products</code> endpoint</strong>.</li>
+</ul>
+</li>
+<li>URLs model <strong>relationships</strong>: <code>/products/42</code> (product 42 in the collection), <code>/products/42/reviews</code>. The more nesting, the more complex the API.</li>
+<li>Resources are <strong>serialised in message bodies</strong>. The client states its preferred <strong>representation</strong> in headers
+<ul>
+<li>the server picks the best (<strong>content negotiation</strong>: https://developer.mozilla.org/en-US/docs/Web/HTTP/Content_negotiation). JSON represents non-binary resources:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"category"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Laptop"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"price"</span><span class="p">:</span><span class="w"> </span><span class="mi">999</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="5-3-request-methods">5.3 Request methods</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-05-rest-request-methods.svg" alt="REST requests and what they do" loading="lazy" />
+CRUD via <strong>request methods</strong>, the &quot;verb&quot; applied to a resource:</p>
+<ul>
+<li><code>POST /products</code>: create a product, return the new resource's URL</li>
+<li><code>GET /products</code>: list (query string filters, paginates, sorts)</li>
+<li><code>GET /products/42</code>: retrieve product 42</li>
+<li><code>PUT /products/42</code>: update product 42</li>
+<li><code>DELETE /products/42</code>: delete product 42</li>
+</ul>
+<p><strong>Safe</strong>: no visible side effects, can be cached. <strong>Idempotent</strong>: running it many times has the same end result as once (crucial, see 5.7).</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Safe</th>
+<th>Idempotent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>POST</td>
+<td>No</td>
+<td>No</td>
+</tr>
+<tr>
+<td>GET</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5-4-response-status-codes">5.4 Response status codes</h2>
+<p>(Reference list: https://httpstatuses.com/)</p>
+<ul>
+<li><strong>200 to 299 success</strong> (200 OK: request succeeded, body has the resource).</li>
+<li><strong>300 to 399 redirection</strong> (301 Moved Permanently: new URL in the <code>Location</code> header).</li>
+<li><strong>400 to 499 client errors</strong>:
+<ul>
+<li>usually fail the same way on retry because the fault is the client's, so <strong>do not retry</strong></li>
+<li>400 Bad Request (input validation failed), 401 Unauthorized (not authenticated), 403 Forbidden (authenticated but not allowed), 404 Not Found.</li>
+</ul>
+</li>
+<li><strong>500 to 599 server errors</strong>:
+<ul>
+<li>the cause may be temporary, so <strong>retry is OK</strong></li>
+<li>500 Internal Server Error, 502 Bad Gateway (a gateway or proxy got an invalid response from a downstream server), 503 Service Unavailable (temporary overload or scheduled maintenance).</li>
+</ul>
+</li>
+<li><em>(Footnote)</em> <strong>Upstream/downstream</strong>: if service A calls B, B is a <strong>downstream</strong> dependency of A and A is <strong>upstream</strong> of B; no industry consensus, other texts may reverse it.</li>
+</ul>
+<h2 id="5-5-openapi">5.5 OpenAPI</h2>
+<p>The HTTP adapter implements the service interface, e.g.:</p>
+<pre class="hl"><code><span class="kd">interface</span> <span class="nc">CatalogService</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Product</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">GetProducts</span><span class="p">(...);</span>
+<span class="w">    </span><span class="n">Product</span><span class="w"> </span><span class="nf">GetProduct</span><span class="p">(...);</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">AddProduct</span><span class="p">(...);</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">DeleteProduct</span><span class="p">(...);</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">UpdateProduct</span><span class="p">(...)</span>
+<span class="p">}</span>
+</code></pre>
+<p><code>GET /products</code> makes the adapter call <code>GetProducts(...)</code> and convert the result to an HTTP response.</p>
+<p>An <strong>interface definition language (IDL)</strong> is a language-independent API definition from which you generate <strong>server-side boilerplate adapters</strong> and <strong>client SDKs</strong> in the languages you want. <strong>OpenAPI</strong> (https://swagger.io/specification/, evolved from Swagger) is one of the most popular IDLs for RESTful HTTP APIs: a YAML document with endpoints, methods, status codes and the JSON schema of resources:</p>
+<pre class="hl"><code><span class="nt">openapi</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3.0.0</span>
+<span class="nt">info</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s">"1.0.0"</span>
+<span class="w">  </span><span class="nt">title</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Catalog Service API</span>
+<span class="nt">paths</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">/products</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">get</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">List products</span>
+<span class="w">      </span><span class="nt">parameters</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">in</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">query</span>
+<span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sort</span>
+<span class="w">          </span><span class="nt">required</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">          </span><span class="nt">schema</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">string</span>
+<span class="w">      </span><span class="nt">responses</span><span class="p">:</span>
+<span class="w">        </span><span class="s">"200"</span><span class="p p-Indicator">:</span>
+<span class="w">          </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">list of products in catalog</span>
+<span class="w">          </span><span class="nt">content</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">application/json</span><span class="p">:</span>
+<span class="w">              </span><span class="nt">schema</span><span class="p">:</span>
+<span class="w">                </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">array</span>
+<span class="w">                </span><span class="nt">items</span><span class="p">:</span>
+<span class="w">                  </span><span class="nt">$ref</span><span class="p">:</span><span class="w"> </span><span class="s">"#/components/schemas/ProductItem"</span>
+<span class="w">        </span><span class="s">"400"</span><span class="p p-Indicator">:</span>
+<span class="w">          </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bad input</span>
+<span class="nt">components</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">schemas</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">ProductItem</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">object</span>
+<span class="w">      </span><span class="nt">required</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">id</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">name</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">category</span>
+<span class="w">      </span><span class="nt">properties</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">id</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">number</span>
+<span class="w">        </span><span class="nt">name</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">string</span>
+<span class="w">        </span><span class="nt">category</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">string</span>
+</code></pre>
+<p>From this a tool generates documentation, boilerplate adapters and client SDKs.</p>
+<h2 id="5-6-evolution">5.6 Evolution</h2>
+<p>An API starts as a well-designed interface (or should) and must change for new use cases. <strong>Avoid breaking changes that force all clients to change at once</strong>, some of which you do not control.</p>
+<ul>
+<li><strong>Endpoint level:</strong> renaming <code>/products</code> to <code>/new-products</code>, or making an optional query parameter <strong>mandatory</strong>, breaks old clients.</li>
+<li><strong>Message level:</strong>
+<ul>
+<li>changing a schema incompatibly, e.g. <strong><code>category</code> from string to number</strong>, makes old deserialisation blow up</li>
+<li>the same holds for Protocol Buffers (reference: https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html).</li>
+</ul>
+</li>
+<li><strong>Version REST APIs</strong>
+<ul>
+<li>to allow breaking changes, e.g</li>
+<li>a version prefix <code>/v1/products/</code></li>
+<li><strong>Rule of thumb: evolve backward-compatibly unless there is a very good reason.</strong> Backward-compatible APIs are not elegant but they are practical.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-7-idempotency">5.7 Idempotency</h2>
+<p><strong>Problem:</strong> when a request times out the client does not know whether the server received it (the server may have processed it and crashed before replying). The fix is to <strong>retry</strong>. Methods such as <strong>PUT and DELETE are inherently idempotent</strong> (RFC 7231 section 4.2.2: https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.2): the same PUT twice has the same effect as once.</p>
+<p><strong>But POST is not.</strong> A timed-out POST that created a product, retried, makes <strong>two products</strong>. Client-side reconciliation (find and remove duplicates) pushes complexity onto every client. Better: make the <strong>server</strong> treat the request as idempotent.</p>
+<ul>
+<li>Decorate the request with an <strong>idempotency key</strong>, a unique identifier such as a <strong>UUID</strong>, often in a header (Stripe's API uses <code>Idempotency-Key</code>: https://stripe.com/blog/idempotency)
+<ul>
+<li>The server stores every request ID it has seen in a <strong>database</strong></li>
+<li>on a new request it checks</li>
+<li>if absent it records the ID and executes. IDs need not be kept forever</li>
+<li><strong>purge after some time</strong>.</li>
+</ul>
+</li>
+<li><strong>The tricky part:</strong>
+<ul>
+<li>if the server records the ID and <strong>crashes before executing</strong>, every retry is wrongly ignored</li>
+<li>So handle the request <strong>atomically</strong>: either process it and store the ID, or do neither.</li>
+</ul>
+</li>
+<li>If the IDs and resources live in the <strong>same database</strong>, wrap both in one <strong>ACID transaction</strong> (see https://brandur.org/http-transactions, https://brandur.org/idempotency-keys)
+<ul>
+<li>If handling needs <strong>external calls to other services</strong>, it needs coordination: <strong>section 13.2</strong> (sagas).</li>
+</ul>
+</li>
+<li><strong>What to return for a duplicate?</strong>
+<ul>
+<li>Not an &quot;already exists&quot; error (the client would need special handling vs. the first <code>201 Created</code>)</li>
+<li>ideally <strong>return the same response as the very first request</strong>.</li>
+</ul>
+</li>
+<li><strong>Multi-client scenario:</strong>
+<ul>
+<li>A creates a product but never gets the reply</li>
+<li>B deletes it</li>
+<li>A retries. Returning the original creation response is <strong>less surprising</strong> than an odd error about a deleted resource. &quot;When in doubt,&quot; follow the <strong>principle of least astonishment</strong>.</li>
+</ul>
+</li>
+<li>Payoff: an idempotent API makes clients robust: <strong>requests can be retried on failure</strong> with no edge-case worries (also see https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/).</li>
+</ul>
+<h2 id="summary-the-author-s">Summary (the author's)</h2>
+<p>Communicating over networks is what makes a system distributed. It is easy to ignore the &quot;leaking&quot; complexity because languages and frameworks make a remote API look like a local function call.</p>
+<p>The author learned the lesson after days chasing odd degradations that turned out to be <strong>exhausted socket pools</strong> or <strong>routers dropping packets</strong>.</p>
+<p>Things that can go wrong: socket pools exhausted, TLS certificates expire, DNS servers unavailable, routers congested and dropping packets, non-idempotent requests causing unexpected states.</p>
+<p>&quot;The only universal truth is that <strong>the fastest, safest, most secure, and reliable network call is the one you don't have to make</strong>.&quot;</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+API · adapter · direct vs indirect communication · request-response · serialisation (JSON, Protocol Buffers) · sync vs async · REST · resource · URL / endpoint · query string · safe · idempotent · status code ranges · IDL · OpenAPI · breaking change · API versioning · idempotency key · head-of-line blocking · HTTP/2 multiplexing · HTTP/3 over UDP.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 5. https://understandingdistributed.systems/</li>
+<li>Standards and articles cited by the book as linked above (RFC 7540, RFC 7231, Fielding's REST dissertation, Stripe and AWS on idempotency).</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">Understanding Distributed Systems 4: Discovery</a> · <a href="/book-digest/understanding-distributed-systems/uds-06-and-07-system-models-and-failure-detection/">Understanding Distributed Systems 6 and 7: Part II intro, system models, failure detection</a> · <a href="/book-digest/spring-start-here/ch10-rest-endpoints/">Ch 10: Implementing REST endpoints</a> · <a href="/book-digest/spring-start-here/ch08-web-apps-with-spring-boot-and-spring-mvc/">Ch 8: Implementing web apps with Spring Boot and Spring MVC</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-04-discovery/">&larr; Understanding Distributed Systems 4: Discovery</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-06-and-07-system-models-and-failure-detection/">Understanding Distributed Systems 6 and 7: Part II intro, system models, failure detection &rarr;</a></nav></main></body></html>

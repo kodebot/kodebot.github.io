@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Kubernetes Book 17: Real-World Kubernetes Security</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book</a></div>
+<main>
+<h1 id="the-kubernetes-book-17-real-world-kubernetes-security">The Kubernetes Book 17: Real-World Kubernetes Security</h1>
+<p>Source: Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 17. Previous: <a href="/book-digest/the-kubernetes-book/tkb-16-threat-modeling-kubernetes/">The Kubernetes Book 16: Threat Modeling Kubernetes</a>. Next: <a href="/book-digest/the-kubernetes-book/tkb-terminology-and-outro/">The Kubernetes Book: Terminology and Outro</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The chapter takes a <strong>security architect's high-level view</strong>, not cookbook recipes, across four areas: the <strong>software delivery pipeline</strong>, <strong>workload isolation</strong>, <strong>identity and access management</strong>, <strong>security monitoring and auditing</strong>.</li>
+<li>Secure the <strong>supply chain</strong>: approved base images, controlled registry access, <strong>vulnerability scanning</strong> in CI/CD, scanning <strong>configuration as code</strong>, <strong>signing</strong> images, and a promotion workflow with quarantine.</li>
+<li><strong>Kubernetes does not support secure multi-tenant clusters</strong>: Namespaces are for grouping, quotas and RBAC, not security boundaries. Hard isolation needs separate clusters.</li>
+<li>Containers share the host kernel, so for isolation <strong>virtual machines win</strong>; add AppArmor, SELinux, seccomp and capabilities, or use stronger runtimes (gVisor, Kata) via RuntimeClasses.</li>
+<li>Plan for breach: <strong>audit</strong>, centralise logs, alert on privileged Pods, human exec sessions and internet access to the control plane, and migrate apps <strong>crawl, walk, run</strong>.</li>
+</ul>
+</div></div>
+<h2 id="17-1-security-in-the-software-delivery-pipeline">17.1 Security in the software delivery pipeline</h2>
+<p>Containers made it easier than ever to run dangerous code. This section secures the supply chain from a developer's laptop to production.</p>
+<h3 id="image-repositories">Image repositories</h3>
+<ul>
+<li>Images live in public and private <strong>registries</strong>, divided into <strong>repositories</strong>.</li>
+<li>Public registries are the easiest way to push and pull, but:
+<ul>
+<li>protect the images you store there</li>
+<li>do <strong>not trust</strong> images you pull from them</li>
+</ul>
+</li>
+<li>Some have <strong>official</strong> and <strong>community</strong> images
+<ul>
+<li>Official images are generally safer: vendor-provided, vetted, expected to follow good practice, regularly scanned and patched, sometimes supported</li>
+<li>Community images are not vetted: use extreme caution</li>
+<li>Always do due diligence.</li>
+</ul>
+</li>
+<li>Give developers a <strong>standard, frictionless way</strong> to obtain and consume images, so they do not feel the need to bypass it.</li>
+</ul>
+<h3 id="use-approved-base-images">Use approved base images</h3>
+<ul>
+<li>Most images have a base layer plus further layers. Figure 17.1 (oversimplified): base layer = core OS and filesystem, middle = libraries and dependencies, top = your app
+<ul>
+<li>together they are the image.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-17-image-layers.svg" alt="An image as three layers: core OS, libraries, application" loading="lazy" /></p>
+<ul>
+<li>Keep a <strong>small number of approved base images</strong>, derived from official images and hardened to corporate policy
+<ul>
+<li>Example: an official Alpine Linux image tweaked with patches, drivers and audit settings.</li>
+</ul>
+</li>
+<li>Figure 17.2: three apps on two approved bases. The left app builds on the approved Alpine base; the other two (web apps) build on an approved Alpine plus NGINX base.</li>
+</ul>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-17-approved-base-images.svg" alt="Three apps built on two approved base images" loading="lazy" /></p>
+<ul>
+<li>Up-front effort, but the benefits are:
+<ul>
+<li>a standard set of drivers</li>
+<li>known patches</li>
+<li>standardised audit settings</li>
+<li>less software sprawl (fewer unofficial bases)</li>
+<li>simpler testing (a small set of known bases)</li>
+<li>simpler updates (fewer bases to patch)</li>
+<li>simpler troubleshooting</li>
+</ul>
+</li>
+<li>Developers can ignore OS concerns; you may also need fewer support contracts and suppliers.</li>
+</ul>
+<h3 id="manage-the-need-for-non-standard-base-images">Manage the need for non-standard base images</h3>
+<p>Bespoke needs are legitimate, so have a process to:</p>
+<ol>
+<li>Identify why an approved base cannot be used.</li>
+<li>Decide whether an approved base can be updated instead (and whether it is worth the effort).</li>
+<li>Determine the support implications of a wholly new image.</li>
+</ol>
+<p>Usually <strong>update an existing base</strong> (for example add a GPU device driver) rather than introduce a new one.</p>
+<h3 id="control-access-to-images">Control access to images</h3>
+<ul>
+<li>A secure, practical option: <strong>private registries inside your own firewalls</strong>, controlling deployment, replication and patching, and integrating with identity providers such as Active Directory.</li>
+<li>Otherwise use <strong>private repositories on public registries</strong>, choosing and configuring the registry with great care.</li>
+<li>Host <strong>only approved images</strong> (trusted sources vetted by infosec) and restrict push and pull to approved users.</li>
+<li>Also:
+<ul>
+<li>restrict which cluster nodes have internet access (your registry may be on the internet)</li>
+<li>let only authorised users and nodes push</li>
+<li>if nodes must pull from a public registry, <strong>limit internet access to the registry's addresses and ports</strong></li>
+<li>apply strict <strong>RBAC</strong> on the registry: for example developers push and pull dev and test repositories, operations teams production repositories</li>
+<li>consider letting only <strong>build nodes</strong>, or only automated build systems, push to specific repositories</li>
+</ul>
+</li>
+</ul>
+<h3 id="moving-images-from-non-production-to-production">Moving images from non-production to production</h3>
+<p>Development environments have fewer rules and may use non-standard images developers later want in production. Measures to keep production safe:</p>
+<p><strong>Vulnerability scanning</strong> is top of the list.</p>
+<ul>
+<li>Scans images <strong>at the binary level</strong> against databases of known vulnerabilities (CVEs).</li>
+<li>Integrate it into <strong>CI/CD</strong>, with policies that <strong>fail builds and quarantine images</strong> containing certain categories of vulnerability (for example fail on known critical ones).</li>
+<li>Solutions differ in how customisable their policies are. Example: a Python TLS-verification method may be vulnerable to DoS with many wildcards in the Common Name
+<ul>
+<li>if you never use Python that way you may mark it a <strong>false positive</strong>, which not every scanner allows.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Configuration as code</strong></p>
+<ul>
+<li>Scanning app code is accepted hygiene; scanning <strong>Dockerfiles, Kubernetes YAML, Helm charts</strong> and other config is less common.</li>
+<li>Well-publicised example:
+<ul>
+<li>an <strong>IBM data science experiment embedded private TLS keys in its container images</strong>, so attackers could pull the image and get root on the nodes</li>
+<li>A security review of the Dockerfiles would have prevented it.</li>
+</ul>
+</li>
+<li>Tools implementing <strong>policy as code</strong> rules are advancing.</li>
+</ul>
+<p><strong>Sign container images</strong></p>
+<ul>
+<li>Developers cryptographically sign images and consumers <strong>verify them at pull and run time</strong>, giving confidence the image is correct and untampered
+<ul>
+<li>Kubernetes and most runtimes support it, usually implemented by the runtime (Figure 17.3).</li>
+</ul>
+</li>
+<li>Use tools that <strong>define and enforce enterprise-wide signing policies</strong>, so it is not left to individuals.</li>
+</ul>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-17-image-signing-flow.svg" alt="Developer signs, registry stores, consumer verifies when pulling" loading="lazy" /></p>
+<p><strong>Image promotion workflow.</strong> Your pipelines should include as many of these as possible:</p>
+<ul>
+<li>policies forcing signed images</li>
+<li>network rules restricting which nodes push and pull</li>
+<li>RBAC protecting repositories</li>
+<li>approved base images</li>
+<li>scanning for known vulnerabilities</li>
+<li>promotion and <strong>quarantine</strong> based on scan results</li>
+<li>review and scan of infrastructure-as-code files</li>
+</ul>
+<p>The list is not an exact workflow.</p>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-17-image-promotion-pipeline.svg" alt="A pipeline from build through scanning and signing to promotion or quarantine" loading="lazy" /></p>
+<h2 id="17-2-workload-isolation">17.2 Workload isolation</h2>
+<p>Starts at the cluster level, then the runtime level, then infrastructure outside the cluster such as firewalls.</p>
+<h3 id="cluster-level-workload-isolation">Cluster-level workload isolation</h3>
+<ul>
+<li><strong>Kubernetes does not support secure multi-tenant clusters.</strong> The only way to isolate two workloads is separate clusters on separate hardware.</li>
+<li>The only way to divide a cluster is <strong>Namespaces</strong>:
+<ul>
+<li>little more than grouping resources and applying <strong>limits, quotas and RBAC rules</strong></li>
+<li>They do <strong>not</strong> stop a compromised workload in one Namespace affecting others, so <strong>never run hostile workloads on the same cluster</strong></li>
+<li>Use Namespaces, but <strong>not as security boundaries</strong>.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Meaning</th>
+<th>Fit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Soft multi-tenancy</strong></td>
+<td>Multiple <strong>trusted</strong> workloads on shared infrastructure (no absolute guarantee of non-interference)</td>
+<td>Example: an e-commerce app with a web front-end service and a back-end recommendation service, each with its own limits managed by different teams: one cluster, one Namespace each</td>
+</tr>
+<tr>
+<td><strong>Hard multi-tenancy</strong></td>
+<td><strong>Untrusted, potentially hostile</strong> workloads on shared infrastructure</td>
+<td><strong>Not currently possible</strong>: workloads needing a strong boundary need separate clusters</td>
+</tr>
+</tbody>
+</table>
+<p>Hard-boundary examples:</p>
+<ul>
+<li>production versus non-production</li>
+<li>different customers</li>
+<li>sensitive projects and business functions</li>
+</ul>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-17-soft-vs-hard-multitenancy.svg" alt="Soft multi-tenancy in one cluster versus hard multi-tenancy on separate clusters" loading="lazy" /></p>
+<div class="callout c-note"><div class="callout-title">The Kubernetes project has a **Multitenancy Working Group** working on models, so future releases may offer better hard multi-tenancy.</div><div class="callout-body">
+<p></p>
+</div></div>
+<h3 id="node-isolation">Node isolation</h3>
+<ul>
+<li>Apps needing <strong>non-standard privileges</strong> (run as root, non-standard syscalls) may not justify their own cluster, but may justify a <strong>ring-fenced subset of worker nodes</strong>, limiting a compromise to workloads on the same node.</li>
+<li>Apply defence in depth: <strong>stricter audit logging and tighter runtime defences</strong> on those nodes.</li>
+<li>Target workloads to nodes with <strong>labels, affinity and anti-affinity rules, and taints</strong>.</li>
+</ul>
+<h3 id="runtime-isolation">Runtime isolation</h3>
+<ul>
+<li>For isolation, <strong>virtual machines win</strong>
+<ul>
+<li>Most container platforms (Docker, containerd, CRI-O) use <strong>namespaced containers</strong>: all containers share the host kernel, isolated by kernel constructs (namespaces, cgroups) <strong>never designed as strong security boundaries</strong></li>
+<li>A hypervisor gives every VM its own kernel with hardware enforcement.</li>
+</ul>
+</li>
+<li>Containers can be hardened with <strong>AppArmor, SELinux, seccomp, capabilities and user namespaces</strong>; runtimes and hosted services default sensibly, but troubleshooting is complex.</li>
+<li>Consider other runtime classes: <strong>gVisor</strong> and <strong>Kata Containers</strong> give stronger isolation and integrate easily through the <strong>CRI</strong> and <strong>RuntimeClasses</strong>.</li>
+<li>Kubernetes can also orchestrate VMs, serverless functions and WebAssembly.</li>
+</ul>
+<p>Options summary:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Virtual machines</strong></td>
+<td>Dedicated kernel per workload; excellent isolation, comparatively slow and resource-hungry</td>
+</tr>
+<tr>
+<td><strong>Namespaced containers</strong></td>
+<td>Share the host kernel; fast and lightweight, extra effort to isolate</td>
+</tr>
+<tr>
+<td><strong>Every container in its own VM</strong></td>
+<td>Combines container versatility with VM security via lightweight VMs, but loses much of containers' appeal; not popular</td>
+</tr>
+<tr>
+<td><strong>Different runtime classes</strong></td>
+<td>Run everything as containers but send workloads needing stronger isolation to a suitable runtime</td>
+</tr>
+<tr>
+<td><strong>Wasm containers</strong></td>
+<td>OCI packaging for Wasm apps; at run time they execute in a secure deny-by-default Wasm host (chapter 9)</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-17-workload-isolation-options.svg" alt="Five workload isolation options, unranked" loading="lazy" /></p>
+<h3 id="network-isolation">Network isolation</h3>
+<ul>
+<li>Firewalls are part of layered security; the goal is to allow only authorised communications.</li>
+<li>Pods talk over the <strong>pod network</strong>, but Kubernetes does not implement it: the <strong>CNI</strong> plugin model lets third parties do
+<ul>
+<li>Plugins fall into two broad categories, <strong>overlay</strong> and <strong>BGP</strong>, each affecting firewalls differently.</li>
+</ul>
+</li>
+</ul>
+<h4 id="overlay-networking">Overlay networking</h4>
+<ul>
+<li>Most clusters use a simple <strong>flat overlay</strong> that hides network complexity: nodes could be on ten networks joined by routers, yet Pods see one flat network (Figure 17.4: four nodes on two networks, Pods on a single overlay).</li>
+<li>Overlays use <strong>VXLAN</strong> to <strong>encapsulate</strong> container packets over a flat Layer-2 network on top of Layer-3 infrastructure (Figure 17.5)
+<ul>
+<li>Encapsulation <strong>hides the original source and destination IPs</strong>, so firewalls struggle to know what is going on.</li>
+</ul>
+</li>
+</ul>
+<h4 id="bgp">BGP</h4>
+<ul>
+<li><strong>BGP</strong> powers the internet: a simple, scalable protocol creating <strong>peer relationships</strong> that share routes.</li>
+<li>Book analogy:
+<ul>
+<li>you want to send a birthday card to a lost friend</li>
+<li>Your child's school friend's parents are still in touch, so the card passes child, school friend, parents, friend</li>
+<li>BGP routing works through a network of peers helping each other find routes.</li>
+</ul>
+</li>
+<li>BGP <strong>does not encapsulate packets</strong>, so firewalls have an easier time (Figure 17.6: no encapsulation).</li>
+</ul>
+<h4 id="impact-on-firewalls">Impact on firewalls</h4>
+<ul>
+<li>Firewalls allow or deny by source and destination address (for example allow <code>10.0.0.0/24</code>, deny <code>192.168.0.0/24</code>).</li>
+<li>With an <strong>overlay</strong>, all traffic is encapsulated, so only firewalls that can <strong>open packets and inspect contents</strong> can decide usefully. If yours cannot, consider a <strong>BGP</strong> pod network.</li>
+<li>Choose <strong>physical firewalls</strong> (dedicated hardware, usually run by a central team), <strong>host-based firewalls</strong> (OS features, run by the OS team), or both (often most secure)
+<ul>
+<li>Consider whether your organisation's change procedure for physical firewalls suits Kubernetes.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-17-overlay-vs-bgp.svg" alt="Encapsulation hides pod IPs from firewalls on an overlay but not on BGP" loading="lazy" /></p>
+<h4 id="packet-capture">Packet capture</h4>
+<p>Pod IPs are sometimes obscured by encapsulation and are <strong>dynamic and recycled</strong> (<strong>IP churn</strong>), so they identify workloads poorly. Being able to associate IPs with Kubernetes identifiers (Pod IDs, Service aliases, container IDs) during packet capture is very useful.</p>
+<h2 id="17-3-identity-and-access-management-iam">17.3 Identity and access management (IAM)</h2>
+<ul>
+<li>Kubernetes has robust <strong>RBAC</strong> that <strong>integrates with existing IAM providers</strong>: Active Directory, other LDAP systems, cloud IAM
+<ul>
+<li>Organisations typically already have a central IAM tied to HR.</li>
+</ul>
+</li>
+<li>Joiners get an identity in the corporate IAM
+<ul>
+<li>with the right groups they get Kubernetes permissions automatically. Leavers are removed by the HR process and their access stops. RBAC has been stable since <strong>v1.8</strong></li>
+<li>use its full capabilities.</li>
+</ul>
+</li>
+</ul>
+<h3 id="managing-remote-ssh-access-to-cluster-nodes">Managing remote SSH access to cluster nodes</h3>
+<p>Almost all administration is REST calls to the API server, so users rarely need SSH to nodes. Reserve it for:</p>
+<ul>
+<li>node management you cannot do via the Kubernetes API</li>
+<li><strong>break-the-glass</strong> activities, such as an API server outage</li>
+<li>deep troubleshooting</li>
+</ul>
+<h3 id="multi-factor-authentication-mfa">Multi-factor authentication (MFA)</h3>
+<p>Accounts with root on the API server and on nodes are prime targets for attackers and disgruntled employees. Protect them with <strong>MFA</strong>:</p>
+<ul>
+<li><strong>Stage 1:</strong> tests knowledge of a username and password.</li>
+<li><strong>Stage 2:</strong> tests possession of something, like a one-time password.</li>
+</ul>
+<p>Also secure workstations and user profiles that have <code>kubectl</code> installed.</p>
+<h2 id="17-4-security-monitoring-and-auditing">17.4 Security monitoring and auditing</h2>
+<ul>
+<li>No system is 100% secure; plan for breach
+<ul>
+<li>Be able to <strong>recognise a breach</strong> and build a <strong>detailed, non-repudiable timeline</strong>: what, how, when and who (in extreme cases called upon in court)</li>
+<li>Auditing also finds weaknesses in your security</li>
+<li>Do not go to production without robust auditing and monitoring.</li>
+</ul>
+</li>
+</ul>
+<h3 id="baseline-best-practices">Baseline best practices</h3>
+<ul>
+<li>The <strong>Center for Information Security (CIS)</strong> publishes an industry-standard Kubernetes benchmark
+<ul>
+<li><strong>Aqua Security's <code>kube-bench</code></strong> runs the CIS tests and reports. It <strong>cannot inspect control plane nodes of hosted Kubernetes services</strong>.</li>
+</ul>
+</li>
+<li>Run <code>kube-bench</code> during <strong>node provisioning</strong> and pass or fail the node on the result. Reports also serve as <strong>before and after baselines</strong> around an incident.</li>
+</ul>
+<h3 id="container-and-pod-lifecycle-events">Container and Pod lifecycle events</h3>
+<p>Pods and containers are ephemeral, so expect many create and terminate events. Configure <strong>log retention</strong> to keep logs from terminated Pods; the runtime may also keep lifecycle logs.</p>
+<h3 id="forensic-checkpointing">Forensic checkpointing</h3>
+<ul>
+<li>Forensics collects and examines evidence to build a trail of events when you suspect malice. Ephemeral containers made that hard.</li>
+<li><strong>CRIU</strong>
+<ul>
+<li>(Checkpoint/Restore in Userspace) can silently capture a running container's state and restore it in a <strong>sandbox</strong> for analysis</li>
+<li>At the time of writing it is <strong>alpha in Kubernetes</strong> and <strong>only CRI-O supports it</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="application-logs">Application logs</h3>
+<p>Some apps log to <strong>stdout or stderr</strong> (picked up with container logs); others write <strong>proprietary files in bespoke locations</strong>. Check each application and configure collection so you miss nothing.</p>
+<h3 id="actions-performed-by-users">Actions performed by users</h3>
+<ul>
+<li>Most admin goes through the API server, where all requests should be logged. But attackers might get <strong>SSH to control plane nodes</strong> and manipulate objects directly, including etcd.</li>
+<li>Limit SSH, add MFA, <strong>log all SSH activity to a secure aggregator</strong>, and consider <strong>requiring two competent people</strong> for all SSH to control plane nodes.</li>
+</ul>
+<h3 id="managing-log-data">Managing log data</h3>
+<p>Container density produces <strong>massive log and audit data</strong>; specialised tools store it and analyse it proactively and after events.</p>
+<h3 id="alerting-for-security-relevant-events">Alerting for security-relevant events</h3>
+<p>Some events deserve immediate investigation:</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Privileged Pod creation by a human</strong></td>
+<td>Privileged Pods can often get root on the node; policy normally forbids them, and rare legitimate ones come from automated processes with service accounts</td>
+</tr>
+<tr>
+<td><strong>Exec sessions by humans</strong></td>
+<td>Shell-like access, normally for troubleshooting only; investigate others and consider deleting the session to prevent tampering</td>
+</tr>
+<tr>
+<td><strong>Attempts to reach the cluster from the internet</strong></td>
+<td>Control plane access from the internet is usually blocked; watch for successful and failed attempts, and treat a success as a misconfiguration to fix</td>
+</tr>
+</tbody>
+</table>
+<h2 id="17-5-migrating-existing-apps-to-kubernetes-crawl-walk-run">17.5 Migrating existing apps to Kubernetes: crawl, walk, run</h2>
+<ul>
+<li><strong>Crawl:</strong> threat-model your existing apps to learn their current posture (for example which use TLS).</li>
+<li><strong>Walk:</strong> keep the posture <strong>unchanged</strong> during migration (an app without TLS stays without TLS).</li>
+<li><strong>Run:</strong>
+<ul>
+<li>improve security <strong>after</strong> migration, starting with simple non-critical apps and working up to mission-critical ones</li>
+<li>deepen gradually, for example one-way TLS first, then two-way TLS.</li>
+</ul>
+</li>
+<li>Key point: do not change an app's security posture as part of migrating it, or you may misdiagnose problems (was it the security change or the migration?).</li>
+</ul>
+<p><img src="/book-digest/the-kubernetes-book/img/tkb-17-crawl-walk-run.svg" alt="Crawl, walk, run migration path" loading="lazy" /></p>
+<h2 id="17-6-real-world-example">17.6 Real-world example</h2>
+<p><strong>CVE-2019-5736</strong> (February 2019) let a container process running as root gain root on the worker node and on all containers on the host. Three things from this chapter would have prevented it:</p>
+<ul>
+<li>image vulnerability scanning (it has a CVE number, so scanners would have found it)</li>
+<li>not running processes as root</li>
+<li>enabling SELinux</li>
+</ul>
+<p>Even if scanners missed it, policies preventing root containers and standard SELinux policies would have blocked exploitation.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Secure the pipeline:
+<ul>
+<li>approved base images, controlled registries, scanning, signing</li>
+<li>isolate workloads at cluster, node and runtime level</li>
+<li>use IAM with MFA</li>
+<li>audit and alert</li>
+<li>migrate carefully.</li>
+</ul>
+</li>
+<li>The chapter intends you to go and start securing your own clusters.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Approved base image</strong>: a small set of hardened bases derived from official images.</li>
+<li><strong>Vulnerability scanning, configuration as code, image signing, promotion and quarantine</strong>.</li>
+<li><strong>Soft vs hard multi-tenancy</strong>: trusted workloads on Namespaces vs separate clusters.</li>
+<li><strong>gVisor, Kata Containers, RuntimeClass</strong>: stronger runtime isolation.</li>
+<li><strong>Overlay (VXLAN encapsulation) vs BGP</strong>: effect on firewalls.</li>
+<li><strong>IP churn</strong>: recycled, dynamic Pod IPs.</li>
+<li><strong>MFA, break-the-glass</strong>.</li>
+<li><strong>kube-bench, CIS benchmark</strong>.</li>
+<li><strong>CRIU, forensic checkpointing</strong>.</li>
+<li><strong>Crawl, walk, run</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Nigel Poulton and Pushkar Joglekar, <em>The Kubernetes Book</em>, 3rd ed. (Packt, 2025), ch. 17. https://learning.oreilly.com/library/view/the-kubernetes-book/9781805806639/chap18.xhtml</li>
+<li>Aqua Security: aquasec.com (as given by the chapter).</li>
+<li>CVE-2019-5736, the IBM key-embedding incident and the CIS benchmark: named in the chapter, no links given.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/the-kubernetes-book/tkb-16-threat-modeling-kubernetes/">The Kubernetes Book 16: Threat Modeling Kubernetes</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-05-virtual-clusters-with-namespaces/">The Kubernetes Book 5: Virtual Clusters with Namespaces</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-09-wasm-on-kubernetes/">The Kubernetes Book 9: Wasm on Kubernetes</a></li>
+<li><a href="/book-digest/the-kubernetes-book/tkb-terminology-and-outro/">The Kubernetes Book: Terminology and Outro</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/the-kubernetes-book/tkb-16-threat-modeling-kubernetes/">&larr; The Kubernetes Book 16: Threat Modeling Kubernetes</a><a href="/book-digest/the-kubernetes-book/">Contents</a><a href="/book-digest/the-kubernetes-book/tkb-terminology-and-outro/">The Kubernetes Book: Terminology and Outro &rarr;</a></nav></main></body></html>

@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 10: Replication</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-10-replication">Understanding Distributed Systems 10: Replication</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 10. Previous: <a href="/book-digest/understanding-distributed-systems/uds-09-leader-election/">Understanding Distributed Systems 9: Leader election</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-11-coordination-avoidance/">Understanding Distributed Systems 11: Coordination avoidance</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+<strong>Replication</strong> keeps copies of data on several processes for <strong>availability</strong> (switch to a copy if one dies) and <strong>scalability/performance</strong> (more replicas, more concurrent clients). The hard part is keeping replicas <strong>consistent despite failures</strong>. <strong>Raft</strong> does it with <strong>state machine replication</strong>: a leader logs operations and replicates the log; an entry is <strong>committed</strong> once a <strong>majority</strong> has it. That solves <strong>consensus</strong>. What a <em>client</em> sees depends on the <strong>consistency model</strong> (linearizable, sequential, eventual), and <strong>CAP/PACELC</strong> say you pay for stronger guarantees in availability or latency. <strong>Chain replication</strong> is an alternative that moves coordination off the critical path.</p>
+</blockquote>
+<h2 id="raft-s-replication-state-machine-replication">Raft's replication (state machine replication)</h2>
+<ul>
+<li>Raft offers the <strong>strongest consistency guarantee</strong>:
+<ul>
+<li>to clients, the data <strong>appears stored on a single process</strong> even though it is replicated
+<ul>
+<li><strong>Paxos</strong> is arguably the most popular protocol with this guarantee (&quot;Paxos Made Simple&quot;: https://lamport.azurewebsites.net/pubs/paxos-simple.pdf)</li>
+</ul>
+</li>
+<li>the book uses Raft as more understandable (https://raft.github.io/raft.pdf).</li>
+</ul>
+</li>
+<li><strong>Idea:</strong>
+<ul>
+<li>a single <strong>leader</strong> broadcasts operations that change its state to the <strong>followers (replicas)</strong></li>
+<li>If followers execute <strong>the same operations in the same order</strong>, they end in the same state</li>
+<li>A large part of the algorithm handles failures: any process can fail and the network can lose messages.</li>
+</ul>
+</li>
+<li><strong>Why &quot;state machine&quot;:</strong>
+<ul>
+<li>each process is a <strong>state machine</strong> (https://en.wikipedia.org/wiki/Finite-state_machine) moving between states in response to inputs</li>
+<li><strong>Deterministic machines with identical input in identical order stay consistent</strong>, so a failed one is replaceable by any copy</li>
+<li>Powerful for making any service fault-tolerant, if it can be modelled that way.</li>
+</ul>
+</li>
+<li><strong>Example:</strong>
+<ul>
+<li>a fault-tolerant key-value store: each node is a state machine with <code>put(k, v)</code> and <code>get(k)</code> over a dictionary</li>
+<li>if every node executes the same puts, they have the same state.</li>
+</ul>
+</li>
+</ul>
+<h3 id="10-1-how-it-works">10.1 How it works</h3>
+<p><img src="/book-digest/understanding-distributed-systems/img/raft-log-replication.svg" alt="Raft log replication" loading="lazy" />
+The system starts with a <strong>leader elected</strong> by chapter 9's algorithm (no external dependencies). <strong>Only the leader changes replicated state</strong>, by storing operations in a <strong>local log</strong> that it replicates.</p>
+<ul>
+<li>A <strong>log</strong> is an ordered list of entries, each with: the <strong>operation</strong> to apply (e.g. assign 3 to x; must be <strong>deterministic</strong>, but can be complex such as compare-and-swap or a multi-operation transaction), its <strong>index</strong> in the log, and the leader's <strong>election term</strong>.</li>
+<li><strong>Flow:</strong>
+<ul>
+<li>the leader <strong>appends</strong> the entry to its log (not applied yet), then sends an <strong><code>AppendEntries</code></strong> request to each follower</li>
+<li>(It is also sent periodically with no entries: it <strong>doubles as the heartbeat</strong>.) A follower <strong>appends the entry to its own log without executing it</strong> and acknowledges</li>
+<li>When a <strong>majority</strong> has acknowledged, the leader considers the entry <strong>committed</strong> and executes it on its local state</li>
+<li>It tracks the <strong>highest committed index</strong> and sends it in later <code>AppendEntries</code>; a follower <strong>applies an entry only after learning the leader committed it</strong>.</li>
+</ul>
+</li>
+<li><strong>Quorum:</strong>
+<ul>
+<li>the leader waits for just a majority, so with <strong>2f + 1</strong> followers the system tolerates <strong>f failures</strong></li>
+<li>A committed entry is <strong>durable</strong> and will eventually be executed by <strong>all</strong> processes, not only the original majority.</li>
+</ul>
+</li>
+<li><strong>Leader failure:</strong>
+<ul>
+<li>a follower is elected. But a majority is enough to progress, so some processes may be behind</li>
+<li>to avoid an out-of-date leader, <strong>a process cannot vote for a candidate with a less up-to-date log</strong>: <strong>a process cannot win unless it contains all committed entries</strong>
+<ul>
+<li>Comparing logs: compare the <strong>term and index of the last entries</strong></li>
+</ul>
+</li>
+<li>the higher term is more up to date</li>
+<li>with the same term, the <strong>longer log</strong> wins
+<ul>
+<li>Since election needs a majority and the winner's log must be at least as up to date as any other in that majority, the winner has all committed entries.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Undeliverable <code>AppendEntries</code>:</strong>
+<ul>
+<li>the leader <strong>retries indefinitely</strong> until a majority appended it</li>
+<li>Retries are harmless because the request is <strong>idempotent</strong> and followers ignore entries already appended.</li>
+</ul>
+</li>
+<li><strong>Follower comes back:</strong>
+<ul>
+<li>each <code>AppendEntries</code> includes the <strong>index and term of the entry preceding</strong> the new one</li>
+<li>If the follower cannot find it, it <strong>rejects</strong> (to avoid a gap)</li>
+<li>The leader retries with the <strong>last two</strong> entries (hence &quot;Entries&quot;, not &quot;Entry&quot;), then three, and so on, to find the <strong>latest entry where the logs agree</strong>, delete the follower's entries after it, and append the leader's entries from there</li>
+<li>(In practice there are ways to reduce the number of messages.)</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-2-consensus">10.2 Consensus</h2>
+<p>State machine replication solves <strong>consensus</strong> (https://en.wikipedia.org/wiki/Consensus_(computer_science)): a group of processes must decide a value so that</p>
+<ul>
+<li>every non-faulty process <strong>eventually agrees</strong> on a value;</li>
+<li>the final decision is <strong>the same everywhere</strong>;</li>
+<li>the value was <strong>proposed by some process</strong>.</li>
+</ul>
+<p>Another view: the API of a <strong>write-once register (WOR)</strong> (a thread-safe, linearizable register written once, read many times; &quot;Paxos made Abstract&quot;: https://maheshba.bitbucket.io/blog/2021/11/15/Paxos.html). Raft's replicated log is a <strong>sequence of WORs</strong>, so <strong>Raft is a sequence of consensus instances</strong>.</p>
+<ul>
+<li>Uses: agreeing on <strong>who acquires a lease</strong>; state machine replication itself.</li>
+<li>You will almost never implement it yourself (nor want to:
+<ul>
+<li>&quot;Paxos Made Live&quot;, https://static.googleusercontent.com/media/research.google.com/en//archive/paxos_made_live.pdf)</li>
+<li>Use off-the-shelf <strong>coordination services</strong> such as <strong>etcd</strong> (https://etcd.io/) and <strong>ZooKeeper</strong> (https://zookeeper.apache.org/), which replicate their state with consensus, expose a <strong>hierarchical key-value store</strong>, and let clients <strong>watch for changes</strong></li>
+<li>Leader election via lease: a client tries to <strong>create a key with a TTL</strong>; if it exists the operation fails, so only one client gets the lease</li>
+<li>This needs the lease manager itself to be fault-tolerant, which is why it relies on consensus.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-3-consistency-models">10.3 Consistency models</h2>
+<p>In an ideal world a request executes <strong>instantaneously</strong>. In reality it must reach the leader, be processed and answered, so <strong>the best guarantee is that it executes somewhere between invocation and completion</strong>. In a single-threaded program, assigning 42 to <code>x</code> and reading it gives 42; with replication, &quot;all bets are off&quot;.</p>
+<ul>
+<li>Only the leader changes state, so <strong>writes go through the leader</strong>
+<ul>
+<li><strong>Reads need not</strong>: they can be served by the leader, a follower, or both</li>
+<li>If all reads go through the leader, read throughput is that of one process; if followers serve reads, two clients (<strong>observers</strong>) can see different state since followers <strong>lag</strong>.</li>
+</ul>
+</li>
+<li><strong>Trade-off:</strong> how consistent observers' views are vs performance and availability. <strong>Consistency models</strong> (https://jepsen.io/consistency) formally define the possible views.</li>
+</ul>
+<h3 id="10-3-1-strong-consistency-linearizability">10.3.1 Strong consistency (linearizability)</h3>
+<p>If clients send reads and writes <strong>only to the leader</strong>, every request appears to take place <strong>atomically at one point in time</strong>, as if there were a single copy; its side effects are visible to <strong>all observers</strong> once it completes.</p>
+<p>The <strong>real-time guarantee</strong> is the model <strong>linearizability</strong> (https://jepsen.io/consistency/models/linearizable), &quot;the strongest consistency guarantee for single-object requests&quot; (what you would expect from a coordination service managing leases).</p>
+<ul>
+<li><strong>Catch:</strong>
+<ul>
+<li>the leader cannot serve a read from local state, since by the time it gets the request it <strong>might no longer be the leader</strong></li>
+<li>It must first <strong>contact a majority to confirm it still is</strong>; otherwise it becomes a follower and fails the request</li>
+<li>This confirmation <strong>considerably increases read time</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="10-3-2-sequential-consistency">10.3.2 Sequential consistency</h3>
+<p>Serialising reads through the leader creates a <strong>chokepoint</strong> and costs a majority round trip. Let <strong>followers serve reads</strong>: a follower lags but <strong>receives updates in the same order as the leader</strong>. A client pinned to follower 1 and another to follower 2 see the state evolve at different times.</p>
+<ul>
+<li><strong>Sequential consistency</strong>
+<ul>
+<li>(https://jepsen.io/consistency/models/sequential): operations occur <strong>in the same order for all observers</strong> but with <strong>no real-time guarantee</strong> about when side effects become visible: that is what separates it from linearizability</li>
+<li>Example: a <strong>producer/consumer system synchronised with a queue</strong>: both see items in the same order, the consumer lags.</li>
+</ul>
+</li>
+</ul>
+<h3 id="10-3-3-eventual-consistency">10.3.3 Eventual consistency</h3>
+<p>Pinned clients lose access if their follower dies. Allow <strong>any follower</strong>: better availability, at a steep price: say follower 2 lags follower 1; a client querying 1 then 2 sees <strong>an earlier state</strong>, which is confusing. The only guarantee: <strong>if writes stop, all followers eventually converge</strong>. This is <strong>eventual consistency</strong>.</p>
+<ul>
+<li>Hard to build on:
+<ul>
+<li>behaviour differs from single-threaded intuition, so subtle, hard-to-reproduce bugs appear</li>
+<li>But not every app needs linearizability: counting <strong>visitors to a website</strong> is fine if a read is slightly out of date.</li>
+</ul>
+</li>
+</ul>
+<h3 id="10-3-4-the-cap-theorem">10.3.4 The CAP theorem</h3>
+<p>When a <strong>network partition</strong> happens, some clients cannot reach the leader. The system can <strong>(a) stay available</strong> by letting clients query reachable followers (giving up strong consistency) or <strong>(b) stay strongly consistent</strong> by failing reads that cannot reach the leader.</p>
+<ul>
+<li>
+<p><strong>CAP:</strong></p>
+<ul>
+<li>&quot;strong consistency, availability and partition tolerance: pick two out of three&quot; (&quot;Perspectives on the CAP Theorem&quot;: https://groups.csail.mit.edu/tds/papers/Gilbert/Brewer2.pdf)</li>
+<li>Since <strong>network faults are a given</strong>, the real choice is <strong>consistency vs availability</strong>.</li>
+</ul>
+</li>
+<li>
+<p><strong>Confusing detail:</strong></p>
+<ul>
+<li>CAP's availability means <strong>every request eventually gets a response</strong>, but real systems cannot be perfectly available and &quot;a very slow response is just as bad as one that never occurs&quot;, so many highly available systems are not &quot;available&quot; in CAP's sense</li>
+<li>Its definitions of consistency and partition tolerance are also very precise, limiting practical use (see &quot;A Critique of the CAP Theorem&quot;: https://www.cl.cam.ac.uk/research/dtg/www/files/publications/public/mk428/cap-critique.pdf; talk: https://www.youtube.com/watch?v=hUd_9FENShA)</li>
+<li>Better to think of a <strong>spectrum</strong>: a strongly consistent, partition-tolerant system in CAP's sense is just one point.</li>
+</ul>
+</li>
+<li>
+<p><strong>PACELC</strong></p>
+<ul>
+<li>(https://en.wikipedia.org/wiki/PACELC_theorem): partitions are rare within a data centre, yet <strong>even without a partition there is a trade-off between consistency and latency</strong>: the stronger the guarantee, the higher an operation's latency</li>
+<li>In case of partition (<strong>P</strong>) choose availability (<strong>A</strong>) or consistency (<strong>C</strong>); <strong>else (E)</strong> choose latency (<strong>L</strong>) or consistency (<strong>C</strong>)</li>
+<li>In practice it is a spectrum, not binary.</li>
+</ul>
+</li>
+<li>
+<p><strong>Why some data stores have counter-intuitive guarantees:</strong></p>
+<ul>
+<li>to provide high availability and performance</li>
+<li>Others have <strong>knobs</strong>: Azure Cosmos DB (https://docs.microsoft.com/en-us/azure/cosmos-db/consistency-levels) and Cassandra (https://docs.datastax.com/en/cassandra-oss/3.0/cassandra/dml/dmlConfigConsistency.html).</li>
+</ul>
+</li>
+<li>
+<p>Another reading of PACELC:</p>
+<ul>
+<li>a trade-off between <strong>coordination and performance</strong></li>
+<li>Design around it by <strong>moving coordination off the critical path</strong></li>
+<li>Raft pays a &quot;coordination tax&quot; on <strong>every strongly consistent read</strong> (contact a majority)</li>
+<li>Chain replication avoids that.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-4-chain-replication">10.4 Chain replication</h2>
+<p>(Paper: https://www.cs.cornell.edu/home/rvr/papers/OSDI04.pdf; the book describes the <strong>CRAQ</strong> extension, https://www.usenix.org/legacy/event/usenix09/tech/full_papers/terrace/terrace.pdf.)</p>
+<p>Processes form a <strong>chain</strong>: leftmost the <strong>head</strong>, rightmost the <strong>tail</strong>.</p>
+<p><img src="/book-digest/understanding-distributed-systems/img/chain-replication.svg" alt="Chain replication" loading="lazy" /></p>
+<ul>
+<li><strong>Writes go only to the head</strong>,
+<ul>
+<li>which updates its state and forwards to the next process, and so on to the tail</li>
+<li>The <strong>tail applies the update and acknowledges to its predecessor</strong>: committed</li>
+<li>The ack flows back to the head, which then replies to the client.</li>
+</ul>
+</li>
+<li><strong>Reads are served only by the tail.</strong> Without failures it is <strong>strongly consistent</strong>, since the tail processes all reads and writes one at a time.</li>
+<li><strong>Fault tolerance</strong>
+<ul>
+<li>is delegated to a <strong>configuration manager / control plane</strong> that monitors health and <strong>removes a faulty process</strong>, and ensures <strong>one agreed view of the topology</strong></li>
+<li>It must itself be fault-tolerant, so it uses <strong>state machine replication (e.g. Raft)</strong></li>
+<li>The chain tolerates up to <strong>N - 1</strong> failures (N = chain length); the control plane only a <strong>minority</strong> (the book writes <code>C/2</code> for C replicas, i.e. fewer than half).</li>
+</ul>
+</li>
+<li><strong>Three failure modes:</strong>
+<ul>
+<li><strong>Head fails:</strong>
+<ul>
+<li>the control plane makes its successor the head and notifies clients
+<ul>
+<li>If the head committed locally but crashed before forwarding, no harm: the write never reached the tail, the client got no ack, and from its view it is a timed-out request to retry</li>
+</ul>
+</li>
+<li>nobody else saw the write.</li>
+</ul>
+</li>
+<li><strong>Tail fails:</strong> its predecessor becomes the tail; all updates the tail got must have reached the predecessor too.</li>
+<li><strong>Intermediate process X fails:</strong>
+<ul>
+<li>the control plane links X's predecessor to X's successor</li>
+<li>X may have applied updates it never forwarded, so X's successor reports <strong>the sequence number of the last committed update it saw</strong>, and X's predecessor sends the missing updates downstream.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>As processes fail it tolerates fewer failures, so <strong>replace a failing process</strong>: the new one becomes the tail after syncing with its predecessor.</li>
+<li><strong>Beauty:</strong> only a handful of simple failure modes, because <strong>a committed write has been processed by every process in the chain</strong>, unlike quorum protocols such as Raft where only some replicas may have seen a committed write.</li>
+<li><strong>Versus Raft:</strong>
+<ul>
+<li>simpler to understand and more performant, since the leader's work is split between head (sequences writes) and tail (serves reads, interleaved with updates from its predecessor)</li>
+<li>A read is served <strong>from the tail's local state without contacting other replicas</strong>: higher throughput, lower latency.</li>
+</ul>
+</li>
+<li><strong>Costs:</strong>
+<ul>
+<li><strong>write latency</strong>: an update must traverse the whole chain, so <strong>one slow replica slows all writes</strong></li>
+<li>Raft waits only for a majority and tolerates transient degradation. And if a process is unavailable, <strong>writes cannot commit until the control plane detects it and removes it</strong></li>
+<li>in Raft one failure does not stop writes.</li>
+</ul>
+</li>
+<li><strong>Upsides:</strong>
+<ul>
+<li>writes can be <strong>pipelined</strong> (higher throughput)
+<ul>
+<li>Read throughput can be raised further by <strong>spreading reads across replicas</strong> while staying linearizable: replicas keep <strong>multiple versions</strong> of an object, each with a <strong>version number and a dirty flag</strong></li>
+</ul>
+</li>
+<li>an update is <strong>dirty</strong> while moving head to tail</li>
+<li>once the tail commits and acks back along the chain, replicas mark it <strong>clean</strong>. A replica serves a read immediately if its latest version is clean</li>
+<li>otherwise it <strong>asks the tail for the latest committed version</strong>.</li>
+</ul>
+</li>
+<li><strong>Data plane vs control plane:</strong>
+<ul>
+<li>the data plane (client requests on the critical path) needs <strong>no leader</strong> because it does not handle failures; it focuses on throughput and efficiency</li>
+<li>The control plane needs a leader and consensus, but only for the occasional failure, off the critical path</li>
+<li>This <strong>splitting data plane from control plane</strong> is a common pattern (chapter 22)</li>
+<li>It cuts the coordination needed per request.</li>
+</ul>
+</li>
+</ul>
+<p>The chapter ends by asking whether data can be replicated <strong>without consensus at all</strong> (consensus is required for state machine replication): the next chapter.</p>
+<blockquote>
+<p>[!note]- Terms to carry forward
+replication · state machine replication · replicated log · AppendEntries · commit · quorum (2f+1) · consensus · write-once register · etcd / ZooKeeper · linearizability · sequential consistency · eventual consistency · observer · CAP · PACELC · chain replication (head, tail, control plane) · dirty / clean version · data plane / control plane.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 10. https://understandingdistributed.systems/</li>
+<li>Raft, Paxos, chain replication, CRAQ and Jepsen consistency pages as linked above (cited by the book).</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-09-leader-election/">Understanding Distributed Systems 9: Leader election</a> · <a href="/book-digest/understanding-distributed-systems/uds-11-coordination-avoidance/">Understanding Distributed Systems 11: Coordination avoidance</a> · databases · <a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">Understanding Distributed Systems 22: Control planes and data planes</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-09-leader-election/">&larr; Understanding Distributed Systems 9: Leader election</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-11-coordination-avoidance/">Understanding Distributed Systems 11: Coordination avoidance &rarr;</a></nav></main></body></html>

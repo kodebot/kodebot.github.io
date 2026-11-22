@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 5: Implementing Microservice Communication</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-5-implementing-microservice-communication">Building Microservices 5: Implementing Microservice Communication</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 5. Previous: <a href="/book-digest/building-microservices/bm-04-microservice-communication-styles/">Building Microservices 4: Microservice Communication Styles</a>. Next: <a href="/book-digest/building-microservices/bm-06-workflow/">Building Microservices 6: Workflow</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Pick technology from the communication style you want. Favour options that make <strong>backward-compatible change easy</strong>, keep the <strong>interface explicit</strong>, stay <strong>technology agnostic</strong>, are <strong>simple for consumers</strong> and <strong>hide internals</strong>.</li>
+<li>Four families: <strong>RPC</strong> (gRPC is Newman's pick), <strong>REST</strong> over HTTP (a sensible default, great at the perimeter), <strong>GraphQL</strong> (aggregation for clients) and <strong>message brokers</strong> (queues, topics, Kafka).</li>
+<li>Use <strong>explicit schemas</strong> and compare versions in CI to catch <strong>structural</strong> breakages; only tests catch <strong>semantic</strong> ones.</li>
+<li>Avoid breaking changes (expansion, tolerant reader); if unavoidable, <strong>emulate the old interface</strong> (expand and contract) rather than lockstep or coexisting versions.</li>
+<li><strong>API gateways</strong> guard north-south traffic, <strong>service meshes</strong> handle east-west; keep both free of business logic (&quot;dumb pipes&quot;).</li>
+</ul>
+</div></div>
+<h2 id="5-1-looking-for-the-ideal-technology">5.1 Looking for the ideal technology</h2>
+<ul>
+<li><strong>Make backward compatibility easy:</strong> adding a field must not break clients, and you want feedback on compatibility before production.</li>
+<li><strong>Make the interface explicit:</strong> consumers see what is exposed, and maintainers see what must stay intact. Use an explicit schema plus documentation.</li>
+<li><strong>Keep APIs technology agnostic:</strong> do not let integration technology dictate the stack (a &quot;.NET shop&quot; today may not be one in five years).</li>
+<li><strong>Make the service simple for consumers:</strong> freedom of technology, though client libraries ease adoption at the cost of coupling.</li>
+<li><strong>Hide internal detail:</strong> exposed internals bind consumers, raise the cost of change and breed technical debt.</li>
+</ul>
+<h2 id="5-2-technology-choices">5.2 Technology choices</h2>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RPC</strong></td>
+<td>Local method calls executed on a remote process (SOAP, gRPC)</td>
+</tr>
+<tr>
+<td><strong>REST</strong></td>
+<td>Resources (Customer, Order) accessed with a common set of verbs</td>
+</tr>
+<tr>
+<td><strong>GraphQL</strong></td>
+<td>Client-defined queries fetching from several services and filtering the result</td>
+</tr>
+<tr>
+<td><strong>Message brokers</strong></td>
+<td>Middleware for asynchronous communication via queues or topics</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/building-microservices/img/bm-05-rest-vs-rpc.svg" alt="REST versus RPC" loading="lazy" /></p>
+<h3 id="remote-procedure-calls">Remote procedure calls</h3>
+<ul>
+<li>Most need an explicit schema, the <strong>IDL</strong> (SOAP calls its schema <strong>WSDL</strong>)
+<ul>
+<li>Schemas let you <strong>generate client and server stubs</strong> for different stacks (a Java SOAP server with a .NET client)</li>
+<li>Java RMI skips the IDL (Java types are the definition) but requires both sides to use Java.</li>
+</ul>
+</li>
+<li>RPC implies a <strong>serialisation protocol</strong> (gRPC uses protocol buffers) and sometimes a network protocol (TCP guarantees delivery; UDP is lighter). Clients need the schema <strong>out of band</strong>
+<ul>
+<li><strong>Avro RPC</strong> can send the schema with the payload.</li>
+</ul>
+</li>
+<li><strong>Challenges:</strong>
+<ul>
+<li><strong>Technology coupling:</strong> RMI ties client and server to the JVM. Thrift, gRPC and SOAP interoperate.</li>
+<li><strong>Local calls are not remote calls:</strong>
+<ul>
+<li>marshalling cost, network time, and the first <strong>fallacy of distributed computing</strong>, &quot;the network is reliable&quot;</li>
+<li>Developers may make remote calls without knowing.</li>
+</ul>
+</li>
+<li><strong>Brittleness:</strong>
+<ul>
+<li>with RMI, adding a <code>createCustomer(String emailAddress)</code> overload means regenerating stubs</li>
+<li>removing an unused <code>age</code> field breaks consumers' deserialisation. Binary stub generation forces <strong>lockstep releases</strong>, and types become <strong>expand-only</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Where to use it:</strong>
+<ul>
+<li>Newman likes RPC; <strong>gRPC</strong> (built on HTTP/2, with tools like Protolock) tops his list when you control both ends and want synchronous request-response</li>
+<li>RMI and SOAP he avoids</li>
+<li>With many unknown consumers, REST fits better.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// CustomerRemote.java</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">java.rmi.Remote</span><span class="p">;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">java.rmi.RemoteException</span><span class="p">;</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">CustomerRemote</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Remote</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Customer</span><span class="w"> </span><span class="nf">findCustomer</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">id</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">RemoteException</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Customer</span><span class="w"> </span><span class="nf">createCustomer</span><span class="p">(</span>
+<span class="w">        </span><span class="n">String</span><span class="w"> </span><span class="n">firstname</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">surname</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">emailAddress</span><span class="p">)</span>
+<span class="w">        </span><span class="kd">throws</span><span class="w"> </span><span class="n">RemoteException</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<h3 id="rest">REST</h3>
+<ul>
+<li>An architectural style inspired by the web
+<ul>
+<li>The key concept is the <strong>resource</strong> (a Customer) with <strong>representations</strong> (JSON) that are fully decoupled from internal storage; clients ask to change it and the server may decline</li>
+<li>See the <strong>Richardson Maturity Model</strong> for REST styles.</li>
+</ul>
+</li>
+<li><strong>REST over HTTP:</strong>
+<ul>
+<li>the verbs have agreed meanings (GET retrieves idempotently, POST creates), replacing many <code>createCustomer</code>/<code>editCustomer</code> methods</li>
+<li>HTTP also brings <strong>caching proxies</strong> (Varnish), <strong>load balancers</strong> (mod_proxy), monitoring and security controls (basic auth to client certificates), if used well</li>
+<li>SOAP rides HTTP but ignores verbs and error codes; gRPC exploits HTTP/2 multiplexing but is not REST.</li>
+</ul>
+</li>
+<li><strong>HATEOAS</strong>
+<ul>
+<li>(hypermedia as the engine of application state): clients follow links instead of knowing URIs, like a human finding the shopping cart however its look changes</li>
+<li>Clients must understand the semantics of the link relations (<code>artist</code>, <code>instantpurchase</code>) but not the URIs.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="cm">&lt;!-- album listing with hypermedia controls --&gt;</span>
+<span class="nt">&lt;album&gt;</span>
+<span class="w">  </span><span class="nt">&lt;name&gt;</span>Give<span class="w"> </span>Blood<span class="nt">&lt;/name&gt;</span>
+<span class="w">  </span><span class="nt">&lt;link</span><span class="w"> </span><span class="na">rel=</span><span class="s">"/artist"</span><span class="w"> </span><span class="na">href=</span><span class="s">"/artist/theBrakes"</span><span class="w"> </span><span class="nt">/&gt;</span>
+<span class="w">  </span><span class="nt">&lt;description&gt;</span>
+<span class="w">    </span>Awesome,<span class="w"> </span>short,<span class="w"> </span>brutish,<span class="w"> </span>funny<span class="w"> </span>and<span class="w"> </span>loud.<span class="w"> </span>Must<span class="w"> </span>buy!
+<span class="w">  </span><span class="nt">&lt;/description&gt;</span>
+<span class="w">  </span><span class="nt">&lt;link</span><span class="w"> </span><span class="na">rel=</span><span class="s">"/instantpurchase"</span><span class="w"> </span><span class="na">href=</span><span class="s">"/instantPurchase/1234"</span><span class="w"> </span><span class="nt">/&gt;</span>
+<span class="nt">&lt;/album&gt;</span>
+</code></pre>
+<ul>
+<li><strong>Challenges:</strong>
+<ul>
+<li>historically no client code generation (so people ship client libraries)</li>
+<li><strong>OpenAPI</strong> (from Swagger) now allows it, though Newman rarely sees it used. Payloads are bigger than Thrift's, HTTP/TCP overhead hurts low latency (HTTP/3 uses <strong>QUIC</strong>), and HATEOAS can be <strong>chatty</strong> (start by navigating controls, optimise later).</li>
+</ul>
+</li>
+<li><strong>Where to use it:</strong>
+<ul>
+<li>a sensible default for synchronous request-response; excels at <strong>large-scale caching</strong> and external or client-facing APIs</li>
+<li>Newman has seen little evidence HATEOAS pays off between microservices</li>
+<li>It is poor for asynchronous interaction.</li>
+</ul>
+</li>
+</ul>
+<h3 id="graphql">GraphQL</h3>
+<ul>
+<li>Lets a client define a query to avoid several requests. Example: a mobile screen needs a few customer fields and the date, value and shipped status of the last five orders
+<ul>
+<li>one query replaces two calls that return unneeded data.</li>
+</ul>
+</li>
+<li>A microservice exposes a <strong>GraphQL endpoint</strong> with a schema and query builder.</li>
+<li><strong>Challenges:</strong>
+<ul>
+<li><strong>Dynamic queries</strong> can load the server heavily, like expensive SQL but without a query planner; throttling across several services is hard.</li>
+<li><strong>Caching</strong> is more complex than REST headers and CDNs; IDs per resource and client caches (Apollo) are workarounds.</li>
+<li><strong>Writes</strong> fit worse, so teams use GraphQL for reads and REST for writes.</li>
+<li>It encourages seeing services as <strong>wrappers over databases</strong> (compare OData); do not couple to the datastores.</li>
+</ul>
+</li>
+<li><strong>Where to use it:</strong>
+<ul>
+<li>at the <strong>perimeter</strong>, for GUIs, mobile and some external APIs (GitHub)</li>
+<li>It is a call aggregation and filtering mechanism, not a replacement for service-to-service calls</li>
+<li>An alternative is the <strong>BFF</strong> pattern (chapter 14).</li>
+</ul>
+</li>
+</ul>
+<h3 id="message-brokers">Message brokers</h3>
+<ul>
+<li>Intermediaries (middleware) between processes. A <strong>message</strong> can carry a request, response or event; the sender gives it to the broker with routing information.</li>
+<li><strong>Queues</strong>
+<ul>
+<li>are point to point</li>
+<li><strong>topics</strong>
+<ul>
+<li>let many consumers subscribe, each receiving a copy</li>
+<li>A consumer may be a <strong>consumer group</strong> (several instances of one service): only one member receives each message, which is <strong>competing consumers</strong> and distributes load (Figure 5-1)</li>
+<li>With topics, several groups each get a copy and one instance per group sees it (Figure 5-2)</li>
+<li>A queue looks like a topic with one group, but the sender knows the destination of a queue message</li>
+<li>Topics suit <strong>events</strong></li>
+</ul>
+</li>
+<li>queues suit <strong>request-response</strong> (guidance, not rule).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-05-queues-and-topics.svg" alt="Queues and topics with consumer groups" loading="lazy" /></p>
+<ul>
+<li><strong>Guaranteed delivery:</strong>
+<ul>
+<li>the broker holds messages durably until delivered, so a downed consumer is not the sender's problem (unlike a failed HTTP call)</li>
+<li>It needs a <strong>clustered</strong> broker run correctly (RabbitMQ needs low-latency links between nodes or data can be lost), and you must <strong>trust</strong> it</li>
+<li>Meanings vary: read the docs.</li>
+</ul>
+</li>
+<li><strong>Other characteristics:</strong>
+<ul>
+<li><strong>Ordering:</strong> often guaranteed but scoped (Kafka only within a partition); consumers may defer out-of-order messages.</li>
+<li><strong>Transactions:</strong> Kafka writes to several topics in one transaction; JMS offers read transactions.</li>
+<li><strong>Exactly once delivery</strong> is controversial. Build consumers to tolerate duplicates, for example by checking a <strong>message ID</strong> and ignoring repeats.</li>
+</ul>
+</li>
+<li><strong>Choices:</strong> RabbitMQ, ActiveMQ, Kafka; cloud options such as AWS SQS (the second AWS product, 2006), SNS and Kinesis.</li>
+<li><strong>Kafka</strong>
+<ul>
+<li>stands out for: <strong>very large scale</strong> (built at LinkedIn; one expert saw 50,000 producers and consumers on a cluster), <strong>message permanence</strong> (retained for a configurable period, even forever, so consumers can reingest and new ones catch up) and <strong>built-in stream processing</strong> (KSQL, like a materialised view over topics)</li>
+<li>Newman recommends Stopford's <em>Designing Event-Driven Systems</em> and <em>Kafka: The Definitive Guide</em>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-3-serialisation-formats">5.3 Serialisation formats</h2>
+<ul>
+<li><strong>Textual:</strong>
+<ul>
+<li><strong>JSON</strong> has largely replaced <strong>XML</strong>, mainly because browsers consume it, though compressed sizes rarely differ much and schemas were dropped in the rush</li>
+<li><strong>Avro</strong> uses JSON to define a schema-based format and can ship the schema with the payload</li>
+<li>Newman still likes XML (XPath, CSS selectors) over JSONPath.</li>
+</ul>
+</li>
+<li><strong>Binary:</strong>
+<ul>
+<li><strong>protocol buffers</strong> (the most popular), Simple Binary Encoding, Cap'n Proto, FlatBuffers. Benchmarks may not match your usage, so measure yourself</li>
+<li>most systems gain more by sending less data or skipping the call.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-4-schemas">5.4 Schemas</h2>
+<ul>
+<li>Schema type follows the format: <strong>XSD</strong> for XML, <strong>JSON Schema</strong> for JSON; SOAP needs WSDL and gRPC needs a protocol buffer spec.</li>
+<li>Newman favours explicit schemas for two reasons: they make the endpoint explicit (and reduce documentation), and they <strong>catch accidental breakage</strong>.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Breakage</th>
+<th>Meaning</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Structural</strong></td>
+<td>Fields or methods removed, new required fields added</td>
+<td>Schema comparison</td>
+</tr>
+<tr>
+<td><strong>Semantic</strong></td>
+<td>Same structure, changed behaviour (the <code>calculate</code> method now multiplies rather than adds)</td>
+<td>Testing</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The analogy is static versus dynamic typing:
+<ul>
+<li>without an explicit schema you still have an <strong>implicit</strong> one in your consumer code</li>
+<li>The case against schemas (&quot;more work, little value&quot;) is partly a failure of imagination and tooling</li>
+<li>When one team owns both sides he is more relaxed.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-5-handling-change-between-microservices">5.5 Handling change between microservices</h2>
+<p>&quot;How do you handle versioning?&quot; is really about contract changes.</p>
+<h3 id="avoiding-breaking-changes">Avoiding breaking changes</h3>
+<ul>
+<li><strong>Expansion changes:</strong> add, never remove (a new <code>dateOfBirth</code> field).</li>
+<li><strong>Tolerant reader:</strong>
+<ul>
+<li>pick only the fields you need and ignore the rest</li>
+<li>The Email service needs <code>firstname</code>, <code>lastname</code>, <code>email</code> but not <code>telephoneNumber</code>; if the customer is restructured (a <code>naming</code> wrapper), <strong>XPath</strong> still finds the fields</li>
+<li>This is Martin Fowler's term and reflects <strong>Postel's law</strong>: &quot;Be conservative in what you do, be liberal in what you accept from others.&quot;</li>
+</ul>
+</li>
+<li><strong>Right technology:</strong> protocol buffers' <strong>field numbers</strong> let new fields pass unnoticed; Avro ships schemas; HATEOAS goes furthest.</li>
+<li><strong>Explicit interface:</strong>
+<ul>
+<li>an explicit schema makes information hiding boundaries explicit (&quot;what's exposed in the schema is by definition not hidden&quot;)</li>
+<li>REST schemas are rare but <strong>OpenAPI</strong> and JSON Schema are growing</li>
+<li>For events, <strong>AsyncAPI</strong> and <strong>CloudEvents</strong> (a CNCF specification, supported by Azure Event Grid) are emerging.</li>
+</ul>
+</li>
+<li><strong>Semantic versioning:</strong>
+<ul>
+<li><code>MAJOR.MINOR.PATCH</code> (major = incompatible, minor = backward-compatible features, patch = fixes)</li>
+<li>A helpdesk built on Customer 1.2.0 should survive 1.3.0, may need 1.2.0 or later, and expect changes at 2.0.0</li>
+<li>Newman has not seen it used enough in distributed systems.</li>
+</ul>
+</li>
+<li><strong>Catch accidental breaks early:</strong>
+<ul>
+<li>compare schemas in CI and <strong>fail the build</strong> on incompatibility</li>
+<li>Tools:
+<ul>
+<li><strong>Protolock</strong> (protocol buffers)</li>
+<li><strong>json-schema-diff-validator</strong></li>
+<li><strong>openapi-diff</strong> (three tools share the name; the Azure one passes or fails on compatibility), and the open-source <strong>Confluent Schema Registry</strong> (JSON Schema, Avro, protobuf; needs Kafka to run)</li>
+</ul>
+</li>
+<li>For semantic breaks, use <strong>consumer-driven contract tests</strong> (Pact), and run tests with each supported client library.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="cm">&lt;!-- Customer response, then restructured --&gt;</span>
+<span class="nt">&lt;customer&gt;</span>
+<span class="w">  </span><span class="nt">&lt;firstname&gt;</span>Sam<span class="nt">&lt;/firstname&gt;</span>
+<span class="w">  </span><span class="nt">&lt;lastname&gt;</span>Newman<span class="nt">&lt;/lastname&gt;</span>
+<span class="w">  </span><span class="nt">&lt;email&gt;</span>sam@magpiebrain.com<span class="nt">&lt;/email&gt;</span>
+<span class="w">  </span><span class="nt">&lt;telephoneNumber&gt;</span>555-1234-5678<span class="nt">&lt;/telephoneNumber&gt;</span>
+<span class="nt">&lt;/customer&gt;</span>
+</code></pre>
+<h3 id="managing-breaking-changes">Managing breaking changes</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Lockstep deployment</strong></td>
+<td>Defeats independent deployability; acceptable rarely, within one team, but a one-off can become business as usual and lead to a <strong>distributed monolith</strong></td>
+</tr>
+<tr>
+<td><strong>Coexist incompatible versions</strong></td>
+<td>Netflix uses it sparingly; costs: fix bugs in two services (branching), routing smarts in middleware or nginx scripts, shared persistent state. Fine for minutes or hours (canary release)</td>
+</tr>
+<tr>
+<td><strong>Emulate the old interface</strong></td>
+<td>Newman's preference: one running service exposes old and new endpoints</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Emulate and expand and contract:</strong>
+<ul>
+<li>expand to support old and new, then contract by removing the old once consumers move</li>
+<li>Route with <strong>version headers</strong> or <strong>URI versions</strong> (<code>/v1/customer/</code>, <code>/v2/customer/</code>); for protocol buffers use namespaces (<code>v1.createCustomer</code>)</li>
+<li>When Newman's team coexisted three versions, they transformed V1 requests to V2 and V2 to V3 internally, to delineate retired code.</li>
+</ul>
+</li>
+<li><strong>The social contract:</strong>
+<ul>
+<li>agree up front how the need is raised, how teams agree the change, who updates consumers, and how long they have</li>
+<li>Be <strong>consumer-first</strong></li>
+<li>Sometimes consumers cannot change (Netflix set-top boxes); the decision can be financial.</li>
+</ul>
+</li>
+<li><strong>Tracking usage:</strong> log each endpoint and identify clients (a user-agent identifier or API gateway keys).</li>
+<li><strong>Extreme measures:</strong>
+<ul>
+<li>a company that simply switched off old interfaces after a generous <strong>one year</strong></li>
+<li>another added a growing <strong>sleep</strong> to an old library until teams migrated. Only after other efforts, and Newman would still track who is affected.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-05-breaking-change-options.svg" alt="Breaking-change options" loading="lazy" /></p>
+<p><img src="/book-digest/building-microservices/img/bm-05-expand-and-contract.svg" alt="Expand and contract, and the social contract" loading="lazy" /></p>
+<h2 id="5-6-dry-and-code-reuse">5.6 DRY and code reuse</h2>
+<ul>
+<li><strong>DRY</strong> means avoiding duplicated <strong>behaviour and knowledge</strong>, not just code. Sharing in a microservice world is trickier.</li>
+<li><strong>Libraries:</strong>
+<ul>
+<li>shared code that <strong>leaks across service boundaries</strong> couples them (a common domain-objects library at one client forced all services to update and queues to be drained)</li>
+<li>Logging libraries are fine</li>
+<li>realestate.com.au <strong>copies</strong> a service template rather than sharing it</li>
+<li>You cannot update all uses at once (each service packages and redeploys its own copy), so accept several versions
+<ul>
+<li>if you need exact simultaneity, use a <strong>dedicated microservice</strong> instead.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Client libraries:</strong>
+<ul>
+<li>if the same people write server and client, <strong>server logic leaks into the client</strong> and cohesion suffers (Newman did this)</li>
+<li>The <strong>AWS SDK</strong> model is good: written by others, and clients choose when to upgrade</li>
+<li>Netflix's client libraries handle discovery, failure modes and logging (reliability at scale) but caused coupling</li>
+<li>Separate <strong>transport</strong> code from service-specific code, decide whether use is mandatory, and let <strong>clients control upgrades</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-7-service-discovery">5.7 Service discovery</h2>
+<p>Two parts: a way for an instance to <strong>register</strong> (&quot;I'm here!&quot;) and a way to <strong>find</strong> it, ideally coping with instances created and destroyed constantly.</p>
+<p><img src="/book-digest/building-microservices/img/bm-05-service-discovery.svg" alt="Register and look up" loading="lazy" /></p>
+<ul>
+<li><strong>DNS:</strong>
+<ul>
+<li>a name such as <code>accounts.musiccorp.net</code>, or a template like <code>&lt;servicename&gt;-&lt;environment&gt;.musiccorp.net</code></li>
+<li>Widely supported, but updating entries for disposable hosts is painful (Route 53 helps) and <strong>TTL caching</strong> (even in the JVM) leaves stale entries</li>
+<li>Point DNS at a <strong>load balancer</strong> rather than <strong>DNS round-robin</strong>, which hides sick hosts from the client.</li>
+</ul>
+</li>
+<li><strong>ZooKeeper:</strong>
+<ul>
+<li>from Hadoop</li>
+<li>a hierarchical namespace with <strong>watches</strong>, running as at least <strong>three nodes</strong></li>
+<li>configuration, leader election and naming. Newman would now avoid it for registration.</li>
+</ul>
+</li>
+<li><strong>Consul:</strong>
+<ul>
+<li>configuration plus discovery, an <strong>HTTP</strong> interface, a built-in <strong>DNS server</strong> serving <strong>SRV</strong> records (IP and port)</li>
+<li><strong>health checks</strong></li>
+<li><strong>consul-template</strong> (update config files, for example a HAProxy pool) and integration with <strong>Vault</strong> (secrets).</li>
+</ul>
+</li>
+<li><strong>etcd and Kubernetes:</strong> Kubernetes services select <strong>pods</strong> by metadata; often enough, though a mixed environment may still want Consul.</li>
+<li><strong>Rolling your own:</strong> Newman used AWS <strong>instance tags</strong> (service, environment, version) queried via API; today it would be &quot;a much worse wheel&quot;.</li>
+<li><strong>Don't forget the humans:</strong> expose the same information to people.</li>
+</ul>
+<h2 id="5-8-service-meshes-and-api-gateways">5.8 Service meshes and API gateways</h2>
+<ul>
+<li><strong>North-south</strong>
+<ul>
+<li>traffic crosses the perimeter</li>
+<li><strong>east-west</strong> stays inside. An <strong>API gateway</strong> handles north-south</li>
+<li>a <strong>service mesh</strong> handles east-west. Both act as proxies for <strong>generic behaviour</strong> with no tie to any one microservice's logic.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-05-gateway-and-service-mesh.svg" alt="Gateway at the perimeter, mesh inside" loading="lazy" /></p>
+<h3 id="api-gateways">API gateways</h3>
+<ul>
+<li>Mostly <strong>reverse proxies</strong> adding API keys, logging, rate limiting and developer portals
+<ul>
+<li>The hype came from the &quot;<strong>API economy</strong>&quot;; many firms bought features they never needed</li>
+<li>Usually it only fronts the organisation's own GUI clients (Kubernetes needs something at the edge since it routes only inside the cluster), so a third-party-oriented gateway is overkill.</li>
+</ul>
+</li>
+<li><strong>Where to use them:</strong>
+<ul>
+<li>be clear what you want</li>
+<li>for Kubernetes a focused product such as <strong>Ambassador</strong> (or your own reverse proxy)</li>
+<li>possibly more than one gateway. Newman reports more mis-selling in this space than any other.</li>
+</ul>
+</li>
+<li><strong>What to avoid:</strong>
+<ul>
+<li><strong>Call aggregation</strong> drifts into business logic: use GraphQL, a BFF, or a modelled <strong>saga</strong> (chapter 6).</li>
+<li><strong>Protocol rewriting</strong> (&quot;any SOAP API into REST&quot;) pushes smarts into the pipe.</li>
+<li><strong>Smart gateways</strong> break &quot;dumb pipes, smart endpoints&quot; and add handoffs: a central team changes your gateway via tickets.</li>
+<li><strong>Proxying all east-west calls</strong> adds a network hop.</li>
+</ul>
+</li>
+</ul>
+<h3 id="service-meshes">Service meshes</h3>
+<ul>
+<li>Push common inter-service functions (<strong>mutual TLS</strong>, <strong>correlation IDs</strong>, discovery, load balancing) into the mesh, avoiding shared libraries and versions, and working across languages (Netflix once mandated JVM to JVM)
+<ul>
+<li>Changes roll out <strong>without rebuilding</strong> services.</li>
+</ul>
+</li>
+<li><strong>How they work:</strong>
+<ul>
+<li>a <strong>proxy runs beside each instance</strong> (on Kubernetes, in the same <strong>pod</strong>), so a call from Order Processor to Payment goes via local proxies, limiting remote hops</li>
+<li>the <strong>Envoy</strong> proxy underlies Istio and Ambassador. A <strong>control plane</strong> changes proxy behaviour, distributes certificates and collects data.</li>
+</ul>
+</li>
+<li><strong>Smart pipes?</strong> No: only generic behaviour such as timeouts, which teams can set self-service (in Istio via the service definition).</li>
+<li><strong>Do you need one?</strong>
+<ul>
+<li>The space was unstable (Linkerd rebuilt from v1 to v2; Istio took years to 1.0). Newman's old advice was &quot;if you can afford to wait six months, wait&quot;</li>
+<li>it has since matured. Options are limited off Kubernetes, and they add complexity (hard to justify for five microservices)</li>
+<li>switching is painful. <strong>Monzo</strong> relied on Linkerd v1, then moved to an in-house Envoy-based mesh.</li>
+</ul>
+</li>
+<li><strong>Other protocols:</strong> meshes mainly handle HTTP; Kafka traffic bypasses the mesh.</li>
+</ul>
+<h2 id="5-9-documenting-services">5.9 Documenting services</h2>
+<ul>
+<li>Schemas show structure, not behaviour, so documentation is still needed (more so without schemas)
+<ul>
+<li><strong>OpenAPI</strong> also drives portals (open-source ones are basic; Ambassador's <strong>Developer Portal</strong> auto-discovers endpoints)</li>
+<li>For events: <strong>AsyncAPI</strong> (adapted from OpenAPI) and <strong>CloudEvents</strong> (more integration, historically JSON only, protobuf support restored).</li>
+</ul>
+</li>
+<li><strong>Self-describing system:</strong>
+<ul>
+<li>UDDI was heavyweight</li>
+<li>Fowler's <strong>humane registry</strong> is a lightweight alternative (a wiki)
+<ul>
+<li>Combine health checks, correlation IDs, Consul, OpenAPI and CloudEvents into dashboards, crawling repositories for metadata files</li>
+<li>The <strong>Financial Times Biz Ops</strong> (on a graph database) calculates a <strong>System Operability Score</strong></li>
+</ul>
+</li>
+<li><strong>Spotify's Backstage</strong> and Ambassador's Service Catalog are open-source options.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Let the problem and the style guide the technology; use schemas for explicit contracts and to catch accidental breaks.</li>
+<li>Prefer backward-compatible changes; when breaking, give consumers time and avoid lockstep.</li>
+<li>Surface information to humans with a humane registry.</li>
+<li>Next: coordinating operations across several microservices.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>RPC, IDL, WSDL, stub, gRPC, protocol buffers, Avro</strong>.</li>
+<li><strong>REST, resource, HATEOAS, OpenAPI, GraphQL, BFF</strong>.</li>
+<li><strong>Queue, topic, consumer group, competing consumers, guaranteed delivery, exactly once</strong>.</li>
+<li><strong>Structural vs semantic breakage, tolerant reader, Postel's law, semantic versioning</strong>.</li>
+<li><strong>Expand and contract, lockstep deployment, social contract</strong>.</li>
+<li><strong>Service discovery, API gateway, service mesh, control plane, humane registry</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 5. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch05.html</li>
+<li>Tools and specifications named in the text (Pact, Protolock, OpenAPI, CloudEvents, AsyncAPI, Confluent Schema Registry, Backstage): as cited by the book, no links given.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-04-microservice-communication-styles/">Building Microservices 4: Microservice Communication Styles</a></li>
+<li><a href="/book-digest/building-microservices/bm-06-workflow/">Building Microservices 6: Workflow</a></li>
+<li><a href="/book-digest/understanding-distributed-systems/uds-23-messaging/">Understanding Distributed Systems 23: Messaging</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-04-microservice-communication-styles/">&larr; Building Microservices 4: Microservice Communication Styles</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-06-workflow/">Building Microservices 6: Workflow &rarr;</a></nav></main></body></html>

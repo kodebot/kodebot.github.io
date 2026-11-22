@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 4: Discovery</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-4-discovery">Understanding Distributed Systems 4: Discovery</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 4. Previous: <a href="/book-digest/understanding-distributed-systems/uds-03-secure-links/">Understanding Distributed Systems 3: Secure links</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-05-apis/">Understanding Distributed Systems 5: APIs</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+Before opening a connection you must <strong>discover the IP address</strong> of the remote process. The usual way is <strong>DNS</strong>, the &quot;phone book of the internet&quot;: a <strong>distributed, hierarchical, eventually consistent key-value store</strong> (RFC 1035: https://datatracker.ietf.org/doc/html/rfc1035). Resolution walks a hierarchy (root, top-level domain, authoritative) but <strong>caching with a TTL</strong> makes it fast; the TTL is a trade-off, and DNS can easily become a <strong>single point of failure</strong>.</p>
+</blockquote>
+<h2 id="how-a-browser-resolves-www-example-com">How a browser resolves <code>www.example.com</code></h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/dns-resolution.svg" alt="DNS resolution" loading="lazy" />
+(The process is similar for other clients. A deep-dive video is cited: https://www.youtube.com/watch?v=drWd9HIhJdU.)</p>
+<ol>
+<li>The browser checks its <strong>local cache</strong>. If found, done; otherwise it asks a <strong>DNS resolver</strong>, a server typically hosted by your <strong>ISP</strong>.</li>
+<li>The resolver resolves <strong>iteratively</strong> on behalf of its clients (&quot;why iterative will be obvious in a moment&quot;). It checks its own cache; if missing, it queries a <strong>root name server (root NS)</strong>.</li>
+<li>The root NS maps the <strong>top-level domain (TLD)</strong> (<code>.com</code>) to the address of the name server responsible for it.</li>
+<li>The resolver asks the <strong>TLD name server</strong> about <code>example.com</code>.</li>
+<li>The TLD name server maps <code>example.com</code> to the address of the <strong>authoritative name server</strong> for the domain.</li>
+<li>The resolver queries the authoritative name server for <code>www.example.com</code>, which returns the IP address.</li>
+</ol>
+<ul>
+<li>For a <strong>subdomain</strong> like <code>news.example.com</code>, the authoritative server would return the address of the name server responsible for the subdomain, and <strong>one more request</strong> is needed.</li>
+<li>The original protocol sent <strong>plain-text messages mostly over UDP</strong> for efficiency
+<ul>
+<li>Anyone watching could snoop, so the industry mostly moved to secure alternatives such as <strong>DNS over TLS</strong> (RFC 7858: https://en.wikipedia.org/wiki/DNS_over_TLS).</li>
+</ul>
+</li>
+<li>Worst case:
+<ul>
+<li>several round trips</li>
+<li>Its beauty: <strong>the address of a root name server is all you need</strong> to resolve any hostname</li>
+<li>But it would be slow if every request did several lookups, and the global resolution load is enormous, so <strong>caching</strong> is used: the <strong>browser, operating system and DNS resolver</strong> all cache, because name-to-IP mappings change rarely.</li>
+</ul>
+</li>
+</ul>
+<h2 id="ttl-how-caches-expire">TTL: how caches expire</h2>
+<ul>
+<li>Every record has a <strong>time to live (TTL)</strong> telling caches how long the entry is valid
+<ul>
+<li>But <strong>clients may not enforce it</strong>: after changing a DNS entry, a small number of clients may still connect to the old address long after the TTL expired.</li>
+</ul>
+</li>
+<li><strong>Trade-off:</strong>
+<ul>
+<li>a long TTL means many clients <strong>do not see a change for a long time</strong></li>
+<li>too short increases <strong>load on name servers</strong> and the <strong>average response time</strong> (clients resolve more often).</li>
+</ul>
+</li>
+<li>If your name server becomes unavailable, <strong>the smaller the TTL, the more clients are impacted</strong>.</li>
+</ul>
+<h2 id="dns-as-a-single-point-of-failure">DNS as a single point of failure</h2>
+<ul>
+<li>If your DNS name server is down, clients <strong>cannot find your application's IP</strong> and cannot connect: this can cause <strong>massive outages</strong> (example cited: the 2016 DDoS attack on Dyn, https://en.wikipedia.org/wiki/2016_Dyn_cyberattack).</li>
+<li><strong>Observation:</strong>
+<ul>
+<li>DNS would be more robust if caches <strong>served stale entries when they cannot reach a name server</strong>, rather than treating TTLs as time bombs</li>
+<li>Since entries rarely change, a stale entry is arguably far more robust than none</li>
+<li>The principle that <strong>a system should keep functioning even when a dependency is impaired</strong> is called <strong>static stability</strong>; the resiliency part returns to it.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+DNS · resolver · root name server · TLD · authoritative name server · iterative resolution · TTL · DNS over TLS · single point of failure · static stability.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 4. https://understandingdistributed.systems/</li>
+<li>RFC 1035, RFC 7858 and the Dyn attack article as cited by the book.</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-03-secure-links/">Understanding Distributed Systems 3: Secure links</a> · <a href="/book-digest/understanding-distributed-systems/uds-05-apis/">Understanding Distributed Systems 5: APIs</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-03-secure-links/">&larr; Understanding Distributed Systems 3: Secure links</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-05-apis/">Understanding Distributed Systems 5: APIs &rarr;</a></nav></main></body></html>

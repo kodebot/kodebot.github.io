@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 6: Workflow</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-6-workflow">Building Microservices 6: Workflow</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 6. Previous: <a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a>. Next: <a href="/book-digest/building-microservices/bm-07-build/">Building Microservices 7: Build</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Splitting data across services loses <strong>atomicity</strong>: each service can use ACID locally, but the operation as a whole is no longer one transaction.</li>
+<li><strong>Distributed transactions</strong> (two-phase commit) are mostly distributed locking; they add latency, lose isolation and fail in messy ways. Newman says avoid them.</li>
+<li>A <strong>saga</strong> models a long-lived business process as independent local transactions, with <strong>compensating transactions</strong> for rollback and a choice of <strong>backward or forward recovery</strong>.</li>
+<li>Two implementation styles: <strong>orchestrated</strong> (central coordinator, visible, more coupled) and <strong>choreographed</strong> (events, loosely coupled, harder to follow). One team owning the saga: orchestration is fine; several teams: prefer choreography.</li>
+<li>Sagas handle <strong>business</strong> failures, not technical ones; use <strong>correlation IDs</strong> to track state.</li>
+</ul>
+</div></div>
+<h2 id="6-1-database-transactions">6.1 Database transactions</h2>
+<ul>
+<li>A transaction treats several changes as a single unit and gives a way to clean up on error. Typically this is an <strong>ACID</strong> transaction:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Guarantee</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Atomicity</strong></td>
+<td>All operations complete or all fail, as if nothing happened</td>
+</tr>
+<tr>
+<td><strong>Consistency</strong></td>
+<td>The database is left in a valid state</td>
+</tr>
+<tr>
+<td><strong>Isolation</strong></td>
+<td>Concurrent transactions do not see each other's interim changes</td>
+</tr>
+<tr>
+<td><strong>Durability</strong></td>
+<td>Completed changes survive a system failure</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Not every database offers ACID (MongoDB supported it only on a single document for years; multidocument ACID arrived in 4.0 per the book's footnote)
+<ul>
+<li>For depth Newman recommends Kleppmann's <em>Designing Data-Intensive Applications</em></li>
+<li>This chapter focuses on <strong>atomicity</strong>, the first thing lost when functionality splits.</li>
+</ul>
+</li>
+</ul>
+<h3 id="still-acid-but-lacking-atomicity">Still ACID, but lacking atomicity</h3>
+<ul>
+<li>A service can still use ACID <strong>inside its own database</strong>
+<ul>
+<li>only the scope shrinks
+<ul>
+<li>Example: onboarding a customer ends by changing customer 2346's status from <code>PENDING</code> to <code>VERIFIED</code> and <strong>deleting the row</strong> from <code>PendingEnrollments</code></li>
+<li>In one database that is a single transaction</li>
+</ul>
+</li>
+<li>across the Customer and Enrollments services it is <strong>two independent transactions</strong>.</li>
+</ul>
+</li>
+<li>You could sequence them (delete only if the update worked), but you must then handle the delete failing yourself
+<ul>
+<li>Reordering steps is useful (it returns with sagas), but the operation's atomicity is lost.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-06-one-transaction-vs-two.svg" alt="One transaction versus two" loading="lazy" /></p>
+<h2 id="6-2-distributed-transactions-two-phase-commit">6.2 Distributed transactions: two-phase commit</h2>
+<ul>
+<li><strong>2PC</strong> has a <strong>voting phase</strong> and a <strong>commit phase</strong>, run by a central <strong>coordinator</strong>.
+<ul>
+<li>Voting: the coordinator asks workers whether a change can be made (set status to <code>VERIFIED</code>; remove the pending row). Any &quot;no&quot; aborts everything.</li>
+<li>A &quot;yes&quot; is a <strong>guarantee</strong> to make the change later, so the worker typically <strong>locks</strong> the record so nothing invalidates it.</li>
+<li>Commit: if all agreed, changes are applied and locks released; otherwise a <strong>rollback</strong> message lets workers release locks.</li>
+</ul>
+</li>
+<li><strong>Problems:</strong>
+<ul>
+<li>Commits <strong>do not land simultaneously</strong>, so a window exists where A has changed but B has not. <strong>Isolation is lost.</strong></li>
+<li>At heart it is <strong>coordinating distributed locks</strong>, hard to manage and deadlock-prone.</li>
+<li>Failure modes abound (a worker votes yes then does not answer the commit), some needing a <strong>manual fix by an operator</strong>.</li>
+<li>More participants and more latency mean more trouble: 2PC is only suitable for <strong>short-lived</strong> operations, since resources stay locked for the duration.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-06-two-phase-commit.svg" alt="Two-phase commit" loading="lazy" /></p>
+<h3 id="just-say-no">Just say no</h3>
+<ul>
+<li>Newman strongly advises against distributed transactions across microservices. Alternatives:
+<ul>
+<li><strong>Do not split</strong> state that must stay atomic: keep it in one database and one service (or the monolith) and split elsewhere first.</li>
+<li>If you must split, or the operation takes minutes, days or months, use a <strong>saga</strong>.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] Database distributed transactions
+Newman's objection is to coordinating state across <strong>services</strong>. Distributed transactions work inside a single logical database that happens to be distributed, such as <strong>Google Spanner</strong>, where they are transparent to the application. It needs &quot;very expensive data centers and satellite-based atomic clocks (really)&quot;; he recommends Kubis's talk <em>Google Cloud Spanner: Global Consistency at Scale</em> (Devoxx, 2017).</p>
+</blockquote>
+<h2 id="6-3-sagas">6.3 Sagas</h2>
+<ul>
+<li>A <strong>saga</strong> coordinates several state changes <strong>without locking resources for long</strong>, by modelling the steps as discrete, independently executable activities
+<ul>
+<li>It also forces you to <strong>model business processes explicitly</strong>.</li>
+</ul>
+</li>
+<li>Origin:
+<ul>
+<li>Hector Garcia-Molina and Kenneth Salem, &quot;Sagas&quot;, <em>ACM SIGMOD Record</em> 16(3), 1987, about <strong>long-lived transactions (LLTs)</strong></li>
+<li>Mapping an LLT to one database transaction would lock rows or tables for a long time</li>
+<li>Break it into a <strong>sequence of shorter transactions</strong>, each touching part of the data, so there is far less contention</li>
+<li>The model works equally across services.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!warning] A saga is not atomic
+A saga does <strong>not</strong> give ACID atomicity at the saga level. Each individual step can be an ACID transaction, and the saga gives you enough information to reason about its <strong>state</strong>; handling the implications is your job.</p>
+</blockquote>
+<ul>
+<li>Example:
+<ul>
+<li>MusicCorp <strong>order fulfilment</strong> as one saga, each step a different service</li>
+<li>inside the Warehouse, reserving stock is a local ACID transaction writing a row to its <strong>Reservation</strong> table.</li>
+</ul>
+</li>
+</ul>
+<h3 id="failure-modes">Failure modes</h3>
+<ul>
+<li><strong>Backward recovery:</strong> revert and clean up (a rollback) using <strong>compensating actions</strong> for already-committed transactions.</li>
+<li><strong>Forward recovery:</strong> carry on from the failure point by <strong>retrying</strong>, which requires persisting enough information.</li>
+<li>Expect backward, forward or a mix, depending on the process.</li>
+<li>Sagas recover from <strong>business failures</strong> (insufficient funds), <strong>not technical failures</strong> (payment gateway timeout or a 500). They assume reliable components
+<ul>
+<li>see chapter 12 and Friedrichsen's &quot;The Limits of the Saga Pattern&quot;.</li>
+</ul>
+</li>
+</ul>
+<h3 id="saga-rollbacks">Saga rollbacks</h3>
+<ul>
+<li>Suppose the item cannot be found when packaging, and you decide to <strong>cancel the whole order</strong> (not offer back-order)
+<ul>
+<li>Payment was taken and points awarded in earlier, already committed transactions, so there is no simple rollback.</li>
+</ul>
+</li>
+<li>You run a <strong>compensating transaction</strong> for each committed step
+<ul>
+<li>It is a <strong>semantic rollback</strong>: the original did happen, and you add a new transaction reverting its effect</li>
+<li>You cannot unsend an email, so the compensation sends a <strong>second email</strong> saying the order was cancelled.</li>
+</ul>
+</li>
+<li>Keeping a record of the aborted order is appropriate and useful.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-06-saga-and-compensation.svg" alt="Saga steps and compensating transactions" loading="lazy" /></p>
+<h3 id="reordering-steps-to-reduce-rollbacks">Reordering steps to reduce rollbacks</h3>
+<ul>
+<li>Award <strong>loyalty points only at dispatch</strong> rather than earlier, so a packaging failure has no points to undo
+<ul>
+<li><strong>Pull likely failures earlier</strong> and push hard-to-undo steps later, so some compensations need not exist.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-06-reordering-steps.svg" alt="Reordering workflow steps" loading="lazy" /></p>
+<h3 id="mixing-fail-backward-and-fail-forward">Mixing fail-backward and fail-forward</h3>
+<ul>
+<li>Once payment is taken and the item packed, only dispatch remains. If the carrier has no room, rolling back the order would be odd: <strong>retry</strong> (perhaps next day), then involve a <strong>human</strong>.</li>
+</ul>
+<h2 id="6-4-implementing-sagas">6.4 Implementing sagas</h2>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>Idea</th>
+<th>Typical interaction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Orchestrated</strong></td>
+<td>A central <strong>orchestrator</strong> defines order and triggers compensation: command and control</td>
+<td>Request-response</td>
+</tr>
+<tr>
+<td><strong>Choreographed</strong></td>
+<td>Responsibility distributed across services: &quot;trust but verify&quot;</td>
+<td>Events</td>
+</tr>
+</tbody>
+</table>
+<h3 id="orchestrated-sagas">Orchestrated sagas</h3>
+<ul>
+<li><strong>Order Processor</strong>
+<ul>
+<li>acts as orchestrator: it knows which services are needed, decides when to call them and what to do on failure</li>
+<li>The process is <strong>explicit in one place</strong>, easing onboarding and understanding.</li>
+</ul>
+</li>
+<li><strong>Downsides:</strong>
+<ul>
+<li><strong>Domain coupling:</strong> the orchestrator must know every service.</li>
+<li><strong>Anaemic services:</strong>
+<ul>
+<li>logic gets absorbed by the orchestrator</li>
+<li>Services should still own local state and behaviour (&quot;their own local state machines&quot;)</li>
+<li>Note the maxim: &quot;If logic has a place where it can be centralized, it will become centralized!&quot;</li>
+</ul>
+</li>
+<li>Mitigate by using <strong>different orchestrators for different flows</strong> (Order Processor, Returns, Goods Receiving), all reusing Warehouse functionality.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] BPM tools
+Business process modelling tools let non-developers wire building blocks into flows with drag-and-drop. Newman dislikes them: the &quot;non-developers define the process&quot; premise almost never holds; flows need GUIs, are hard to version control, and are not designed for testing. Let developers use <strong>code</strong>; it is easier to <strong>project a visual view from code</strong> than to run code from a diagram. If you want one, he points to open-source <strong>Camunda</strong> and <strong>Zeebe</strong>.</p>
+</blockquote>
+<h3 id="choreographed-sagas">Choreographed sagas</h3>
+<ul>
+<li>Services <strong>react to events</strong>
+<ul>
+<li>When Warehouse gets <code>Order Placed</code> it reserves stock and fires an event; failure raises something like <code>Insufficient Stock</code></li>
+<li>When Payment Gateway fires <code>Payment Taken</code>, <strong>Loyalty</strong> awards points while <strong>Warehouse</strong> dispatches <strong>in parallel</strong>.</li>
+</ul>
+</li>
+<li>A <strong>message broker</strong> with a <strong>topic</strong> handles broadcast; a Recommendation service could also listen to <code>Order Placed</code>.</li>
+<li><strong>Pros:</strong> no service knows about another (far less domain coupling); no place for logic to centralise.</li>
+<li><strong>Cons:</strong> the process is <strong>not explicit</strong> (you rebuild it by reading each service) and you lack a view of a <strong>saga's state</strong>, needed for compensation.</li>
+<li><strong>Fix:</strong>
+<ul>
+<li>put a unique <strong>correlation ID</strong> for the saga in every event, and have a service consume all events to <strong>project a view</strong> of each order's state (and possibly act to resolve issues)</li>
+<li>Newman considers correlation IDs essential here (chapter 10).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-06-orchestration-vs-choreography.svg" alt="Orchestration versus choreography" loading="lazy" /></p>
+<h3 id="mixing-styles">Mixing styles</h3>
+<ul>
+<li>You can mix styles by process or inside one saga (an orchestrated flow inside the Warehouse boundary, within a larger choreographed saga). Whatever you do, keep a clear way to see <strong>saga state and completed activities</strong>
+<ul>
+<li>Garcia-Molina and colleagues also studied <strong>nested sagas</strong> (1991).</li>
+</ul>
+</li>
+<li><strong>Tracing calls:</strong> correlation IDs and log aggregation (chapter 10) help with either style.</li>
+</ul>
+<h3 id="orchestration-or-choreography">Orchestration or choreography?</h3>
+<ul>
+<li>Newman finds the extra tracking complexity of choreography &quot;almost always&quot; outweighed by looser coupling, but this reflects his taste for events.</li>
+<li><strong>Rule of thumb:</strong>
+<ul>
+<li><strong>One team owns the whole saga:</strong> orchestration is fine (the coupling is manageable inside a team).</li>
+<li><strong>Several teams involved:</strong> prefer choreography, to distribute responsibility and let teams work in isolation.</li>
+</ul>
+</li>
+<li>Orchestration leans on request-response, choreography on events (a tendency, not a rule). If event-driven design confuses you, choreography may not suit.</li>
+</ul>
+<h2 id="6-5-sagas-versus-distributed-transactions">6.5 Sagas versus distributed transactions</h2>
+<ul>
+<li>Pat Helland (&quot;Life Beyond Distributed Transactions: An Apostate's Opinion&quot;, <em>acmqueue</em>, 2016) notes that a single node's failure stalls commit in most distributed transaction systems, so the larger the system, the likelier it is down: like an aircraft that needs all engines, <strong>adding an engine reduces availability</strong>.</li>
+<li>Modelling processes as sagas avoids many of these problems and makes the process a <strong>first-class concept</strong>.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Workflows come down to <strong>explicitly modelling the business process</strong>, which fits microservice boundaries drawn around the business domain.</li>
+<li>Next reading: Hohpe and Woolf's <em>Enterprise Integration Patterns</em> and Bernd Ruecker's <em>Practical Process Automation</em> (O'Reilly, 2021; orchestration-focused).</li>
+<li>Next chapter: building microservices (source control, CI and CD).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>ACID, atomicity, isolation</strong>.</li>
+<li><strong>Two-phase commit, coordinator, voting phase, commit phase</strong>.</li>
+<li><strong>Saga, long-lived transaction, compensating transaction, semantic rollback</strong>.</li>
+<li><strong>Backward recovery, forward recovery, business vs technical failure</strong>.</li>
+<li><strong>Orchestrated saga, choreographed saga, correlation ID, BPM</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 6. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch06.html</li>
+<li>Hector Garcia-Molina and Kenneth Salem, &quot;Sagas&quot;, ACM SIGMOD Record 16(3), 1987, pp. 249-259
+<ul>
+<li>Pat Helland, &quot;Life Beyond Distributed Transactions: An Apostate's Opinion&quot;, acmqueue 14(5), 2016</li>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly, 2017)</li>
+<li>as cited by the book, no links given.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a></li>
+<li><a href="/book-digest/building-microservices/bm-07-build/">Building Microservices 7: Build</a></li>
+<li><a href="/book-digest/building-microservices/bm-04-microservice-communication-styles/">Building Microservices 4: Microservice Communication Styles</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">&larr; Building Microservices 5: Implementing Microservice Communication</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-07-build/">Building Microservices 7: Build &rarr;</a></nav></main></body></html>

@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 21: Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-21-microservices">Understanding Distributed Systems 21: Microservices</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), chapter 21. Previous: <a href="/book-digest/understanding-distributed-systems/uds-20-caching/">Understanding Distributed Systems 20: Caching</a>. Next: <a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">Understanding Distributed Systems 22: Control planes and data planes</a>.</p>
+<blockquote>
+<p>[!abstract] The one-minute version
+A successful monolith keeps accumulating components, which become <strong>coupled</strong>, slow every developer down and force <strong>whole-app deploys and rollbacks</strong>. <strong>Functionally decomposing</strong> it into <strong>independently deployable services</strong> that talk via <strong>APIs</strong> lets <strong>small teams</strong> own services end to end. But it adds <strong>a great deal of complexity</strong>, worth paying only if amortised across many teams. Start with a <strong>monolith</strong>, decompose when there is a good reason. An <strong>API gateway</strong> then hides the internal services from the outside world.</p>
+</blockquote>
+<h2 id="the-monolith-s-growing-pains">The monolith's growing pains</h2>
+<ul>
+<li>Components get <strong>increasingly coupled</strong>; developers <strong>step on each other's toes</strong>; eventually <strong>nobody understands every part</strong>, and features and fixes take longer.</li>
+<li>A change to one component can force <strong>rebuilding and deploying the whole app</strong>
+<ul>
+<li>A deployment bug (memory or socket leak) can hit <strong>unrelated components</strong></li>
+<li><strong>Reverting affects every developer's velocity</strong>, not only the author's.</li>
+</ul>
+</li>
+</ul>
+<h2 id="the-microservice-answer">The microservice answer</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-21-monolith-to-microservices.svg" alt="From a monolith to independently deployable services" loading="lazy" /></p>
+<ul>
+<li><strong>Functionally decompose</strong> into independently deployable services communicating via <strong>APIs</strong>, which <strong>create boundaries that are hard to violate</strong>, unlike boundaries between components in one process.</li>
+<li><strong>Small teams own and operate</strong>
+<ul>
+<li>each service</li>
+<li>Smaller teams collaborate better: <strong>communication overhead grows quadratically</strong> with team size (<em>The Mythical Man-Month</em>: https://en.wikipedia.org/wiki/The_Mythical_Man-Month)</li>
+<li>Each team controls its codebase and <strong>release schedule</strong>, so less cross-team talk; a service's smaller surface is easier for new hires.</li>
+</ul>
+</li>
+<li>Teams may pick the <strong>tech stack and hardware</strong> that suit them (API consumers do not care), so experimenting is easy; each service can have its <strong>own data model and data store(s)</strong>.</li>
+<li><strong>&quot;Micro&quot; is misleading</strong>:
+<ul>
+<li>nothing has to be micro</li>
+<li>A service that does little only adds operational overhead and complexity</li>
+<li><strong>Rule of thumb: APIs should have a small surface area and encapsulate a significant amount of functionality</strong> (the idea is from John Ousterhout's <em>A Philosophy of Software Design</em>)</li>
+<li>A more apt name is service-oriented architecture, but that has baggage too.</li>
+</ul>
+</li>
+</ul>
+<h2 id="21-1-caveats">21.1 Caveats</h2>
+<p>Splitting adds a lot of complexity, <strong>worth it only if amortised across many development teams</strong>.</p>
+<ul>
+<li><strong>Tech stack:</strong>
+<ul>
+<li>nothing forbids different stacks, but it makes it harder for developers to <strong>move between teams</strong> and multiplies the libraries to support (one per language) for common needs like logging</li>
+<li>Enforce some <strong>standardisation</strong>: e.g</li>
+<li><strong>loosely encourage</strong> technologies by giving teams a <strong>great development experience</strong> if they stay on the recommended portfolio.</li>
+</ul>
+</li>
+<li><strong>Communication:</strong>
+<ul>
+<li>remote calls are <strong>expensive and introduce non-determinism</strong></li>
+<li>much of the book is about taming that. A monolith still faces external requests and third-party APIs, but on a smaller scale.</li>
+</ul>
+</li>
+<li><strong>Coupling:</strong>
+<ul>
+<li>services must be <strong>loosely coupled</strong> so a change in one does not force changes elsewhere</li>
+<li>Otherwise you get the dreaded <strong>distributed monolith</strong>: all the downsides of a monolith, an order of magnitude more complexity</li>
+<li>Causes: <strong>fragile APIs</strong> needing client updates on every change, <strong>shared libraries updated in lockstep</strong> across services, <strong>static IP addresses</strong> to reference external services.</li>
+</ul>
+</li>
+<li><strong>Resource provisioning:</strong> new machines, data stores and other commodity resources must be <strong>simple to provision</strong> (not each team's own way), then <strong>configured</strong>: needs a fair amount of <strong>automation</strong>.</li>
+<li><strong>Testing:</strong> testing one microservice is not harder than testing a monolith, but <strong>testing their integration is much harder</strong>: subtle, unexpected behaviours appear only when services interact <strong>at scale in production</strong>.</li>
+<li><strong>Operations:</strong>
+<ul>
+<li>a common way to <strong>continuously deliver and deploy</strong> safely so no team reinvents it</li>
+<li><strong>Debugging</strong> is harder: you cannot load the whole app on your machine and step through it, so a good <strong>observability platform</strong> is crucial.</li>
+</ul>
+</li>
+<li><strong>Eventual consistency:</strong>
+<ul>
+<li>the data model no longer lives in one store</li>
+<li>atomically updating data across stores with strong consistency is <strong>slow, expensive and hard</strong>, so the architecture usually has to <strong>embrace eventual consistency</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Summary advice:</strong> generally <strong>start with a monolith and decompose it only when there is a good reason</strong> (Fowler: https://martinfowler.com/bliki/MicroservicePremium.html). You can still <strong>componentise the monolith</strong>, and boundaries are far easier to move as it grows. Once it is mature and growing pains appear, <strong>peel off one microservice at a time</strong>.</p>
+<h2 id="21-2-api-gateway">21.2 API gateway</h2>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-21-api-gateway.svg" alt="What the API gateway does" loading="lazy" />
+After decomposing, rethink how the outside world talks to the app.</p>
+<ul>
+<li>A client may need <strong>several requests to different services</strong> for one operation: expensive on <strong>mobile</strong>, where each network request costs battery.</li>
+<li>Clients must know <strong>implementation details</strong> like internal service DNS names, so architecture changes force client changes, hard when you do not control them
+<ul>
+<li>&quot;Once a public API is out there, you had better be prepared to maintain it for a very long time.&quot;</li>
+</ul>
+</li>
+<li>Solution (a layer of indirection): hide internal APIs behind a <strong>public API that acts as a facade or proxy</strong>: the <strong>API gateway</strong> (a reverse proxy).</li>
+</ul>
+<h3 id="21-2-1-core-responsibilities">21.2.1 Core responsibilities</h3>
+<ul>
+<li><strong>Routing:</strong>
+<ul>
+<li>forward inbound requests to internal services using a <strong>routing map</strong> from the public API to internal APIs</li>
+<li>Internal APIs can change without breaking external clients: with a 1:1 mapping between a public and an internal endpoint, if the internal one changes clients keep using the public one.</li>
+</ul>
+</li>
+<li><strong>Composition:</strong>
+<ul>
+<li>data now lives in many services and stores</li>
+<li>the gateway can offer a <strong>higher-level API</strong> that queries several services and <strong>composes</strong> the responses, sparing the client from knowing which services to ask and cutting its request count
+<ul>
+<li><strong>But not simple:</strong> <strong>availability of the composed API drops as internal calls increase</strong> (each can fail), and data may be <strong>inconsistent</strong> if updates have not propagated</li>
+</ul>
+</li>
+<li>the gateway must resolve discrepancies.</li>
+</ul>
+</li>
+<li><strong>Translation:</strong>
+<ul>
+<li>from one IPC mechanism to another (e.g. <strong>REST over HTTP to internal gRPC</strong>), and <strong>different APIs for different clients</strong>: a desktop app can get more data than a mobile one (more screen estate; for mobile, network calls cost more and requests are batched to save battery)</li>
+<li><strong>Graph-based APIs</strong>
+<ul>
+<li>are increasingly popular: a <strong>schema of types, fields and relationships</strong></li>
+<li>clients <strong>query for exactly the data they need</strong> and the gateway turns that into internal calls</li>
+</ul>
+</li>
+<li>Less development time (no per-use-case APIs)</li>
+<li><strong>GraphQL</strong> (https://graphql.org/) is the most popular.</li>
+</ul>
+</li>
+</ul>
+<h3 id="21-2-2-cross-cutting-concerns">21.2.2 Cross-cutting concerns</h3>
+<p>As a reverse proxy the gateway can do what each service otherwise would: <strong>cache</strong> frequently accessed resources, <strong>rate-limit</strong> to protect services. The most critical are <strong>authentication and authorisation</strong>:</p>
+<ul>
+<li><strong>Authentication:</strong>
+<ul>
+<li>validating that a <strong>principal</strong> (human or application) is who it says</li>
+<li><strong>Authorisation:</strong> granting the authenticated principal <strong>permissions</strong> (create, read, update, delete a resource), typically via <strong>roles</strong>.</li>
+</ul>
+</li>
+<li><strong>Monolith approach: sessions.</strong>
+<ul>
+<li>HTTP is stateless, so the app creates a <strong>session object</strong> with an ID (a cryptographically strong random number), stores it in an in-memory cache or external store, and returns the <strong>ID in a cookie</strong></li>
+<li>On login success the principal's <strong>ID and roles</strong> are stored in the session and later used to decide on requests.</li>
+</ul>
+</li>
+<li><strong>In microservices it is not obvious</strong> which service authenticates and authorises, since handling a request can span services.</li>
+<li><strong>One approach:</strong>
+<ul>
+<li>the <strong>API gateway authenticates</strong> external requests (it is the entry point), <strong>centralising support for different authentication mechanisms</strong> and hiding the complexity</li>
+<li><strong>Authorisation is best left to individual services</strong> to avoid coupling the gateway to domain logic.</li>
+</ul>
+</li>
+<li>After authenticating, the gateway creates a <strong>security token</strong>, passed with the request to internal services, which pass it downstream
+<ul>
+<li>A service must <strong>validate the token</strong> and get the principal's identity and roles</li>
+<li><strong>Opaque token:</strong> carries no information, so validation <strong>calls an external auth service</strong></li>
+<li><strong>Transparent token:</strong> embeds the principal's information, <strong>eliminating that call</strong> but making it <strong>harder to revoke compromised tokens</strong>.</li>
+</ul>
+</li>
+<li><strong>JSON Web Token (JWT)</strong> (https://jwt.io/introduction) is the most popular transparent token: a <strong>JSON payload</strong> with an <strong>expiration date</strong>, the principal's <strong>identity and roles</strong> and other metadata, <strong>signed with a certificate trusted by internal services</strong>, so no external call is needed.</li>
+<li><strong>API keys:</strong> a custom key that lets the gateway <strong>identify the principal and limit what they can do</strong>; popular for public APIs like GitHub's or Twitter's.</li>
+<li>The topic is barely scratched; see <em>Microservices Security in Action</em> (https://www.manning.com/books/microservices-security-in-action).</li>
+</ul>
+<h3 id="21-2-3-caveats">21.2.3 Caveats</h3>
+<ul>
+<li>It can become a <strong>development bottleneck</strong>: tightly coupled to the internal APIs it shields, so each internal API change means changing the gateway.</li>
+<li>It is <strong>one more service to maintain</strong> and must <strong>scale to the combined request rate</strong> of all services behind it.</li>
+<li>With <strong>many services and APIs the pros outweigh the cons</strong>.</li>
+<li><strong>Build or buy:</strong> roll your own from a reverse proxy like <strong>NGINX</strong>, or use managed <strong>Azure API Management</strong> (https://azure.microsoft.com/en-gb/services/api-management/) or <strong>Amazon API Gateway</strong> (https://aws.amazon.com/api-gateway/).</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+monolith · microservice · independently deployable · distributed monolith · service-oriented architecture · API gateway · routing map · composition · translation · GraphQL · principal · authentication / authorisation · session · opaque vs transparent token · JWT · API key.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 21. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-20-caching/">Understanding Distributed Systems 20: Caching</a> · <a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">Understanding Distributed Systems 22: Control planes and data planes</a> · <a href="/book-digest/understanding-distributed-systems/uds-05-apis/">Understanding Distributed Systems 5: APIs</a> · <a href="/book-digest/spring-start-here/ch11-consuming-rest-endpoints/">Ch 11: Consuming REST endpoints</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-20-caching/">&larr; Understanding Distributed Systems 20: Caching</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><a href="/book-digest/understanding-distributed-systems/uds-22-control-planes-and-data-planes/">Understanding Distributed Systems 22: Control planes and data planes &rarr;</a></nav></main></body></html>

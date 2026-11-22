@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 14: User Interfaces</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-14-user-interfaces">Building Microservices 14: User Interfaces</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 14. Previous: <a href="/book-digest/building-microservices/bm-13-scaling/">Building Microservices 13: Scaling</a>. Next: <a href="/book-digest/building-microservices/bm-15-organizational-structures/">Building Microservices 15: Organizational Structures</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The UI is where microservice capabilities are woven together; think <strong>digital</strong>, not web versus mobile.</li>
+<li>Prefer <strong>stream-aligned teams</strong> owning UI and services end to end over a dedicated frontend team; solve the usual reasons (scarce specialists, consistency, SPAs) differently.</li>
+<li>Patterns: <strong>monolithic frontend</strong>, <strong>micro frontends</strong> (page-based, widget-based), <strong>central aggregating gateway</strong>, <strong>backend for frontend (BFF)</strong>, with <strong>GraphQL</strong> as an implementation option.</li>
+<li>Newman's defaults: page-based for websites, widget-based micro frontends for SPAs, a BFF per experience when mobile or third parties need tailored calls.</li>
+</ul>
+</div></div>
+<h2 id="14-1-toward-digital">14.1 Toward digital</h2>
+<ul>
+<li>Web and mobile are no longer treated separately:
+<ul>
+<li>you cannot predict how customers will interact, which drives <strong>granular APIs</strong></li>
+<li>Microservice capabilities are combined to curate experiences on desktop, mobile, wearables or in a physical store.</li>
+</ul>
+</li>
+<li>Two sides: <strong>who</strong> owns what, and <strong>how</strong> to implement.</li>
+</ul>
+<h2 id="14-2-ownership-models">14.2 Ownership models</h2>
+<ul>
+<li>A <strong>layered</strong> organisation (frontend team, backend team, data team) means adding one control needs three teams and hand-offs
+<ul>
+<li>Newman prefers the UI <strong>broken apart and owned by teams that also own the server-side functionality</strong>: faster changes and <strong>direct contact with end users</strong> (backend teams lose track of who the user is)</li>
+<li>Yet dedicated frontend teams remain the commoner pattern.</li>
+</ul>
+</li>
+</ul>
+<h3 id="why-dedicated-frontend-teams-exist">Why dedicated frontend teams exist</h3>
+<table>
+<thead>
+<tr>
+<th>Driver</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Scarce specialists</strong></td>
+<td>Embed them or use <strong>enabling teams</strong>; share skills via <strong>communities of practice</strong> (DBAs, operations and testers followed the same path, and specialists get time for hard problems)</td>
+</tr>
+<tr>
+<td><strong>Consistency</strong></td>
+<td>Specialists across teams, a <strong>living style guide</strong>, shared components; the Financial Times <strong>Origami</strong> enabling team builds web components with the design team. Consistency is not universal: Amazon and <strong>AWS</strong> accept inconsistent UIs for team autonomy (&quot;speed of delivery trumps consistency&quot;)</td>
+</tr>
+<tr>
+<td><strong>Technical challenges</strong></td>
+<td><strong>Single-page applications (SPAs)</strong> (Angular, React, Vue) are hard to split, which <strong>micro frontends</strong> address</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Stream-aligned teams</strong>
+<ul>
+<li>(Skelton and Pais, <em>Team Topologies</em>, 2019): aligned to a single valuable stream of work, delivering &quot;without requiring hand-offs to other teams&quot;: full stack <strong>teams</strong>, not full stack developers</li>
+<li><strong>FinanceCo</strong> (a European fintech): most teams ship customer-facing software with <strong>customer-oriented KPIs</strong>, so the impact of a change is clear.</li>
+</ul>
+</li>
+<li>Users see &quot;a single pane of glass&quot; and do not care whether the UI is modular.</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-14-ownership-models.svg" alt="Layered versus stream-aligned ownership" loading="lazy" /></p>
+<h2 id="14-3-pattern-monolithic-frontend">14.3 Pattern: monolithic frontend</h2>
+<ul>
+<li>All UI state and behaviour live in the UI, which calls microservices for data (an Album details screen pulls the album and track listing from the Album service and offers from <strong>Promotions</strong>, returning JSON)
+<ul>
+<li>Typical of monolithic SPAs with a dedicated frontend team</li>
+<li>Binary protocols suit native or thick clients, not browsers.</li>
+</ul>
+</li>
+<li><strong>Downsides:</strong>
+<ul>
+<li>drives (or is driven by) a dedicated frontend team</li>
+<li>contention if several teams share it</li>
+<li>little scope to <strong>tailor responses per device</strong> (a phone needing 10 of 100 order fields). It suits a single team owning UI and services</li>
+<li>with several teams, resist it as it leads to a layered architecture.</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-4-pattern-micro-frontends">14.4 Pattern: micro frontends</h2>
+<ul>
+<li>&quot;An architectural style where independently deliverable frontend applications are composed into a greater whole&quot; (Cam Jackson, martinfowler.com, 2019). Microservices give backend independent deployability
+<ul>
+<li>micro frontends give it for the frontend, which is <strong>essential for stream-aligned teams</strong> that own UI and services (stock, purchase flow and customer profile teams each changing their part).</li>
+</ul>
+</li>
+<li>Two techniques:
+<ul>
+<li><strong>widget-based</strong> and <strong>page-based</strong> decomposition</li>
+<li>Limit: cross-cutting capabilities (type-ahead recommendations while searching) do not fit a widget or page, so you fall back to API calls.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] Self-contained systems (SCS)
+An SCS is an <strong>autonomous web application with no shared UI</strong>, owned by one team, asynchronous communication where possible, no shared business code. Newman agrees with many ideas (especially single-team ownership) but finds it overly prescriptive (&quot;autonomous web application&quot; rules out a native iOS app using gRPC) and focused on activity over principles; he would rather focus on stream-aligned teams and let architecture follow.</p>
+</blockquote>
+<h2 id="14-5-pattern-page-based-decomposition">14.5 Pattern: page-based decomposition</h2>
+<ul>
+<li>The UI is several <strong>web pages</strong>, served by different services (<code>/albums/</code> from the Albums service, <code>/artists/</code> from Artists) stitched by common <strong>navigation</strong>
+<ul>
+<li>services may call others (Inventory for stock). The owning team renders full UI end to end.</li>
+</ul>
+</li>
+<li>It is the classic <strong>web</strong>:
+<ul>
+<li>URLs, links, bookmarks, back and forward. No fancy JavaScript or <strong>iFrames</strong></li>
+<li>adapt per device with <strong>progressive enhancement</strong>. It is Newman's <strong>default for a website</strong></li>
+<li>many UIs that suit it are shoehorned into SPAs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-6-pattern-widget-based-decomposition">14.6 Pattern: widget-based decomposition</h2>
+<ul>
+<li>A screen holds <strong>widgets</strong> changeable independently (basket and recommendations on MusicCorp; the Recommendations widget cycles a carousel and adds to a wishlist, calling the Recommendations and Wishlist services), within a <strong>container application</strong> (core navigation, which widgets)
+<ul>
+<li>Spotify uses it heavily.</li>
+</ul>
+</li>
+<li><strong>Implementation:</strong> HTML fragments via server or client templating for simple widgets; for complex ones, avoid clashes. Not <strong>iFrames</strong> (sizing and communication problems).</li>
+<li><strong>Dependencies:</strong>
+<ul>
+<li>widgets share a page, so conflicts matter (React v16 versus v15), but it eases <strong>incremental upgrades</strong>. The cost is duplication and page weight (CNN's page was <strong>7.9 MB</strong>, more than Alpine Linux's 5 MB)</li>
+<li>put automated <strong>page-weight checks</strong> in place.</li>
+</ul>
+</li>
+<li><strong>Communication:</strong> the chart widget emits a custom <strong>Album Selected</strong> event; recommendations and album details subscribe: event-driven interaction inside the browser.</li>
+</ul>
+<blockquote>
+<p>[!note] Web components
+The <strong>Web Component Standard</strong> (sandboxing HTML, CSS and JavaScript) seemed the obvious fit but took long to settle and be supported; Newman has met no organisation serving them from microservices, and is &quot;not holding my breath&quot;.</p>
+</blockquote>
+<ul>
+<li><strong>When to use:</strong>
+<ul>
+<li>it lets several stream-aligned teams contribute to one UI, more flexibly than pages, and enabling teams can supply reusable widgets</li>
+<li>When building an SPA, micro frontends are his <strong>default</strong></li>
+<li>Concerns: separate bundling (one-off) and payload size.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-14-frontend-decomposition.svg" alt="Monolithic, page-based and widget-based UIs" loading="lazy" /></p>
+<h2 id="14-7-constraints">14.7 Constraints</h2>
+<ul>
+<li>Devices impose constraints:
+<ul>
+<li>browsers, screen resolution</li>
+<li><strong>screen readers</strong> and keyboard navigation for accessibility (legal duties exist, such as the UK Equality Act 2010, s. 20), and on mobile <strong>bandwidth, battery, one-handed use</strong>, no right-click</li>
+<li><strong>SMS</strong> interfaces in the global south.</li>
+</ul>
+</li>
+<li>A common response is <strong>call filtering and aggregation</strong> to strip unneeded data and combine calls.</li>
+</ul>
+<h2 id="14-8-pattern-central-aggregating-gateway">14.8 Pattern: central aggregating gateway</h2>
+<ul>
+<li>A gateway between UIs and microservices that <strong>filters and aggregates</strong> for all UIs. Without it, a &quot;recent orders&quot; screen calls Customer (pulling all fields for a few) and Order separately
+<ul>
+<li>the gateway makes one call, combines and discards extra data, and can <strong>batch</strong> lookups, cutting bandwidth and latency.</li>
+</ul>
+</li>
+<li><strong>Problems:</strong>
+<ul>
+<li><strong>Ownership:</strong> it ends up with a dedicated team (a siloed layered architecture) and becomes a <strong>bottleneck</strong>; a frontend team may lack the backend skills.</li>
+<li><strong>Different UIs:</strong> mobile and web want different data and calls, so the gateway bloats and many teams change one deployable.</li>
+<li><strong>Multiple concerns:</strong> buy a product for <strong>generic</strong> needs (API keys, authentication, routing) but do not put aggregation in it: you work in its DSL, bake smarts into a third party, and aggregation may really be domain functionality for a service.</li>
+</ul>
+</li>
+<li><strong>When to use:</strong> acceptable if one team owns UI and services, and keep it limited.</li>
+</ul>
+<h2 id="14-9-pattern-backend-for-frontend-bff">14.9 Pattern: backend for frontend (BFF)</h2>
+<ul>
+<li>A BFF is <strong>single-purpose, built for one UI</strong>, so it avoids being a shared bottleneck and coupling to the UI is acceptable: &quot;the UI is actually split into two parts&quot;, one on the device and one on the server, <strong>owned by the same team</strong>
+<ul>
+<li>Used well at <strong>SoundCloud</strong> and <strong>REA</strong>.</li>
+</ul>
+</li>
+<li><strong>How many?</strong>
+<ul>
+<li>The preferred model is <strong>one BFF per client type</strong> (REA: separate BFFs for iOS and Android, run by separate teams)</li>
+<li>Variation: SoundCloud shared one BFF between its Android and iOS Listener apps, though its engineers might reconsider (the &quot;mobile team&quot; was really two)</li>
+<li>Stewart Gleadow's guideline: <strong>&quot;one experience, one BFF&quot;</strong>; align with team boundaries (Conway's law).</li>
+</ul>
+</li>
+<li><strong>Reuse:</strong>
+<ul>
+<li>duplication across BFFs is easier to spot than in clients (common server stack), but merging them recreates the central gateway. Newman tolerates duplication across services</li>
+<li>options are a <strong>shared library</strong> (cheap, risky coupling) or a new <strong>microservice</strong> (good for domain logic)
+<ul>
+<li>Example: the wishlist (Customer holds the wishlist, Catalog name and price, Inventory stock) needed by both BFFs becomes a <strong>Wishlist</strong> service</li>
+</ul>
+</li>
+<li>the rule of thumb is to abstract on the <strong>third</strong> use.</li>
+</ul>
+</li>
+<li><strong>Beyond mobile:</strong>
+<ul>
+<li>web BFFs help with server-side templating and with caching aggregated calls (a reverse proxy in front)</li>
+<li>BFFs also work for <strong>third parties</strong> (royalty reporting, set-top boxes): breaking changes for one party do not affect others.</li>
+</ul>
+</li>
+<li><strong>When to use:</strong>
+<ul>
+<li>for a web-only app only if server-side aggregation is significant</li>
+<li>as soon as mobile or third-party needs arise, consider <strong>a BFF per client from the start</strong>, especially when UI and service teams are separated.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-14-gateway-vs-bff.svg" alt="Central gateway versus BFFs" loading="lazy" /></p>
+<h2 id="14-10-graphql">14.10 GraphQL</h2>
+<ul>
+<li>A query language where clients ask for exactly the fields they want (and nested data, saving round trips), requiring explicit <strong>types</strong>
+<ul>
+<li>A server-side <strong>resolver</strong> maps queries to microservice calls, so GraphQL can implement an aggregating gateway or BFF and <strong>client query changes need no server change</strong> (unless new types or fields are required)</li>
+<li>Align multiple GraphQL backends with team boundaries (it then acts as a BFF)</li>
+<li>Chapter 5 gives the concerns.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>{
+  order(id: 123) {
+    date
+    total
+    status
+    delivery {
+      company
+      driver
+      duedate
+    }
+  }
+}
+</code></pre>
+<p><img src="/book-digest/building-microservices/img/bm-14-graphql-bff.svg" alt="GraphQL as a BFF" loading="lazy" /></p>
+<h2 id="14-11-a-hybrid-approach">14.11 A hybrid approach</h2>
+<ul>
+<li>Mix: widget-based for the website, a BFF for mobile. Keep <strong>cohesion</strong>: ordering or customer-detail logic stays in the owning services, not smeared across intermediate layers.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Decomposition need not stop at the server, and dedicated frontend teams are not inevitable.</li>
+<li>Next: organisational structures.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Stream-aligned team, enabling team, SPA</strong>.</li>
+<li><strong>Monolithic frontend, micro frontend, page-based and widget-based decomposition</strong>.</li>
+<li><strong>Self-contained system, aggregating gateway, BFF, GraphQL resolver</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 14. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch14.html</li>
+<li>Matthew Skelton and Manuel Pais, <em>Team Topologies</em> (IT Revolution, 2019)
+<ul>
+<li>Cam Jackson, &quot;Micro Frontends&quot; (https://oreil.ly/U3K40)</li>
+<li>Lukasz Plotnicki, &quot;BFF @ SoundCloud&quot;: as cited by the book.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-13-scaling/">Building Microservices 13: Scaling</a></li>
+<li><a href="/book-digest/building-microservices/bm-15-organizational-structures/">Building Microservices 15: Organizational Structures</a></li>
+<li><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-13-scaling/">&larr; Building Microservices 13: Scaling</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-15-organizational-structures/">Building Microservices 15: Organizational Structures &rarr;</a></nav></main></body></html>

@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Understanding Distributed Systems 32-34: Observability, manageability, final words</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/understanding-distributed-systems/">Understanding Distributed Systems</a></div>
+<main>
+<h1 id="understanding-distributed-systems-32-34-observability-manageability-final-words">Understanding Distributed Systems 32-34: Observability, manageability, final words</h1>
+<p>Source: Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (v2.0.0, 2022), ch. 32, 33, 34. Previous: <a href="/book-digest/understanding-distributed-systems/uds-31-monitoring/">Understanding Distributed Systems 31: Monitoring</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Observability</strong> = tools giving <strong>granular insight into production</strong> to understand emergent behaviour and <strong>validate hypotheses fast</strong>. A <strong>superset of monitoring</strong>: monitoring spots symptoms, observability explains causes.</li>
+<li>Telemetry: <strong>metrics</strong> (monitoring; high throughput, low dimensionality), <strong>event logs</strong> and <strong>traces</strong> (debugging; high dimensionality, lower throughput). Metrics and traces are <strong>derived views of event logs</strong>.</li>
+<li><strong>Manageability:</strong> change behaviour <strong>without code changes</strong>: externalised, dynamically reloaded <strong>configuration</strong> and <strong>feature toggles</strong>.</li>
+</ul>
+</div></div>
+<h2 id="ch-32-observability">Ch. 32 Observability</h2>
+<p>A distributed system is <strong>never 100% healthy</strong>: something is always failing. Relaxed consistency and resiliency mechanisms (rate limiting, retries, circuit breakers) tolerate many failures but <strong>add complexity</strong>, making <strong>emergent behaviours</strong> harder to predict.</p>
+<ul>
+<li>Humans still debug root causes:
+<ul>
+<li>form a <strong>hypothesis</strong> and validate it</li>
+<li>Example: response-time <strong>variance</strong> has crept up for weeks; correlated with rising traffic, the operator hypothesises the service nears a <strong>resource limit</strong></li>
+<li><strong>Metrics and charts alone cannot validate</strong> this.</li>
+</ul>
+</li>
+<li>A good platform <strong>minimises time to validate hypotheses</strong>, which needs <strong>granular events with rich context</strong> because you cannot know in advance what will be useful.</li>
+<li><strong>Stores:</strong>
+<ul>
+<li>metrics go to time-series stores with <strong>high throughput but poor high-dimensionality</strong></li>
+<li>event logs and traces go to stores handling <strong>high-dimensional data</strong> (e.g. Azure Data Explorer: https://azure.microsoft.com/mediahandler/files/resourcefiles/azure-data-explorer/Azure_Data_Explorer_white_paper.pdf) but <strong>poor high throughput</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="32-1-logs">32.1 Logs</h3>
+<p>A <strong>log</strong> is an <strong>immutable list of time-stamped events</strong>. Format: free-form text, or <strong>structured</strong> (JSON, or binary like Protobuf) as a bag of key-value pairs, e.g. <code>{&quot;failureCount&quot;: 1, &quot;serviceRegion&quot;: &quot;EastUs2&quot;, &quot;timestamp&quot;: 1614438079}</code>.</p>
+<p>Sources: your services and dependencies (brokers, proxies, data stores). Typically written to <strong>disk files</strong>, shipped asynchronously by an <strong>agent</strong> to a <strong>log collector</strong> (ELK stack: https://www.elastic.co/what-is/elk-stack, or AWS CloudWatch logs).</p>
+<ul>
+<li><strong>Strengths:</strong>
+<ul>
+<li>a wealth of detail if instrumented</li>
+<li>great for <strong>tracing a symptom back to a root cause</strong> (an instance crash) and for <strong>long-tail behaviour</strong> invisible in averages and percentiles (why a <strong>specific request</strong> failed).</li>
+</ul>
+</li>
+<li><strong>Weaknesses:</strong>
+<ul>
+<li>easy to emit (that is the only advantage)</li>
+<li><strong>Overhead</strong> if misused, especially <strong>blocking, non-async</strong> writes</li>
+<li>A <strong>full disk</strong> loses logs at best and at worst <strong>breaks the instance</strong></li>
+<li><strong>Expensive</strong> to ingest, process and store, even binary structured logs (high dimensionality)</li>
+<li><strong>Low signal-to-noise</strong> (fine-grained, service-specific).</li>
+</ul>
+</li>
+</ul>
+<p><strong>Best practices:</strong></p>
+<ul>
+<li><strong>One event per work unit</strong> (a request or a message pulled from a queue), built by passing a <strong>context object</strong> through the code path.</li>
+<li>The event holds: <strong>who created it, what for, success or failure</strong>, <strong>measurements</strong> (durations), and <strong>every network call</strong> instrumented (response time, status code).</li>
+<li><strong>Sanitise</strong> sensitive data (users' personal data) that developers should not see.</li>
+<li>It minimises but does not remove <strong>joins</strong>: to correlate caller and callee events, <strong>every event includes the request (or message) ID</strong>.</li>
+</ul>
+<p><strong>Controlling cost:</strong></p>
+<ul>
+<li><strong>Log levels</strong> (debug, info, warning, error) with a <strong>dynamic knob</strong>: raise verbosity to investigate, lower to save.</li>
+<li><strong>Sampling</strong> (e.g. log every nth event; https://www.honeycomb.io/blog/dynamic-sampling-by-example/), with <strong>priority</strong>: sample failed requests more than successful ones.</li>
+<li>More nodes mean more volume, and a bad commit can cause excessive logging, so <strong>log collectors must rate limit</strong>.</li>
+<li><strong>In-memory aggregates</strong> (metrics) emitted instead of raw logs: cheaper, but you <strong>lose drill-down</strong>.</li>
+</ul>
+<h3 id="32-2-traces">32.2 Traces</h3>
+<p><strong>Tracing</strong> captures the <strong>whole lifespan of a request</strong> across services. A <strong>trace</strong> is a list of <strong>causally related spans</strong>; a <strong>span</strong> is a time interval for a logical operation or work unit, with key-value pairs.</p>
+<ul>
+<li>Each request gets a unique <strong>trace ID</strong>, <strong>propagated</strong> at every fork (thread to thread, and caller to callee over the network, e.g. via <strong>HTTP headers</strong>)
+<ul>
+<li>Each stage is a <strong>span event carrying the trace ID</strong>.</li>
+</ul>
+</li>
+<li>On completion a span goes to a <strong>collector</strong>, which <strong>stitches spans into a trace</strong>: <strong>Zipkin</strong> (https://zipkin.io/), <strong>AWS X-Ray</strong> (https://aws.amazon.com/xray/).</li>
+<li>Uses:
+<ul>
+<li>debug issues of <strong>specific requests</strong> (e.g. from support tickets)</li>
+<li><strong>rare issues</strong> hitting few requests</li>
+<li>issues across a <strong>large group with something in common</strong> (slow requests on a subset of instances)</li>
+<li>find <strong>end-to-end bottlenecks</strong></li>
+<li><strong>resource attribution</strong> (which users hit which downstream services in what proportion, for rate limiting or billing).</li>
+</ul>
+</li>
+<li><strong>Hard to retrofit:</strong>
+<ul>
+<li>every component on the path must propagate the trace context, including <strong>third-party</strong> frameworks, libraries and services</li>
+<li>The <strong>service mesh</strong> pattern can help retrofit it.</li>
+</ul>
+</li>
+</ul>
+<h3 id="32-3-putting-it-together">32.3 Putting it together</h3>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-32-telemetry-relationship.svg" alt="Metrics and traces derive from event logs" loading="lazy" />
+Event logs are <strong>fine-grained and service-specific</strong>: one event covers one service's work unit, so it tells little about the <strong>whole request flow</strong> or a service's <strong>overall health</strong>. <strong>Metrics and traces are derived views</strong> built from event logs:</p>
+<ul>
+<li>a <strong>metric</strong> = time series of <strong>summary statistics</strong> from aggregating counters or observations over many events (emit counters in events and let the backend <strong>roll them up at ingestion</strong>, as some collectors do);</li>
+<li>a <strong>trace</strong> = all events of one request's lifecycle <strong>aggregated into an ordered list</strong> (emit span events, backend assembles).</li>
+</ul>
+<h2 id="ch-33-manageability">Ch. 33 Manageability</h2>
+<p>Operators need to <strong>change behaviour without code changes</strong>: releasing (chapter 30) or changing <strong>configuration</strong>.</p>
+<ul>
+<li>Settings affect behaviour (max internal cache size) or hold <strong>secrets</strong> (credentials)
+<ul>
+<li>They vary by environment and can be sensitive, so <strong>do not hard-code</strong>: keep them in a <strong>dedicated store</strong> such as <strong>AWS AppConfig</strong> (https://docs.aws.amazon.com/appconfig/; background: https://www.allthingsdistributed.com/2021/08/continuous-configuration-on-aws.html) or <strong>Azure App Configuration</strong> (https://azure.microsoft.com/en-us/services/app-configuration/).</li>
+</ul>
+</li>
+<li><strong>Option 1:</strong> the CD pipeline reads config at deploy and passes it via <strong>environment variables</strong>; drawback: <strong>changes require redeploying</strong>.</li>
+<li><strong>Option 2:</strong>
+<ul>
+<li>the app <strong>periodically re-reads</strong> config at run time and applies changes</li>
+<li>e.g. an HTTP handler whose constructor depends on a setting must be <strong>re-created</strong> when the setting changes.</li>
+</ul>
+</li>
+<li>With dynamic config, ship a build with a feature <strong>disabled</strong>, then <strong>enable it for a fraction of instances or users</strong> to build confidence before full rollout (<strong>feature toggles</strong>), or run <strong>A/B tests</strong> (https://en.wikipedia.org/wiki/A/B_testing).</li>
+</ul>
+<h2 id="part-v-summary-the-author-s-advice">Part V summary (the author's advice)</h2>
+<ul>
+<li>Most time goes to <strong>maintenance</strong>: fixing bugs, adding features, operating production.</li>
+<li>To become a better system designer, <strong>embrace maintenance</strong> and make systems easy to <strong>modify, extend and operate</strong>; you gain a &quot;<strong>sixth sense</strong>&quot; for critiquing others' designs.</li>
+<li><strong>Learn from production</strong>: <strong>be on call</strong> for your services, <strong>join as many post-mortems as you can</strong> and ask how each incident could have been avoided: worth more long term than reading about the latest architectural trends.</li>
+</ul>
+<h2 id="ch-34-final-words-recommended-next-steps">Ch. 34 Final words (recommended next steps)</h2>
+<ul>
+<li>Best way to keep learning: <strong>design, build and maintain large-scale systems</strong> (some of the best-paid jobs, high demand).</li>
+<li>Second best:
+<ul>
+<li><strong>industry papers</strong>
+<ul>
+<li>Start with <strong>&quot;Windows Azure Storage: A Highly Available Cloud Storage Service with Strong Consistency&quot;</strong> (https://sigops.org/s/conferences/sosp/2011/current/2011-Cascais/printable/11-calder.pdf): Azure storage is a core building block under many Microsoft products</li>
+</ul>
+</li>
+<li><strong>strong consistency</strong> was a key decision that eases application developers' work</li>
+<li>it touches many concepts in this book. Then <strong>&quot;Azure Data Explorer&quot;</strong> (the cloud-native event store built on Azure storage; link above): shows how large systems <strong>compose</strong>.</li>
+</ul>
+</li>
+<li>New to reading papers:
+<ul>
+<li>Keshav's three-pass approach, &quot;How to Read a Paper&quot; (https://web.stanford.edu/class/ee384m/Handouts/HowtoReadPaper.pdf). Follow references down the rabbit hole</li>
+<li>the book's references are &quot;side quests&quot;.</li>
+</ul>
+</li>
+<li>Books:
+<ul>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (&quot;a must-read&quot;: https://www.amazon.com/dp/1449373321)</li>
+<li>Alex Xu, <em>System Design Interview</em> for case studies (https://www.amazon.co.uk/dp/B08CMF2CQF).</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note]- Terms to carry forward
+observability · emergent behaviour · telemetry · structured log · work unit · context object · sampling · trace / span / trace ID · resource attribution · derived views · configuration store · feature toggle · A/B test.</p>
+</blockquote>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 32-34 and Part V summary. https://understandingdistributed.systems/</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/understanding-distributed-systems/uds-31-monitoring/">Understanding Distributed Systems 31: Monitoring</a> · <a href="/book-digest/understanding-distributed-systems/uds-30-continuous-delivery-and-deployment/">Understanding Distributed Systems 30: Continuous delivery and deployment</a> · <a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a> · <a href="/book-digest/understanding-distributed-systems/uds-17-file-storage/">Understanding Distributed Systems 17: File storage</a></p>
+<nav class="pager"><a href="/book-digest/understanding-distributed-systems/uds-31-monitoring/">&larr; Understanding Distributed Systems 31: Monitoring</a><a href="/book-digest/understanding-distributed-systems/">Contents</a><span></span></nav></main></body></html>

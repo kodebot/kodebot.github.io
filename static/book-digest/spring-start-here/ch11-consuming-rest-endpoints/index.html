@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Ch 11: Consuming REST endpoints</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/spring-start-here/">Spring Start Here</a></div>
+<main>
+<h1 id="ch-11-consuming-rest-endpoints">Ch 11: Consuming REST endpoints</h1>
+<p>Source: Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 11. Previous: <a href="/book-digest/spring-start-here/ch10-rest-endpoints/">Ch 10: Implementing REST endpoints</a>. Book projects: <code>ssh_ch11_payments</code> (the service being called), <code>ssh_ch11_ex1</code> to <code>ssh_ch11_ex4</code>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Backends often call other backends: delivery asks invoicing for an invoice, then asks the warehouse to adjust stock.</li>
+<li>In Spring you do this through a <strong>proxy class</strong> that wraps one of three clients:</li>
+<li><strong><code>RestClient</code></strong>: modern, simple, no extra dependency. The default choice.</li>
+<li><strong>OpenFeign</strong>: write an interface; Spring implements it. Best for larger, structured service-to-service calls (Spring Cloud).</li>
+<li><strong><code>WebClient</code></strong>: reactive, non-blocking. Use it only if the whole app is reactive.</li>
+</ul>
+<p>Avoid <strong><code>RestTemplate</code></strong> in new code. Even if AI generates the code, you must know the options so you can say which to use and check the result.</p>
+<p><img src="/book-digest/spring-start-here/img/consuming-rest-scenario.svg" alt="Scenario: your app calls the payments service" loading="lazy" /></p>
+<p><img src="/book-digest/spring-start-here/img/rest-client-choice.svg" alt="Which client to use" loading="lazy" /></p>
+</div></div>
+<h2 id="11-1-the-service-being-called-ssh-ch11-payments">11.1 The service being called (<code>ssh_ch11_payments</code>)</h2>
+<p>Web starter only:</p>
+<pre class="hl"><code><span class="nt">&lt;dependency&gt;</span>
+<span class="w">   </span><span class="nt">&lt;groupId&gt;</span>org.springframework.boot<span class="nt">&lt;/groupId&gt;</span>
+<span class="w">   </span><span class="nt">&lt;artifactId&gt;</span>spring-boot-starter-webmvc<span class="nt">&lt;/artifactId&gt;</span>
+<span class="nt">&lt;/dependency&gt;</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Payment.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Payment</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">id</span><span class="p">;</span>
+<span class="w">  </span><span class="kd">private</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">amount</span><span class="p">;</span>
+<span class="w">  </span><span class="c1">// getters, setters</span>
+<span class="p">}</span>
+</code></pre>
+<p><code>POST /payment</code> takes a <strong>request header</strong> and a <strong>request body</strong>, sets a random ID, and returns the payment plus a response header:</p>
+<pre class="hl"><code><span class="nd">@RestController</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentsController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">Logger</span><span class="w"> </span><span class="n">logger</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Logger</span><span class="p">.</span><span class="na">getLogger</span><span class="p">(</span><span class="n">PaymentsController</span><span class="p">.</span><span class="na">class</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span>
+
+<span class="w">    </span><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/payment"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="o">&lt;</span><span class="n">Payment</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">createPayment</span><span class="p">(</span>
+<span class="w">        </span><span class="nd">@RequestHeader</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">requestId</span><span class="p">,</span>
+<span class="w">        </span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="n">payment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">logger</span><span class="p">.</span><span class="na">info</span><span class="p">(</span><span class="s">"Received request with ID "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">requestId</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">" ;Payment Amount: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">payment</span><span class="p">.</span><span class="na">getAmount</span><span class="p">());</span>
+<span class="w">      </span><span class="n">payment</span><span class="p">.</span><span class="na">setId</span><span class="p">(</span><span class="n">UUID</span><span class="p">.</span><span class="na">randomUUID</span><span class="p">().</span><span class="na">toString</span><span class="p">());</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">ResponseEntity</span><span class="p">.</span><span class="na">status</span><span class="p">(</span><span class="n">HttpStatus</span><span class="p">.</span><span class="na">OK</span><span class="p">).</span><span class="na">header</span><span class="p">(</span><span class="s">"requestId"</span><span class="p">,</span><span class="w"> </span><span class="n">requestId</span><span class="p">).</span><span class="na">body</span><span class="p">(</span><span class="n">payment</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>It runs on Boot's default port 8080.</p>
+<h2 id="11-2-restclient-ssh-ch11-ex1">11.2 <code>RestClient</code> (<code>ssh_ch11_ex1</code>)</h2>
+<p>Preferred in modern Spring: simple, readable API for calling a service, sending data, adding headers, handling responses. <strong>Comes with the web starter</strong>, no extra dependency.</p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentsProxy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">RestClient</span><span class="w"> </span><span class="n">restClient</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">PaymentsProxy</span><span class="p">(</span><span class="nd">@Value</span><span class="p">(</span><span class="s">"${payments.url:http://localhost:8080}"</span><span class="p">)</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">paymentsUrl</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">this</span><span class="p">.</span><span class="na">restClient</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RestClient</span><span class="p">.</span><span class="na">create</span><span class="p">(</span><span class="n">paymentsUrl</span><span class="p">);</span><span class="w">          </span><span class="c1">// base URL</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="nf">createPayment</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">requestId</span><span class="p">,</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="n">payment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">restClient</span><span class="p">.</span><span class="na">post</span><span class="p">()</span><span class="w">                                   </span><span class="c1">// HTTP method</span>
+<span class="w">            </span><span class="p">.</span><span class="na">uri</span><span class="p">(</span><span class="s">"/payment"</span><span class="p">)</span><span class="w">                                     </span><span class="c1">// path</span>
+<span class="w">            </span><span class="p">.</span><span class="na">header</span><span class="p">(</span><span class="s">"requestId"</span><span class="p">,</span><span class="w"> </span><span class="n">requestId</span><span class="p">)</span><span class="w">                      </span><span class="c1">// headers</span>
+<span class="w">            </span><span class="p">.</span><span class="na">body</span><span class="p">(</span><span class="n">payment</span><span class="p">)</span><span class="w">                                       </span><span class="c1">// request body</span>
+<span class="w">            </span><span class="p">.</span><span class="na">retrieve</span><span class="p">()</span><span class="w">                                          </span><span class="c1">// send, get response</span>
+<span class="w">            </span><span class="p">.</span><span class="na">body</span><span class="p">(</span><span class="n">Payment</span><span class="p">.</span><span class="na">class</span><span class="p">);</span><span class="w">                                </span><span class="c1">// response into a Payment</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>${payments.url:http://localhost:8080}</code> reads a property and falls back to the value after the colon.</li>
+<li>A <strong>proxy</strong> (chapter 4's name for an object that talks to something outside the app) holds the call.</li>
+</ul>
+<p>An endpoint in the calling app delegates to the proxy:</p>
+<pre class="hl"><code><span class="nd">@RestController</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentsController</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">PaymentsProxy</span><span class="w"> </span><span class="n">paymentsProxy</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">PaymentsController</span><span class="p">(</span><span class="n">PaymentsProxy</span><span class="w"> </span><span class="n">paymentsProxy</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">paymentsProxy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">paymentsProxy</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/payment"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="nf">createPayment</span><span class="p">(</span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="n">payment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">String</span><span class="w"> </span><span class="n">requestId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">UUID</span><span class="p">.</span><span class="na">randomUUID</span><span class="p">().</span><span class="na">toString</span><span class="p">();</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">paymentsProxy</span><span class="p">.</span><span class="na">createPayment</span><span class="p">(</span><span class="n">requestId</span><span class="p">,</span><span class="w"> </span><span class="n">payment</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>To run both apps on one machine, give this one another port in <code>application.properties</code>:</p>
+<pre class="hl"><code>server.port=9090
+</code></pre>
+<pre class="hl"><code>curl<span class="w"> </span>--request<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--url<span class="w"> </span>http://localhost:9090/payment<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--header<span class="w"> </span><span class="s1">'content-type: application/json'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data<span class="w"> </span><span class="s1">'{"amount": 100}'</span>
+</code></pre>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"amount"</span><span class="p">:</span><span class="w"> </span><span class="mf">100.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"9ae1db6c-ddb4-4cf9-8319-5c8041935d94"</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="11-3-openfeign-ssh-ch11-ex2">11.3 OpenFeign (<code>ssh_ch11_ex2</code>)</h2>
+<p>You write an <strong>interface</strong> and OpenFeign provides the implementation as a bean. The same style appears later in Spring Data. It integrates better with other <strong>Spring Cloud</strong> features (Circuit Breaker, Load Balancer), so it suits cloud-native systems. Spring Cloud is out of scope; the author recommends <em>Cloud Native Spring in Action</em> by Thomas Vitale (Manning, 2022).</p>
+<p><img src="/book-digest/spring-start-here/img/openfeign-flow.svg" alt="OpenFeign flow" loading="lazy" /></p>
+<pre class="hl"><code><span class="nt">&lt;dependency&gt;</span>
+<span class="w">   </span><span class="nt">&lt;groupId&gt;</span>org.springframework.cloud<span class="nt">&lt;/groupId&gt;</span>
+<span class="w">   </span><span class="nt">&lt;artifactId&gt;</span>spring-cloud-starter-openfeign<span class="nt">&lt;/artifactId&gt;</span>
+<span class="nt">&lt;/dependency&gt;</span>
+</code></pre>
+<p>The interface is also called the <strong>OpenFeign client</strong>:</p>
+<pre class="hl"><code><span class="nd">@FeignClient</span><span class="p">(</span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"payments"</span><span class="p">,</span><span class="w"> </span><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"${name.service.url}"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">PaymentsProxy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@PostMapping</span><span class="p">(</span><span class="s">"/payment"</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Payment</span><span class="w"> </span><span class="nf">createPayment</span><span class="p">(</span><span class="nd">@RequestHeader</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">requestId</span><span class="p">,</span><span class="w"> </span><span class="nd">@RequestBody</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="n">payment</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>name</code> uniquely identifies the client; <code>url</code> is the base URI.</li>
+<li><strong>Never hard-code URIs or per-environment details.</strong> Keep them in <code>application.properties</code> and reference with <code>${property_name}</code>, so you need no recompile to change environment.</li>
+<li>It <strong>reuses the MVC annotations</strong> (<code>@GetMapping</code>, <code>@PostMapping</code>, <code>@PutMapping</code>, <code>@RequestHeader</code>, <code>@RequestBody</code>), nothing new to learn.</li>
+</ul>
+<p>Enable it and say where the contracts are:</p>
+<pre class="hl"><code><span class="nd">@Configuration</span>
+<span class="nd">@EnableFeignClients</span><span class="p">(</span><span class="n">basePackages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"com.example.proxy"</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<p>The controller is <strong>identical</strong> to the RestClient one. Call:</p>
+<pre class="hl"><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>-H<span class="w"> </span><span class="s1">'content-type:application/json'</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"amount":1000}'</span><span class="w"> </span>http://localhost:9090/payment
+</code></pre>
+<pre class="hl"><code>{"id":"1c518ead-2477-410f-82f3-54533b4058ff","amount":1000.0}
+Received request with ID 1c518ead-... ;Payment Amount: 1000.0     &lt;- payments service log
+</code></pre>
+<h3 id="legacy-resttemplate-ssh-ch11-ex3">Legacy: <code>RestTemplate</code> (<code>ssh_ch11_ex3</code>)</h3>
+<p>Used for years; not for new apps. Not because it is broken, but because needs grew:</p>
+<ul>
+<li>call endpoints synchronously <strong>and</strong> asynchronously;</li>
+<li>less boilerplate and fewer exceptions to handle;</li>
+<li><strong>retries</strong> and <strong>fallbacks</strong> (logic when a call cannot be executed).</li>
+</ul>
+<p>Steps: build <code>HttpHeaders</code>, wrap data in an <code>HttpEntity</code>, call <code>exchange()</code>.</p>
+<pre class="hl"><code><span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentsProxy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">RestTemplate</span><span class="w"> </span><span class="n">rest</span><span class="p">;</span>
+<span class="w">    </span><span class="nd">@Value</span><span class="p">(</span><span class="s">"${name.service.url}"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">paymentsServiceUrl</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">PaymentsProxy</span><span class="p">(</span><span class="n">RestTemplate</span><span class="w"> </span><span class="n">rest</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">rest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">rest</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="nf">createPayment</span><span class="p">(</span><span class="n">Payment</span><span class="w"> </span><span class="n">payment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">String</span><span class="w"> </span><span class="n">uri</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">paymentsServiceUrl</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">"/payment"</span><span class="p">;</span>
+
+<span class="w">      </span><span class="n">HttpHeaders</span><span class="w"> </span><span class="n">headers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HttpHeaders</span><span class="p">();</span>
+<span class="w">      </span><span class="n">headers</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="s">"requestId"</span><span class="p">,</span><span class="w"> </span><span class="n">UUID</span><span class="p">.</span><span class="na">randomUUID</span><span class="p">().</span><span class="na">toString</span><span class="p">());</span>
+
+<span class="w">      </span><span class="n">HttpEntity</span><span class="o">&lt;</span><span class="n">Payment</span><span class="o">&gt;</span><span class="w"> </span><span class="n">httpEntity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HttpEntity</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">payment</span><span class="p">,</span><span class="w"> </span><span class="n">headers</span><span class="p">);</span>
+
+<span class="w">      </span><span class="n">ResponseEntity</span><span class="o">&lt;</span><span class="n">Payment</span><span class="o">&gt;</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">rest</span><span class="p">.</span><span class="na">exchange</span><span class="p">(</span><span class="n">uri</span><span class="p">,</span><span class="w"> </span><span class="n">HttpMethod</span><span class="p">.</span><span class="na">POST</span><span class="p">,</span><span class="w"> </span><span class="n">httpEntity</span><span class="p">,</span><span class="w"> </span><span class="n">Payment</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">response</span><span class="p">.</span><span class="na">getBody</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="11-4-webclient-ssh-ch11-ex4-and-reactive-apps">11.4 <code>WebClient</code> (<code>ssh_ch11_ex4</code>) and reactive apps</h2>
+<ul>
+<li>Built on the <strong>reactive</strong> approach. The book recommends learning it after the basics (starting point: chapters 12 and 13 of <em>Spring in Action</em>, 6th ed., Craig Walls, Manning, 2022).</li>
+<li><strong>Spring's docs recommend WebClient, but that only holds for reactive apps.</strong> Not reactive: use RestClient or OpenFeign
+<ul>
+<li>The author disagrees with using WebClient for ordinary blocking calls (a practice many follow)</li>
+<li>Choosing WebClient is tightly coupled with making the app reactive.</li>
+</ul>
+</li>
+</ul>
+<h3 id="what-reactive-means-the-book-s-debt-calculation-example">What reactive means (the book's debt-calculation example)</h3>
+<p>Banking app computes a client's total debt: (1) receive the user id, (2) ask another service whether the user has credits elsewhere, (3) get internal debt, (4) if external debt exists, call an external service, (5) sum and respond.</p>
+<p><img src="/book-digest/spring-start-here/img/blocking-vs-reactive.svg" alt="Blocking vs reactive" loading="lazy" /></p>
+<p><strong>Two problems with the classic model</strong> (one thread runs the whole flow):</p>
+<ol>
+<li>The thread sits <strong>idle</strong> while blocked on I/O but still occupies memory. Ten simultaneous requests could mean ten idle threads.</li>
+<li>Steps 2 and 3 are <strong>independent</strong> yet run one after the other.</li>
+</ol>
+<p><strong>Reactive model:</strong> treat steps as independent tasks that declare dependencies. Analogy: a backlog of tasks and a team of developers; a developer blocked on one task leaves it and picks another, someone else (or they, later) finishes it. Fewer threads serve more requests, and independent tasks run in parallel.</p>
+<ul>
+<li>A task returns a <strong>producer</strong> so others can depend on it; a task uses a <strong>subscriber</strong> to consume another task's result.</li>
+</ul>
+<p>Dependency is <strong>WebFlux</strong> instead of the standard web starter:</p>
+<pre class="hl"><code><span class="nt">&lt;dependency&gt;</span>
+<span class="w">   </span><span class="nt">&lt;groupId&gt;</span>org.springframework.boot<span class="nt">&lt;/groupId&gt;</span>
+<span class="w">   </span><span class="nt">&lt;artifactId&gt;</span>spring-boot-starter-webflux<span class="nt">&lt;/artifactId&gt;</span>
+<span class="nt">&lt;/dependency&gt;</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ProjectConfig.java</span>
+<span class="nd">@Configuration</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProjectConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Bean</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">WebClient</span><span class="w"> </span><span class="nf">webClient</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">WebClient</span><span class="p">.</span><span class="na">builder</span><span class="p">().</span><span class="na">build</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// PaymentsProxy.java</span>
+<span class="nd">@Component</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">PaymentsProxy</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="n">WebClient</span><span class="w"> </span><span class="n">webClient</span><span class="p">;</span>
+<span class="w">    </span><span class="nd">@Value</span><span class="p">(</span><span class="s">"${name.service.url}"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">url</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">PaymentsProxy</span><span class="p">(</span><span class="n">WebClient</span><span class="w"> </span><span class="n">webClient</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">webClient</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">webClient</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Mono</span><span class="o">&lt;</span><span class="n">Payment</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">createPayment</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">requestId</span><span class="p">,</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="n">payment</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">webClient</span><span class="p">.</span><span class="na">post</span><span class="p">()</span>
+<span class="w">                </span><span class="p">.</span><span class="na">uri</span><span class="p">(</span><span class="n">url</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">"/payment"</span><span class="p">)</span>
+<span class="w">                </span><span class="p">.</span><span class="na">header</span><span class="p">(</span><span class="s">"requestId"</span><span class="p">,</span><span class="w"> </span><span class="n">requestId</span><span class="p">)</span>
+<span class="w">                </span><span class="p">.</span><span class="na">body</span><span class="p">(</span><span class="n">Mono</span><span class="p">.</span><span class="na">just</span><span class="p">(</span><span class="n">payment</span><span class="p">),</span><span class="w"> </span><span class="n">Payment</span><span class="p">.</span><span class="na">class</span><span class="p">)</span><span class="w">   </span><span class="c1">// body supplied as a producer</span>
+<span class="w">                </span><span class="p">.</span><span class="na">retrieve</span><span class="p">()</span>
+<span class="w">                </span><span class="p">.</span><span class="na">bodyToMono</span><span class="p">(</span><span class="n">Payment</span><span class="p">.</span><span class="na">class</span><span class="p">);</span><span class="w">                </span><span class="c1">// returns a producer too</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong><code>Mono</code></strong>
+<ul>
+<li>is the producer type here: the body arrives as a <code>Mono</code> (an independent task that provides the value) and the method returns a <code>Mono</code> so the framework can subscribe</li>
+<li>The flow is built from linked tasks, not steps on one thread.</li>
+</ul>
+</li>
+<li>Same <code>curl</code> call and output as before.</li>
+</ul>
+<h3 id="sidebar-generating-proxy-methods-with-ai">Sidebar: generating proxy methods with AI</h3>
+<ul>
+<li><strong>Always name the technology</strong> (RestClient, WebClient, OpenFeign...); otherwise the agent may pick something that works but does not fit your design.</li>
+<li>If a proxy already exists, <strong>give it as an example</strong> so style, dependencies and config stay consistent. If it is your first proxy, say which technology and why.</li>
+<li><strong>Provide the endpoint contract</strong>: the controller method with request and response types, or the OpenAPI YAML if contract-first. This reduces wrong assumptions.</li>
+</ul>
+<h2 id="chapter-summary-book">Chapter summary (book)</h2>
+<ul>
+<li>Backends often call other backends' endpoints.</li>
+<li>Three relevant solutions: <strong>RestClient</strong> (simple), <strong>OpenFeign</strong> (Spring Cloud; less code, features suited to modern services), <strong>WebClient</strong> (reactive).</li>
+<li>Do not use RestTemplate in new code. Non-reactive: RestClient or OpenFeign. Reactive: WebClient.</li>
+<li>WebClient is excellent for reactive designs, but you should deeply understand the reactive approach and how to implement a reactive app with Spring before using it.</li>
+</ul>
+<h2 id="terms-to-carry-forward">Terms to carry forward</h2>
+<p>proxy (REST client class) · <code>RestClient</code> · OpenFeign · <code>@FeignClient</code> · <code>@EnableFeignClients</code> · Spring Cloud · <code>RestTemplate</code> · <code>HttpEntity</code> · <code>WebClient</code> · reactive · WebFlux · <code>Mono</code> · producer / subscriber · <code>@RequestHeader</code> · <code>@Value(&quot;${...}&quot;)</code> · <code>server.port</code>.</p>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Laurentiu Spilca, <em>Spring Start Here, Second Edition</em> (Manning, MEAP V05), ch. 11. https://www.manning.com/books/spring-start-here-second-edition (unverified)</li>
+<li>Thomas Vitale, <em>Cloud Native Spring in Action</em> (Manning, 2022); Craig Walls, <em>Spring in Action</em>, 6th ed. (Manning, 2022): both cited by the book.</li>
+</ul>
+<h2 id="related">Related</h2>
+<p><a href="/book-digest/spring-start-here/ch10-rest-endpoints/">Ch 10: Implementing REST endpoints</a> · <a href="/book-digest/spring-start-here/ch12-using-data-sources-in-spring-apps/">Ch 12: Using data sources in Spring apps</a></p>
+<nav class="pager"><a href="/book-digest/spring-start-here/ch10-rest-endpoints/">&larr; Ch 10: Implementing REST endpoints</a><a href="/book-digest/spring-start-here/">Contents</a><a href="/book-digest/spring-start-here/ch12-using-data-sources-in-spring-apps/">Ch 12: Using data sources in Spring apps &rarr;</a></nav></main></body></html>

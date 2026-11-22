@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Microservices 11: Security</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/building-microservices/">Building Microservices</a></div>
+<main>
+<h1 id="building-microservices-11-security">Building Microservices 11: Security</h1>
+<p>Source: Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 11. Previous: <a href="/book-digest/building-microservices/bm-10-from-monitoring-to-observability/">Building Microservices 10: From Monitoring to Observability</a>. Next: <a href="/book-digest/building-microservices/bm-12-resiliency/">Building Microservices 12: Resiliency</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Microservices widen the <strong>attack surface</strong> (more data on networks, more infrastructure) but give more room to <strong>defend in depth</strong> and limit the blast radius.</li>
+<li>Security is a mix of principles (<strong>least privilege</strong>, <strong>defence in depth</strong>, <strong>automation</strong>, built into delivery) and the NIST five functions: <strong>identify, protect, detect, respond, recover</strong>.</li>
+<li>Foundations: manage <strong>credentials and secrets</strong> (rotate, revoke, limit scope), <strong>patch</strong> all layers, keep <strong>tested backups</strong> separate from production, and be able to <strong>rebuild</strong> automatically.</li>
+<li>Choose a trust model (<strong>implicit</strong> versus <strong>zero trust</strong>), protect <strong>data in transit</strong> (server and client identity, visibility, manipulation) and <strong>at rest</strong>, and be frugal with data.</li>
+<li>Authentication via <strong>SSO</strong> (OpenID Connect), authorise <strong>in the owning microservice</strong> (avoid the <strong>confused deputy</strong>), passing identity with <strong>JWTs</strong>.</li>
+</ul>
+</div></div>
+<h2 id="11-1-core-principles">11.1 Core principles</h2>
+<ul>
+<li>Newman is not a security expert (&quot;a conscious incompetent&quot;) but argues developers need grounding, as they now do for testing and data. The dichotomy: more exposure, but more defences.</li>
+<li>Security is only as strong as the weakest part: do not harden the front door and leave the back door open.</li>
+</ul>
+<h3 id="principle-of-least-privilege">Principle of least privilege</h3>
+<ul>
+<li>Grant the <strong>minimum access needed, for the shortest time needed</strong>
+<ul>
+<li>A microservice with read-only database access limits an attacker to read-only access to that database; an expired credential is useless</li>
+<li>It extends to which services may talk to which.</li>
+</ul>
+</li>
+</ul>
+<h3 id="defence-in-depth">Defence in depth</h3>
+<ul>
+<li>Multiple layers, like <strong>Dover Castle</strong> (on a hill, two walls, a keep)
+<ul>
+<li>Microservices offer more places to protect: small, limited-scope services, different <strong>network segments</strong>, network protections at more points, and varied technology so a single zero-day does not hit everything.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">Types of security controls</div><div class="callout-body">
+<ul>
+<li><strong>Preventative:</strong> stop an attack (storing secrets securely, encryption at rest and in transit, authentication and authorisation).</li>
+<li><strong>Detective:</strong> reveal an attack (application firewalls, intrusion detection).</li>
+<li><strong>Responsive:</strong> help during and after (automated rebuild, working backups, a communications plan).</li>
+</ul>
+<p>You need a combination, with several of each. (Newman could not find the original source of this categorisation.)</p>
+</div></div>
+<h3 id="automation-and-delivery">Automation and delivery</h3>
+<ul>
+<li><strong>Automation</strong> copes with many moving parts, reduces human error and variability, eases <strong>least privilege</strong> (specific privileges per script), and helps revoke and rotate keys.</li>
+<li><strong>Build security into delivery</strong>,
+<ul>
+<li>not as an afterthought (&quot;Do you want fries with that?&quot;, Jonny Schneider on usability)</li>
+<li>Developers need general awareness, specialists should embed in teams when needed (&quot;Enabling Teams&quot;), and tooling should help</li>
+<li>Automated tools: <strong>OWASP ZAP</strong> (recreates attacks), <strong>Brakeman</strong> (Ruby static analysis), <strong>Snyk</strong> (vulnerable dependencies)</li>
+<li>Put them in CI; they find only local issues, not systemic ones.</li>
+</ul>
+</li>
+</ul>
+<h2 id="11-2-the-five-functions-of-cybersecurity-nist">11.2 The five functions of cybersecurity (NIST)</h2>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Meaning</th>
+<th>Microservice angle</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Identify</strong></td>
+<td>Who the attackers are, what they want, where you are weakest</td>
+<td><strong>Threat modelling</strong> from the outside in; look holistically, not at one or two services; an external party helps</td>
+</tr>
+<tr>
+<td><strong>Protect</strong></td>
+<td>Defend key assets</td>
+<td>Most of the chapter: wider surface, more options</td>
+</tr>
+<tr>
+<td><strong>Detect</strong></td>
+<td>Know if an attack happened</td>
+<td>More networks and machines; use chapter 10 techniques plus <strong>intrusion detection</strong> (container tools such as <strong>Aqua</strong>)</td>
+</tr>
+<tr>
+<td><strong>Respond</strong></td>
+<td>Act on a breach</td>
+<td>Scope the breach; <strong>PII</strong> triggers privacy notification; the <strong>GDPR</strong> requires reporting personal data breaches to authorities within <strong>72 hours</strong> (tell people earlier if you can); a <strong>blame culture</strong> hurts learning</td>
+</tr>
+<tr>
+<td><strong>Recover</strong></td>
+<td>Restore and learn</td>
+<td>More parts to recover; automation and backups help</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Threat modelling story:</strong>
+<ul>
+<li>a company argued over <strong>CCTV</strong> in reception after an intruder reached the corporate network, while a <strong>faulty front-door lock</strong> left the door unlocked in the mornings for years</li>
+<li>Humans are bad at understanding risk and fixate on technology they know (JWTs, mutual TLS)</li>
+<li>See Adam Shostack, <em>Threat Modeling: Designing for Security</em> (2014).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-11-five-functions.svg" alt="The five NIST functions" loading="lazy" /></p>
+<h2 id="11-3-foundations-of-application-security">11.3 Foundations of application security</h2>
+<h3 id="credentials">Credentials</h3>
+<ul>
+<li>Microservices mean many more credentials (services, machines, databases), tempting &quot;lazy&quot; broad shared ones. Two areas: <strong>user credentials</strong> and <strong>secrets</strong>
+<ul>
+<li>for both consider <strong>rotation, revocation and limiting scope</strong>.</li>
+</ul>
+</li>
+<li><strong>User credentials:</strong>
+<ul>
+<li>Verizon's 2020 <em>Data Breach Investigations Report</em> found credential theft in <strong>80%</strong> of hacking-related breaches</li>
+<li>Advice (via Troy Hunt, from NIST and the UK NCSC): use password managers, long passwords, no complex rules, and <strong>no mandated regular changes</strong></li>
+<li>Cloud API keys matter too:
+<ul>
+<li><strong>Code Spaces</strong> went out of business after an attacker destroyed everything, backups included, in one AWS account</li>
+<li>another client lost over <strong>$10,000</strong> to bitcoin mining on stolen keys (bots scan for credentials).</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="secrets">Secrets</h3>
+<ul>
+<li>Examples: TLS certificates, SSH keys, public/private API keypairs, database credentials. Lifecycle:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Question</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Creation</strong></td>
+<td>How is it made?</td>
+</tr>
+<tr>
+<td><strong>Distribution</strong></td>
+<td>How does it reach only the right place?</td>
+</tr>
+<tr>
+<td><strong>Storage</strong></td>
+<td>Only authorised access?</td>
+</tr>
+<tr>
+<td><strong>Monitoring</strong></td>
+<td>Do we know how it is used?</td>
+</tr>
+<tr>
+<td><strong>Rotation</strong></td>
+<td>Can we change it safely?</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Tools:
+<ul>
+<li><strong>Kubernetes secrets</strong> (basic, stored in plain text; acceptable depending on your threat model)</li>
+<li><strong>HashiCorp Vault</strong> (open source; distributes secrets, generates <strong>time-limited credentials</strong> for databases and clouds, works with <strong>consul-template</strong> to update config files)</li>
+<li><strong>AWS Secrets Manager</strong> and <strong>Azure Key Vault</strong> (or run Vault yourself on the cloud with an encrypted backend).</li>
+</ul>
+</li>
+<li><strong>Rotation:</strong>
+<ul>
+<li>limits an attacker's window (a keypair changed weekly gives one week)</li>
+<li>Example: time-limited AWS keys generated on the fly, valid under an hour, so one checked into public GitHub is useless once expired</li>
+<li>It can cause incidents when you do not know what uses a credential, so limit scope and automate.</li>
+</ul>
+</li>
+<li><strong>Revocation:</strong>
+<ul>
+<li>if you know a credential leaked, revoke and regenerate automatically</li>
+<li>services must <strong>re-read</strong> secrets (or be rolling-restarted). If you already rotate regularly, emergency revocation is likely covered.</li>
+</ul>
+</li>
+<li><strong>Scanning for keys:</strong> private keys leak through commits; GitHub scans some; <strong>git-secrets</strong> (as a commit hook) and <strong>gitleaks</strong> scan before commit.</li>
+<li><strong>Limiting scope:</strong>
+<ul>
+<li>a shared Inventory login gives an attacker read/write</li>
+<li>the <strong>Debezium</strong> process (feeding Kafka for ETL) gets a <strong>read-only</strong> login
+<ul>
+<li>Better: <strong>each instance its own credentials</strong>, so you can rotate or revoke one, trace a leak, and spot which instance ran an expensive query</li>
+</ul>
+</li>
+<li>needs automation (Vault).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-11-limiting-credential-scope.svg" alt="Limiting the scope of credentials" loading="lazy" /></p>
+<h3 id="patching">Patching</h3>
+<ul>
+<li><strong>Equifax (2017):</strong> an <strong>Apache Struts</strong> vulnerability, with a patch available for months, exposed data on over <strong>160 million</strong> people and cost a <strong>$700 million</strong> settlement.</li>
+<li>Layers needing patches:
+<ul>
+<li>hardware and OS, container runtime, Kubernetes and your code</li>
+<li>A <strong>managed Kubernetes</strong> cluster reduces what you own</li>
+<li><strong>Containers</strong> are immutable but include an OS and base images (backdoors? six months of unapplied OS patches), so use tools like <strong>Aqua</strong></li>
+<li>Use <strong>Snyk</strong> or <strong>GitHub code scanning</strong> for third-party dependencies, which can send pull requests and <strong>fail the build</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="backups">Backups</h3>
+<ul>
+<li>&quot;Like flossing&quot;: more say they do it than do
+<ul>
+<li>Replication and reliable disks tempt people to skip them, but a wiped Cassandra cluster or a deleting bug still happens</li>
+<li>Automated deployment means you back up <strong>state</strong> (databases, perhaps logs), not whole machines (block-level clones are near instant).</li>
+</ul>
+</li>
+<li><strong>Avoid the Schrödinger backup:</strong> a backup that may or may not be one until you <strong>restore</strong> it; restore regularly (for example build performance-test data from production backups).</li>
+<li>Keep backups <strong>isolated from core systems</strong>: Code Spaces kept them in the compromised account. Use a <strong>separate account</strong>, maybe another region or provider.</li>
+</ul>
+<h3 id="rebuild">Rebuild</h3>
+<ul>
+<li>After an attack, <strong>rebuild</strong> and remove the attacker's access
+<ul>
+<li>A <strong>rootkit</strong> once altered <code>ls</code> and <code>ps</code>; it was found by checking <strong>hashes</strong> against official packages, and the server had to be reinstalled</li>
+<li>Routine <strong>rebuilds plus credential rotation</strong> limit persistent attackers.</li>
+</ul>
+</li>
+<li>Needs good automation and backup restoration
+<ul>
+<li>make rebuild the <strong>same as every deployment</strong> (container deploys do this). Caveat: can you rebuild the <strong>platform</strong> (the Kubernetes cluster) itself?</li>
+</ul>
+</li>
+</ul>
+<h2 id="11-4-implicit-trust-versus-zero-trust">11.4 Implicit trust versus zero trust</h2>
+<ul>
+<li><strong>Implicit trust:</strong> anything inside the perimeter is trusted. Common, often unconsciously; once an attacker is inside they can read, change or impersonate.</li>
+<li><strong>Zero trust</strong>
+<ul>
+<li>(&quot;perimeterless computing&quot;): assume you are already compromised (&quot;the call is coming from inside the house&quot;): assess every inbound call, store data and keys safely, and <strong>encrypt sensitive data in transit</strong> inside the system</li>
+<li>It is a <strong>mindset</strong>, not a product; Jan Schaumann notes you can even allow connections to internal services from the internet since the internal network is treated as untrusted</li>
+<li>It needs constant investment.</li>
+</ul>
+</li>
+<li><strong>It is a spectrum:</strong>
+<ul>
+<li>be driven by your threat model</li>
+<li><strong>MedicalCo</strong>
+<ul>
+<li>classified data as <strong>Public, Private</strong> (logged-in users, such as insurance plan) or <strong>Secret</strong> (health data) and ran services in matching <strong>zones</strong>: a service runs in the zone of its most sensitive data</li>
+<li>services reach <strong>down</strong> into no more secure zones, but services in secure zones may call less secure ones</li>
+</ul>
+</li>
+<li>The public zone is nearer implicit trust, the secret zone zero trust (a zoned approach is still defence in depth).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-11-data-zones.svg" alt="MedicalCo-style data zones" loading="lazy" /></p>
+<h2 id="11-5-securing-data">11.5 Securing data</h2>
+<h3 id="data-in-transit-four-concerns">Data in transit: four concerns</h3>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Meaning and solution (HTTP example)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Server identity</strong></td>
+<td>Is it really the server? <strong>HTTPS</strong> (HTTP with <strong>TLS</strong>) validates a certificate; also fine for SOAP or gRPC over HTTPS. (SSL was replaced by TLS but the name lingers)</td>
+</tr>
+<tr>
+<td><strong>Client identity</strong></td>
+<td>Authenticate the calling service (shared secret, client certificate); do not make a central call per request (latency). Newman would not check client identity without server identity: <strong>mutual authentication</strong>, via <strong>mutual TLS</strong>, common in zero trust; <strong>Vault</strong> eases certificates and <strong>service meshes</strong> are partly adopted for this</td>
+</tr>
+<tr>
+<td><strong>Visibility</strong></td>
+<td>TLS hides data from intermediaries, but also stops proxies like <strong>Squid</strong> or <strong>Varnish</strong> caching</td>
+</tr>
+<tr>
+<td><strong>Manipulation</strong></td>
+<td>TLS also prevents tampering; or sign open data with an <strong>HMAC</strong> (hash sent with the data)</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/building-microservices/img/bm-11-data-in-transit.svg" alt="Four concerns for data in transit" loading="lazy" /></p>
+<h3 id="data-at-rest">Data at rest</h3>
+<ul>
+<li>Breaches often involve unencrypted data or a flawed mechanism.</li>
+<li><strong>Go with the well known:</strong>
+<ul>
+<li>use tested implementations, never your own algorithm</li>
+<li>use <strong>salted password hashing</strong> (not encryption, which can be reversed with the key)</li>
+<li>badly implemented encryption can be worse than none.</li>
+</ul>
+</li>
+<li><strong>Pick your targets:</strong> encrypting everything is simple but costly (CPU, logs, schema migrations needing decrypt-migrate-encrypt); finer-grained services let you encrypt specific tables.</li>
+<li><strong>Be frugal:</strong>
+<ul>
+<li>store only what you need</li>
+<li>Mask the end of IP addresses; keep an age range and postcode rather than full details</li>
+<li>Unstored data cannot be stolen or requested</li>
+<li>The German <strong>Datensparsamkeit</strong> (from German privacy law) means storing only what business operations or law require.</li>
+</ul>
+</li>
+<li><strong>It's all about the keys:</strong>
+<ul>
+<li>do not keep the key beside the data</li>
+<li>Use a security appliance or key vault (<strong>Vault</strong>); database features such as SQL Server's <strong>Transparent Data Encryption</strong> need scrutiny of key handling</li>
+<li>&quot;Encrypt data when you first see it</li>
+<li>Only decrypt on demand.&quot;</li>
+</ul>
+</li>
+<li><strong>Encrypt backups</strong> too.</li>
+</ul>
+<h2 id="11-6-authentication-and-authorisation">11.6 Authentication and authorisation</h2>
+<ul>
+<li><strong>Authentication</strong>
+<ul>
+<li>confirms a party is who it says (the <strong>principal</strong>)</li>
+<li><strong>authorisation</strong> maps a principal to allowed actions. Users should not log in separately to each service: <strong>single sign-on (SSO)</strong>.</li>
+</ul>
+</li>
+<li><strong>Service-to-service:</strong> mutual TLS, or <strong>API keys</strong> used to hash a request.</li>
+<li><strong>Human authentication:</strong>
+<ul>
+<li><strong>multifactor authentication (MFA)</strong> (2FA is a subset): SMS codes, email magic links, apps such as Authy, hardware keys (<strong>YubiKey</strong>), biometrics</li>
+<li>Treat MFA as a must for key services and sensitive access such as source code.</li>
+</ul>
+</li>
+</ul>
+<h3 id="single-sign-on-implementations">Single sign-on implementations</h3>
+<ul>
+<li>A principal is sent to an <strong>identity provider</strong> (maybe with MFA), which tells the <strong>service provider</strong> who they are
+<ul>
+<li>the system decides what they may do. The provider can be external (Google offers an <strong>OpenID Connect</strong> provider) or internal, linked to a <strong>directory service</strong> (LDAP, Active Directory)</li>
+<li><strong>Okta</strong> is a hosted SAML provider that links to company directories.</li>
+</ul>
+</li>
+<li><strong>SAML</strong> is SOAP-based and complex, and has fallen from favour; <strong>OpenID Connect</strong> (an implementation of <strong>OAuth 2.0</strong>, using simpler REST calls) is now dominant.</li>
+</ul>
+<h3 id="the-sso-gateway">The SSO gateway</h3>
+<ul>
+<li>Rather than each service handling the handshake (duplication, shared library coupling, mixed stacks), a <strong>gateway</strong> proxy does it once
+<ul>
+<li>Downstream services need principal information: <strong>HTTP headers</strong> (Shibboleth with Apache and SAML) or a <strong>JWT</strong>.</li>
+</ul>
+</li>
+<li>Cautions:
+<ul>
+<li>harder to reason about a service in isolation (let developers run services behind a gateway)</li>
+<li>a <strong>false sense of security</strong> (defence in depth: perimeter, subnet, firewall, machine, OS, hardware)</li>
+<li>gateways accumulate functionality, becoming a coupling point with a larger attack surface.</li>
+</ul>
+</li>
+</ul>
+<h3 id="fine-grained-authorisation">Fine-grained authorisation</h3>
+<ul>
+<li>A gateway can do <strong>coarse-grained</strong> checks (only logged-in users reach the helpdesk; role <code>STAFF</code>). Finer decisions belong <strong>in the service</strong>: a <code>CALL_CENTER</code> principal sees customer data except payment details and issues capped refunds
+<ul>
+<li><code>CALL_CENTER_TEAM_LEADER</code> larger ones.</li>
+</ul>
+</li>
+<li>Avoid roles like <code>CALL_CENTER_50_DOLLAR_REFUND</code>: service-specific behaviour then lives in a directory run by someone else. Favour <strong>coarse roles modelled on how your organisation works</strong>.</li>
+</ul>
+<h3 id="the-confused-deputy-problem">The confused deputy problem</h3>
+<ul>
+<li>An upstream party tricks an intermediate into doing something it should not
+<ul>
+<li>Example: a logged-in customer clicks <code>/orderStatus/12345</code>; the browser UI calls the <strong>Web Shop</strong> (a <strong>BFF</strong>; chapter 14), which asks <strong>Order</strong> and <strong>Shipping</strong></li>
+<li>Calls are authenticated, but the customer could <strong>guess other order IDs</strong>: authenticated yet not authorised</li>
+<li>Who checks that user A may see A's order?</li>
+</ul>
+</li>
+<li><strong>Centralised, upstream authorisation</strong> (in the gateway or Web Shop) implies implicit trust, makes the gateway know downstream functionality, and ties deployment to gateway configuration, undermining independent deployability.</li>
+<li><strong>Decentralised authorisation:</strong> the <strong>Order</strong> service decides, which needs the user's identity: a plain username header can be forged, hence <strong>JWTs</strong> (older approaches included <strong>nested SAML assertions</strong>).</li>
+</ul>
+<h3 id="json-web-tokens">JSON Web Tokens</h3>
+<ul>
+<li>A JWT holds <strong>claims</strong> in a string that can be <strong>signed</strong> (tamper-proof) and optionally <strong>encrypted</strong>, expire, and travel in many protocols (the HTTP <code>Authorization</code> header)
+<ul>
+<li>It has three dot-separated parts: <strong>header</strong> (signing algorithm), <strong>payload</strong> (JSON claims; standard public claims such as <code>exp</code> are honoured by libraries; do not reuse those names), and <strong>signature</strong> (integrity and, with a private key, origin).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"sub"</span><span class="p">:</span><span class="w"> </span><span class="s2">"123"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Sam Newman"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"exp"</span><span class="p">:</span><span class="w"> </span><span class="mi">1606741736</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"groups"</span><span class="p">:</span><span class="w"> </span><span class="s2">"admin, beta"</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Using tokens:</strong>
+<ul>
+<li>after login a session token (likely OAuth) lives on the client</li>
+<li>each request hits the <strong>gateway</strong>, which generates a <strong>JWT valid for that request</strong> and passes it downstream</li>
+<li>services verify the signature and read claims. Per-request JWTs are common (short validity, easier key changes, and clients are unaffected). It beats nested SAML assertions.</li>
+</ul>
+</li>
+<li><strong>Challenges:</strong>
+<ul>
+<li><strong>Keys:</strong> verifying needs a public key out of band; handle changes (<strong>Vault</strong> can supply and rotate).</li>
+<li><strong>Expiry:</strong>
+<ul>
+<li>long asynchronous processes (days of order fulfilment) clash with short tokens</li>
+<li>teams use special longer-lived scoped tokens or stop using the token at some point (no settled answer).</li>
+</ul>
+</li>
+<li><strong>Size:</strong> one music-rights domain might need up to <strong>10,000 entries</strong> per track; use a simple token for most, plus a <strong>data store lookup</strong> for the rare complex case.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/building-microservices/img/bm-11-sso-and-jwt.svg" alt="SSO, JWTs and decentralised authorisation" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Build security with a holistic view and <strong>threat modelling</strong>; use a mix of controls and a multifaceted approach.</li>
+<li>Finer-grained services let you reduce the impact of a breach and trade overhead against data sensitivity.</li>
+<li>Further reading: Laura Bell et al., <em>Agile Application Security</em> (O'Reilly, 2017).</li>
+<li>Next: resiliency.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Least privilege, defence in depth, threat modelling, NIST five functions</strong>.</li>
+<li><strong>Secret, rotation, revocation, Schrödinger backup, rebuild</strong>.</li>
+<li><strong>Implicit trust, zero trust, mutual TLS, HMAC, Datensparsamkeit</strong>.</li>
+<li><strong>Principal, SSO, identity provider, OpenID Connect, MFA</strong>.</li>
+<li><strong>Confused deputy, JWT, coarse-grained roles</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Building Microservices</em>, 2nd ed. (O'Reilly, 2021), ch. 11. https://learning.oreilly.com/library/view/building-microservices-2nd/9781492034018/ch11.html</li>
+<li>Adam Shostack, *Threat Modeling:
+<ul>
+<li>Designing for Security* (Wiley, 2014)</li>
+<li>Troy Hunt, &quot;Passwords Evolved&quot; (https://oreil.ly/T7PYM)</li>
+<li>Neil McAllister, &quot;Code Spaces Goes Titsup FOREVER&quot;, The Register, 2014 (https://oreil.ly/mw7PC)</li>
+<li>Verizon 2020 Data Breach Investigations Report</li>
+<li>Laura Bell et al., <em>Agile Application Security</em> (2017): as cited by the book.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-microservices/bm-10-from-monitoring-to-observability/">Building Microservices 10: From Monitoring to Observability</a></li>
+<li><a href="/book-digest/building-microservices/bm-12-resiliency/">Building Microservices 12: Resiliency</a></li>
+<li><a href="/book-digest/building-microservices/bm-05-implementing-microservice-communication/">Building Microservices 5: Implementing Microservice Communication</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-microservices/bm-10-from-monitoring-to-observability/">&larr; Building Microservices 10: From Monitoring to Observability</a><a href="/book-digest/building-microservices/">Contents</a><a href="/book-digest/building-microservices/bm-12-resiliency/">Building Microservices 12: Resiliency &rarr;</a></nav></main></body></html>

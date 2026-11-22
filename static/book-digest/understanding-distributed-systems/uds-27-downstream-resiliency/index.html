@@ -24,7 +24,7 @@ Tactical patterns that protect a service from <strong>failures of its downstream
 <p>Always configure a timeout: a call with none may never return, and non-returning calls cause <strong>resource leaks</strong> (chapter 24). Timeouts detect connectivity faults and stop them cascading. Also essential for any operation that may never return, like <strong>acquiring a mutex</strong>.</p>
 <p><strong>Defaults are often bad:</strong></p>
 <ul>
-<li>JavaScript <code>XMLHttpRequest</code>: default timeout <strong>0 = none</strong> (https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest/timeout):</li>
+<li>JavaScript <code>XMLHttpRequest</code>: default timeout <strong>0 = none</strong> (<a href="https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest/timeout" target="_blank" rel="noopener noreferrer">https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest/timeout</a>):</li>
 </ul>
 <pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="nx">xhr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">XMLHttpRequest</span><span class="p">();</span>
 <span class="nx">xhr</span><span class="p">.</span><span class="nx">open</span><span class="p">(</span><span class="s2">"GET"</span><span class="p">,</span><span class="w"> </span><span class="s2">"/api"</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">);</span>
@@ -34,32 +34,32 @@ Tactical patterns that protect a service from <strong>failures of its downstream
 <span class="nx">xhr</span><span class="p">.</span><span class="nx">send</span><span class="p">(</span><span class="kc">null</span><span class="p">);</span>
 </code></pre>
 <ul>
-<li><code>fetch</code>: initially <strong>no way</strong> to set a timeout (https://github.com/whatwg/fetch/issues/951)
+<li><code>fetch</code>: initially <strong>no way</strong> to set a timeout (<a href="https://github.com/whatwg/fetch/issues/951" target="_blank" rel="noopener noreferrer">https://github.com/whatwg/fetch/issues/951</a>)
 <ul>
-<li>later added via the <strong>Abort API</strong> (https://developer.mozilla.org/en-US/docs/Web/API/AbortController).</li>
+<li>later added via the <strong>Abort API</strong> (<a href="https://developer.mozilla.org/en-US/docs/Web/API/AbortController" target="_blank" rel="noopener noreferrer">https://developer.mozilla.org/en-US/docs/Web/API/AbortController</a>).</li>
 </ul>
 </li>
 <li>Python <code>requests</code>:
 <ul>
-<li>default <strong>infinity</strong> (https://requests.readthedocs.io/en/master/user/quickstart/#timeouts)</li>
-<li>Go's HTTP package: <strong>no timeouts by default</strong> (https://github.com/golang/go/issues/24138).</li>
+<li>default <strong>infinity</strong> (<a href="https://requests.readthedocs.io/en/master/user/quickstart/#timeouts" target="_blank" rel="noopener noreferrer">https://requests.readthedocs.io/en/master/user/quickstart/#timeouts</a>)</li>
+<li>Go's HTTP package: <strong>no timeouts by default</strong> (<a href="https://github.com/golang/go/issues/24138" target="_blank" rel="noopener noreferrer">https://github.com/golang/go/issues/24138</a>).</li>
 </ul>
 </li>
 <li>Modern Java and .NET clients do better
 <ul>
-<li>.NET Core <code>HttpClient</code> defaults to <strong>100 s</strong> (lax but better than none) (https://docs.microsoft.com/en-us/dotnet/api/system.net.http.httpclient.timeout?view=net-6.0#remarks).</li>
+<li>.NET Core <code>HttpClient</code> defaults to <strong>100 s</strong> (lax but better than none) (<a href="https://docs.microsoft.com/en-us/dotnet/api/system.net.http.httpclient.timeout?view=net-6.0#remarks" target="_blank" rel="noopener noreferrer">https://docs.microsoft.com/en-us/dotnet/api/system.net.http.httpclient.timeout?view=net-6.0#remarks</a>).</li>
 </ul>
 </li>
 <li>Rule: <strong>always set timeouts on network calls</strong>, and beware third-party libraries that make calls without exposing timeout settings.</li>
 </ul>
-<p><strong>Choosing the value:</strong> base it on the <strong>false timeout rate</strong> (https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/). If you accept 0.1% of calls that would eventually have succeeded timing out, set the timeout at the <strong>99.9th percentile</strong> of the downstream's response time.</p>
+<p><strong>Choosing the value:</strong> base it on the <strong>false timeout rate</strong> (<a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/" target="_blank" rel="noopener noreferrer">https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/</a>). If you accept 0.1% of calls that would eventually have succeeded timing out, set the timeout at the <strong>99.9th percentile</strong> of the downstream's response time.</p>
 <p><strong>Monitor</strong> the whole lifecycle of each call (duration, status code, whether a timeout fired): without measuring integration points, production issues are hard to debug. Best wrapped in a <strong>library function</strong> that sets the timeout and monitors, or via a <strong>co-located reverse proxy</strong> (sidecar / service mesh, section 18.3) that enforces timeouts and monitors.</p>
 <h2 id="27-2-retry">27.2 Retry</h2>
 <p>After a failed or timed-out request: <strong>fail fast</strong> or <strong>retry</strong>. A short-lived connectivity glitch usually succeeds on retry after some <strong>backoff</strong>. If the downstream is <strong>overwhelmed</strong>, immediate retries make it worse, so slow retries with longer delays until a <strong>maximum number</strong> of retries or <strong>enough elapsed time</strong>.</p>
 <h3 id="27-2-1-exponential-backoff">27.2.1 Exponential backoff</h3>
 <p><img src="/book-digest/understanding-distributed-systems/img/uds-27-retry-backoff.svg" alt="Waiting times grow, then cap" loading="lazy" />
 Capped exponential delay: <code>delay = min(cap, initial_backoff * 2^attempt)</code>. Example: cap 8 s, initial 2 s: retries wait 2 s, 4 s, 8 s, then 8 s (capped).</p>
-<p>Problem: when the downstream degrades, many clients fail at the same moment and <strong>retry simultaneously</strong>, causing load spikes (a <strong>retry storm</strong>, &quot;herding&quot;). Fix: add <strong>random jitter</strong> (https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/): <code>delay = random(0, min(cap, initial_backoff * 2^attempt))</code>, spreading retries over time.</p>
+<p>Problem: when the downstream degrades, many clients fail at the same moment and <strong>retry simultaneously</strong>, causing load spikes (a <strong>retry storm</strong>, &quot;herding&quot;). Fix: add <strong>random jitter</strong> (<a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/" target="_blank" rel="noopener noreferrer">https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/</a>): <code>delay = random(0, min(cap, initial_backoff * 2^attempt))</code>, spreading retries over time.</p>
 <p>Other points:</p>
 <ul>
 <li>Batch apps without real-time needs can park failed requests in a <strong>retry queue</strong>, read later by the same or another process.</li>
@@ -117,7 +117,7 @@ timeout · false timeout rate · percentile · retry · capped exponential backo
 <h2 id="q-a">Q&amp;A</h2>
 <h2 id="source">Source</h2>
 <ul>
-<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 27. https://understandingdistributed.systems/</li>
+<li>Roberto Vitillo, <em>Understanding Distributed Systems</em>, 2nd ed. (2022), ch. 27. <a href="https://understandingdistributed.systems/" target="_blank" rel="noopener noreferrer">https://understandingdistributed.systems/</a></li>
 </ul>
 <h2 id="related">Related</h2>
 <p><a href="/book-digest/understanding-distributed-systems/uds-25-and-26-redundancy-and-fault-isolation/">Understanding Distributed Systems 25-26: Redundancy and fault isolation</a> · <a href="/book-digest/understanding-distributed-systems/uds-28-upstream-resiliency/">Understanding Distributed Systems 28: Upstream resiliency (and Part V intro)</a> · <a href="/book-digest/understanding-distributed-systems/uds-24-common-failure-causes/">Understanding Distributed Systems 24: Part IV intro and common failure causes</a> · <a href="/book-digest/understanding-distributed-systems/uds-18-network-load-balancing/">Understanding Distributed Systems 18: Network load balancing</a> · <a href="/book-digest/understanding-distributed-systems/uds-05-apis/">Understanding Distributed Systems 5: APIs</a></p>

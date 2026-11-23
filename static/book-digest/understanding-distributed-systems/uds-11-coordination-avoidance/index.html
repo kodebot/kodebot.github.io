@@ -62,6 +62,7 @@ Wide-area networks like the internet offer only <strong>point-to-point (unicast)
 <p><strong>Can replicas resolve conflicts with no consensus at all?</strong> Yes, if every possible conflict has a <strong>deterministic outcome</strong> (e.g. <strong>the write with the greatest timestamp wins</strong>): then there are no conflicts by design.</p>
 <p>That gives <strong>strong eventual consistency</strong> (<a href="https://www.microsoft.com/en-us/research/video/strong-eventual-consistency-and-conflict-free-replicated-data-types/" target="_blank" rel="noopener noreferrer">https://www.microsoft.com/en-us/research/video/strong-eventual-consistency-and-conflict-free-replicated-data-types/</a>): <strong>eventual delivery</strong> plus <strong>strong convergence</strong> (replicas that executed the same updates are in the same state).</p>
 <p>It allows systems that are <strong>available, (strongly eventually) consistent and partition tolerant</strong>.</p>
+<p><img src="/book-digest/understanding-distributed-systems/img/uds-11-crdt-max-merge.svg" alt="A max-register CRDT converges whatever the arrival order" loading="lazy" /></p>
 <p><strong>Conditions for strong convergence.</strong> Replicate an object (integer, string, set...) across N replicas. A client can send queries and updates to any replica:</p>
 <ul>
 <li>a <strong>query</strong> is answered immediately from the local copy;</li>
@@ -113,14 +114,16 @@ Wide-area networks like the internet offer only <strong>point-to-point (unicast)
 <h2 id="11-3-dynamo-style-data-stores">11.3 Dynamo-style data stores</h2>
 <p><strong>Dynamo</strong> (&quot;Amazon's Highly Available Key-value Store&quot;: <a href="https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf" target="_blank" rel="noopener noreferrer">https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf</a>) is arguably the best-known eventually consistent, highly available key-value store; it inspired <strong>Cassandra</strong> (<a href="https://cassandra.apache.org/" target="_blank" rel="noopener noreferrer">https://cassandra.apache.org/</a>) and <strong>Riak KV</strong> (<a href="https://riak.com/products/riak-kv/" target="_blank" rel="noopener noreferrer">https://riak.com/products/riak-kv/</a>).</p>
 <ul>
-<li><strong>Every replica accepts reads and writes.</strong>
+<li>
+<p><strong>Every replica accepts reads and writes.</strong></p>
 <ul>
 <li>A write is sent to <strong>all N replicas in parallel</strong> but the client waits for <strong>W acknowledgements</strong> (<strong>write quorum</strong>)</li>
 <li>A read goes to all but waits for <strong>R replies</strong> (<strong>read quorum</strong>) and returns the <strong>most recent</strong> entry</li>
 <li>Conflicts are resolved with LWW or MV behaviour, depending on the flavour.</li>
 </ul>
 </li>
-<li><strong>If W + R &gt; N</strong>,
+<li>
+<p><strong>If W + R &gt; N</strong>,</p>
 <ul>
 <li>the quorums <strong>intersect</strong>, so at least one read returns the latest version
 <ul>
@@ -130,13 +133,16 @@ Wide-area networks like the internet offer only <strong>point-to-point (unicast)
 <li>to avoid that, bundle writes in an <strong>atomic transaction</strong> (chapter 12).</li>
 </ul>
 </li>
-<li>Normally W and R are <strong>majority quorums</strong> (more than half the replicas)
+<li>
+<p>Normally W and R are <strong>majority quorums</strong> (more than half the replicas)</p>
 <ul>
 <li>Other choices shift performance: a <strong>read-heavy</strong> workload benefits from a <strong>smaller R</strong> (but writes become slower and less available while W + R &gt; N)</li>
-<li><strong>W = R = 1</strong> maximises performance at the expense of consistency (<strong>W + R &lt; N</strong>).</li>
+<li><strong>W = R = 1</strong> maximises performance at the expense of consistency (<strong>W + R &lt; N</strong>).
+<img src="/book-digest/understanding-distributed-systems/img/uds-11-quorum-w-r-n.svg" alt="Dynamo-style quorums with N=3, W=2, R=2" loading="lazy" /></li>
 </ul>
 </li>
-<li><strong>Problem:</strong> a write sent to a replica may never arrive, so it would never converge. Two <strong>anti-entropy</strong> mechanisms help (quorum replication = <strong>best-effort broadcast + anti-entropy</strong>):
+<li>
+<p><strong>Problem:</strong> a write sent to a replica may never arrive, so it would never converge. Two <strong>anti-entropy</strong> mechanisms help (quorum replication = <strong>best-effort broadcast + anti-entropy</strong>):</p>
 <ul>
 <li><strong>Read repair:</strong>
 <ul>
@@ -157,7 +163,8 @@ Wide-area networks like the internet offer only <strong>point-to-point (unicast)
 <h2 id="11-4-the-calm-theorem">11.4 The CALM theorem</h2>
 <p>How do you know whether an application needs coordination such as consensus? <strong>CALM</strong> (&quot;Keeping CALM: When Distributed Consistency is Easy&quot;, <a href="https://arxiv.org/pdf/1901.01930.pdf" target="_blank" rel="noopener noreferrer">https://arxiv.org/pdf/1901.01930.pdf</a>): <strong>a program has a consistent, coordination-free distributed implementation if and only if it is monotonic.</strong></p>
 <ul>
-<li><strong>Monotonic:</strong>
+<li>
+<p><strong>Monotonic:</strong></p>
 <ul>
 <li>new inputs <strong>refine the output and cannot retract any prior output</strong></li>
 <li>Example: the <strong>union of a set</strong>: once an element is added it cannot be removed</li>
@@ -165,13 +172,16 @@ Wide-area networks like the internet offer only <strong>point-to-point (unicast)
 <li><strong>variable assignment</strong> overwrites the previous value.</li>
 </ul>
 </li>
-<li>A monotonic program can be <strong>consistent, available and partition tolerant at once</strong>
+<li>
+<p>A monotonic program can be <strong>consistent, available and partition tolerant at once</strong></p>
 <ul>
 <li>But CALM's &quot;consistency&quot; is <strong>not linearizability</strong> (CAP's C, narrowly about reads and writes): CALM concerns <strong>consistency of the program's output</strong>: it yields the <strong>same output whatever the input order</strong>, despite conflicts</li>
-<li>Make sure you know what &quot;consistency&quot; means each time you meet it.</li>
+<li>Make sure you know what &quot;consistency&quot; means each time you meet it.
+<img src="/book-digest/understanding-distributed-systems/img/uds-11-calm-monotonic.svg" alt="Monotonic programs need no coordination; non-monotonic ones do" loading="lazy" /></li>
 </ul>
 </li>
-<li><strong>Counter example:</strong> with only <code>write</code> and <code>read</code>, order matters: `write
+<li>
+<p><strong>Counter example:</strong> with only <code>write</code> and <code>read</code>, order matters: `write</p>
 <ul>
 <li>, write</li>
 <li>, write</li>
@@ -182,7 +192,8 @@ Wide-area networks like the internet offer only <strong>point-to-point (unicast)
 <li>` three times gives 3 <strong>in any order</strong>. So read/write-level consistency can limit the solution space: you can be consistent at the <strong>application level</strong> but not at the <strong>storage read/write level</strong> (&quot;Building on Quicksand&quot;: <a href="https://dsf.berkeley.edu/cs286/papers/quicksand-cidr2009.pdf" target="_blank" rel="noopener noreferrer">https://dsf.berkeley.edu/cs286/papers/quicksand-cidr2009.pdf</a>)</li>
 </ul>
 </li>
-<li>CALM also flags programs that <strong>cannot</strong> be consistent without coordination because they are non-monotonic
+<li>
+<p>CALM also flags programs that <strong>cannot</strong> be consistent without coordination because they are non-monotonic</p>
 <ul>
 <li>But assignment <strong>combined with a logical clock</strong> becomes monotonic, as LWW and MV registers show.</li>
 </ul>

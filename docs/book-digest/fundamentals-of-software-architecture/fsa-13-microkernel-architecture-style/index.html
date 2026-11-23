@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 13: Microkernel Architecture Style</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-12-pipeline-architecture-style/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-13-microkernel-architecture-style">Fundamentals of Software Architecture 13: Microkernel Architecture Style</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 13. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-12-pipeline-architecture-style/">Fundamentals of Software Architecture 12: Pipeline Architecture Style</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Microkernel</strong> (plug-in) architecture: a monolith of two components, a <strong>core system</strong> (the happy path, minimal functionality to run) and <strong>plug-ins</strong> (custom, volatile, specialised processing). It removes <strong>cyclomatic complexity</strong> from the core into plug-ins.</li>
+<li>A natural fit for <strong>product-based</strong> applications and any domain needing <strong>customisation</strong> (insurance rules per state, tax forms, IDEs, browsers).</li>
+<li>Plug-ins connect <strong>point to point</strong> (method call) or <strong>remotely</strong> (REST, messaging). Remote access improves decoupling and scalability but makes it <strong>distributed</strong> and still <strong>one quantum</strong>.</li>
+<li>Needs a <strong>registry</strong> and <strong>contracts</strong>. Risks: a <strong>volatile core</strong> and <strong>plug-in dependencies</strong>.</li>
+<li>The only style that can be <strong>both domain and technically partitioned</strong>. Simplicity 4; modularity, maintainability, testability, deployability, evolvability and responsiveness 3; scalability, elasticity and fault tolerance 1; quanta 1.</li>
+</ul>
+</div></div>
+<h2 id="13-1-topology">13.1 Topology</h2>
+<p>The microkernel style (also the <strong>plug-in architecture</strong>) was invented decades ago and is widely used. It fits <strong>product-based applications</strong>: packaged, downloaded and installed as a single monolithic deployment, typically at the customer's site as a third-party product.</p>
+<p>It is also used in custom business applications in domains that need customisation, for example a US insurer with unique rules per state, or an international shipper with legal and logistical variations.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-fig-13-1-topology.svg" alt="Figure 13-1: the basic components, a core system and plug-ins" loading="lazy" /></p>
+<p>It is a relatively simple <strong>monolithic</strong> architecture of two component types: a <strong>core system</strong> and <strong>plug-ins</strong>. Application logic is split between independent plug-ins and the basic core, which isolates features and gives extensibility, adaptability and custom processing logic.</p>
+<h2 id="13-2-style-specifics">13.2 Style specifics</h2>
+<h3 id="core-system">Core system</h3>
+<ul>
+<li>Formally, the <strong>minimal functionality required to run the system</strong>. In the Eclipse IDE the core is just a basic text editor (open a file, change text, save)
+<ul>
+<li>it only becomes useful with plug-ins.</li>
+</ul>
+</li>
+<li>Another definition:
+<ul>
+<li>the <strong>happy path</strong>, a general processing flow with little or no custom processing</li>
+<li>A microkernel takes the <strong>cyclomatic complexity</strong> out of the core and puts it into separate plug-ins, giving better extensibility, maintainability and testability.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Example: Going Green</strong> (the recycling application from Chapter 7) must assess each device by custom rules. Without plug-ins:</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">assessDevice</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">deviceID</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">deviceID</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="s">"iPhone6s"</span><span class="p">))</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">assessiPhone6s</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">deviceID</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="s">"iPad1"</span><span class="p">))</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">assessiPad1</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">deviceID</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="s">"Galaxy5"</span><span class="p">))</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">assessGalaxy5</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">else</span><span class="w"> </span><span class="p">...</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="p">}</span>
+</code></pre>
+<p>(The listing in the book has unbalanced braces; they are balanced here.) Rather than keep all this client-specific, high-complexity logic in the core, create <strong>one plug-in per device</strong>. Adding a device is just adding a plug-in and updating the registry; the core only locates and invokes the right plug-in:</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">assessDevice</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">deviceID</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">plugin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pluginRegistry</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">deviceID</span><span class="p">);</span>
+<span class="w">    </span><span class="n">Class</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">theClass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Class</span><span class="p">.</span><span class="na">forName</span><span class="p">(</span><span class="n">plugin</span><span class="p">);</span>
+<span class="w">    </span><span class="n">Constructor</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">constructor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">theClass</span><span class="p">.</span><span class="na">getConstructor</span><span class="p">();</span>
+<span class="w">    </span><span class="n">DevicePlugin</span><span class="w"> </span><span class="n">devicePlugin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">DevicePlugin</span><span class="p">)</span><span class="w"> </span><span class="n">constructor</span><span class="p">.</span><span class="na">newInstance</span><span class="p">();</span>
+<span class="w">    </span><span class="n">devicePlugin</span><span class="p">.</span><span class="na">assess</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-core-and-plugin-lookup.svg" alt="The core replaces a long if-else chain with a registry lookup and plug-in call" loading="lazy" /></p>
+<p>All the complex rules for one device sit in one standalone plug-in the core can run generically.</p>
+<p><strong>Implementing the core.</strong> Depending on size and complexity it can be a <strong>layered architecture</strong> or a <strong>modular monolith</strong> (Figure 13-2), or even be split into separately deployed <strong>domain services</strong>, each with its own domain-specific plug-ins. Example: Payment Processing as the core domain service, with one plug-in per payment method (credit card, PayPal, store credit, gift card, purchase order).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-fig-13-2-core-variations.svg" alt="Figure 13-2: variations of the microkernel core system" loading="lazy" /></p>
+<p><strong>The user interface.</strong> The Presentation layer can be embedded in the core or be a separate UI with the core providing backend services; a separate UI could itself be a microkernel (Figure 13-3).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-fig-13-3-ui-variants.svg" alt="Figure 13-3: user interface variants" loading="lazy" /></p>
+<h3 id="plug-in-components">Plug-in components</h3>
+<ul>
+<li>Standalone, independent components with specialised processing, extra features and custom code that extend the core
+<ul>
+<li>They <strong>isolate highly volatile code</strong>, improving maintainability and testability</li>
+<li>Ideally they have <strong>no dependencies between them</strong>.</li>
+</ul>
+</li>
+<li>Communication with the core is generally <strong>point to point</strong>: the &quot;pipe&quot; is usually a method call or function call to the plug-in's entry-point class.</li>
+<li>A plug-in is <strong>compile based</strong> or <strong>runtime based</strong>:
+<ul>
+<li><strong>Runtime</strong>
+<ul>
+<li>plug-ins can be added or removed without redeploying the core or other plug-ins, usually managed by frameworks such as <strong>OSGi</strong> (Open Service Gateway Initiative, Java)</li>
+<li><strong>Penrose</strong> (Java)</li>
+<li><strong>Jigsaw</strong> (Java) or <strong>Prism</strong> (.NET).</li>
+</ul>
+</li>
+<li><strong>Compile-based</strong> plug-ins are simpler to manage, but adding, changing or removing one means redeploying the whole monolith.</li>
+</ul>
+</li>
+<li>Point-to-point plug-ins can be <strong>shared libraries</strong> (JAR, DLL, Ruby Gem), package names in Java or namespaces in C#.</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-fig-13-4-and-13-5-plugin-implementation.svg" alt="Figures 13-4 and 13-5: plug-ins as shared libraries, or as packages and namespaces" loading="lazy" /></p>
+<ul>
+<li><strong>Shared libraries (Figure 13-4):</strong> each device plug-in is a JAR, DLL or Gem named after the device.</li>
+<li><strong>Package or namespace (Figure 13-5):</strong>
+<ul>
+<li>easier: one namespace or package per plug-in in the same code base or IDE project</li>
+<li>The recommended semantics: <strong><code>app.plug-in.&lt;domain&gt;.&lt;context&gt;</code></strong>, for example <code>app.plug-in.assessment.iphone6s</code>.</li>
+<li>Second node (<code>plug-in</code>): marks it as a plug-in that must be self-contained and separate from other plug-ins.</li>
+<li>Third node: the domain (<code>assessment</code>), so plug-ins group by common purpose.</li>
+<li>Fourth node: the specific context (<code>iphone6s</code>), so it is easy to find for change or test.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Remote plug-ins.</strong> Plug-ins need not be point to point: they can be reached through <strong>REST or messaging</strong>, each plug-in a standalone service (possibly a microservice in a container).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-fig-13-6-remote-plugins.svg" alt="Figure 13-6: remote plug-in access using REST" loading="lazy" /></p>
+<ul>
+<li>It sounds like it would raise scalability, but the topology is <strong>still a single architecture quantum</strong> because of the monolithic core: every request goes through the core first.</li>
+<li><strong>Benefits:</strong>
+<ul>
+<li>better decoupling, scalability and throughput</li>
+<li>runtime changes without special frameworks (OSGi, Jigsaw, Prism)</li>
+<li><strong>asynchronous</strong>
+<ul>
+<li>communication that can significantly improve responsiveness</li>
+<li>Going Green could fire an asynchronous assessment request and be notified through another asynchronous channel when it completes, then notify the user.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Trade-offs:</strong>
+<ul>
+<li>it turns the microkernel into a <strong>distributed</strong> architecture, hard to implement and deploy for most third-party on-premises products</li>
+<li>more complexity and cost</li>
+<li>and if a plug-in becomes unresponsive (particularly with REST) the request cannot complete, unlike a monolithic deployment.</li>
+</ul>
+</li>
+<li>Choose by the project's requirements and a careful trade-off analysis.</li>
+</ul>
+<h3 id="the-spectrum-of-microkern-ality">The spectrum of &quot;microkern-ality&quot;</h3>
+<p>Not all systems that support plug-ins are microkernels, but <strong>all microkernels support plug-ins</strong>. The degree of &quot;microkern-ality&quot; depends on <strong>how much standalone functionality exists in the core</strong>:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-fig-13-7-spectrum.svg" alt="Figure 13-7: the spectrum of microkern-ality, from a less functional to a more functional core" loading="lazy" /></p>
+<ul>
+<li><strong>&quot;Pure&quot; microkernels</strong>
+<ul>
+<li>(the Eclipse IDE, linter tools) have little core functionality. A linter's core parses source code and delivers the abstract syntax tree</li>
+<li>until someone writes a plug-in that uses it, it has little use.</li>
+</ul>
+</li>
+<li>A <strong>web browser</strong> supports plug-ins but is perfectly functional without them: it sits on the right.</li>
+<li>Judge the <strong>volatility of the core</strong> to decide between just supporting plug-ins and a purer microkernel.</li>
+</ul>
+<h3 id="registry">Registry</h3>
+<ul>
+<li>The core must know which plug-ins exist and how to reach them
+<ul>
+<li>A common way is a <strong>plug-in registry</strong> with each plug-in's name, <strong>data contract</strong> and <strong>remote access protocol</strong> details (if remote)</li>
+<li>Example: a tax-software plug-in flagging high-risk audit items might register the service name (AuditChecker), its data contract (input and output) and the contract format (XML).</li>
+</ul>
+</li>
+<li>The registry can be a simple internal <strong>map</strong> owned by the core (key plus plug-in reference), or a registry and discovery tool embedded in or external to the core (such as <strong>Apache ZooKeeper</strong> or <strong>Consul</strong>)
+<ul>
+<li>A simple Java registry showing point-to-point, messaging and RESTful entries for an iPhone 6S:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">registry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashMap</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="o">&gt;</span><span class="p">();</span>
+
+<span class="kd">static</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// point-to-point access example</span>
+<span class="w">    </span><span class="n">registry</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="s">"iPhone6s"</span><span class="p">,</span><span class="w"> </span><span class="s">"Iphone6sPlugin"</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// messaging example</span>
+<span class="w">    </span><span class="n">registry</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="s">"iPhone6s"</span><span class="p">,</span><span class="w"> </span><span class="s">"iphone6s.queue"</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// restful example</span>
+<span class="w">    </span><span class="n">registry</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="s">"iPhone6s"</span><span class="p">,</span><span class="w"> </span><span class="s">"https://atlas:443/assess/iphone6s"</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<h3 id="contracts">Contracts</h3>
+<ul>
+<li>The contract between plug-ins and core is usually <strong>standard across a domain</strong> of plug-ins and covers behaviour, input data and output data.</li>
+<li><strong>Custom contracts</strong>
+<ul>
+<li>are typical when a <strong>third party</strong> writes the plug-in and you cannot control its contract</li>
+<li>Then create an <strong>adapter</strong> between the plug-in contract and your standard one so the core has no specialised code per plug-in.</li>
+</ul>
+</li>
+<li>Contracts can be XML, JSON or even objects passed between core and plug-in. Going Green's standard contract is a Java interface plus an output class:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">AssessmentPlugin</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">AssessmentOutput</span><span class="w"> </span><span class="nf">assess</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">register</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">deregister</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">AssessmentOutput</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">assessmentReport</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Boolean</span><span class="w"> </span><span class="n">resell</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Double</span><span class="w"> </span><span class="n">value</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Double</span><span class="w"> </span><span class="n">resellPrice</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<p>The plug-in returns:</p>
+<ul>
+<li>a <strong>formatted report string</strong></li>
+<li>a <strong>resell flag</strong> (can the device be resold on a third-party market or safely disposed of)</li>
+<li>if resellable, its <strong>calculated value and recommended resale price</strong></li>
+</ul>
+<p>Note the roles: the core does not format or understand the assessment report, it only prints or displays it.</p>
+<h2 id="13-3-data-topologies-cloud-risks">13.3 Data topologies, cloud, risks</h2>
+<p><strong>Data.</strong> Usually monolithic with a single (typically relational) database.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-fig-13-8-data-store.svg" alt="Figure 13-8: the core owns the central database; a plug-in may own a private data store" loading="lazy" /></p>
+<ul>
+<li>It is uncommon for plug-ins to connect to the shared database directly: <strong>the core passes data to each plug-in</strong>
+<ul>
+<li>The reason is <strong>decoupling</strong>: a database change should affect only the core.</li>
+</ul>
+</li>
+<li>A plug-in <strong>may have its own data store</strong> accessible only to it: for example a simple database or rules engine holding that product's assessment rules, external or embedded (in-memory or embedded database).</li>
+</ul>
+<p><strong>Cloud.</strong> Typically monolithic, so options are coarse-grained:</p>
+<ol>
+<li>Deploy the whole application in the cloud (cloud facilities or containers).</li>
+<li>Put only the data in the cloud and run the microkernel on-premises.</li>
+<li>Keep the <strong>core on-premises</strong> and the <strong>plug-ins in the cloud</strong>: sounds modular but hurts <strong>responsiveness</strong>, because plug-in calls are frequent and pass a fair amount of information, so the core-plug-in latency becomes undesirable overhead.</li>
+</ol>
+<p><strong>Common risks</strong> mainly come from misapplying it:</p>
+<ul>
+<li><strong>Volatile core.</strong>
+<ul>
+<li>The core should be as stable as possible after initial development, since the style's benefit is isolating change in plug-ins</li>
+<li>A constantly changing core undermines it, usually because the architect misjudged the core's volatility and must refactor.</li>
+</ul>
+</li>
+<li><strong>Plug-in dependencies.</strong>
+<ul>
+<li>Microkernels work best when plug-ins talk only to the core, not each other</li>
+<li>Most non-microkernel plug-in systems use <strong>dependency-free plug-ins</strong></li>
+<li>Complex ones such as the Eclipse IDE sometimes build dependencies, making the core resolve <strong>transitive dependency conflicts</strong>: what if two plug-ins need different versions of the same core library? Avoid inter-plug-in dependencies when you can.</li>
+</ul>
+</li>
+</ul>
+<h2 id="13-4-governance">13.4 Governance</h2>
+<p>It revolves around checking that the philosophy is honoured. Common checks:</p>
+<ul>
+<li><strong>Volatility checks for the core</strong>: fitness functions wired to <strong>churn in version control</strong>, not a specific code check</li>
+<li><strong>Rate of change in the core</strong></li>
+<li><strong>Contract tests</strong>, especially if some plug-ins support different versions because of gradual evolution</li>
+<li>Other structural verifications for the topology</li>
+</ul>
+<h2 id="13-5-team-topology-considerations">13.5 Team topology considerations</h2>
+<p>The obvious split is <strong>core versus plug-ins</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Team type</th>
+<th>Why it fits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream-aligned</strong></td>
+<td>The core is a sweet spot: they build the core functionality; plug-ins may also fall to them</td>
+</tr>
+<tr>
+<td><strong>Enabling</strong></td>
+<td>Extremely well suited: segregating behaviour in plug-ins allows <strong>A/B testing</strong> and other experiments</td>
+</tr>
+<tr>
+<td><strong>Complicated-subsystem</strong></td>
+<td>Specialised behaviour (such as analytics) lives in plug-ins, so the core team calls out to sophisticated plug-ins</td>
+</tr>
+<tr>
+<td><strong>Platform</strong></td>
+<td>Mostly operational details, as with other monoliths</td>
+</tr>
+</tbody>
+</table>
+<h2 id="13-6-architecture-characteristics-ratings">13.6 Architecture characteristics ratings</h2>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-13-fig-13-9-ratings.svg" alt="Figure 13-9: microkernel architecture characteristics ratings" loading="lazy" /></p>
+<ul>
+<li>Like layered, <strong>simplicity and overall cost</strong> are strengths and <strong>scalability, fault tolerance and elasticity</strong> weaknesses, because of monolithic deployment
+<ul>
+<li>The quantum is always <strong>1</strong> because every request goes through the core to reach a plug-in.</li>
+</ul>
+</li>
+<li>Otherwise they differ:
+<ul>
+<li>microkernel is <strong>the only style that can be both domain partitioned and technically partitioned</strong></li>
+<li>Most are technically partitioned, but the domain aspect arises from a strong <strong>domain-to-architecture isomorphism</strong>: problems needing different configurations per location or client fit extremely well, as do products emphasising user customisation and feature extensibility (Jira, Eclipse).</li>
+</ul>
+</li>
+<li><strong>Testability, deployability and reliability (3 stars):</strong> functionality is isolated in plug-ins, reducing the testing scope of a change and deployment risk, particularly with runtime-based plug-ins.</li>
+<li><strong>Modularity and evolvability (3 stars):</strong>
+<ul>
+<li>functionality is added, removed and changed through self-contained plug-ins, so applications are easy to extend and teams respond faster
+<ul>
+<li>Example: when US tax law requires a new form, add it as a plug-in</li>
+</ul>
+</li>
+<li>drop one that is no longer needed.</li>
+</ul>
+</li>
+<li><strong>Responsiveness (3 stars):</strong>
+<ul>
+<li>microkernel applications are generally small, suffer less from the Architecture Sinkhole, and can be <strong>streamlined by unplugging</strong> functionality</li>
+<li>WildFly (formerly the JBoss Application Server) performs much faster with clustering, caching and messaging unplugged.</li>
+</ul>
+</li>
+</ul>
+<h2 id="13-7-examples-and-use-cases">13.7 Examples and use cases</h2>
+<ul>
+<li><strong>Software-development tools</strong>
+<ul>
+<li>are mostly microkernels: the Eclipse IDE, PMD, Jira, Jenkins</li>
+<li><strong>Web browsers</strong> (Chrome, Firefox) use it too: viewers and other plug-ins add capabilities to the core browser.</li>
+</ul>
+</li>
+<li><strong>Tax-preparation software:</strong>
+<ul>
+<li>the US Internal Revenue Service's basic two-page <strong>1040</strong> form summarises everything needed to compute tax liability</li>
+<li>each line (such as gross income) needs many other forms and worksheets
+<ul>
+<li>Make the 1040 the <strong>core (the driver)</strong> and each form or worksheet a <strong>plug-in</strong>, so tax-law changes stay isolated in independent plug-ins.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Insurance claims processing:</strong>
+<ul>
+<li>very complicated, with rules per jurisdiction (some US states allow free windshield replacement for rock damage, others do not)</li>
+<li>Most applications use big <strong>rules engines</strong> (a framework or library to define rules or workflows declaratively, with visual tools or a domain-specific language), which can grow into a <strong>Big Ball of Mud</strong> where a simple rule change needs &quot;an army of analysts, developers, and testers&quot;.</li>
+<li>Put each jurisdiction's claims rules in a standalone plug-in (source code or a rules-engine instance behind the plug-in)
+<ul>
+<li>Rules and whole jurisdictions can be added, removed or changed without touching the rest</li>
+<li>The <strong>core</strong> is the standard process of filing and processing a claim, which rarely changes.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>It is &quot;a case where an architecture structure (core + plug-ins) matches the common domain problem of customization&quot;, and customisation comes up a lot.</p>
+</blockquote>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Core (happy path) plus plug-ins (volatile, custom); registry and contracts connect them.</li>
+<li>Point to point is simple; remote plug-ins decouple and scale better but make it distributed (still one quantum).</li>
+<li>Keep the core stable and plug-ins independent.</li>
+<li>Strong for product-based and customisable domains; weak on scalability, elasticity and fault tolerance.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Microkernel (plug-in) architecture; core system; plug-in.</strong></li>
+<li><strong>Compile-based versus runtime-based plug-ins; OSGi, Penrose, Jigsaw, Prism.</strong></li>
+<li><strong>Plug-in registry; contract; adapter.</strong></li>
+<li><strong>Spectrum of microkern-ality.</strong></li>
+<li><strong>Volatile core; dependency-free plug-ins; transitive dependency conflicts.</strong></li>
+<li><strong>Domain-to-architecture isomorphism.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 13 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch13.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch13.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-12-pipeline-architecture-style/">Fundamentals of Software Architecture 12: Pipeline Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-05-identifying-architectural-characteristics/">Fundamentals of Software Architecture 5: Identifying Architectural Characteristics</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-12-pipeline-architecture-style/">&larr; Fundamentals of Software Architecture 12: Pipeline Architecture Style</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 12: Pipeline Architecture Style</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-11-the-modular-monolith-architecture-style/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-13-microkernel-architecture-style/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-12-pipeline-architecture-style">Fundamentals of Software Architecture 12: Pipeline Architecture Style</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 12. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-11-the-modular-monolith-architecture-style/">Fundamentals of Software Architecture 11: The Modular Monolith Architecture Style</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-13-microkernel-architecture-style/">Fundamentals of Software Architecture 13: Microkernel Architecture Style</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Pipes and filters</strong>: filters hold the functionality, pipes carry data one way, usually point to point. It is the principle behind Unix shells (Bash, Zsh) and echoes MapReduce and functional programming.</li>
+<li>Four <strong>filter types</strong>: <strong>producer</strong> (start), <strong>transformer</strong> (map), <strong>tester</strong> (reduce-like check or switch) and <strong>consumer</strong> (end). Filters are stateless, self-contained and do one task.</li>
+<li>Usually <strong>monolithic</strong>; each filter can be deployed as a service to go distributed. It suits the <strong>cloud</strong> (for example AWS Step Functions with a lambda per filter).</li>
+<li>Risks: <strong>overloaded filters</strong>, <strong>bidirectional communication</strong>, hard <strong>error handling</strong>, and <strong>contract changes</strong> between filters. Govern with <strong>tags</strong> (annotations or attributes).</li>
+<li>Ratings: technically partitioned, quanta 1; <strong>simplicity 4</strong>; testability, evolvability and responsiveness 3; modularity, maintainability and deployability 2; scalability, elasticity and fault tolerance 1.</li>
+</ul>
+</div></div>
+<h2 id="12-1-topology">12.1 Topology</h2>
+<p>The <strong>pipeline architecture</strong> (pipes and filters) is one of the fundamental styles: it follows as soon as developers split functionality into discrete parts.</p>
+<p>Most know it as the principle behind Unix shells (Bash, Zsh); functional programmers see parallels in language constructs, and tools using the <strong>MapReduce</strong> model follow the same basic topology. The chapter's examples are low level, but it also works for higher-level business applications.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-12-fig-12-1-topology.svg" alt="Figure 12-1: basic topology for the pipeline architecture" loading="lazy" /></p>
+<ul>
+<li>Two component types: <strong>filters</strong> hold the system functionality and perform a specific business function; <strong>pipes</strong> transfer data to the next filter(s).</li>
+<li>Pipes form <strong>one-way, usually point-to-point</strong> communication.</li>
+<li>The isomorphic shape: <strong>a single deployment unit, with functionality in filters connected by unidirectional pipes.</strong></li>
+</ul>
+<h2 id="12-2-style-specifics">12.2 Style specifics</h2>
+<p>Most implementations are monolithic, but each filter (or set of filters) can be deployed as a <strong>service</strong>, giving a distributed architecture with synchronous or asynchronous remote calls. Either way there are only two architectural components, filters and pipes.</p>
+<h3 id="filters">Filters</h3>
+<ul>
+<li><strong>Self-contained</strong> and independent of other filters; generally <strong>stateless</strong>; should do <strong>one task only</strong>. Composite tasks are handled by a sequence of filters.</li>
+<li>A filter may be several class files, so it is a <strong>component</strong> (Chapter 8); even a single-class filter is a component.</li>
+</ul>
+<p>Four types:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-12-filter-types.svg" alt="The four filter types" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Role</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Producer</strong></td>
+<td>The starting point, outbound only; sometimes called the <strong>source</strong></td>
+<td>A user interface; an external request to the system</td>
+</tr>
+<tr>
+<td><strong>Transformer</strong></td>
+<td>Accepts input, optionally transforms some or all of it, forwards to the outbound pipe. Functional programmers see <strong>map</strong></td>
+<td>Enhance data, transform data, perform a calculation</td>
+</tr>
+<tr>
+<td><strong>Tester</strong></td>
+<td>Accepts input, tests it against one or more criteria, optionally produces output. Similar to <strong>reduce</strong></td>
+<td>Check all data is valid; act as a switch (&quot;don't forward to the next filter if the order amount is under five dollars&quot;)</td>
+</tr>
+<tr>
+<td><strong>Consumer</strong></td>
+<td>The termination point</td>
+<td>Persist the final result to a database or show it on a UI screen</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Compositional reuse.</strong> The unidirectional simplicity of pipes and filters encourages reuse, as shell users know. The &quot;More Shell, Less Egg&quot; blog tells how <strong>Donald Knuth</strong> was asked for a program to read a text file, find the <strong>n most frequent words</strong> and print them sorted by frequency.</p>
+<p>He wrote <strong>over 10 pages of Pascal</strong>, designing and documenting a new algorithm. <strong>Doug McIlroy</strong> answered with a shell script small enough for a social media post:</p>
+<pre class="hl"><code>tr<span class="w"> </span>-cs<span class="w"> </span>A-Za-z<span class="w"> </span><span class="s1">'\n'</span><span class="w"> </span><span class="p">|</span>
+tr<span class="w"> </span>A-Z<span class="w"> </span>a-z<span class="w"> </span><span class="p">|</span>
+sort<span class="w"> </span><span class="p">|</span>
+uniq<span class="w"> </span>-c<span class="w"> </span><span class="p">|</span>
+sort<span class="w"> </span>-rn<span class="w"> </span><span class="p">|</span>
+sed<span class="w"> </span><span class="si">${</span><span class="nv">1</span><span class="si">}</span>q
+</code></pre>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-12-shell-pipeline.svg" alt="Knuth's program versus a McIlroy shell pipeline: the same problem as a chain of single-purpose filters" loading="lazy" /></p>
+<p>Even Unix shell designers are often surprised at the inventive uses developers find for such composites.</p>
+<h3 id="pipes">Pipes</h3>
+<ul>
+<li>The communication channel between filters: typically <strong>unidirectional and point to point</strong>, from one source to another.</li>
+<li>The payload can be any data format, but architects favour <strong>smaller amounts of data</strong> for performance.</li>
+<li>If a filter or group is a <strong>separate service</strong>, the pipe is a one-way remote call (REST, messaging, streaming or another protocol).</li>
+<li>In either topology pipes can be <strong>synchronous or asynchronous</strong>; in monolithic deployments asynchronous communication uses threads or embedded messaging.</li>
+</ul>
+<h2 id="12-3-data-topologies">12.3 Data topologies</h2>
+<p>Most are monoliths with a single monolithic database, but it varies <strong>from a single database to one per filter</strong>.</p>
+<p>Figure 12-2 is a pipeline for a typical <strong>continuous fitness function</strong> running in production that analyses an operational characteristic such as responsiveness or scalability:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-12-fig-12-2-fitness-pipeline.svg" alt="Figure 12-2: a pipeline can have a single database or many" loading="lazy" /></p>
+<ol>
+<li><strong>Capture Raw Data</strong> loads a separate database of raw data.</li>
+<li>It sends the raw data through a pipe to <strong>Time Series Selector</strong>, which reads configuration (such as the period to analyse) from a separate database.</li>
+<li>The transformed data goes through a pipe to <strong>Trend Analyzer</strong>, which analyses it and stores analytics in another database.</li>
+<li>The analytics go through a final pipe to <strong>Graphing Tool</strong>, which ends the pipeline by generating a graphical report.</li>
+</ol>
+<h2 id="12-4-cloud-considerations">12.4 Cloud considerations</h2>
+<ul>
+<li>A good fit for the cloud: high modularity and separate filter types. Most pipelines are not overly complex, so they also deploy fine as a monolith with all filters in one unit.</li>
+<li>Filters also work as <strong>distributed functions</strong>
+<ul>
+<li>On AWS the pipeline can be an <strong>AWS Step Function</strong> with each filter a separate <strong>lambda</strong></li>
+<li>Step Functions offer two workflows: <strong>Standard</strong> (each step executes exactly once) and <strong>Express</strong> (each step can execute more than once); the style works with both.</li>
+</ul>
+</li>
+<li>Other options: serverless functions, containerised functions, or one service containing all four filter components.</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-12-step-functions.svg" alt="The fitness-function pipeline as an AWS Step Function" loading="lazy" /></p>
+<p>The Figure 12-2 example as a Step Function:</p>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"Comment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Measure and analyze scalability trends."</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"StartAt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Capture Raw Data"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"States"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"Capture Raw Data"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Task"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:lambda:region:account_id:function:raw_data_capture"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Next"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Time Series Selector"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"Time Series Selector"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Task"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:lambda:region:account_id:function:time_series_selector"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Next"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Trend Analyzer"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"Trend Analyzer"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Task"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:lambda:region:account_id:function:trend_analyzer"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Next"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Graphing Tool"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"Graphing Tool"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Task"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:lambda:region:account_id:function:graphing_tool"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"End"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="12-5-common-risks">12.5 Common risks</h2>
+<ul>
+<li><strong>Overloaded filters.</strong> The aim is single-purpose filters; the most common risk is giving a filter too much responsibility. Governance (below) helps.</li>
+<li><strong>Bidirectional communication.</strong>
+<ul>
+<li>Pipes are meant to be unidirectional to keep a clean separation of concerns</li>
+<li>If you need it, either pipeline is the wrong style or the filters are too complex and the functionality is not demarcated correctly.</li>
+</ul>
+</li>
+<li><strong>Error handling.</strong> Once started, it is hard to decide how to exit and recover. Identify the possible <strong>fatal error conditions</strong> before defining the architecture.</li>
+<li><strong>Contracts between filters.</strong> Each pipe has a contract (data and possibly types). Changing one needs strict governance and testing so receiving filters do not break.</li>
+</ul>
+<h2 id="12-6-governance">12.6 Governance</h2>
+<p>Operational characteristics (responsiveness, scalability, availability) are governed per use case. Structurally, architects use the <strong>role and responsibility of each filter type</strong>. It is easy to overload filters and turn the pipeline into an <strong>unstructured monolith</strong>.</p>
+<p>It is hard to write a fitness function that checks a producer is truly the start of the pipeline or that a tester really performs a conditional check. One technique is <strong>tags</strong>: annotations in Java, custom attributes in C#. They do no work; they give metadata. Tagging a filter's starting class tells developers what type it is, helping prevent overloading or functions that do not fit the type.</p>
+<p>Java tag for the four filter types:</p>
+<pre class="hl"><code><span class="nd">@Retention</span><span class="p">(</span><span class="n">RetentionPolicy</span><span class="p">.</span><span class="na">RUNTIME</span><span class="p">)</span>
+<span class="nd">@Target</span><span class="p">(</span><span class="n">ElementType</span><span class="p">.</span><span class="na">TYPE</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="nd">@interface</span><span class="w"> </span><span class="n">Filter</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">FilterType</span><span class="o">[]</span><span class="w"> </span><span class="nf">value</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">enum</span><span class="w"> </span><span class="n">FilterType</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">PRODUCER</span><span class="p">,</span>
+<span class="w">        </span><span class="n">TESTER</span><span class="p">,</span>
+<span class="w">        </span><span class="n">TRANSFORMER</span><span class="p">,</span>
+<span class="w">        </span><span class="n">CONSUMER</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>C# custom attribute:</p>
+<pre class="hl"><code><span class="na">[System.AttributeUsage(System.AttributeTargets.Class)]</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Filter</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">System</span><span class="p">.</span><span class="n">Attribute</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">FilterType</span><span class="p">[]</span><span class="w"> </span><span class="n">filterType</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="n">FilterType</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">PRODUCER</span><span class="p">,</span>
+<span class="w">        </span><span class="n">TESTER</span><span class="p">,</span>
+<span class="w">        </span><span class="n">TRANSFORMER</span><span class="p">,</span>
+<span class="w">        </span><span class="n">CONSUMER</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="p">}</span>
+</code></pre>
+<p>A filter can be several class files (the Trend Analyzer, say), so a second tag marks the class that is the filter's <strong>entry point</strong>:</p>
+<pre class="hl"><code><span class="nd">@Retention</span><span class="p">(</span><span class="n">RetentionPolicy</span><span class="p">.</span><span class="na">RUNTIME</span><span class="p">)</span>
+<span class="nd">@Target</span><span class="p">(</span><span class="n">ElementType</span><span class="p">.</span><span class="na">TYPE</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="nd">@interface</span><span class="w"> </span><span class="n">FilterEntrypoint</span><span class="w"> </span><span class="p">{}</span>
+</code></pre>
+<pre class="hl"><code><span class="na">[System.AttributeUsage(System.AttributeTargets.Class)]</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">FilterEntrypoint</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">System</span><span class="p">.</span><span class="n">Attribute</span><span class="w"> </span><span class="p">{}</span>
+</code></pre>
+<p>Developers then tag the entry-point class with its type. For the Trend Analyzer transformation filter:</p>
+<pre class="hl"><code><span class="nd">@FilterEntrypoint</span>
+<span class="nd">@Filter</span><span class="p">(</span><span class="n">FilterType</span><span class="p">.</span><span class="na">TRANSFORMER</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">TrendAnalyzerFilter</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="na">[FilterEntrypoint]</span>
+<span class="na">[Filter(FilterType.TRANSFORMER)]</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">TrendAnalyzerFilter</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="p">}</span>
+</code></pre>
+<p>This will not stop every developer making a transformer do testing logic (a tester's job), but it gives additional context.</p>
+<h2 id="12-7-team-topology-considerations">12.7 Team topology considerations</h2>
+<p>Generally <strong>independent of team topologies</strong>; works with any configuration:</p>
+<table>
+<thead>
+<tr>
+<th>Team type</th>
+<th>Why it fits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream-aligned</strong></td>
+<td>Small, self-contained, a single flow through the system; teams own it start to end</td>
+</tr>
+<tr>
+<td><strong>Enabling</strong></td>
+<td>Highly modular: add filters without affecting the flow. Example: add a transformer after Time Series Selector to try an alternative trend analysis on the same data as Trend Analyzer</td>
+</tr>
+<tr>
+<td><strong>Complicated-subsystem</strong></td>
+<td>Each filter does one specific task; unidirectional hand-offs let members focus narrowly on one filter's complexity</td>
+</tr>
+<tr>
+<td><strong>Platform</strong></td>
+<td>High modularity lets them use common tools, services, APIs and tasks</td>
+</tr>
+</tbody>
+</table>
+<h2 id="12-8-style-characteristics">12.8 Style characteristics</h2>
+<p>It is <strong>technically partitioned</strong> (logic split by filter type) and usually monolithic, so the architecture quantum is <strong>1</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-12-fig-12-3-ratings.svg" alt="Figure 12-3: pipeline architecture characteristics ratings" loading="lazy" /></p>
+<ul>
+<li><strong>Cost, simplicity, modularity</strong>
+<ul>
+<li>are the strengths: no distributed-style complexity, easy to understand, low cost</li>
+<li>Modularity comes from separating concerns by filter type: <strong>any filter can be modified or replaced without affecting the others</strong> (in the Kafka example the Duration Calculator can change its calculation without touching any other filter).</li>
+</ul>
+</li>
+<li><strong>Deployability and testability</strong>
+<ul>
+<li>are only average but slightly above layered because of filter modularity</li>
+<li>It is still typically monolithic, so ceremony, risk, deployment frequency and completeness of testing still hurt.</li>
+</ul>
+</li>
+<li><strong>Elasticity and scalability (1 star)</strong>
+<ul>
+<li>from monolithic deployment</li>
+<li>A <strong>distributed</strong> version with asynchronous communication improves them significantly, at a cost to overall cost and simplicity.</li>
+</ul>
+</li>
+<li><strong>Fault tolerance (1 star):</strong>
+<ul>
+<li>an out-of-memory condition in one part crashes the whole unit</li>
+<li>availability suffers from high <strong>MTTR</strong>, startup in minutes. Going distributed with asynchronous communication improves it too, again paying in cost and complexity.</li>
+</ul>
+</li>
+<li>&quot;One of the classic trade-offs&quot;: most low operational scores can be raised by making each filter a deployment unit with pipes as remote calls, but that hurts simplicity and cost.</li>
+</ul>
+<h2 id="12-9-when-to-use-and-when-not-to-use">12.9 When to use and when not to use</h2>
+<ul>
+<li><strong>Use</strong> it for systems of any complexity with <strong>distinct, ordered, deterministic one-way processing steps</strong>, and for tight time frames and budgets.</li>
+<li><strong>Do not use</strong> it when you need high scalability, elasticity or fault tolerance (a distributed approach mitigates this), or for <strong>back-and-forth</strong> communication between filters (pipes are unidirectional).</li>
+<li>It can handle <strong>nondeterministic workflows</strong> with many tester filters, but that overcomplicates the style and hurts maintainability, testability, deployability and reliability
+<ul>
+<li><strong>Event-driven architecture</strong> (Chapter 15) suits nondeterministic workflows far better.</li>
+</ul>
+</li>
+<li><strong>Where it appears:</strong> electronic data interchange (EDI) tools (document-to-document transformations), database ETL (extract, transform, load) tools, and orchestrators and mediators such as Apache Camel.</li>
+</ul>
+<h2 id="12-10-example-service-telemetry-through-kafka">12.10 Example: service telemetry through Kafka</h2>
+<p>Service telemetry is streamed from services to <strong>Apache Kafka</strong> (Figure 12-4):</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-12-fig-12-4-kafka-example.svg" alt="Figure 12-4: pipeline example processing telemetry streamed to Kafka" loading="lazy" /></p>
+<ol>
+<li><strong>Service Info Capture</strong> (producer) subscribes to the Kafka topic and receives service information. It only knows how to connect to a topic and receive streaming data.</li>
+<li>It passes data to the <strong>Duration</strong> filter (tester), which only qualifies data: is it about the <strong>duration in milliseconds of a service request</strong>?</li>
+<li>If yes, it goes to the <strong>Duration Calculator</strong> (transformer). If not, it goes to the <strong>Uptime</strong> tester, which checks whether it is an uptime metric. If it is not, the pipeline ends: the data is of no interest to this flow.</li>
+<li>If it is, the <strong>Uptime Calculator</strong> computes the uptime metrics and passes the modified data to <strong>Database Output</strong> (consumer), which persists it in <strong>MongoDB</strong>.</li>
+</ol>
+<p>It shows how <strong>extensible</strong> the style is: a new tester filter could be added after the Uptime filter to feed a new metric such as database connection wait time. Technically partitioned filters give good modularity even in a monolith; it fits a workflow-based, step-by-step approach to processing data. Next comes another monolithic style with good modularity through plug-ins: the microkernel.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Pipes carry data one way between single-purpose, stateless filters (producer, transformer, tester, consumer).</li>
+<li>Monolithic by default; distributed (for example Step Functions) improves scale and fault tolerance at a cost in simplicity.</li>
+<li>Watch for overloaded filters, two-way pipes, hard error recovery and contract changes; tag filters to govern roles.</li>
+<li>Ratings: simple (4) but low on scalability, elasticity and fault tolerance.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Pipeline (pipes and filters) architecture; producer, transformer, tester, consumer.</strong></li>
+<li><strong>Compositional reuse.</strong></li>
+<li><strong>Filter entry-point tag</strong> (annotation or attribute).</li>
+<li><strong>AWS Step Functions: Standard and Express workflows.</strong></li>
+<li><strong>Error-handling and contract risks.</strong></li>
+<li><strong>Deterministic one-way processing.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 12 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch12.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch12.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-11-the-modular-monolith-architecture-style/">Fundamentals of Software Architecture 11: The Modular Monolith Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-13-microkernel-architecture-style/">Fundamentals of Software Architecture 13: Microkernel Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-11-the-modular-monolith-architecture-style/">&larr; Fundamentals of Software Architecture 11: The Modular Monolith Architecture Style</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-13-microkernel-architecture-style/">Fundamentals of Software Architecture 13: Microkernel Architecture Style &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

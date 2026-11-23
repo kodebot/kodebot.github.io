@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 18: Microservices Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-19-choosing-the-appropriate-architecture-style/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-18-microservices-architecture">Fundamentals of Software Architecture 18: Microservices Architecture</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 18. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/">Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-19-choosing-the-appropriate-architecture-style/">Fundamentals of Software Architecture 19: Choosing the Appropriate Architecture Style</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Microservices</strong> is a distributed, <strong>domain-partitioned</strong> style where each service is a physical <strong>bounded context</strong> (code plus its own data), favouring <strong>duplication over reuse</strong> to reach extreme decoupling (&quot;share nothing&quot;).</li>
+<li>Named early: Martin Fowler and James Lewis popularised it in a 2014 blog post. The term is &quot;a label, not a description&quot;: too-small services produce a <strong>Big Ball of Distributed Mud</strong> (the <strong>Grains of Sand</strong> antipattern).</li>
+<li>Granularity guides: <strong>purpose</strong>, <strong>transactions</strong>, <strong>choreography</strong>. Iterate; first guesses are rarely right.</li>
+<li>Operational reuse via the <strong>Sidecar</strong> pattern and a <strong>service mesh</strong>; the API layer routes only, never orchestrates; <strong>avoid transactions across services</strong> (Saga if unavoidable).</li>
+<li>Data: <strong>Database-per-Service</strong>, and at most five or six services sharing a database. Serverless is a <strong>deployment model</strong> of microservices, not a separate style.</li>
+<li>Ratings: 5 stars for modularity, maintainability, testability, deployability, evolvability, scalability and fault tolerance; 1 for simplicity; 2 for responsiveness; cost <code>$$$$$</code>.</li>
+</ul>
+</div></div>
+<h2 id="18-1-origins-and-philosophy">18.1 Origins and philosophy</h2>
+<p>Most styles are named after architects notice a recurring pattern. Microservices was named early: <strong>Martin Fowler and James Lewis</strong> popularised it in a famous <strong>2014</strong> blog post that delineated its characteristics.</p>
+<ul>
+<li>It is heavily inspired by <strong>domain-driven design</strong>
+<ul>
+<li>the <strong>bounded context</strong> inspired it most. A bounded context is a decoupling style (see Chapter 7), hence the nickname &quot;<strong>share nothing</strong>&quot;.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>a domain <code>CatalogCheckout</code> with catalog items, customers and payment</li>
+<li>A monolith would share classes and link databases</li>
+<li>In a bounded context, internal code and schemas may be coupled to each other but <strong>never to anything outside</strong>, such as another context's database or class.</li>
+</ul>
+</li>
+<li>Reuse has a cost (First Law):
+<ul>
+<li>it usually requires more coupling, by inheritance or composition</li>
+<li>An architect whose goal is high decoupling (the primary goal of microservices) <strong>favours duplication over reuse</strong>, physically modelling the bounded context as a service and its data.</li>
+</ul>
+</li>
+</ul>
+<h2 id="18-2-topology">18.2 Topology</h2>
+<p>Services are much smaller than in SOA (Chapter 17), event-driven (Chapter 15) or service-based (Chapter 14) architectures, and each includes everything needed to operate independently, <strong>including its database and dependencies</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-1-topology.svg" alt="Figure 18-1: topology of the microservices architecture style" loading="lazy" /></p>
+<ul>
+<li>Each service runs in <strong>its own process</strong>, in a VM or container
+<ul>
+<li>That solves a problem of multitenant hosting (an application server shared by many applications): shared infrastructure eventually becomes constrained, and isolation between applications is poor.</li>
+</ul>
+</li>
+<li>Before free open source operating systems and automated machine provisioning, a separate infrastructure per domain was impractical
+<ul>
+<li>cloud and containers now make <strong>extreme decoupling at domain and operational level</strong> affordable.</li>
+</ul>
+</li>
+<li><strong>Performance is the usual downside:</strong> network calls are far slower than method calls and each endpoint adds security verification, so granularity needs careful thought.</li>
+<li>Experienced architects advise against <strong>transactions across service boundaries</strong>; getting <strong>granularity</strong> right is the key to success.</li>
+</ul>
+<h2 id="18-3-style-specifics">18.3 Style specifics</h2>
+<h3 id="bounded-context">Bounded context</h3>
+<p>Each service models a function, subdomain or workflow and includes everything needed: logical components and classes, database schemas and the database. In a monolith, developers commonly share a class such as <code>Address</code>; here the architect <strong>duplicates</strong> it rather than coupling. Microservices takes domain partitioning to the extreme and physically embodies DDD.</p>
+<h3 id="granularity">Granularity</h3>
+<p>Architects take <em>micro</em> literally, make services too small and then must add communication links back between them, negating the point: a <strong>Big Ball of Distributed Mud</strong>.</p>
+<p>Quoting Martin Fowler, as the authors do: &quot;The term microservice is a label, not a description.&quot; (The 2007-era dominant style, SOA, could have been called &quot;gigantic services&quot;, which is why this was named <em>micro</em>.) Boundaries should capture a domain or workflow, and for tightly coupled business processes the natural boundary may be large.</p>
+<table>
+<thead>
+<tr>
+<th>Guideline</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Purpose</strong></td>
+<td>Each service should be functionally cohesive, contributing one significant behaviour for the application</td>
+</tr>
+<tr>
+<td><strong>Transactions</strong></td>
+<td>Entities that must cooperate in a transaction suggest a boundary; designing to avoid distributed transactions gives better designs</td>
+</tr>
+<tr>
+<td><strong>Choreography</strong></td>
+<td>If services with excellent isolation need extensive communication to work, consider bundling them into a larger service to avoid the overhead</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Iterate:</strong> architects rarely find the right granularity, data dependencies and communication style on the first pass.</p>
+<h3 id="data-isolation">Data isolation</h3>
+<p>Microservices avoids all coupling, including shared schemas and databases as integration points. Beware the <strong>Entity Trap</strong> (do not just model a service per database entity).</p>
+<p>A relational database used to be the single source of truth; now you either name <strong>one domain the source of truth</strong> and coordinate with it, or distribute information via <strong>replication or caching</strong>.</p>
+<p>The upside: each team can choose the most appropriate <strong>database technology</strong> for its budget, structure and operational needs, and change course without affecting other teams.</p>
+<h3 id="api-layer">API layer</h3>
+<p>Usually an <strong>API gateway</strong> between consumers (UIs or other systems) and the services: a simple reverse proxy or a gateway with cross-cutting concerns (security, naming). To stay true to the philosophy it must <strong>not act as a mediator or orchestrator</strong>: all interesting business logic stays inside a bounded context; mediators belong in technically partitioned architectures.</p>
+<div class="callout c-tip"><div class="callout-title">Keep the API layer to **request routing and cross-cutting concerns** (security, monitoring, logging). No business logic.</div><div class="callout-body">
+</div></div>
+<h3 id="operational-reuse">Operational reuse</h3>
+<p>Duplication is preferred for domain code, but some concerns benefit from coupling: <strong>monitoring, logging, circuit breakers</strong>. If each team implements monitoring independently, how do you ensure they all do, and who handles upgrades?</p>
+<p>The <strong>Sidecar pattern</strong> answers: common operational components sit in each service as a separate component, owned by a team or a shared infrastructure team, so upgrading the monitoring tool means updating the sidecar and every service gets it.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-2-to-18-4-sidecar-mesh.svg" alt="Figures 18-2 to 18-4: sidecars, the service plane and the service mesh" loading="lazy" /></p>
+<ul>
+<li>With a sidecar in every service, a <strong>service mesh</strong> gives unified control: each sidecar wires into the <strong>service plane</strong>, integration software (usually a product such as <strong>Istio</strong>) that connects the sidecars with a consistent interface.</li>
+<li>Each service is a node in the mesh, which forms a <strong>console</strong> for global control of monitoring levels, logging and other operational concerns (Figure 18-4).</li>
+<li><strong>Service discovery</strong>
+<ul>
+<li>adds elasticity: requests pass through a discovery tool that monitors request count and frequency and spins up service instances</li>
+<li>It is often in the mesh or hosted in the API layer, giving one place for callers to find services.</li>
+</ul>
+</li>
+</ul>
+<h3 id="frontends">Frontends</h3>
+<p>The original vision put the <strong>UI inside the bounded context</strong>, but web partitioning and other constraints make that hard. Two common styles:</p>
+<ul>
+<li><strong>Monolithic frontend</strong> (Figure 18-5): a single UI (rich desktop, mobile or a JavaScript web app) calling through the API layer.</li>
+<li><strong>Micro-frontends</strong>
+<ul>
+<li>(Figure 18-6): UI-level components that give a matching level of granularity and isolation in UI and backend, relating UI components to corresponding backend services</li>
+<li>(The authors recommend <em>Building Micro-Frontends</em>, 2nd ed., by Luca Mezzalira, O'Reilly, 2025.)</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-5-and-18-6-frontends.svg" alt="Figures 18-5 and 18-6: monolithic frontend and micro-frontends" loading="lazy" /></p>
+<h3 id="communication">Communication</h3>
+<p>The first choice is <strong>synchronous</strong> (sender waits) or <strong>asynchronous</strong>. Typical is <strong>protocol-aware heterogeneous interoperability</strong>:</p>
+<ul>
+<li><strong>Protocol-aware:</strong> with no central integration hub, each service must know how to call others, so architects standardise (a level of REST, message queues) and services know or discover the protocol.</li>
+<li><strong>Heterogeneous:</strong> each service may use a different technology stack (<strong>polyglot</strong>).</li>
+<li><strong>Interoperability:</strong> services call each other over the network to collaborate and exchange information, while transactional calls are discouraged.</li>
+</ul>
+<blockquote>
+<p>[!example] Enforced heterogeneity
+A pioneering architect at a mobile personal-information-management startup, wanting to prevent accidental coupling, mandated that <strong>each team use a different technology stack</strong>: Java on one, .NET on another, so classes could not be shared by accident. It is the polar opposite of enterprise standardisation; the aim is not the most complex ecosystem but the <strong>right scale of technology for a narrow problem</strong> (not every service needs an industrial-strength relational database). For async, use events and messages as in Chapter 15.</p>
+</blockquote>
+<h3 id="choreography-and-orchestration">Choreography and orchestration</h3>
+<p><strong>Choreography</strong> has no central coordinator, matching the bounded-context philosophy and the EDA communication style. Each service calls others as needed. Figure 18-7: a user asks for another user's wish list; <code>CustomerWishList</code> lacks some data, calls <code>CustomerDemographics</code>, and returns the result.</p>
+<p><strong>Orchestration</strong>: with no global mediator, a localised mediator (an <strong>orchestration service</strong>) coordinates several services. Figure 18-8: the user calls the <code>ReportCustomerInformation</code> mediator, which calls all the services needed.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-7-and-18-8-choreography-orchestration.svg" alt="Figures 18-7 and 18-8: choreography and orchestration in microservices" loading="lazy" /></p>
+<ul>
+<li><strong>Choreography</strong> preserves decoupling and its benefits, but makes error handling and coordination harder.</li>
+<li>For a complex workflow, choreography (Figure 18-9) forces the first service called to coordinate many others: a nominally choreographed service becoming a mediator is the <strong>Front Controller pattern</strong>, and the service taking on multiple roles adds complexity.</li>
+<li><strong>Orchestration</strong>
+<ul>
+<li>for a complex process (Figure 18-10): a mediator service coordinates the workflow, <strong>creating coupling</strong> but focusing coordination in one service and leaving the others less affected
+<ul>
+<li>Domain workflows are often inherently coupled</li>
+</ul>
+</li>
+<li>the architect's job is to represent that coupling in the way that best supports both the domain and the architecture.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-9-and-18-10-complex-workflows.svg" alt="Figures 18-9 and 18-10: Front Controller versus a mediator service" loading="lazy" /></p>
+<h3 id="transactions-and-sagas">Transactions and Sagas</h3>
+<p>Atomicity, trivial in a monolith, becomes a problem when databases are as decoupled as the services. Transactions across services violate the decoupling principle and create the worst kind of dynamic connascence, <strong>Connascence of Values</strong>. The authors' advice: **don't.</p>
+<p>Fix the service granularity instead**; needing transactions to wire services together is a sign the design is too granular. Exceptions exist, such as two services needing vastly different architecture characteristics (and so separate boundaries) that still need coordination.</p>
+<p>Distributed transactions are usually handled with the <strong>Saga pattern</strong> (a saga being an epic story of a long sequence of events).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-11-and-18-12-saga.svg" alt="Figures 18-11 and 18-12: a Saga mediator and its compensating transactions" loading="lazy" /></p>
+<ol>
+<li>A service acts as <strong>mediator</strong>: it calls each part of the transaction, records success or failure and coordinates the results.</li>
+<li>If all succeed, values in the services and their databases update.</li>
+<li>If one part fails, the mediator must ensure <strong>no part succeeds</strong>: it tells every successful participant to <strong>undo its previous request</strong>, a <strong>compensating transaction framework</strong>.</li>
+<li>Developers usually implement this by putting each request in a <strong>pending state</strong> until the mediator declares overall success.</li>
+<li>Juggling asynchronous requests gets complex when new requests depend on pending state, and compensating transactions create a lot of coordination traffic.</li>
+</ol>
+<div class="callout c-tip"><div class="callout-title">A few cross-service transactions are sometimes necessary; if they dominate the architecture, microservices is probably the wrong choice. The authors identify **eight transactional Saga patterns** (*Software Architecture: The Hard Parts*, O&#x27;Reilly, 2021, chapter 12).</div><div class="callout-body">
+</div></div>
+<h2 id="18-4-data-topologies">18.4 Data topologies</h2>
+<p>Microservices is <strong>the only style that requires breaking apart data</strong>: monolithic and domain databases are not an option, because of fine granularity, the bounded context and the sheer number of services.</p>
+<p><strong>Why a monolithic database fails (60 services sharing one):</strong></p>
+<ul>
+<li><strong>Change control:</strong> renaming a column or dropping a table requires changes to all 60 services, plus coordinated testing and release of five dozen deployables alongside the database change.</li>
+<li><strong>The bounded context disappears</strong>: it includes the database and data structures.</li>
+<li><strong>Scalability and elasticity:</strong>
+<ul>
+<li>tools autoscale service instances but few databases scale to match, causing slow responses and timeouts</li>
+<li>Services also run <strong>out of database connections</strong> as instances multiply.</li>
+</ul>
+</li>
+<li><strong>Availability:</strong> a crash, maintenance or backup takes the whole ecosystem down. A <strong>domain database</strong> topology suffers the same issues (less extreme).</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-13-to-18-15-databases.svg" alt="Figures 18-13 to 18-15: monolithic database, Database-per-Service, and a few services sharing data" loading="lazy" /></p>
+<p><strong>The standard: Database-per-Service</strong> (Figure 18-14). Each service owns its data, as tables in a separate database or schema.</p>
+<ul>
+<li>It preserves the bounded context and controls change: other services request data from the owner through a <strong>contract</strong> and are decoupled from the internal structure, so a database change affects only the owner, who can even switch from a relational to a document database.</li>
+<li>It gives excellent scalability, elasticity, availability and fault tolerance, and makes connection management easier.</li>
+<li><strong>Drawbacks, and the exception (Figure 18-15):</strong>
+<ul>
+<li>two services may need to write the same table, or an outside service may query the database directly for performance</li>
+<li>A few services can then share a database: the authors recommend <strong>no more than five or six</strong> per database or schema</li>
+<li>The box around them denotes a <strong>broader bounded context</strong>: for example, payment processing split by type (credit card, gift card, PayPal, rewards points) or shipping split by method, with all still sharing data.</li>
+</ul>
+</li>
+<li><strong>Trade-off:</strong> database changes now need coordinated changes and deployment of several services, which is riskier and less agile, with possible effects on scalability, elasticity and fault tolerance.</li>
+</ul>
+<h2 id="18-5-cloud-considerations">18.5 Cloud considerations</h2>
+<p>Microservices can run on-prem (Kubernetes, Cloud Foundry) but is so well suited to the cloud, through on-demand VMs, containers and databases, that it is sometimes called &quot;<strong>cloud-native</strong>&quot;.</p>
+<p>Serverless (AWS Lambda, Google and Azure cloud functions, triggered on request) is <strong>not an architectural style but a deployment model of microservices</strong>: a microservice is single-purpose, separately deployed and does one thing well, which also describes a serverless function.</p>
+<p>Microservices can equally be containerised; most cloud vendors have adopted Kubernetes, so containers deploy as easily.</p>
+<h2 id="18-6-common-risks">18.6 Common risks</h2>
+<ul>
+<li><strong>Grains of Sand:</strong>
+<ul>
+<li>services that are too fine-grained</li>
+<li><strong>Mark Richards coined the name in 2016.</strong> <em>Micro</em> describes what the service does, not its size (see Chapter 7 of <em>Software Architecture: The Hard Parts</em>).</li>
+</ul>
+</li>
+<li><strong>Too much interservice communication,</strong>
+<ul>
+<li>from workflow (choreography, or AWS Step Functions for serverless) or needing another service's data</li>
+<li>It is often a result of too-fine granularity and is fixed by <strong>merging into coarser services</strong>.</li>
+</ul>
+</li>
+<li><strong>Too much data sharing:</strong>
+<ul>
+<li>harms change control, scalability, fault tolerance and agility, the strengths of the style</li>
+<li>Know when sharing is necessary and when to <strong>consolidate services</strong> instead.</li>
+</ul>
+</li>
+<li><strong>Code reuse and shared functionality:</strong>
+<ul>
+<li>a custom library (JAR, DLL) shared between services means part of the bounded context lives in several others and a change to shared code can break services in other contexts</li>
+<li>Versioning helps but adds significant complication.</li>
+</ul>
+</li>
+</ul>
+<h2 id="18-7-governance">18.7 Governance</h2>
+<p>Mostly about <strong>avoiding structural decay</strong>, monitoring and limiting coupling.</p>
+<ul>
+<li><strong>Static coupling</strong>
+<ul>
+<li>(shared custom or third-party libraries, and contracts): asynchronous communication can decouple dynamically, but the <strong>contract still couples statically</strong></li>
+<li>Use a <strong>software bill of materials</strong>, deployment scripts and dependency-management tools to see and limit shared artifacts</li>
+<li>The authors cannot prescribe how much is too much; minimise it.</li>
+</ul>
+</li>
+<li><strong>Dynamic coupling</strong> is harder to govern and needs creativity and consistency:
+<ul>
+<li><strong>Logs:</strong>
+<ul>
+<li>each service logs its calls (target service, protocol and so on), and fitness functions analyse them</li>
+<li>this requires every service to log consistently, for example through a <strong>custom library</strong> (JAR or DLL) bound at compile time.</li>
+</ul>
+</li>
+<li><strong>Registry entries:</strong>
+<ul>
+<li>the first instance of a service registers its interservice calls, via a contract such as JSON, to a configuration server such as <strong>Apache ZooKeeper</strong></li>
+<li>architects query it for a <strong>map of all interservice calls</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="18-8-team-topologies">18.8 Team topologies</h2>
+<p>Domain partitioned, so best with <strong>domain-aligned, cross-functional teams</strong>; technically partitioned teams (UI, backend, database) work poorly because each domain request needs much interteam communication.</p>
+<table>
+<thead>
+<tr>
+<th>Team type</th>
+<th>Fit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream-aligned</strong></td>
+<td>Works well when domain boundaries align with streams; harder for streams crossing bounded contexts. Then realign bounded contexts and granularity to the streams, or pick another style</td>
+</tr>
+<tr>
+<td><strong>Enabling</strong></td>
+<td>Effective with shared services for specialised or cross-cutting concerns, working independently thanks to modularity; with platform teams, can help build the sidecar components of the mesh</td>
+</tr>
+<tr>
+<td><strong>Complicated-subsystem</strong></td>
+<td>Focus on complicated domain processing independent of other services</td>
+</tr>
+<tr>
+<td><strong>Platform</strong></td>
+<td>Own cross-cutting operational functionality in sidecars and the service mesh, freeing stream-aligned teams</td>
+</tr>
+</tbody>
+</table>
+<h2 id="18-9-style-characteristics">18.9 Style characteristics</h2>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-16-ratings.svg" alt="Figure 18-16: microservices characteristics ratings" loading="lazy" /></p>
+<ul>
+<li>Notably high <strong>deployability and testability</strong>: microservices could not exist without the <strong>DevOps revolution</strong> and its automation of operations.</li>
+<li><strong>Fault tolerance (5):</strong> independent, single-purpose, fine-grained services.</li>
+<li><strong>Scalability, elasticity and evolvability:</strong>
+<ul>
+<li>some of the most scalable systems ever written use microservices</li>
+<li>reliance on automation and operations integration supports elasticity</li>
+<li>small, decoupled deployment units support a fast rate of change.</li>
+</ul>
+</li>
+<li><strong>Performance is often an issue:</strong>
+<ul>
+<li>many network calls, a <strong>security check at each endpoint</strong>, and <strong>data latency</strong> (multiple services means multiple database calls)</li>
+<li>The patterns used to help include <strong>intelligent data caching and replication</strong></li>
+<li>Performance is also a reason to prefer choreography over orchestration: less coupling, faster communication, fewer bottlenecks.</li>
+</ul>
+</li>
+<li><strong>Domain partitioned</strong>,
+<ul>
+<li>with <strong>the most distinct quanta of any modern architecture</strong>: it exemplifies what the quantum measure evaluates</li>
+<li>Extreme decoupling creates headaches but yields great benefits when done well.</li>
+</ul>
+</li>
+</ul>
+<h2 id="18-10-examples-and-use-cases">18.10 Examples and use cases</h2>
+<p>Systems with a high degree of <strong>functional and data modularity</strong>. Example: a <strong>patient medical-monitoring system</strong> reading heart rate, blood pressure and oxygen levels from patient-monitoring devices, analysing them and alerting medical staff.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-18-fig-18-17-patient-monitoring.svg" alt="Figure 18-17: a patient medical-monitoring system as microservices" loading="lazy" /></p>
+<ul>
+<li>Each vital sign is its own microservice with its <strong>own data store</strong> for readings and history.</li>
+<li>Shared services: <strong>Alert Staff</strong> (alerts a nurse or doctor when a service notices a problem) and <strong>Display Vital Signs</strong> (each service asynchronously sends its latest reading to a monitor in the patient's room).</li>
+<li><strong>Exception to independence:</strong> a vital sign (heart rate) may need data from another (a sleep monitor) to analyse for warnings.</li>
+<li><strong>Fault tolerance:</strong> if one vital-sign service crashes, the others keep working, important for medical monitoring.</li>
+<li><strong>Testability:</strong> maintenance on the blood-pressure service has a small enough test scope to be sure nothing else is affected.</li>
+<li><strong>Evolvability:</strong> adding another vital-sign monitor does not affect existing services.</li>
+</ul>
+<p>Further reading the authors recommend: <em>Building Microservices</em>, 2nd ed. (Sam Newman, 2021); <em>Building Micro-Frontends</em>, 2nd ed. (Luca Mezzalira, 2025); <em>Microservices vs. Service-Oriented Architecture</em> and <em>Microservices AntiPatterns and Pitfalls</em> (Mark Richards, 2016).</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>A service is a bounded context: code plus data, duplicated rather than shared.</li>
+<li>Size services by purpose, transactions and communication; iterate; avoid Grains of Sand.</li>
+<li>Sidecars and the service mesh share operations; the API layer only routes.</li>
+<li>Avoid cross-service transactions; use Sagas sparingly; prefer Database-per-Service.</li>
+<li>Top marks for modularity, deployability, testability, evolvability, scalability and fault tolerance; poor simplicity and responsiveness; the costliest style.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Bounded context; share nothing; Big Ball of Distributed Mud; Grains of Sand.</strong></li>
+<li><strong>Entity Trap; API layer; Sidecar; service mesh; service plane; service discovery.</strong></li>
+<li><strong>Protocol-aware heterogeneous interoperability; micro-frontends.</strong></li>
+<li><strong>Front Controller; Saga; compensating transaction.</strong></li>
+<li><strong>Database-per-Service; broader bounded context.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 18 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch18.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch18.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/">Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-19-choosing-the-appropriate-architecture-style/">Fundamentals of Software Architecture 19: Choosing the Appropriate Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">Fundamentals of Software Architecture 15: Event-Driven Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/">&larr; Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-19-choosing-the-appropriate-architecture-style/">Fundamentals of Software Architecture 19: Choosing the Appropriate Architecture Style &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

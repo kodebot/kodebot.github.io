@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 15: Event-Driven Architecture Style</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-15-event-driven-architecture-style">Fundamentals of Software Architecture 15: Event-Driven Architecture Style</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 15. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/">Fundamentals of Software Architecture 16: Space-Based Architecture Style</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>EDA</strong> is a distributed, <strong>asynchronous</strong>, decoupled style: processors trigger and respond to <strong>events</strong> (fire and forget). The authors argue it is a style, not just a pattern.</li>
+<li>Four topology components: <strong>initiating event</strong>, <strong>event broker</strong>, <strong>event processor</strong>, <strong>derived event</strong>. A <strong>poison event</strong> (an endless loop of derived events) is the classic hazard.</li>
+<li>An <strong>event</strong> says something has happened and is broadcast; a <strong>message</strong> is a command to one receiver. Payloads are <strong>data-based</strong> (fast, but stamp coupling and contract pain) or <strong>key-based</strong> (simple, but needs database reads). Avoid <strong>anemic events</strong> and the <strong>Swarm of Gnats</strong>.</li>
+<li>Error handling, data loss and request-reply have named patterns (<strong>Workflow Event</strong>, <strong>Event Forwarding</strong>, correlation ID).</li>
+<li>Two topologies: <strong>choreographed</strong> (broadcast) and <strong>mediated</strong> (control). Three database topologies: monolithic, domain, dedicated.</li>
+<li>Strengths: responsiveness 5, evolvability 5, fault tolerance 5, scalability 4. Weak: simplicity 2 and testability 2. Cost <code>$$$</code>; quanta 1 to many.</li>
+</ul>
+</div></div>
+<h2 id="15-1-request-based-versus-event-based">15.1 Request-based versus event-based</h2>
+<p>Most applications are <strong>request based</strong>. A request orchestrator (usually a UI, but possibly an API layer, orchestration services, an event hub, an event bus or an integration hub) directs a request, <strong>deterministically and synchronously</strong>, to request processors that read and update a database.</p>
+<p>Example: a customer asks for the order history of the past six months. That is a data-driven, deterministic request in a context, not something the system must react to.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-1-request-vs-event.svg" alt="Figure 15-1: request-based model, and the event-based model it contrasts with" loading="lazy" /></p>
+<p>An <strong>event-based</strong> model reacts to an event by acting. Example: submitting an online auction bid is not a request but an <strong>event</strong> that occurs after the asking price is announced; the system responds by comparing it with simultaneous bids and finding the highest bidder.</p>
+<h2 id="15-2-topology">15.2 Topology</h2>
+<p>EDA uses <strong>asynchronous fire-and-forget</strong> communication. Four primary components:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-2-topology.svg" alt="Figure 15-2: basic topology of an event-driven architecture" loading="lazy" /></p>
+<ul>
+<li><strong>Initiating event:</strong> starts the flow, simple (a bid) or complex (updating a health-benefits system when an employee marries). It goes to an <strong>event channel in the event broker</strong>.</li>
+<li><strong>Event broker:</strong>
+<ul>
+<li>usually <strong>federated</strong> (several domain-based clustered instances), each holding all event channels (queues and topics) for its domain's flow</li>
+<li>Because of the decoupled, broadcast nature it uses topics, topic exchanges (AMQP) or streams with <strong>publish and subscribe</strong>.</li>
+</ul>
+</li>
+<li><strong>Event processor</strong> (usually just a service): one accepts the initiating event, does its task and advertises what it did through a <strong>derived event</strong>.</li>
+<li><strong>Derived event:</strong> other processors respond to it and emit their own, until all processors are idle and all derived events processed.</li>
+</ul>
+<h3 id="worked-example-retail-order-entry">Worked example: retail order entry</h3>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-3-order-entry.svg" alt="Figure 15-3: the order-entry flow as an event-driven architecture" loading="lazy" /></p>
+<ol>
+<li><strong>Order Placement</strong> receives the initiating event (place order), inserts the order, returns an order ID, and emits <strong>order placed</strong>.</li>
+<li>Three processors react in parallel: <strong>Notification</strong> (emails the order details), <strong>Payment</strong> (charges the card) and <strong>Inventory</strong> (adjusts stock).</li>
+<li>Notification emits <strong>email sent</strong>, which <strong>nobody listens to</strong>: typical of EDA and a sign of <strong>extensibility</strong>, because future processors can respond without changing the system.</li>
+<li>Inventory emits <strong>inventory updated</strong>; <strong>Warehouse</strong> responds, managing stock between warehouses and reordering when low. When restocked it emits <strong>stock replenished</strong>, which Inventory handles. Inventory does <strong>not</strong> then emit an &quot;inventory adjusted&quot; event: that would create a <strong>poison event</strong>.</li>
+<li>Payment emits <strong>payment applied</strong> or <strong>payment denied</strong>. Notification listens for the denial and emails the customer to update their card or choose another method.</li>
+<li><strong>Order Fulfillment</strong> listens for payment applied (picking and packing: where the item is, what box size) and emits <strong>order fulfilled</strong>.</li>
+<li><strong>Notification</strong> and <strong>Shipping</strong> both respond: Notification tells the customer it is ready, Shipping picks a method, ships and emits <strong>order shipped</strong>, which Notification also uses to say it is on its way.</li>
+</ol>
+<div class="callout c-warning"><div class="callout-title">A **poison event** is a derived event that keeps being triggered and responded to in a continuous loop between services. They happen often in EDA, so be careful.</div><div class="callout-body">
+</div></div>
+<p><strong>The relay race.</strong> Think of a relay: a runner runs a stretch, hands off the baton and is done. Likewise, once a processor hands off an event it is free to react to other events, and each processor <strong>scales independently</strong> for load or backlogs.</p>
+<h2 id="15-3-style-specifics">15.3 Style specifics</h2>
+<h3 id="events-versus-messages">Events versus messages</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><strong>Event</strong></th>
+<th><strong>Message</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Meaning</td>
+<td>Something <strong>has already happened</strong>: &quot;I just placed an order&quot;</td>
+<td>A command or query: &quot;apply the payment for this order&quot;</td>
+</tr>
+<tr>
+<td>Response</td>
+<td>Typically <strong>none required</strong></td>
+<td>Usually a response</td>
+</tr>
+<tr>
+<td>Receivers</td>
+<td><strong>Broadcast to many</strong> processors</td>
+<td>Almost always <strong>one</strong> processor</td>
+</tr>
+<tr>
+<td>Pattern</td>
+<td><strong>Publish and subscribe</strong> (one to many)</td>
+<td><strong>Point to point</strong> (one to one)</td>
+</tr>
+<tr>
+<td>Channel</td>
+<td>A <strong>topic, stream or notification service</strong></td>
+<td>A <strong>queue or messaging service</strong></td>
+</tr>
+</tbody>
+</table>
+<p>EDA mostly uses events, sometimes messages (requesting data, request-reply), and the mediated topology uses messages to control order. The authors' quiz:</p>
+<ul>
+<li>&quot;Adventurous Air Flight 6557, turn left, heading 230 degrees&quot;: a <strong>message</strong> (command, one target, even if others hear it).</li>
+<li>&quot;In other news, a cold front has moved into the area&quot;: an <strong>event</strong> (broadcast, already happened, no reply expected).</li>
+<li>&quot;OK, class, turn to page 145 in your workbooks&quot;: a <strong>message</strong>, even though broadcast: <strong>broadcasting a command over publish and subscribe does not make it an event</strong>.</li>
+<li>&quot;Hi, everyone! Sorry I'm late for the meeting&quot;: an <strong>event</strong> (already happened, broadcast, no reply).</li>
+</ul>
+<h3 id="derived-events">Derived events</h3>
+<p>They are essential and a processor can trigger <strong>more than one</strong>. Charging a credit card (Figure 15-3) involves a <strong>Fraud Detection</strong> processor and a <strong>Credit Limit</strong> processor, both driven by one <code>creditcard charged</code> event:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-4-and-15-5-derived-events.svg" alt="Figures 15-4 and 15-5: derived events from one event, and an extensible event nobody uses yet" loading="lazy" /></p>
+<ul>
+<li>Fraud Detection: one derived event if fraud is detected, another if not (both needed, since different processors act on each).</li>
+<li>Credit Limit: <strong>limit okay</strong> (the payload may carry the credit left), <strong>limit warning</strong> (card near its limit; Notification may warn the customer) and <strong>fatal limit exceeded</strong> (of interest to Notification, Decline Purchase and perhaps an Extend Credit Limit marketing processor).</li>
+<li>Beware the <strong>Swarm of Gnats</strong> antipattern: too many fine-grained events.</li>
+</ul>
+<h3 id="triggering-extensible-events">Triggering extensible events</h3>
+<ul>
+<li>It is usually good practice for <strong>each processor to advertise what it did</strong>, even if nobody cares yet. An <strong>extensible derived event</strong> is a built-in &quot;hook&quot;.</li>
+<li>Example (Figure 15-5):
+<ul>
+<li>Notification emails a customer and emits <code>email sent</code></li>
+<li>Nobody listens, so it disappears (or is ignored in streaming)</li>
+<li>That is not waste: if the business later wants to analyse emails, add an <strong>Email Analyzer</strong> processor with minimal effort and <strong>no changes</strong> to other processors, because the information is already in <code>email sent</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="asynchronous-capabilities">Asynchronous capabilities</h3>
+<p>EDA relies mainly on asynchronous communication for fire-and-forget <strong>and</strong> request-reply, which can greatly raise <strong>responsiveness</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-6-sync-vs-async.svg" alt="Figure 15-6: posting a review synchronously versus asynchronously" loading="lazy" /></p>
+<ul>
+<li>A user posts a product review
+<ul>
+<li>The comment service takes <strong>3,000 ms</strong> to validate (unacceptable words, abusive text such as &quot;slow thinker&quot;, and a context check that it is about the product).</li>
+</ul>
+</li>
+<li><strong>Synchronous REST:</strong> 50 ms network latency in, 3,000 ms to validate and post, 50 ms back: <strong>3,100 ms</strong> from the user's view.</li>
+<li><strong>Asynchronous messaging:</strong> the user waits <strong>25 ms</strong> for acceptance. The system still takes 25 + 3,000 = 3,025 ms to post, but the user sees only 25 ms.</li>
+<li><strong>Caveat:</strong>
+<ul>
+<li>synchronously the user is guaranteed the comment posted</li>
+<li>asynchronously it is only acknowledged. If it contains profanity and is rejected, the system can notify a registered user by message.</li>
+</ul>
+</li>
+<li><strong>Responsiveness is not performance.</strong>
+<ul>
+<li>Responsiveness is the time to get information back to the user; <strong>performance</strong> is the time to insert the comment end to end</li>
+<li>The asynchronous path did nothing to optimise the comment service</li>
+<li>Optimising it (running parsers in parallel, caching) while still synchronous would address performance</li>
+<li>&quot;When the user doesn't need any information back, why make them wait?&quot;</li>
+</ul>
+</li>
+<li>Error handling is the big problem of asynchronous communication; see the Workflow Event pattern below.</li>
+</ul>
+<p><strong>Dynamic Quantum Entanglement antipattern.</strong> Synchronous communication between two quanta makes them depend on each other, so they become <strong>one quantum</strong>. Asynchronous communication detangles them.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-7-and-15-8-entanglement.svg" alt="Figures 15-7 and 15-8: synchronous coupling merges two quanta; an asynchronous queue separates them" loading="lazy" /></p>
+<ul>
+<li><strong>Figure 15-7:</strong>
+<ul>
+<li>Portfolio Management sends a trade order <strong>synchronously</strong> to Trade Order (compliance checks, creating the order) and must block for a confirmation number
+<ul>
+<li>They are one quantum, and characteristics now live between them: if Trade Order is down or slow, Portfolio Management is too</li>
+</ul>
+</li>
+<li>if Portfolio Management scales, Trade Order must as well.</li>
+</ul>
+</li>
+<li><strong>Figure 15-8:</strong>
+<ul>
+<li>send the order through a <strong>queue</strong> and receive the confirmation number on a separate asynchronous channel. They are now <strong>two quanta</strong></li>
+<li>Portfolio Management can still issue orders when Trade Order is unavailable.</li>
+</ul>
+</li>
+</ul>
+<h3 id="broadcast-capabilities">Broadcast capabilities</h3>
+<p>EDA can broadcast events <strong>without knowing who receives them or what they do</strong>, dynamically decoupling processors. It underlies patterns such as <strong>eventual consistency</strong> and <strong>complex event processing (CEP)</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-9-broadcast.svg" alt="Figure 15-9: broadcasting an event to many processors" loading="lazy" /></p>
+<p>Example: each new <strong>ticker price</strong> on the stock market may drive trade analytics or buying and selling. The publisher simply broadcasts the price: <strong>semantic decoupling</strong>, one processor having no knowledge of or dependency on another's actions.</p>
+<h3 id="event-payload">Event payload</h3>
+<p>The information in an event is its <strong>payload</strong>, from a key-value pair to everything downstream needs. The two basic types are <strong>data-based</strong> and <strong>key-based</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-10-to-15-12-payloads.svg" alt="Figures 15-10 to 15-12: data-based payloads, stamp coupling and key-based payloads" loading="lazy" /></p>
+<p><strong>Data-based payloads</strong> send all the information needed. Example (Figure 15-10): Order Placement inserts the order (the system of record) and broadcasts <code>order_placed</code> with all details (<strong>45 attributes, 500 KB</strong>). Payment uses the order ID, customer information and total; Inventory Management uses the item ID and quantity.</p>
+<ul>
+<li><strong>Advantages:</strong>
+<ul>
+<li>consumers do <strong>not query the database</strong>, which improves performance, responsiveness and scalability</li>
+<li>the publisher does not know who needs what, so including everything guarantees it</li>
+<li>some processors may not even have database access in strict bounded contexts.</li>
+</ul>
+</li>
+<li><strong>Disadvantage 1: data consistency.</strong>
+<ul>
+<li>Multiple systems of record</li>
+<li>If a customer orders 100 items by mistake or uses a wrong address and corrects it at once, the database holds the new values but older events may still carry the old ones</li>
+<li>Event timing is hard to control, so newer values may even be processed before older values and be overlaid.</li>
+</ul>
+</li>
+<li><strong>Disadvantage 2: contract management and versioning.</strong>
+<ul>
+<li>With 45 attributes the event needs a <strong>contract</strong> (JSON? XML? <strong>strict</strong> with a schema such as a JSON schema, GraphQL spec or class definition, or <strong>loose</strong> with name-value pairs?), each forming tight <strong>static coupling</strong></li>
+<li>Versioning (for example a vendor MIME type in event headers) needs every processor to follow the same logic under strong governance, and version communication and deprecation are very hard in a decoupled asynchronous style: data-based payloads are &quot;somewhat fragile&quot;.</li>
+</ul>
+</li>
+<li><strong>Disadvantage 3: stamp coupling.</strong>
+<ul>
+<li>Processors share a data structure but use different parts. In Figure 15-11 Order Placement sends 45 attributes (500 KB) but Inventory needs only <code>item_id</code> and <code>quantity</code> (<strong>30 bytes</strong>)</li>
+<li>removing an address-line attribute would still affect Inventory.</li>
+</ul>
+</li>
+<li><strong>Bandwidth.</strong>
+<ul>
+<li>At <strong>500 orders per second</strong>, sending the 500 KB event to Inventory takes <strong>250,000 KB/s</strong></li>
+<li>sending the 30 bytes needed takes <strong>15 KB/s</strong>. Bandwidth is not infinite (the third fallacy) and in the cloud it is expensive.</li>
+</ul>
+</li>
+<li><strong>Consumer-driven contracts</strong> (a contract per consumer with only its data) are hard in EDA, because broadcast means you cannot always know who responds.</li>
+</ul>
+<p><strong>Key-based payloads</strong> carry only a key (an order ID or customer ID), so responders <strong>query the database</strong>. Example event body:</p>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"order_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"123"</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Disadvantages:</strong>
+<ul>
+<li>every responder must query the database (Payment for order information, Inventory for item ID and quantity), which hurts responsiveness, performance and scalability and can overwhelm the database</li>
+<li>it is a challenge when the data lies in another processor's bounded context.</li>
+</ul>
+</li>
+<li><strong>Advantages:</strong>
+<ul>
+<li>better <strong>consistency and integrity</strong> (a single system of record, so changes during processing are easy)</li>
+<li>the contract is so simple it is usually <strong>loose, schema-less JSON or XML</strong>, avoiding versioning and deprecation issues</li>
+<li><strong>no stamp coupling</strong> and minimal bandwidth, so faster on the network and broker.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Trade-off summary (Table 15-1).</strong> It is not all or nothing: each event can use a different payload.</p>
+<table>
+<thead>
+<tr>
+<th>Criteria</th>
+<th>Data-based</th>
+<th>Key-based</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Performance and scalability</td>
+<td>Good</td>
+<td>Bad</td>
+</tr>
+<tr>
+<td>Contract management</td>
+<td>Bad</td>
+<td>Good</td>
+</tr>
+<tr>
+<td>Stamp coupling</td>
+<td>Bad</td>
+<td>Good</td>
+</tr>
+<tr>
+<td>Bandwidth utilisation</td>
+<td>Bad</td>
+<td>Good</td>
+</tr>
+<tr>
+<td>Restricted database access</td>
+<td>Good</td>
+<td>Bad</td>
+</tr>
+<tr>
+<td>Overall system fragility</td>
+<td>Bad</td>
+<td>Good</td>
+</tr>
+</tbody>
+</table>
+<p>The core trade-off: <strong>scalability and performance versus contract management and bandwidth</strong>. Extreme scale suggests data-based; frequently changing data suggests key-based.</p>
+<h3 id="anemic-events">Anemic events</h3>
+<p>An <strong>anemic event</strong> is a derived event whose payload lacks enough information or context for the receiver to decide anything.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-13-to-15-17-anemic-and-gnats.svg" alt="Figures 15-13 to 15-17: an anemic event, and the Swarm of Gnats antipattern with its fix" loading="lazy" /></p>
+<ul>
+<li>Example (Figure 15-13):
+<ul>
+<li>a customer updates their profile and Customer Profile emits <code>profile_updated</code> with only the customer ID. Service 1 does not know <strong>what</strong> changed</li>
+<li>Service 2 does not know if it needs to act</li>
+<li>Service 3 does not know the prior values. Querying the database cannot tell them.</li>
+</ul>
+</li>
+<li><strong>Fix:</strong> include the updated information <strong>and the prior values</strong>, which most databases do not keep.</li>
+<li>It sits on a <strong>spectrum of payload granularity</strong>:
+<ul>
+<li>far left is key-based (fine for create or delete, poor for update), far right is data-based (all data whether needed or not: stamp coupling)</li>
+<li>The profile update belongs in between.</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-swarm-of-gnats-antipattern">The Swarm of Gnats antipattern</h3>
+<p>Anemic events concern the granularity of the <strong>payload</strong>; the Swarm of Gnats concerns the granularity of the <strong>events themselves</strong>: too many derived events from one processor.</p>
+<ul>
+<li><strong>Too coarse (Figure 15-14):</strong>
+<ul>
+<li>Payment applied, then Fraud Detection emits one <code>fraud_checked</code> event</li>
+<li>Credit Card Locking, Customer Notify and Purchase Profile all must respond and read the payload to decide</li>
+<li>If no fraud was detected, only Purchase Profile needed to act: wasted bandwidth and processing.</li>
+</ul>
+</li>
+<li><strong>Better (Figure 15-15):</strong> two derived events, <code>fraud_detected</code> and <code>no_fraud_detected</code>, so each processor decides from the event itself.</li>
+<li><strong>Too fine (Figure 15-16):</strong>
+<ul>
+<li>a customer who moved updates bill-to address, ship-to address and phone number</li>
+<li>Customer Profile emits a separate event for each change, saturating the system and making event flows hard to understand.</li>
+</ul>
+</li>
+<li><strong>Fix (Figure 15-17):</strong> bundle the changes into a single <code>profile_updated</code> derived event with the before and after data of all fields.</li>
+<li>Guidance: <strong>focus on the outcome of the processing or state change</strong>.</li>
+</ul>
+<h3 id="error-handling-the-workflow-event-pattern">Error handling: the Workflow Event pattern</h3>
+<p>A pattern of <strong>reactive architecture</strong> that addresses both resiliency and responsiveness via <strong>delegation, containment and repair</strong> using a <strong>workflow delegate</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-18-and-15-19-workflow-event.svg" alt="Figures 15-18 and 15-19: the Workflow Event pattern handling a bad trade order" loading="lazy" /></p>
+<ol>
+<li>An event processor sends data through a channel to the event consumer.</li>
+<li>On an error the consumer <strong>immediately delegates</strong> it to the <strong>Workflow Processor</strong> and moves on to the next message, so <strong>responsiveness is unchanged</strong> (trying to diagnose the error would delay everything waiting).</li>
+<li>The workflow processor tries to work out what is wrong (a static, deterministic error, or ML or AI anomaly analysis), <strong>programmatically repairs</strong> the data and sends it back to the originating queue as a new message.</li>
+<li>If it cannot, it sends it to another queue read by a <strong>dashboard</strong> for a knowledgeable person, who fixes it manually and resubmits it (usually through a reply-to header).</li>
+</ol>
+<p><strong>Example.</strong> A trading advisor batches trade orders (a <strong>basket</strong>) and asynchronously sends them to a broker on the other side of the country. The contract is <code>ACCOUNT(String),SIDE(String),SYMBOL(String),SHARES(Long)</code>:</p>
+<pre class="hl"><code>12654A87FR4,BUY,AAPL,1254
+87R54E3068U,BUY,AAPL,3122
+6R4NB7609JJ,BUY,AAPL,5433
+2WE35HF6DHF,BUY,AAPL,8756 SHARES
+764980974R2,BUY,AAPL,1211
+1533G658HD8,BUY,AAPL,2654
+</code></pre>
+<p>The fourth line has &quot;SHARES&quot; after the number. Without error handling the TradePlacement service throws, and with no user to tell it can only log:</p>
+<pre class="hl"><code>Exception in thread "main" java.lang.NumberFormatException:
+For input string: "8756 SHARES"
+    at java.lang.NumberFormatException.forInputString(NumberFormatException.java:65)
+    at java.lang.Long.parseLong(Long.java:589)
+    at java.lang.Long.&lt;init&gt;(Long.java:965)
+    at trading.TradePlacement.execute(TradePlacement.java:23)
+    at trading.TradePlacement.main(TradePlacement.java:29)
+</code></pre>
+<p>With the pattern, TradePlacement delegates the error to the <strong>Trade Placement Error</strong> service and continues:</p>
+<pre class="hl"><code>Trade Placed: 12654A87FR4,BUY,AAPL,1254
+Trade Placed: 87R54E3068U,BUY,AAPL,3122
+Trade Placed: 6R4NB7609JJ,BUY,AAPL,5433
+Error Placing Trade: "2WE35HF6DHF,BUY,AAPL,8756 SHARES"
+Sending to trade error processor &lt;-- delegate the error fixing and move on
+Trade Placed: 764980974R2,BUY,AAPL,1211
+...
+</code></pre>
+<p>The workflow delegate strips &quot;SHARES&quot; and resubmits:</p>
+<pre class="hl"><code>Received Trade Order Error: 2WE35HF6DHF,BUY,AAPL,8756 SHARES
+Trade fixed: 2WE35HF6DHF,BUY,AAPL,8756
+Resubmitting Trade For Re-Processing
+</code></pre>
+<pre class="hl"><code>...
+trade placed: 1533G658HD8,BUY,AAPL,2654
+trade placed: 2WE35HF6DHF,BUY,AAPL,8756 &lt;-- this was the original trade in error
+</code></pre>
+<p><strong>Consequence: out-of-order processing.</strong> Resubmitted messages are processed out of sequence, but trades in one account must be in order (a SELL for IBM before a BUY for AAPL in the same account).</p>
+<p>Fix: the TradePlacement service queues and stores the <strong>brokerage account number</strong> of the erroneous trade, holds later trades for that account in a temporary <strong>FIFO</strong> queue, and de-queues and processes them in order once the bad trade is fixed.</p>
+<h3 id="preventing-data-loss">Preventing data loss</h3>
+<p>Asynchronous communication risks a dropped or never-delivered event or message. Most EDA use <strong>AMQP</strong> (brokers: Amazon SNS, RabbitMQ, Solace, Azure Event Hubs): events go to an <strong>exchange</strong>, which forwards via binding rules to a queue per subscribing processor.</p>
+<p>These brokers can use the <strong>Event Forwarding</strong> pattern. The <strong>Jakarta Messaging API</strong> (formerly JMS) uses topics rather than that two-step process but can use the pattern with <strong>durable subscribers</strong> (the topic keeps the event until the subscriber is back).</p>
+<p><strong>Kafka</strong> event streaming prevents loss differently (see its documentation).</p>
+<p>Three places data can be lost (processor A publishes, broker queues, processor B stores in a database):</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-20-and-15-21-data-loss.svg" alt="Figures 15-20 and 15-21: where data can be lost, and how Event Forwarding prevents it" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Loss point</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A crashes before the broker acknowledges, or the broker acknowledges then crashes before another processor accepts it</td>
+<td><strong>Persistent message queues</strong> (guaranteed delivery: stored in memory and also persisted to disk or a database) plus <strong>synchronous send</strong> (A blocks until the broker confirms persistence)</td>
+</tr>
+<tr>
+<td>B de-queues the event then crashes before processing</td>
+<td><strong>Client acknowledge mode</strong>: the event stays in the queue, tagged with the client ID so no other consumer reads it (the default <strong>auto acknowledge</strong> removes it immediately)</td>
+</tr>
+<tr>
+<td>B cannot persist to the database (data error)</td>
+<td><strong>ACID transaction commit</strong>; then <strong>last participant support (LPS)</strong> removes the event from the persisted queue, acknowledging that processing completed and the data is persisted</td>
+</tr>
+</tbody>
+</table>
+<h3 id="request-reply-processing">Request-reply processing</h3>
+<p>When a processor needs an immediate answer (for example a confirmation ID before triggering an event), EDA uses <strong>request-reply</strong> (pseudosynchronous) messaging: each channel has a <strong>request queue</strong> and a <strong>reply queue</strong>. The producer sends to the request queue, returns control, does other work, then waits on the reply queue; the consumer processes and replies.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-22-to-15-24-request-reply.svg" alt="Figures 15-22 to 15-24: request-reply with a correlation ID, and with a temporary queue" loading="lazy" /></p>
+<p><strong>Correlation ID technique (most common).</strong></p>
+<ol>
+<li>The producer sends to the request queue and records the message ID (124); its CID is null.</li>
+<li>It does a blocking wait on the reply queue with a <strong>message selector</strong>: CID equals 124. The reply queue holds ID 855 (CID 120) and ID 856 (CID 122): neither is picked up.</li>
+<li>The consumer receives message 124 and processes it.</li>
+<li>It builds a reply and sets its <strong>CID to the original message ID (124)</strong>.</li>
+<li>It sends the reply (new ID 857) to the reply queue.</li>
+<li>The producer receives it because the CID matches its selector.</li>
+</ol>
+<p><strong>Temporary queue technique.</strong> The producer creates a <strong>temporary queue</strong> (or the broker does) and sends the request with its name in the <strong>reply-to</strong> header; it blocks on that queue (no selector needed, since only its reply arrives); the consumer replies to it; the producer deletes the queue.</p>
+<p>Simpler, but the broker must create and delete a queue per request, which can <strong>significantly slow</strong> the broker at high volume and concurrency. The authors usually recommend the <strong>correlation ID</strong> technique.</p>
+<h2 id="15-4-mediated-event-driven-architecture">15.4 Mediated event-driven architecture</h2>
+<p>So far: <strong>choreographed</strong> EDA (processors broadcast, many respond). For more control use the <strong>mediator topology</strong>: an <strong>initiating event</strong>, an <strong>event queue</strong>, an <strong>event mediator</strong>, <strong>event channels</strong> and <strong>event processors</strong>. It typically uses <strong>messages</strong> (commands such as <code>ship_order</code>), not events.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-25-and-15-26-mediator.svg" alt="Figures 15-25 and 15-26: the mediator topology, and delegating events to the right mediator" loading="lazy" /></p>
+<ul>
+<li>The mediator accepts the initiating event, <strong>knows the steps</strong>, generates derived messages and sends them point to point to dedicated queues
+<ul>
+<li>Processors listen, process and (usually) <strong>respond to the mediator</strong></li>
+<li>they do <strong>not</strong> advertise what they did.</li>
+</ul>
+</li>
+<li>Most implementations use <strong>several mediators</strong>, one per domain or group of events (a customer mediator for registrations and profile updates; an order mediator for carts and checkout)
+<ul>
+<li>This avoids a <strong>single point of failure</strong> and raises throughput.</li>
+</ul>
+</li>
+<li><strong>Choosing a mediator</strong> by complexity:
+<ul>
+<li><strong>Apache Camel, Mule ESB, Spring Integration</strong> for simple error handling and orchestration; flows are written in code (Java, C#).</li>
+<li><strong>Apache ODE or Oracle BPEL Process Manager</strong>
+<ul>
+<li>for lots of conditional processing, dynamic paths and complex error handling</li>
+<li>they use <strong>BPEL</strong> (Business Process Execution Language), an XML-like description with elements for error handling, redirection and multicasting, so architects usually use the engine's GUI tools.</li>
+</ul>
+</li>
+<li>BPEL is poor for <strong>long-running transactions with human intervention</strong> (for example a <code>place_trade</code> over a share threshold that needs a senior trader's manual approval): use a <strong>BPM engine</strong> such as <strong>jBPM</strong>.</li>
+<li>Camel for long-running human events would be extremely hard; a BPM engine for simple flows would waste months on what Camel does in days.</li>
+</ul>
+</li>
+<li><strong>Mediator delegation model (Figure 15-26):</strong>
+<ul>
+<li>classify events as <strong>simple, hard or complex</strong>, and send everything through a <strong>simple mediator</strong> (Camel or Mule)</li>
+<li>It handles simple ones itself or forwards hard or complex ones to a BPEL or BPM mediator</li>
+<li>The simple mediator may still track completion or delegate the whole workflow, including client notification.</li>
+</ul>
+</li>
+</ul>
+<p><strong>The order flow with a mediator</strong> (Figures 15-27 to 15-32). The same initiating event (place order) goes to the <strong>Customer mediator</strong>:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-27-to-15-32-mediator-steps.svg" alt="Figures 15-27 to 15-32: the mediator drives five steps for placing an order" loading="lazy" /></p>
+<ol>
+<li><strong>Create order:</strong> the mediator sends <code>create order</code> to the order placement queue; Order Placement validates, creates and returns an acknowledgment and order ID. The mediator may send the ID to the customer or continue, per business rules.</li>
+<li><strong>Three messages at once:</strong> <code>email customer</code>, <code>apply payment</code>, <code>adjust inventory</code>. The mediator <strong>waits for all three acknowledgments</strong> before step 3; on an error it can take corrective action.</li>
+<li><strong>Fulfil:</strong> <code>fulfill order</code> and <code>order stock</code> together, to Order Fulfillment and Warehouse.</li>
+<li><strong>Ship:</strong> <code>ship order</code> and another contextual <code>email customer</code> (ready to ship). Step 3 must complete before step 4.</li>
+<li><strong>Final notice:</strong> <code>email customer</code> that it has shipped. The mediator marks the flow complete and <strong>removes all state</strong>.</li>
+</ol>
+<p>The mediator knows the workflow, keeps <strong>event state</strong> and handles <strong>error handling, recoverability and restart</strong>. Example: an expired card means payment failed, so the mediator stops before step 3, records state in its own persistent store, and restarts at step 3 once payment succeeds.</p>
+<p><strong>Disadvantages of the mediator topology:</strong></p>
+<ul>
+<li>It is very hard to <strong>declaratively model</strong> the dynamic processing of a complex flow, so many flows use a <strong>hybrid</strong> (mediator for general processing, choreography for out-of-stock and other atypical cases).</li>
+<li>The mediator must <strong>scale</strong> too, and can become a <strong>bottleneck</strong>.</li>
+<li>Processors are <strong>less decoupled</strong> than in the choreographed topology.</li>
+<li>Performance is lower because the mediator controls processing.</li>
+<li><strong>Trade-off:</strong> workflow control and error handling versus the highest performance and scalability.</li>
+</ul>
+<h2 id="15-5-data-topologies">15.5 Data topologies</h2>
+<p>Database topology is a distinctive part of EDA. The simplified order flow (Figure 15-33): Order Placement creates the order and emits <code>order placed</code>; Payment and Inventory respond; after payment Order Fulfillment helps the packer and emits <code>order fulfilled</code>; Shipping ships.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-33-to-15-38-database-topologies.svg" alt="Figures 15-33 to 15-38: the three database topologies and the synchronous calls two of them force" loading="lazy" /></p>
+<p>A complication: Order Placement needs <strong>how many items are in stock</strong> and <strong>the shipping options for the customer's location</strong>. How it gets them depends on the topology.</p>
+<table>
+<thead>
+<tr>
+<th>Topology</th>
+<th>Data access</th>
+<th>Strengths</th>
+<th>Weaknesses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Monolithic database</strong> (the most common)</td>
+<td>Any processor queries the central database directly, with no synchronous call to another processor</td>
+<td>Preserves decoupling and limits communication</td>
+<td><strong>Fault tolerance</strong> (database down means all processors unavailable); <strong>scalability</strong> (every processor hits one database that must scale to the combined concurrency); <strong>change control</strong> (dropping a column affects many processors); a <strong>single quantum</strong></td>
+</tr>
+<tr>
+<td><strong>Domain database</strong> (processors grouped by domain, each domain owning a database)</td>
+<td>Order Placement reads inventory from its domain database but must make a <strong>synchronous call to Order Shipping</strong> for shipping options</td>
+<td>Better fault tolerance (if the order-processing database is down, order placement still works; the <code>payment applied</code> channel acts as a <strong>backpressure point</strong>), scalability and change control</td>
+<td>The synchronous call couples services and erodes those benefits. If too much synchronous communication is needed, <strong>rethink the domains</strong>, merge them, or return to a monolithic database</td>
+</tr>
+<tr>
+<td><strong>Dedicated database</strong> (database per event processor, as in microservices)</td>
+<td>Order Placement must call <strong>both Inventory and Order Shipment</strong> synchronously</td>
+<td><strong>Highest</strong> fault tolerance, scalability and change control; failures are isolated to one processor</td>
+<td>Often <strong>expensive</strong>; many <strong>synchronous coupling points</strong>. Good when processors are mostly self-contained within their bounded context; otherwise move to domain or monolithic. Frequent structural database changes can justify trading operational characteristics to limit the processors affected</td>
+</tr>
+</tbody>
+</table>
+<h2 id="15-6-cloud-risks-governance-teams">15.6 Cloud, risks, governance, teams</h2>
+<ul>
+<li><strong>Cloud:</strong> EDA matches cloud environments: highly decoupled, easily using cloud vendors' asynchronous services, and elastic infrastructure matches its shape.</li>
+<li><strong>Common risks:</strong>
+<ul>
+<li><strong>Nondeterministic processing</strong>
+<ul>
+<li>causes side effects (processors unexpectedly triggering derived events or not responding)</li>
+<li>flows get complex and it is hard to know what happens when an event fires.</li>
+</ul>
+</li>
+<li><strong>Too much static coupling</strong>
+<ul>
+<li>through payload contracts</li>
+<li>changing one is daunting since you do not know who responds. Key-based payloads help but bring scalability, performance and anemic-event risks.</li>
+</ul>
+</li>
+<li><strong>Too much synchronous communication</strong> between processors: a sign EDA is the wrong style.</li>
+<li><strong>State management:</strong>
+<ul>
+<li>hard to know when an initiating event has been fully processed or its current state. Occasionally the initiating processor can subscribe to a known &quot;ending&quot; event</li>
+<li>usually not.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Governance:</strong> mostly nonstructural and based on <strong>observability</strong> (logs, as part of a governance mesh), sometimes collected manually. Two areas, both <strong>structural decay</strong> in EDA:
+<ul>
+<li><strong>Static coupling through contracts:</strong>
+<ul>
+<li>track the rate of change of payload contracts and stamp coupling by <strong>recording which fields consumers never use</strong>, so contracts shrink</li>
+<li>Changing a contract, especially one with no schema, can break a downstream processor and is hard to test in nondeterministic flows.</li>
+</ul>
+</li>
+<li><strong>Dynamic coupling through synchronous calls:</strong>
+<ul>
+<li>write fitness functions to track synchronous communication via logs, source code annotations or custom-identifier libraries</li>
+<li>discuss each one, especially with domain or dedicated databases.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Team topologies:</strong> EDA is largely <strong>technically partitioned</strong>, but can work with domain-aligned teams.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Team type</th>
+<th>Fit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream-aligned</strong></td>
+<td>A domain is several processors and derived events, so domain changes (adding a step to order placement) may touch many processors and restructure event triggers. The bigger the system, the less effective they are</td>
+</tr>
+<tr>
+<td><strong>Enabling</strong></td>
+<td>Does <strong>not</strong> work well: integration through derived events and contracts means experiments disrupt a stream's understanding of the flow and need too much coordination</td>
+</tr>
+<tr>
+<td><strong>Complicated-subsystem</strong></td>
+<td>Works well: complex processing isolates in separate processors; coordination only for event-payload contracts and derived events</td>
+</tr>
+<tr>
+<td><strong>Platform</strong></td>
+<td>Works well, especially if brokers, event hubs, buses and channels are treated as platform artifacts</td>
+</tr>
+</tbody>
+</table>
+<h2 id="15-7-style-characteristics">15.7 Style characteristics</h2>
+<p>It is primarily <strong>technically partitioned</strong>: a domain spreads over processors tied by brokers, contracts and topics, so a domain change usually affects several processors and messaging artifacts; it is not generally domain partitioned.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-39-ratings.svg" alt="Figure 15-39: EDA characteristics ratings" loading="lazy" /></p>
+<ul>
+<li><strong>Quanta: one to many</strong>,
+<ul>
+<li>depending on database interactions and request-reply</li>
+<li>Several processors sharing a database instance are one quantum</li>
+<li><strong>Request-reply</strong> also ties processors together: if the processor that places an order and returns an order ID is down, the requester cannot continue, so they share a quantum even though both use asynchronous messages.</li>
+</ul>
+</li>
+<li><strong>Performance, scalability and fault tolerance</strong>
+<ul>
+<li>are the main strengths</li>
+<li>Performance comes from asynchronous communication with highly parallel processing</li>
+<li>Scalability comes from programmatic load balancing (<strong>competing consumers</strong> and <strong>consumer groups</strong>) adding processors as load rises
+<ul>
+<li>it earns <strong>four stars, not five</strong>, because of the database (space-based architecture, Chapter 16, gets five)</li>
+</ul>
+</li>
+<li>Fault tolerance comes from decoupled, asynchronous processors giving <strong>eventual consistency</strong>: if downstream processors are unavailable and no immediate response is needed, the event is processed later.</li>
+</ul>
+</li>
+<li><strong>Low simplicity and testability (2 stars)</strong>
+<ul>
+<li>from <strong>nondeterministic</strong> dynamic event flows. Request-based flows are deterministic and easy to test</li>
+<li>in EDA architects often do not know how processors will react, and <strong>event tree diagrams</strong> can generate hundreds or thousands of scenarios.</li>
+</ul>
+</li>
+<li><strong>Evolvability (5 stars):</strong> adding features via existing or new processors is easy, because derived events provide hooks and the data is already available: no change to infrastructure or other processors.</li>
+<li><strong>Disadvantages:</strong>
+<ul>
+<li>hard to <strong>control the overall workflow</strong> and to know when a business transaction from an initiating event has completed</li>
+<li><strong>error handling:</strong>
+<ul>
+<li>with no mediator (except in the mediator topology) other services do not know about a crash</li>
+<li>If Payment dies, Inventory still adjusts stock and everything else carries on as if fine</li>
+</ul>
+</li>
+<li><strong>recoverability:</strong> restarting a business transaction is very hard, because other actions were taken asynchronously and resubmitting the initiating event is often not feasible</li>
+</ul>
+</li>
+</ul>
+<h3 id="choosing-between-request-based-and-event-based">Choosing between request-based and event-based</h3>
+<ul>
+<li><strong>Request-based:</strong> well-structured, data-driven requests (such as retrieving a customer profile) when <strong>certainty and control over the workflow</strong> matter most.</li>
+<li><strong>Event-based:</strong> flexible, action-based events needing <strong>high responsiveness and scale</strong> with complex, dynamic user processing.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Event-based advantages over request-based</th>
+<th>Trade-offs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Better response to dynamic user content</td>
+<td>Only supports <strong>eventual consistency</strong></td>
+</tr>
+<tr>
+<td>Better scalability and elasticity</td>
+<td>Less control over processing flow</td>
+</tr>
+<tr>
+<td>Better agility and change management</td>
+<td>Less certainty over the outcome of the flow</td>
+</tr>
+<tr>
+<td>Better adaptability and extensibility</td>
+<td>Difficult to test and debug</td>
+</tr>
+<tr>
+<td>Better responsiveness and performance</td>
+<td></td>
+</tr>
+<tr>
+<td>Better real-time decision making</td>
+<td></td>
+</tr>
+<tr>
+<td>Better reaction to situational awareness</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="15-8-examples-and-use-cases">15.8 Examples and use cases</h2>
+<ul>
+<li><strong>Good candidates:</strong>
+<ul>
+<li>problems about responding to things happening inside or outside the system</li>
+<li>order entry (parallel, decoupled processing)</li>
+<li>systems needing high responsiveness, performance, scalability, fault tolerance and elasticity.</li>
+</ul>
+</li>
+<li><strong>Going, Going, Gone auction.</strong>
+<ul>
+<li>The number of bidders is unknown, so it needs <strong>scalability and elasticity</strong> (especially near the close of a timed auction) and high <strong>responsiveness</strong></li>
+<li>Best of all, EDA treats placing a bid <strong>as an event that has happened, not a request</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-15-fig-15-40-bidding.svg" alt="Figure 15-40: an online bidding system using EDA" loading="lazy" /></p>
+<p>When a bidder places a bid:</p>
+<ol>
+<li><strong>Bid Capture</strong> receives the initiating event, checks whether it beats the prior bid, and emits <strong>bid placed</strong>.</li>
+<li><strong>Auctioneer</strong> updates the website with the item's new price.</li>
+<li><strong>Bid Streamer</strong> simultaneously streams the bid to the website's bid history or to individual bidders.</li>
+<li><strong>Bidder Tracker</strong> persists the bidder and bid for tracking and auditing (back-end processing).</li>
+</ol>
+<p>Many more processors and derived events are involved, but this shows responsiveness, fault tolerance, scalability and elasticity.</p>
+<p>EDA is very complicated but very powerful: analyse the workflows to decide whether its complexity is worth its superpowers. <strong>If most processing is request based, consider microservices (Chapter 18) instead.</strong></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Four components: initiating event, broker, processor, derived event; broadcast, asynchronous, decoupled.</li>
+<li>Events are broadcast facts; messages are commands; choose data-based or key-based payloads per event; avoid anemic events and Swarm of Gnats.</li>
+<li>Asynchrony raises responsiveness and separates quanta; handle errors (Workflow Event), loss (Event Forwarding) and replies (correlation ID).</li>
+<li>Mediator topology trades throughput for control; database topology trades isolation for synchronous coupling.</li>
+<li>Strong on responsiveness, evolvability, fault tolerance and scale; weak on simplicity and testability.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Initiating event, derived event, event broker, event processor; poison event.</strong></li>
+<li><strong>Extensible event; semantic decoupling; Dynamic Quantum Entanglement.</strong></li>
+<li><strong>Events versus messages.</strong></li>
+<li><strong>Data-based and key-based payloads; stamp coupling; anemic event; Swarm of Gnats.</strong></li>
+<li><strong>Workflow Event pattern (delegation, containment, repair).</strong></li>
+<li><strong>Event Forwarding; persistent queues; synchronous send; client acknowledge mode; last participant support.</strong></li>
+<li><strong>Request-reply: correlation ID, message selector, temporary queue.</strong></li>
+<li><strong>Choreographed versus mediator topology; BPEL; BPM; mediator delegation model.</strong></li>
+<li><strong>Monolithic, domain and dedicated database topologies; backpressure point.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 15 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch15.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch15.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/">Fundamentals of Software Architecture 16: Space-Based Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-07-the-scope-of-architectural-characteristics/">Fundamentals of Software Architecture 7: The Scope of Architectural Characteristics</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">&larr; Fundamentals of Software Architecture 14: Service-Based Architecture Style</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/">Fundamentals of Software Architecture 16: Space-Based Architecture Style &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

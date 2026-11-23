@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 22: Analyzing Architecture Risk</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-21-architectural-decisions/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-23-diagramming-architecture/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-22-analyzing-architecture-risk">Fundamentals of Software Architecture 22: Analyzing Architecture Risk</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 22. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-21-architectural-decisions/">Fundamentals of Software Architecture 21: Architectural Decisions</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-23-diagramming-architecture/">Fundamentals of Software Architecture 23: Diagramming Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Every architecture has <strong>operational</strong> risks (availability, scalability, data integrity) and <strong>structural</strong> risks (static coupling). Analysing them lets architects fix deficiencies and structural decay.</li>
+<li><strong>Risk matrix:</strong> impact (1 to 3) times likelihood (1 to 3). 1 to 2 low (green), 3 to 4 medium (yellow), 6 to 9 high (red). Rate impact first; if likelihood is unsure, use 3.</li>
+<li><strong>Risk assessment:</strong> criteria (the critical architecture characteristics) by context (domains), with totals, filtering for signal, and <strong>direction</strong> from fitness functions.</li>
+<li><strong>Risk storming:</strong> collaborative, three phases (identification, consensus, mitigation). Unknown technology is automatically 9.</li>
+<li>Case study: a nursing-hotline system gains two databases, SLAs, two queues, an outbreak cache and three API gateways.</li>
+</ul>
+</div></div>
+<h2 id="22-1-risk-matrix">22.1 Risk matrix</h2>
+<p>Assessing risk is subjective: one architect says high, another medium. The <strong>risk-assessment matrix</strong> makes it more measurable with two dimensions: <strong>overall impact</strong> and <strong>likelihood</strong>. Each is rated low (1), medium (2) or high (3) and the numbers multiplied.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-22-fig-22-1-risk-matrix.svg" alt="Figure 22-1: matrix for determining architecture risk" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Product</th>
+<th>Level</th>
+<th>Colour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1, 2</td>
+<td>Low</td>
+<td>Green</td>
+</tr>
+<tr>
+<td>3, 4</td>
+<td>Medium</td>
+<td>Yellow</td>
+</tr>
+<tr>
+<td>6, 9</td>
+<td>High</td>
+<td>Red</td>
+</tr>
+</tbody>
+</table>
+<p>Shading helps grayscale rendering and people who cannot distinguish colours.</p>
+<div class="callout c-tip"><div class="callout-title">Consider **impact first, likelihood second**. If unsure of the likelihood, use **high (3)** until you can confirm.</div><div class="callout-body">
+</div></div>
+<p><strong>Worked example:</strong> worry about the availability of the primary central database. Impact if it is unavailable: <strong>high</strong> (3). Likelihood: <strong>low</strong> (1), because it runs on highly available servers in a cluster. High impact times low likelihood gives <strong>3, medium risk</strong>.</p>
+<h2 id="22-2-risk-assessments">22.2 Risk assessments</h2>
+<p>A <strong>risk assessment</strong> is a summarised report of an architecture's overall risk, using criteria chosen for a context (services, subdomains or domains). <strong>Architecture characteristics are excellent criteria</strong>: why analyse performance risk when scalability, elasticity and data integrity are the critical ones? Criteria run down the left, contexts across the top.</p>
+<div class="callout c-tip"><div class="callout-title">The characteristics most critical to the architecture make great risk-assessment criteria.</div><div class="callout-body">
+</div></div>
+<p>Example: an <strong>ecommerce ordering system</strong> with five criteria and four domain contexts. A domain or subdomain context works well; <strong>services are too fine-grained</strong> and miss risk in communication or coordination between services.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-22-fig-22-2-risk-assessment.svg" alt="Figure 22-2: a standard risk assessment" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Risk criteria</th>
+<th>Customer registration</th>
+<th>Catalog checkout</th>
+<th>Order fulfillment</th>
+<th>Order shipment</th>
+<th>Total</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scalability</td>
+<td>2</td>
+<td>6</td>
+<td>1</td>
+<td>2</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Availability</td>
+<td>3</td>
+<td>4</td>
+<td>2</td>
+<td>1</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Performance</td>
+<td>4</td>
+<td>2</td>
+<td>3</td>
+<td>6</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Security</td>
+<td>6</td>
+<td>3</td>
+<td>1</td>
+<td>1</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Data integrity</td>
+<td>9</td>
+<td>6</td>
+<td>1</td>
+<td>1</td>
+<td>17</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>24</strong></td>
+<td><strong>21</strong></td>
+<td><strong>8</strong></td>
+<td>11</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>(The order shipment total is the column sum; the printed figure hides it.)</p>
+<ul>
+<li><strong>By criteria:</strong> data integrity (17) is the highest risk; availability (10) the lowest.</li>
+<li><strong>By context:</strong> customer registration (24) is the highest-risk domain; order fulfillment (8) the lowest. This guides priorities and where to spend effort.</li>
+<li><strong>Filtering for signal.</strong>
+<ul>
+<li>When presenting to stakeholders, remove low and medium cells (the noise) to show high risks (the signal)</li>
+<li>Figure 22-3 does this: scalability and data integrity for catalog checkout, performance for order shipment, security and data integrity for customer registration.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-22-fig-22-3-high-risks.svg" alt="Figure 22-3: only the high risks" loading="lazy" /></p>
+<ul>
+<li>
+<p><strong>Direction.</strong> The table is a snapshot, not a trend. Use <strong>continuous measurement through fitness functions</strong> (Chapter 6) to spot trends. Figure 22-4 adds a third dimension:</p>
+<ul>
+<li>an <strong>upright triangle</strong>: risk is getting worse (tip points to a higher number)</li>
+<li>an <strong>upside-down triangle</strong>: risk is lessening</li>
+<li>a <strong>circle</strong>: not moving</li>
+</ul>
+<p>Always include a key.</p>
+</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-22-fig-22-4-risk-direction.svg" alt="Figure 22-4: direction of risk" loading="lazy" /></p>
+<p>Reading it: <strong>data integrity is getting worse</strong> for catalog checkout, order fulfillment and order shipping (which could indicate a database issue), while <strong>security and availability are improving</strong> for customer registration and catalog checkout.</p>
+<h2 id="22-3-risk-storming">22.3 Risk storming</h2>
+<p>No architect can judge a system's risk alone: they may overlook an area, and few know every part. <strong>Risk storming</strong> is a <strong>collaborative exercise</strong> to determine architectural risk within one dimension (context or criterion). Include <strong>senior developers and tech leads</strong> as well as architects: they bring an implementation view and learn the architecture.</p>
+<p>Three phases: <strong>identification</strong> (individual), <strong>consensus</strong> and <strong>mitigation</strong> (collaborative). All use a comprehensive or contextual architecture diagram (Chapter 23), sent to participants by the <strong>facilitator</strong>.</p>
+<p>Example architecture (Figure 22-5): an <strong>Elastic Load Balancer</strong> forwards requests to <strong>EC2 instances</strong> holding web servers (Nginx) and application services; those call a <strong>MySQL</strong> database, a <strong>Redis</strong> cache and a <strong>MongoDB</strong> database (logging), and <strong>Push Expansion Servers</strong>, which also use all three stores. (Deliberately vague, to illustrate the process.)</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-22-fig-22-5-to-22-7-risk-storming.svg" alt="Figures 22-5 to 22-7: the example architecture, initial sticky notes, and the consensus" loading="lazy" /></p>
+<h3 id="phase-1-identification">Phase 1: identification</h3>
+<p>Each participant records an <strong>unbiased</strong> view without being swayed. Steps:</p>
+<ol>
+<li>The facilitator invites everyone: the diagram (or where to find it), the criteria and context to analyse, and date, time and place (physical or virtual).</li>
+<li>Participants analyse the risks individually with the matrix.</li>
+<li>They classify each risk as low (1 to 2), medium (3 to 4) or high (6 to 9) on <strong>green, yellow or red sticky notes</strong>.</li>
+</ol>
+<p>Usually analyse <strong>one criterion or context</strong> (&quot;Where are our security risks?&quot;). If staff availability forces several dimensions in one context, write the criterion next to the number. For example three people see a high (6) central-database risk, one for availability and two for performance: discuss them <strong>separately</strong>.</p>
+<div class="callout c-tip"><div class="callout-title">Whenever possible restrict a session to a single criterion or context, so participants focus and the actual risk is clear.</div><div class="callout-body">
+</div></div>
+<h3 id="phase-2-consensus">Phase 2: consensus</h3>
+<p>Highly collaborative: post a big diagram on a wall (or screen); participants place their sticky notes. In Figure 22-6:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Elastic Load Balancer</td>
+<td>two medium (3), one high (6)</td>
+</tr>
+<tr>
+<td>Push Expansion Servers</td>
+<td>one high (9)</td>
+</tr>
+<tr>
+<td>MySQL</td>
+<td>three medium (3)</td>
+</tr>
+<tr>
+<td>Redis cache</td>
+<td>one high (9)</td>
+</tr>
+<tr>
+<td>MongoDB logging</td>
+<td>three low (2)</td>
+</tr>
+</tbody>
+</table>
+<p>MySQL and MongoDB need no discussion (all agree). The rest need talking through:</p>
+<ul>
+<li><strong>Elastic Load Balancer:</strong>
+<ul>
+<li>Austen and Logan said 3</li>
+<li>Addison said 6. Addison: if it goes down the whole system is inaccessible. True, so impact is high, but the others convince Addison that <strong>clustering</strong> makes likelihood low</li>
+<li>the group settles on medium (3). It could have gone the other way if Addison had seen something the others missed: <strong>that is why collaboration matters</strong>.</li>
+</ul>
+</li>
+<li><strong>Push Expansion Servers:</strong>
+<ul>
+<li>one participant rated 9 from bad experience with such servers <strong>crashing under similar loads</strong></li>
+<li>Without that participant no one would have seen the risk until well into production.</li>
+</ul>
+</li>
+<li><strong>Redis cache:</strong> Devon, a developer, rated it 9; asked why, Devon says &quot;What's a Redis cache?&quot; <strong>A technology unknown to a participant is automatically high (9).</strong></li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Always assign unproven or unknown technologies the highest rating (9): the matrix cannot be used for them.</div><div class="callout-body">
+</div></div>
+<p>Including developers is valuable: not knowing a technology is information about overall risk. The architect may change the technology or pay for training. The phase ends when everyone agrees (Figure 22-7).</p>
+<h3 id="phase-3-risk-mitigation">Phase 3: risk mitigation</h3>
+<p>Mitigation usually means changing areas that might otherwise have been &quot;perfect&quot;: from a completely changed architecture to a targeted refactoring such as adding a <strong>queue for backpressure</strong> at a throughput bottleneck. It usually costs more, so involve <strong>business stakeholders with authority</strong> to decide whether the cost outweighs the risk.</p>
+<p>Example: the team finds the central database a medium (4) availability risk. Clustering it and splitting it into separate physical databases would cost <strong>$50,000</strong>; the owner says the price outweighs the risk.</p>
+<p>The architect proposes instead splitting it into <strong>two domain-based databases</strong> for <strong>$16,000</strong>, still reducing the risk; the stakeholders agree. Risk storming shapes both the architecture <strong>and the negotiations with stakeholders</strong>, and with risk assessments tracks and improves it.</p>
+<h3 id="user-story-risk-analysis">User-story risk analysis</h3>
+<p>Risk storming also works for <strong>user stories</strong> during grooming: impact if the story is not completed in the iteration, times likelihood it will not be. The team can then spot high-risk stories, track them closely and prioritise them.</p>
+<h2 id="22-4-risk-storming-use-case-the-nursing-hotline">22.4 Risk-storming use case: the nursing hotline</h2>
+<p>A call-center support system where nurses advise patients. Requirements:</p>
+<ul>
+<li>A <strong>third-party diagnostics engine</strong> serves questions and guides nurses and patients; it handles about <strong>500 requests a second</strong>.</li>
+<li>Patients either call a nurse or use a <strong>self-service website</strong> that accesses the same engine directly.</li>
+<li>Support <strong>250 concurrent nurses</strong> nationwide and up to <strong>hundreds of thousands</strong> of concurrent self-service patients.</li>
+<li>Nurses access medical records through a <strong>medical records exchange</strong>; patients cannot.</li>
+<li><strong>HIPAA</strong> compliance: only nurses may access medical records; the self-service option cannot guarantee HIPAA compliance.</li>
+<li>High volume during <strong>cold, flu and COVID outbreaks</strong>.</li>
+<li>Calls are routed by each nurse's <strong>skill profile</strong> (languages, specialisations).</li>
+</ul>
+<p>The architect, <strong>Logan</strong>, designs the architecture of Figure 22-8: three web UIs (self-service, nurses, administrative staff maintaining nurse profiles and settings); a <strong>Call Accepter</strong> and a <strong>Call Router</strong> (routes to the next available nurse by skill profile, reading profiles from the central database); and a diagnostics-system <strong>API Gateway</strong> performing security checks and directing requests.</p>
+<p>The four main services: <strong>Case Management</strong>, <strong>Nurse Profile Management</strong>, <strong>Medical Records Interface</strong> and the external <strong>Diagnostics Engine Interface</strong>. All communication is REST except proprietary protocols to the external systems and call-center services.</p>
+<p>It must support <strong>availability, elasticity and security</strong>. After many reviews Logan holds a risk-storming exercise.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-22-fig-22-8-and-22-9-nursing-availability.svg" alt="Figures 22-8 and 22-9: the initial architecture and its availability risks" loading="lazy" /></p>
+<h3 id="availability">Availability</h3>
+<p>Findings (Figure 22-9):</p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Risk</th>
+<th>Reasoning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Central database</td>
+<td><strong>High (6)</strong></td>
+<td>High impact (3), medium likelihood (2)</td>
+</tr>
+<tr>
+<td>Diagnostics Engine</td>
+<td><strong>High (9)</strong></td>
+<td>High impact (3), unknown likelihood (3)</td>
+</tr>
+<tr>
+<td>Medical Records Interface</td>
+<td><strong>Low (2)</strong></td>
+<td>Not needed to determine a medical outcome</td>
+</tr>
+</tbody>
+</table>
+<p>No other parts are availability risks, since each service has multiple instances and the API Gateway is clustered.</p>
+<ul>
+<li><strong>Database mitigation:</strong>
+<ul>
+<li>if it went down nurses could write case notes by hand, but the call router could not function</li>
+<li>Split it into <strong>two databases</strong>: a <strong>clustered</strong> one for nurse profiles and a <strong>single-instance</strong> one for case notes</li>
+<li>This also helps secure the case notes.</li>
+</ul>
+</li>
+<li><strong>External systems</strong>
+<ul>
+<li>are harder (third-party controlled)</li>
+<li>The team researches published <strong>SLAs</strong> (usually legally binding) or <strong>SLOs</strong> (usually not)</li>
+<li>Both have SLAs: Diagnostics Engine <strong>99.99%</strong> availability (about <strong>52.60 minutes</strong> of downtime a year) and Medical Records Interface <strong>99.90%</strong> (about <strong>8.77 hours</strong> a year)</li>
+<li>That was enough to <strong>remove the risk</strong></li>
+<li>Figure 22-10 shows the two databases and the SLAs on the diagram.</li>
+</ul>
+</li>
+</ul>
+<h3 id="elasticity">Elasticity</h3>
+<p>Only 250 nurses use the engine, but the <strong>self-service portal</strong> reaches it too, and flu and COVID outbreaks will raise load. Participants unanimously rate the Diagnostics Engine interface <strong>high (9)</strong>: it handles only 500 requests a second, especially with REST.</p>
+<ol>
+<li>Use <strong>asynchronous queues</strong> between the API Gateway and the engine interface, a <strong>backpressure point</strong>. It is good practice but nurses and patients still wait and time out.</li>
+<li>Apply the <strong>Ambulance pattern</strong>: two message channels (one for nurses, one for self-service) so <strong>nurses' requests take priority</strong>. This does not fix wait times.</li>
+<li><strong>Cache outbreak-related questions</strong> so they never reach the engine: a new <strong>Diagnostics Outbreak Cache Server</strong> handles requests for a particular outbreak or flu question, freeing capacity for other symptoms (Figure 22-11).</li>
+</ol>
+<p>Without the session, this might not have been found until flu season.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-22-fig-22-10-to-22-12-mitigations.svg" alt="Figures 22-10 to 22-12: the architecture after availability, elasticity and security risk storming" loading="lazy" /></p>
+<h3 id="security">Security</h3>
+<p>HIPAA means the Medical Records Interface must allow <strong>only nurses</strong>. Logan believes the API Gateway's authentication and authorisation checks neutralise the risk.</p>
+<p>Participants all rate the gateway <strong>high security risk (6)</strong>: high impact (3) if admin staff or self-service patients reach medical records, medium likelihood (2). <strong>All three user types share one gateway</strong>, so per-call checks are not enough. They convince Logan (who had said low, 2).</p>
+<p>Everyone agrees on <strong>separate API Gateways for admin staff, self-service users and nurses</strong>, so non-nurse calls never reach the Medical Records Interface (Figure 22-12).</p>
+<p>The architecture changed significantly from Figure 22-8 to Figure 22-12, in ways that address availability, elasticity and security.</p>
+<h2 id="22-5-summary">22.5 Summary</h2>
+<p><strong>Risk storming is not a one-time process.</strong> Repeat it through the system's lifecycle, to find and mitigate risk before production. How often depends on the frequency of change, refactoring efforts and incremental development; it is typical to run sessions on particular dimensions <strong>after adding a major feature or at the end of every iteration</strong>.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Impact times likelihood makes risk measurable; unknowns rate 9.</li>
+<li>Assess criteria (key characteristics) by domain context; filter for signal; track direction with fitness functions.</li>
+<li>Risk storming: individual identification, collaborative consensus, mitigation negotiated with the people who pay.</li>
+<li>Repeat it as the system evolves.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Risk matrix; risk assessment; signal and noise; direction of risk.</strong></li>
+<li><strong>Risk storming; facilitator; sticky notes; unknown technology = 9.</strong></li>
+<li><strong>SLA versus SLO; backpressure; Ambulance pattern.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 22 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch22.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch22.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-21-architectural-decisions/">Fundamentals of Software Architecture 21: Architectural Decisions</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-23-diagramming-architecture/">Fundamentals of Software Architecture 23: Diagramming Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-06-measuring-and-governing-architecture-characteristics/">Fundamentals of Software Architecture 6: Measuring and Governing Architecture Characteristics</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-21-architectural-decisions/">&larr; Fundamentals of Software Architecture 21: Architectural Decisions</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-23-diagramming-architecture/">Fundamentals of Software Architecture 23: Diagramming Architecture &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

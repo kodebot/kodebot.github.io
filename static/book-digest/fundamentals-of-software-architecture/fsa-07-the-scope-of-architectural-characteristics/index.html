@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 7: The Scope of Architectural Characteristics</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-06-measuring-and-governing-architecture-characteristics/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-08-component-based-thinking/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-7-the-scope-of-architectural-characteristics">Fundamentals of Software Architecture 7: The Scope of Architectural Characteristics</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 7. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-06-measuring-and-governing-architecture-characteristics/">Fundamentals of Software Architecture 6: Measuring and Governing Architecture Characteristics</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-08-component-based-thinking/">Fundamentals of Software Architecture 8: Component-Based Thinking</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Older frameworks assumed <strong>one set of characteristics for the whole system</strong>. Modern architectures such as microservices have different characteristics per service, so <strong>scope</strong> matters.</li>
+<li>The authors' scope measure is the <strong>architecture quantum</strong>: an independently deployable unit with <strong>high functional cohesion</strong>, <strong>low external implementation static coupling</strong> and <strong>synchronous communication</strong> to other quanta.</li>
+<li>Coupling has four kinds: <strong>semantic</strong>, <strong>implementation</strong>, <strong>static</strong> and <strong>dynamic</strong>. Two services sharing a coupling point (a database, a component) are in the same quantum.</li>
+<li>Scoping drives the <strong>style choice</strong>: monolith or distributed, then persistence, then communication style.</li>
+<li>Worked kata: <strong>Going Green</strong> splits into three quanta from three clusters of characteristics. The cloud adds scoping questions of its own.</li>
+</ul>
+</div></div>
+<h2 id="7-1-why-scope-matters">7.1 Why scope matters</h2>
+<ul>
+<li>Many outdated frameworks had a fatal flaw:
+<ul>
+<li>they assumed one set of characteristics for the whole system</li>
+<li>That is sometimes still true, but microservices and similar styles hold different characteristics at service and system levels.</li>
+</ul>
+</li>
+<li>Scope helps choose the architecture style used as a starting point.</li>
+<li>While writing <em>Building Evolutionary Architectures</em> the authors needed a measure of the structural evolvability of styles
+<ul>
+<li>The code-level metrics in Chapter 6 reveal low-level detail but cannot evaluate dependencies outside the code base, such as <strong>databases</strong>, that affect many operational characteristics.</li>
+</ul>
+</li>
+<li>Example: no effort making a code base performant or elastic succeeds if the database does not match those characteristics.</li>
+<li>Finding no good measure of scope, they made one: the <strong>architecture quantum</strong>.</li>
+</ul>
+<h2 id="7-2-architecture-quanta-and-granularity">7.2 Architecture quanta and granularity</h2>
+<p>Component-level coupling is not the only thing binding software together. Business concepts bind parts semantically, creating <strong>functional cohesion</strong>. To design, analyse and evolve software, consider <strong>all coupling points that could break</strong>.</p>
+<blockquote>
+<p>[!note] Plurals for Latin-derived technical terms
+<em>Quantum</em> is Latin, so the plural is <strong>quanta</strong>, like <em>data</em>. The Chicago Manual of Style (18th edition, 2024, p. 336) notes <em>data</em> is now commonly treated as a mass noun with a singular verb.</p>
+</blockquote>
+<p><strong>Where the term comes from.</strong> In physics a quantum is the smallest possible amount of something (usually energy); the Latin means &quot;how great&quot; or &quot;how much&quot;. In general use it means a &quot;small, unbreakable thing&quot;, the sense used here.</p>
+<p>An informal definition: <strong>&quot;the smallest part of the system that runs independently&quot;</strong>. Microservices often form quanta: a service runs independently with its own data and other dependencies.</p>
+<p>An architecture quantum <strong>establishes the scope for a set of architectural characteristics</strong> and has four features:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-quantum-features.svg" alt="The four features of an architecture quantum" loading="lazy" /></p>
+<ul>
+<li><strong>Independent deployment</strong> from other parts of the architecture.</li>
+<li><strong>High functional cohesion.</strong></li>
+<li><strong>Low external implementation static coupling.</strong></li>
+<li><strong>Synchronous communication</strong> with other quanta.</li>
+</ul>
+<h3 id="establishes-the-scope-for-characteristics">Establishes the scope for characteristics</h3>
+<p>It is a boundary for a set of characteristics, particularly operational ones. Being independently deployable with high functional cohesion, it gives a useful measure of architecture <strong>modularity</strong>.</p>
+<h3 id="independently-deployable">Independently deployable</h3>
+<p>A quantum includes everything it needs to function. <strong>If an application uses a database, the database is part of the quantum</strong>, because the system will not work without it.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-quanta-databases.svg" alt="A single shared database makes one quantum; a database per service makes many" loading="lazy" /></p>
+<ul>
+<li>Virtually every legacy system deployed with a single database is, by definition, a <strong>quantum of one</strong>.</li>
+<li>In microservices each service has its own database (part of the bounded-context philosophy, Chapter 18), which creates <strong>multiple quanta</strong>, each with its own scope of characteristics.</li>
+</ul>
+<h3 id="high-functional-cohesion">High functional cohesion</h3>
+<ul>
+<li>Cohesion is how unified the code is in purpose. A Customer component with properties and methods all about the Customer entity has high cohesion
+<ul>
+<li>a Utility component with random methods does not.</li>
+</ul>
+</li>
+<li>High functional cohesion means a quantum <strong>does something purposeful</strong>.</li>
+<li>It matters little in a monolith with a single database, where cohesion is essentially the whole system
+<ul>
+<li>In distributed architectures (event-driven, microservices) architects design each service around a single workflow, a <strong>bounded context</strong>, so it has high functional cohesion.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">Domain-driven design&#x27;s bounded context</div><div class="callout-body">
+<ul>
+<li>Eric Evans's <em>Domain-Driven Design</em> (Addison-Wesley Professional, 2003) has deeply influenced architectural thinking. <strong>DDD</strong> is a modelling technique for decomposing complex problem domains in an organised way.</li>
+<li>A <strong>bounded context</strong> is where everything related to a portion of the domain is visible internally but opaque to other bounded contexts.</li>
+<li>Before DDD, architects sought to reuse code across common entities organisation-wide, but shared artifacts cause tight coupling, harder coordination and more complexity.</li>
+<li>So instead of one Customer class for the whole organisation, each problem domain has its own Customer class and reconciles differences at the communication points between domains.</li>
+</ul>
+</div></div>
+<h3 id="four-kinds-of-coupling">Four kinds of coupling</h3>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-coupling-types.svg" alt="Semantic, implementation, static and dynamic coupling" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Coupling</th>
+<th>What it describes</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Semantic</strong></td>
+<td>The natural coupling of the problem being solved</td>
+<td>An order-processing application inherently involves inventory, catalogues, carts, customers and sales. A domain change means changing requirements, and no architecture pattern prevents that from rippling out</td>
+</tr>
+<tr>
+<td><strong>Implementation</strong></td>
+<td>How the team decides to implement dependencies</td>
+<td>One database or split for scalability and availability? Monolith or distributed? These barely change semantic coupling but greatly affect architectural decisions</td>
+</tr>
+<tr>
+<td><strong>Static</strong></td>
+<td>The &quot;wiring&quot;: how services depend on one another. Two services are in the same quantum if they depend on the same coupling point</td>
+<td>Catalog and Shipping both depend on a shared address component, so they share a quantum. Several services using the same relational database also share one</td>
+</tr>
+<tr>
+<td><strong>Dynamic</strong></td>
+<td>The forces when quanta communicate while running</td>
+<td>Services talking to form workflows; trade-offs in Chapter 15</td>
+</tr>
+</tbody>
+</table>
+<p>A simple test: <strong>two things are coupled if changing one might break the other.</strong> Static coupling defines the scope of dependencies.</p>
+<h3 id="low-external-implementation-static-coupling">Low external implementation static coupling</h3>
+<ul>
+<li>Implementation coupling between quanta should be low, derived from DDD's low coupling between bounded contexts
+<ul>
+<li>Quanta are the <strong>operational building blocks one level of abstraction above components</strong> and often overlap service boundaries.</li>
+</ul>
+</li>
+<li>Tight coupling is desirable when high cohesion is required, such as inside a service or subsystem.</li>
+<li>An architecture is <strong>brittle</strong> when one implementation change causes unexpected side effects that break seemingly unrelated things
+<ul>
+<li>Example: an architect renames a service call field from <code>State</code> to <code>StateCode</code>, expecting one caller to be affected, and many other dependencies break.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Higher coupling is allowed for narrower scopes; the broader the scope, the looser the coupling should be.</div><div class="callout-body">
+</div></div>
+<h3 id="synchronous-communication">Synchronous communication</h3>
+<p>Communication is dynamic coupling. It concerns operational characteristics because they often determine timing and blocking in distributed architectures.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-sync-vs-async.svg" alt="A synchronous call overloads a slower service; a queue buffers bursts" loading="lazy" /></p>
+<ul>
+<li>Example:
+<ul>
+<li>in microservices, when an auction ends the <strong>Auction</strong> service sends payment information <strong>synchronously</strong> to the <strong>Payment</strong> service, which can handle only one payment every <strong>500 ms</strong></li>
+<li>When many auctions end at once, the first call works, then calls fail: Payment is not as scalable as Auction.</li>
+</ul>
+</li>
+<li>With <strong>asynchronous</strong> communication (a message queue) the queue buffers: it holds pending messages until the receiver is ready
+<ul>
+<li>It will still overflow if Auction keeps sending more than Payment can handle, but bursts are absorbed.</li>
+</ul>
+</li>
+<li>Synchronous communication is <strong>unforgiving</strong> in distributed architectures, especially when parts have different characteristics. Chapter 15 covers communication types.</li>
+</ul>
+<p>In modern systems, architects define characteristics <strong>at the quantum level</strong>, not the system level.</p>
+<h2 id="7-3-the-impact-of-scoping">7.3 The impact of scoping</h2>
+<p>Scope helps determine service boundaries. Figure 7-1 is the whole decision tree and Figures 7-2 to 7-4 detail its steps:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-fig-7-1-decision-tree.svg" alt="Figures 7-1 to 7-4: using characteristics scope to choose an architecture style" loading="lazy" /></p>
+<ol>
+<li><strong>Choose the style (Figure 7-2).</strong> From characteristics and domain analysis, decide whether the system succeeds with <strong>one set</strong> of characteristics or needs <strong>several groups</strong>. One set allows a <strong>monolith</strong>, which reduces later choices. Several groups point to a <strong>distributed</strong> architecture.</li>
+<li><strong>Determine quantum boundaries (Figure 7-3)</strong> for a distributed architecture (granularity guidelines in Chapter 18).</li>
+<li><strong>Determine persistence (Figure 7-4).</strong> A monolith generally takes a <strong>single monolithic database</strong>, developed and deployed in lockstep; the architect then picks the monolithic style. Distributed architectures use a <strong>single database</strong> (common in event-driven) or <strong>partition the data</strong> along service granularity (microservices).</li>
+<li><strong>Determine the communication style between quanta</strong>: synchronous or asynchronous (Chapter 15). In some systems, choosing synchronous communication can change the quantum boundaries set by static coupling; the two types of coupling interact often.</li>
+</ol>
+<h2 id="7-4-kata-going-green">7.4 Kata: Going Green</h2>
+<p><strong>The problem.</strong> Going Green (GG) recycles and resells old electronics such as cell phones through <strong>public kiosks and a website</strong>, both running the same system.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-fig-7-5-going-green.svg" alt="Figure 7-5: requirements overview for Going Green" loading="lazy" /></p>
+<ul>
+<li>A user uploads the device's model number and condition, and GG bids.</li>
+<li>If the user accepts, they deposit it in a kiosk or, via the website, GG sends a box to mail it.</li>
+<li>On receipt GG assesses the device and pays the user.</li>
+<li>GG then estimates the value and either <strong>recycles or resells</strong> it.</li>
+<li>The system also produces reports and analytics.</li>
+</ul>
+<p><strong>Three clusters appear</strong> in the characteristics analysis:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-fig-7-6-clusters.svg" alt="Figure 7-6: three clusters of characteristics" loading="lazy" /></p>
+<ul>
+<li><strong>Customer facing (quote, status):</strong> scalability, availability, agility.</li>
+<li><strong>Electronic item assessment:</strong> maintainability, deployability, testability (which make up the composite <strong>agility</strong>).</li>
+<li><strong>Recycling, reporting and accounting:</strong> security, data integrity, auditability.</li>
+</ul>
+<p><strong>Why assessment is separate.</strong> GG's business is reselling the highest-value used electronics, and new models arrive constantly. The faster GG updates its assessments, the more newer (more valuable) devices it can resell: a business driver intersecting an architectural concern.</p>
+<p>Could one system meet all eight characteristics? Possibly, but with difficulty, because they counteract one another: fast deployability is harder when you also prioritise back-office <strong>auditability</strong>, and the UI needs a vastly different level of scalability from the rest.</p>
+<p><strong>Use the clusters to separate quanta.</strong> In Figure 7-7 the dotted lines are the quanta. Using characteristic scope as a guide to service granularity is a good first step toward the most beneficial trade-offs (Chapter 18).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-fig-7-7-going-green-quanta.svg" alt="Figure 7-7: each set of characteristics becomes an architectural boundary" loading="lazy" /></p>
+<ul>
+<li><strong>Quantum 1:</strong> Quote service and Item Status service, with their database.</li>
+<li><strong>Quantum 2:</strong> Assessment service, with its own database.</li>
+<li><strong>Quantum 3:</strong> Receiving, Recycling, Accounting and Reporting services, sharing one database.</li>
+</ul>
+<h2 id="7-5-scoping-and-the-cloud">7.5 Scoping and the cloud</h2>
+<p>Cloud-based resources complicate scoping because they encapsulate many operational characteristics. At least two scenarios:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-07-cloud-scoping.svg" alt="Two ways of using the cloud and what each makes the architect consider" loading="lazy" /></p>
+<ul>
+<li><strong>Using the cloud to host containers:</strong>
+<ul>
+<li>the cloud acts as an alternate operations centre running and orchestrating containers</li>
+<li>Consider the characteristics of the containers and the constraints of the orchestration tool (for example Kubernetes).</li>
+</ul>
+</li>
+<li><strong>Using provider resources as system components:</strong>
+<ul>
+<li>applications are pieced together from the provider's building blocks (triggered functions, databases)</li>
+<li>Look at the capabilities the provider advertises, and hopefully maintains, to see how to build suitable capabilities.</li>
+</ul>
+</li>
+</ul>
+<p>Many things now cloud configuration settings, such as elasticity, were hard-won by the previous generation working on physical systems. Those concerns are easier now, but new trade-offs appear: <strong>provider availability</strong> and heightened <strong>security</strong> concerns. The details change a lot; the job of analysing trade-offs stays constant.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Scope matters: characteristics belong to quanta, not always the whole system.</li>
+<li>A quantum is independently deployable (with its data), highly cohesive, loosely coupled externally and mindful of synchronous communication.</li>
+<li>Use four coupling types to find quanta; a shared database or component joins quanta.</li>
+<li>Scoping steers monolith versus distributed, persistence and communication choices; clusters of characteristics suggest quanta.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Architecture quantum (plural quanta):</strong> independently deployable unit with high functional cohesion, low external implementation static coupling and synchronous communication.</li>
+<li><strong>Semantic, implementation, static and dynamic coupling.</strong></li>
+<li><strong>Brittle architecture:</strong> one change breaks seemingly unrelated things.</li>
+<li><strong>Bounded context:</strong> DDD unit visible inside, opaque outside.</li>
+<li><strong>Quantum of one:</strong> a system with a single shared database.</li>
+<li><strong>Characteristic clusters:</strong> groups that guide quantum boundaries.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 7 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch07.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch07.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-06-measuring-and-governing-architecture-characteristics/">Fundamentals of Software Architecture 6: Measuring and Governing Architecture Characteristics</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-08-component-based-thinking/">Fundamentals of Software Architecture 8: Component-Based Thinking</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-06-measuring-and-governing-architecture-characteristics/">&larr; Fundamentals of Software Architecture 6: Measuring and Governing Architecture Characteristics</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-08-component-based-thinking/">Fundamentals of Software Architecture 8: Component-Based Thinking &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

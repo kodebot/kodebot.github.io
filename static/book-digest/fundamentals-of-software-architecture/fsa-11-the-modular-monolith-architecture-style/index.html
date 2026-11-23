@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 11: The Modular Monolith Architecture Style</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-10-layered-architecture-style/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-12-pipeline-architecture-style/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-11-the-modular-monolith-architecture-style">Fundamentals of Software Architecture 11: The Modular Monolith Architecture Style</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 11. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-10-layered-architecture-style/">Fundamentals of Software Architecture 10: Layered Architecture Style</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-12-pipeline-architecture-style/">Fundamentals of Software Architecture 12: Pipeline Architecture Style</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>single deployment unit</strong> (WAR, EAR, .NET assembly) with functionality <strong>grouped by domain</strong>: a domain-partitioned monolith. New in this edition because DDD and domain partitioning made it popular.</li>
+<li>Domains or subdomains are <strong>modules</strong>, organised either as a <strong>monolithic structure</strong> (one code base, split by directory or namespace) or a <strong>modular structure</strong> (each module its own artifact, such as a JAR or DLL, combined at deployment).</li>
+<li>Module communication is &quot;never a good thing&quot; but sometimes necessary: use <strong>peer-to-peer</strong> calls or a <strong>mediator</strong>. Too much reuse or communication turns it into a <strong>Big Ball of Mud</strong> (or <strong>DLL/JAR Hell</strong>).</li>
+<li>Governance with fitness functions: check modules exist, limit coupling points, forbid specific module dependencies.</li>
+<li>Strengths: <strong>cost, simplicity, modularity</strong>. Deployability and testability get 2 stars (slightly better than layered). Scalability, elasticity and fault tolerance get 1. Quanta = 1.</li>
+</ul>
+</div></div>
+<h2 id="11-1-topology">11.1 Topology</h2>
+<p>It is a monolithic architecture: deployed as one unit (a <strong>WAR</strong> file, a single <strong>.NET assembly</strong>, an <strong>EAR</strong> file on the Java platform, and so on). Because it is <strong>domain partitioned</strong>, its shape is a single deployment unit with functionality grouped by domain area.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-11-fig-11-1-topology.svg" alt="Figure 11-1: functionality grouped by domain area in one deployment unit" loading="lazy" /></p>
+<p><strong>Contrast with layered.</strong> In a layered architecture components are organised by technical capability, so customer-profile presentation logic might live at <code>com.app.presentation.customer.profile</code>: the third node is the technical layer.</p>
+<p>In a modular monolith the same component is <code>com.app.customer.profile</code>: the third node is the domain. A complex component may split by technical concern after the domain, such as <code>com.app.customer.profile.presentation</code> or <code>com.app.customer.profile.business</code>.</p>
+<h2 id="11-2-style-specifics">11.2 Style specifics</h2>
+<p>Domains (or subdomains) are called <strong>modules</strong>. Two ways to organise them:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-11-structure-options.svg" alt="Monolithic versus modular structure" loading="lazy" /></p>
+<h3 id="monolithic-structure">Monolithic structure</h3>
+<ul>
+<li>All modules live in <strong>one source-code repository</strong> and deploy together. Each module is a separate high-level directory holding its components and subdomains (Figure 11-2).</li>
+<li>Example namespaces for an order-entry system:</li>
+</ul>
+<pre class="hl"><code>com.orderentry.orderplacement
+com.orderentry.inventorymanagement
+com.orderentry.paymentprocessing
+com.orderentry.notification
+com.orderentry.fulfillment
+com.orderentry.shipping
+</code></pre>
+<ul>
+<li><strong>Pro:</strong> the simplest option; all code in one place, so easier to maintain, test and deploy.</li>
+<li><strong>Con:</strong>
+<ul>
+<li>it needs <strong>strict governance</strong> to keep module boundaries</li>
+<li>Developers tend to <strong>reuse too much code across modules</strong> and allow <strong>too much communication between them</strong>, which can turn it into an unstructured <strong>Big Ball of Mud</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-11-fig-11-2-monolithic-structure.svg" alt="Figure 11-2: the monolithic structure option" loading="lazy" /></p>
+<h3 id="modular-structure">Modular structure</h3>
+<ul>
+<li>Each module is a <strong>self-contained artifact</strong> (JAR, DLL) and the modules are assembled into one deployment unit at deployment time (Figure 11-3, JARs on the Java platform).</li>
+<li><strong>Pros:</strong>
+<ul>
+<li>teams can work on separate modules, often in <strong>their own repository</strong></li>
+<li>it suits largely independent modules and large, complex systems where each module needs different expertise or business knowledge</li>
+<li>developers are <strong>less apt to over-reuse code or over-communicate</strong></li>
+<li>cleaner boundaries and separation of concerns.</li>
+</ul>
+</li>
+<li><strong>Con:</strong> it loses effectiveness when <strong>dependent modules need to communicate</strong>. Then the monolithic structure is more effective.</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-11-fig-11-3-modular-structure.svg" alt="Figure 11-3: the modular structure option using JAR files" loading="lazy" /></p>
+<h3 id="module-communication">Module communication</h3>
+<p>&quot;Communication between modules is never a good thing in this architectural style&quot;, but is often necessary. In Figure 11-2, OrderPlacement must talk to InventoryManagement (adjust stock and perhaps order more) and to PaymentProcessing (apply payment). Two options:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-11-fig-11-4-and-11-5-communication.svg" alt="Figures 11-4 and 11-5: peer-to-peer communication versus a mediator" loading="lazy" /></p>
+<p><strong>Peer-to-peer.</strong> A class in one module instantiates a class in another and calls its methods (Figure 11-4).</p>
+<ul>
+<li>In the monolithic structure it is <strong>too convenient</strong> to instantiate any class in another module, an easy path from well structured to Big Ball of Mud (Figure 9-1).</li>
+<li>In the modular structure the other module's classes sit in external artifacts, so the module <strong>will not compile</strong> without them: a compile-time dependency
+<ul>
+<li>The usual fix is a <strong>shared interface class</strong> in a separately shared JAR or DLL so each module compiles independently</li>
+<li>Too much communication still ends in <strong>DLL Hell</strong> (or <strong>JAR Hell</strong> on Java).</li>
+</ul>
+</li>
+</ul>
+<p><strong>Mediator.</strong> A mediator component forms an <strong>abstraction layer</strong> between modules, acting as an orchestrator that accepts requests and delivers them to the right module (Figure 11-5).</p>
+<ul>
+<li>It decouples modules, but each module is now <strong>coupled to the mediator</strong>: coupling is simplified, not removed.</li>
+<li>The mediator, not the dependent modules, needs an API or interface to invoke the other modules' functionality.</li>
+</ul>
+<h2 id="11-3-data-topologies">11.3 Data topologies</h2>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-11-fig-11-6-data.svg" alt="Figure 11-6: one monolithic database, or a database per module" loading="lazy" /></p>
+<ul>
+<li>Deployed as one unit, it usually has a <strong>monolithic database</strong>. A single database <strong>reduces inter-module communication</strong> because the data is shared.</li>
+<li>If modules are independent and perform specific functions they can also have <strong>their own databases</strong> with contextual data, even though the architecture is monolithic.</li>
+</ul>
+<h2 id="11-4-cloud-considerations">11.4 Cloud considerations</h2>
+<p>It can be deployed in the cloud (especially small systems), but its monolithic nature makes it <strong>less able to use on-demand provisioning</strong>. Smaller systems can still use cloud services such as file storage, databases and messaging.</p>
+<h2 id="11-5-common-risks">11.5 Common risks</h2>
+<ul>
+<li>It can get <strong>too big</strong> to maintain, test and deploy. Monoliths are not bad in themselves; &quot;too big&quot; varies by system. Warning signs:
+<ul>
+<li>changes take too long</li>
+<li>changing one area unexpectedly breaks others</li>
+<li>team members get in each other's way</li>
+<li>startup takes too long</li>
+</ul>
+</li>
+<li><strong>Going overboard with code reuse</strong> blurs module boundaries and leads to the <strong>unstructured monolith</strong>: so interdependent it cannot be unravelled.</li>
+<li><strong>Too much inter-module communication.</strong>
+<ul>
+<li>Some is normal in a complex workflow, but too much suggests the <strong>domains were ill-defined</strong></li>
+<li>rethink them to fit complex workflows and interdependencies.</li>
+</ul>
+</li>
+</ul>
+<h2 id="11-6-governance">11.6 Governance</h2>
+<p>The primary artifact is the <strong>module</strong>, usually shown by directory, namespace or package. So the first automated governance is to define the modules and ensure compliance. Tools: <strong>ArchUnit</strong> (Java), <strong>ArchUnitNet</strong> and <strong>NetArchTest</strong> (.NET), <strong>PyTestArch</strong> (Python), <strong>TSArch</strong> (TypeScript and JavaScript).</p>
+<p>Example 11-1 (pseudocode) checks that all source falls under a defined module namespace:</p>
+<pre class="hl"><code># The following namespaces represent the modules in the system
+LIST module_list = {
+    com.orderentry.orderplacement,
+    com.orderentry.inventorymanagement,
+    com.orderentry.paymentprocessing,
+    com.orderentry.notification,
+    com.orderentry.fulfillment,
+    com.orderentry.shipping
+}
+
+# Get the list of namespaces in the system
+LIST namespace_list = get_all_namespaces(root_directory)
+
+# Make sure all the namespaces start with one of the listed modules
+FOREACH namespace IN namespace_list
+{
+    IF NOT namespace.starts_with(module_list)
+    {
+        send_alert(namespace)
+    }
+}
+</code></pre>
+<p>A developer who adds a high-level namespace or directory outside the defined modules gets an alert. This works well for the <strong>monolithic structure</strong>; it is harder for the <strong>modular structure</strong>, because code may not share one repository. There each module is tested separately (Example 11-2, as printed):</p>
+<pre class="hl"><code># Get the list of namespaces in the system
+LIST namespace_list = get_all_namespaces(root_directory)
+
+# Make sure all the namespaces start with com.orderentry.inventorymanagement
+FOREACH namespace IN namespace_list
+{
+    IF NOT namepace.starts_with("com.orderentry.inventorymanagement")
+    {
+        send_alert(namespace)
+    }
+}
+</code></pre>
+<p><strong>Limit communication.</strong> &quot;Too much&quot; is subjective, but architects should minimise interdependencies. Example 11-3 (as printed in the book) alerts when a module exceeds <strong>five</strong> coupling points:</p>
+<pre class="hl"><code># Walk the directory structure, gathering modules and the source code files
+# contained within those modules
+LIST module_list = {
+    com.orderentry.orderplacement,
+    com.orderentry.inventorymanagement,
+    com.orderentry.paymentprocessing,
+    com.orderentry.notification,
+    com.orderentry.fulfillment,
+    com.orderentry.shipping
+}
+
+MAP module_source_file_map
+FOREACH module IN module_list
+{
+    LIST source_file_list = get_source_files(module)
+    ADD module, source_file_list TO module_source_file_map
+}
+
+# Determine how many references exist for each source file and send an alert if
+# the system's total dependency count is greater than 5
+FOREACH module, source_file_list IN module_source_file_map
+{
+    FOREACH source_file IN source_file_list
+    {
+        incoming count = used_by_other_module(source_file, module_source_file_map)
+        {
+            outgoing_count = uses_other_module(source_file)
+            {
+                total_count = incoming count + outgoing count
+            }
+            IF total_count &gt; 5
+            {
+                send_alert(module, total_count)
+            }
+        }
+    }
+}
+</code></pre>
+<p><strong>Forbid specific dependencies.</strong> For example, in Figure 11-2 OrderPlacement should not talk to Shipping. Example 11-4 (ArchUnit):</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">order_placement_cannot_access_shipping</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">noClasses</span><span class="p">().</span><span class="na">that</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">resideInAPackage</span><span class="p">(</span><span class="s">"..com.orderentry.orderplacement.."</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">should</span><span class="p">().</span><span class="na">accessClassesThat</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">resideInAPackage</span><span class="p">(</span><span class="s">"..com.orderentry.shipping.."</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">check</span><span class="p">(</span><span class="n">myClasses</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="11-7-team-topology-considerations">11.7 Team topology considerations</h2>
+<p>Domain partitioning works best when <strong>teams are also aligned by domain</strong> (cross-functional teams with specialisation), who can take a requirement from presentation logic to database. Teams organised by technical category (UI, backend, database) do not suit it: domain requirements then need much communication and collaboration, which is often difficult.</p>
+<table>
+<thead>
+<tr>
+<th>Team type</th>
+<th>Why it fits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream-aligned</strong></td>
+<td>Own the flow end to end, matching the monolithic, self-contained shape</td>
+</tr>
+<tr>
+<td><strong>Enabling</strong></td>
+<td>High modularity and separation of concerns: specialists experiment by adding modules with minimal impact on existing ones</td>
+</tr>
+<tr>
+<td><strong>Complicated-subsystem</strong></td>
+<td>Each module performs a specific domain role (such as PaymentProcessing), so people can focus on complicated processing independently</td>
+</tr>
+<tr>
+<td><strong>Platform</strong></td>
+<td>Common tools, services, APIs and tasks fit the high modularity</td>
+</tr>
+</tbody>
+</table>
+<h2 id="11-8-style-characteristics">11.8 Style characteristics</h2>
+<p>It is a <strong>domain-partitioned</strong> architecture with a <strong>monolithic deployment</strong>, so the architecture quantum is typically <strong>1</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-11-fig-11-7-ratings.svg" alt="Figure 11-7: star ratings for the modular monolith" loading="lazy" /></p>
+<ul>
+<li><strong>Overall cost, simplicity and modularity</strong>
+<ul>
+<li>are the main strengths: none of distributed styles' complexity, simpler to understand, low cost to build and maintain</li>
+<li>modularity comes from separating concerns between modules.</li>
+</ul>
+</li>
+<li><strong>Deployability and testability (2 stars)</strong> rate slightly higher than layered because of the modularity, but it is still a monolith, so ceremony, risk, deployment frequency and completeness of testing hold the scores down.</li>
+<li><strong>Elasticity and scalability (1 star)</strong>
+<ul>
+<li>from monolithic deployment</li>
+<li>Scaling some functions needs very complex techniques (multithreading, internal messaging, parallel processing) that suit it poorly.</li>
+</ul>
+</li>
+<li><strong>Fault tolerance (1 star):</strong> one out-of-memory condition crashes the whole unit; availability suffers from a high <strong>MTTR</strong>, with startup usually measured in minutes.</li>
+</ul>
+<h2 id="11-9-when-to-use-and-when-not-to-use">11.9 When to use and when not to use</h2>
+<p><strong>Use</strong> it:</p>
+<ul>
+<li>under tight budget and time constraints (simple and low cost)</li>
+<li>when <strong>starting a new system</strong>, or when direction is still unclear: it is often more effective to begin with a modular monolith and later move to service-based (Chapter 14) or microservices (Chapter 18) than to jump straight to a distributed style</li>
+<li>for <strong>domain-focused teams</strong> (cross-functional with specialisation), each owning a module end to end with minimal coordination</li>
+<li>when most changes are <strong>domain based</strong> (for example, adding expiration dates to items in a wishlist)</li>
+<li>for teams practising <strong>DDD</strong></li>
+</ul>
+<p><strong>Do not use</strong> it:</p>
+<ul>
+<li>when a system needs high <strong>scalability, elasticity, availability, fault tolerance, responsiveness or performance</strong></li>
+<li>when most changes are <strong>technically oriented</strong>, such as continually replacing the UI or database technology
+<ul>
+<li>Because the architecture is domain partitioned, such changes hit every module and need heavy coordination between domain teams</li>
+<li><strong>layered</strong> (Chapter 10) is much better then.</li>
+</ul>
+</li>
+</ul>
+<h2 id="11-10-example-easymeals">11.10 Example: EasyMeals</h2>
+<p>A new delivery-based neighbourhood restaurant for busy working people: customers order dinner online and get it at the door within an hour. It is small and local, with low scalability and responsiveness needs and a limited budget, so the modular monolith suits it.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-11-fig-11-8-easymeals.svg" alt="Figure 11-8: the EasyMeals restaurant ordering and management system" loading="lazy" /></p>
+<p>The modules, with namespaces <code>com.easymeals.&lt;module&gt;</code>: <code>placeorder</code>, <code>payment</code>, <code>prepareorder</code>, <code>delivery</code>, <code>recipes</code>, <code>inventory</code>. Customers reach PlaceOrder and PaymentProcessing through a dedicated user interface.</p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+<th>Components (namespaces)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>PlaceOrder</strong></td>
+<td>View the menu, select items, add name, address and payment information, submit the order</td>
+<td><code>menu</code>, <code>shoppingcart</code>, <code>customerdata</code>, <code>paymentdata</code>, <code>checkout</code></td>
+</tr>
+<tr>
+<td><strong>PaymentProcessing</strong></td>
+<td>Apply payment (credit cards, debit cards, PayPal). Modularity makes it easy to add another type such as loyalty points</td>
+<td><code>creditcard</code>, <code>debitcard</code>, <code>paypal</code></td>
+</tr>
+<tr>
+<td><strong>PrepareOrder</strong></td>
+<td>After payment, PlaceOrder talks to it; shows the whole order to the kitchen, who mark it ready for delivery</td>
+<td><code>displayorder</code>, <code>ready</code></td>
+</tr>
+<tr>
+<td><strong>Delivery</strong></td>
+<td>Assign a delivery person and address; they mark it delivered and record issues (an aggressive dog, a customer not home)</td>
+<td><code>assign</code>, <code>issues</code>, <code>complete</code></td>
+</tr>
+<tr>
+<td><strong>Recipes</strong></td>
+<td>Cooks and management add menu items and maintain ingredients and measurements</td>
+<td><code>view</code>, <code>maintenance</code></td>
+</tr>
+<tr>
+<td><strong>IngredientsInventory</strong></td>
+<td>Ensure enough ingredients for the menu; a more complex module with an AI component that forecasts sales to automate weekly procurement</td>
+<td><code>maintenance</code>, <code>forecasting</code>, <code>ordering</code>, <code>suppliers</code>, <code>invoices</code></td>
+</tr>
+</tbody>
+</table>
+<p>A module is made up of <strong>one to many components</strong> (Chapter 8). The simplicity and modularity make it relatively easy to find and change code to fix a bug or add a feature.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>One deployment unit, domain-partitioned modules; namespace <code>com.app.&lt;domain&gt;.&lt;component&gt;</code>.</li>
+<li>Monolithic structure (simple, needs governance) versus modular structure (cleaner boundaries, weak when modules must communicate).</li>
+<li>Communicate by peer-to-peer or mediator; keep it minimal; govern with fitness functions.</li>
+<li>Great start for new systems and domain-focused teams; poor for operational characteristics or technical-change-heavy work.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Modular monolith; domain-partitioned; module.</strong></li>
+<li><strong>Monolithic structure versus modular structure</strong> (JAR or DLL per module).</li>
+<li><strong>Peer-to-peer versus mediator communication.</strong></li>
+<li><strong>DLL Hell and JAR Hell.</strong></li>
+<li><strong>Unstructured monolith.</strong></li>
+<li><strong>Module governance fitness functions</strong> (ArchUnit, ArchUnitNet, NetArchTest, PyTestArch, TSArch).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 11 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch11.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch11.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-10-layered-architecture-style/">Fundamentals of Software Architecture 10: Layered Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-12-pipeline-architecture-style/">Fundamentals of Software Architecture 12: Pipeline Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-09-foundations/">Fundamentals of Software Architecture 9: Foundations</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-10-layered-architecture-style/">&larr; Fundamentals of Software Architecture 10: Layered Architecture Style</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-12-pipeline-architecture-style/">Fundamentals of Software Architecture 12: Pipeline Architecture Style &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

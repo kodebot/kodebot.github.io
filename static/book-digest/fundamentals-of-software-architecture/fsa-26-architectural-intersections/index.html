@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 26: Architectural Intersections</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-25-negotiation-and-leadership-skills/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-27-the-laws-of-software-architecture-revisited/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-26-architectural-intersections">Fundamentals of Software Architecture 26: Architectural Intersections</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 26. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-25-negotiation-and-leadership-skills/">Fundamentals of Software Architecture 25: Negotiation and Leadership Skills</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-27-the-laws-of-software-architecture-revisited/">Fundamentals of Software Architecture 27: The Laws of Software Architecture, Revisited</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>For an architecture to work it must align with the rest of its environment. The authors call these alignments the <strong>intersections of architecture</strong>: implementation, infrastructure, data topologies, engineering practices, team topologies, systems integration, the enterprise, the business environment and generative AI.</li>
+<li><strong>Implementation:</strong> the code must match the design's operational concerns, internal structure and constraints. A cache that served responsiveness crashed a scalability-driven system at about 80,000 users.</li>
+<li><strong>Infrastructure:</strong> a scalable architecture only scales if the infrastructure does; <a href="http://Pets.com" target="_blank" rel="noopener noreferrer">Pets.com</a> is the cautionary tale.</li>
+<li><strong>Data:</strong> the database topology, type, structure and read/write priority must match the style.</li>
+<li><strong>Business environment:</strong> domain-to-architecture isomorphism; unknown unknowns make every architecture iterative; residuality theory is one response.</li>
+<li><strong>Generative AI:</strong> build for swappable LLMs with guardrails and evals; as an assistant it has knowledge but lacks the wisdom to decide.</li>
+</ul>
+</div></div>
+<h2 id="26-1-the-intersections">26.1 The intersections</h2>
+<table>
+<thead>
+<tr>
+<th>Intersection</th>
+<th>The question it asks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Implementation</strong></td>
+<td>Is the code aligned with operational characteristics, architectural constraints and the internal structure?</td>
+</tr>
+<tr>
+<td><strong>Infrastructure</strong></td>
+<td>Do infrastructure and deployment align with scalability, responsiveness, fault tolerance and availability?</td>
+</tr>
+<tr>
+<td><strong>Data topologies</strong></td>
+<td>Does the data topology (monolithic, domain databases, database per service) and data type align with the style? Widely ignored</td>
+</tr>
+<tr>
+<td><strong>Engineering practices</strong></td>
+<td>Does the way the team creates, maintains and tests software, including the deployment pipeline, match the style?</td>
+</tr>
+<tr>
+<td><strong>Team topologies</strong></td>
+<td>Does the team structure match the architecture? If not, even simple changes are hard</td>
+</tr>
+<tr>
+<td><strong>Systems integration</strong></td>
+<td>What other systems must it talk to? Ignoring this devastates maintenance, reliability, scalability, responsiveness and availability</td>
+</tr>
+<tr>
+<td><strong>The enterprise</strong></td>
+<td>Does it fit the organisation's frameworks, practices, principles and standards?</td>
+</tr>
+<tr>
+<td><strong>The business environment</strong></td>
+<td>Does it fit the business and problem domain? Too often ignored, so the architecture misses the business's goals</td>
+</tr>
+<tr>
+<td><strong>Generative AI</strong></td>
+<td>How do LLMs affect the architecture? Increasingly important</td>
+</tr>
+</tbody>
+</table>
+<h2 id="26-2-architecture-and-implementation">26.2 Architecture and implementation</h2>
+<p>The First Law's answer is &quot;it depends&quot;; perhaps the second most common is &quot;<strong>that's an implementation detail</strong>&quot;, often the reason an architecture fails. The source code must align with the design on three things: <strong>operational concerns, internal structure and constraints</strong>.</p>
+<h3 id="operational-concerns">Operational concerns</h3>
+<p>An order-entry system must support <strong>several thousand to half a million concurrent customers</strong>. You choose <strong>microservices</strong> (by the Chapter 18 star ratings) for scalability and elasticity.</p>
+<p>In implementation, the tightly formed bounded contexts mean Order Placement cannot read the inventory database; it must <strong>synchronously call Inventory Management</strong> for stock counts, tightly coupling the services and hurting responsiveness.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-26-fig-26-1-replicated-cache.svg" alt="Figure 26-1: an in-memory replicated cache between services, and the memory that scaling exhausts" loading="lazy" /></p>
+<p>The team adds an <strong>in-memory replicated cache</strong> (Apache Ignite, Hazelcast): Inventory has a <strong>writable</strong> in-memory cache of item IDs and current counts; every Order Placement instance holds a <strong>replicated read-only</strong> copy. This decouples the services and improves responsiveness.</p>
+<p>But after release, more instances are needed as users grow, and at about <strong>80,000 concurrent customers</strong> the system <strong>crashes with out-of-memory conditions in all the virtual machines</strong>, since the cache memory needs are too high.</p>
+<p>The architecture and implementation are <strong>misaligned</strong>: the architecture focused on scalability and elasticity, the implementation on responsiveness and decoupling. Both teams made good decisions, in service of different goals.</p>
+<h3 id="structural-integrity">Structural integrity</h3>
+<p>Logical components form the logical architecture (Chapter 8), usually shown as directory structures or namespaces; the source structure must match it. Without guidance, knowledge and governance, developers create directories and namespaces as they please, producing architectures that are hard to maintain, test and deploy, and so less reliable and harder to evolve.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-26-fig-26-2-and-26-3-structure.svg" alt="Figures 26-2 and 26-3: an ungoverned internal logical architecture versus an aligned one" loading="lazy" /></p>
+<ul>
+<li><strong>Tools for automated governance:</strong> <strong>ArchUnit</strong> (Java), <strong>ArchUnitNet</strong> and <strong>NetArchTest</strong> (.NET), <strong>PyTestArch</strong> (Python), <strong>TSArch</strong> (TypeScript and JavaScript).</li>
+<li>Together with good architect and developer collaboration these give implementations aligned like Figure 26-3, which is far more maintainable, testable, deployable, reliable, adaptable and extensible than the Figure 26-2 tangle.</li>
+</ul>
+<h3 id="architectural-constraints">Architectural constraints</h3>
+<p>A <strong>constraint</strong> is a governing rule limiting the architecture (REST only, a specific database type) needed to reach its goals. If the implementation breaks it, the architecture fails; the architect must identify and communicate constraints.</p>
+<p><strong>Example:</strong> a business with a <strong>tight budget and deadline</strong> expects many structural database changes. A <strong>traditional layered architecture</strong> fits (simple, cheap, technically partitioned: database changes isolated to one layer). Constraints needed:</p>
+<ul>
+<li>all database logic lives in the <strong>Persistence layer</strong></li>
+<li>the <strong>Presentation layer cannot access the Persistence layer directly</strong>, even for simple queries</li>
+</ul>
+<p>They stop database logic spreading, so dropping a table or renaming a column touches only the Persistence layer.</p>
+<p>Now UI developers call the database directly (faster) and backend developers put business and database logic together (easier to test): the implementation ignores the constraints, so database changes hit every layer, take too long, and the business goals are missed.</p>
+<p>Architectural tools also govern constraints.</p>
+<h2 id="26-3-architecture-and-infrastructure">26.3 Architecture and infrastructure</h2>
+<p>The scope of architecture has grown. Around the <strong>mid-2000s</strong> the relationship with operations was contractual and bureaucratic: companies outsourced operations with <strong>SLAs</strong> for uptime, scale and responsiveness. Today styles like microservices freely use what used to be solely operational.</p>
+<p>Elastic scale was once built into space-based architectures (Chapter 16); now microservices handle it less painfully through tighter collaboration between architects and DevOps.</p>
+<blockquote>
+<p>[!example] History: how <a href="http://Pets.com" target="_blank" rel="noopener noreferrer">Pets.com</a> gave us elastic scale
+Capabilities like elastic scale are born of hard lessons. <strong><a href="http://Pets.com" target="_blank" rel="noopener noreferrer">Pets.com</a></strong> appeared around <strong>1998</strong>, hoping to be the <a href="http://Amazon.com" target="_blank" rel="noopener noreferrer">Amazon.com</a> of pet supplies, with a sock-puppet mascot with a microphone that became a superstar (parades, national sporting events). Management apparently spent the money on the mascot, not infrastructure. When orders poured in the site was slow, transactions were lost and deliveries delayed; shortly after a <strong>disastrous Christmas rush</strong> it closed, selling its only remaining valuable asset, the mascot. It needed <strong>elastic scale</strong>: spinning up more instances on demand, now a cloud commodity. Early ecommerce firms ran their own infrastructure and many learned that <strong>too much success can kill a business</strong>.</p>
+</blockquote>
+<ul>
+<li><strong>Why it matters:</strong>
+<ul>
+<li>the infrastructure facilitates operational characteristics</li>
+<li>An architecture that <em>can</em> scale won't if the infrastructure doesn't</li>
+<li>Architects and developers are often blamed for failures caused by <strong>architecture and infrastructure misalignment</strong>, usually from lack of communication with infrastructure and operations people.</li>
+</ul>
+</li>
+<li><strong>History of DevOps:</strong>
+<ul>
+<li>operations were considered separate and often outsourced as a cost saving, so 1990s and 2000s architectures were designed <strong>defensively</strong>, assuming operations were beyond control (see Chapter 16)</li>
+<li>Orchestration-driven SOA needed elaborate tooling for scale and elasticity, so architects built those capabilities into the architecture, which became far more complex</li>
+<li><strong>Microservices' creators realised operational concerns are better handled by operations</strong>, collaborated with them and laid the foundations of <strong>DevOps</strong>.</li>
+</ul>
+</li>
+<li><strong>Cloud can still misalign.</strong>
+<ul>
+<li>Deploying services <strong>across regions or availability zones</strong> can reduce or cancel the performance and data integrity benefits of replicated and distributed caches</li>
+<li><strong>co-locating services, containers or Kubernetes Pods on one VM</strong> raises performance but hurts scalability, fault tolerance, availability and elasticity.</li>
+</ul>
+</li>
+<li>Align through close collaboration with infrastructure staff or by adopting DevOps, so everyone understands the critical operational concerns
+<ul>
+<li>only then do the &quot;five-star&quot; ratings materialise.</li>
+</ul>
+</li>
+</ul>
+<h2 id="26-4-architecture-and-data-topologies">26.4 Architecture and data topologies</h2>
+<p>Often overlooked. The wrong database type or topology can negate an architecture's best characteristics: a <strong>monolithic database</strong> gives good consistency and transactions but hurts scalability and fault tolerance; <strong>distributed topologies</strong> are good for scalability and change control but can reduce data integrity, consistency and performance.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-26-fig-26-4-database-topologies.svg" alt="Figure 26-4: common database topologies" loading="lazy" /></p>
+<ul>
+<li><strong>Database topology</strong>
+<ul>
+<li>(Chapter 15): <strong>monolithic</strong>, <strong>distributed domain-based</strong>, or <strong>database per service</strong></li>
+<li><strong>Microservices</strong>
+<ul>
+<li>typically use database per service to keep a strict bounded context</li>
+<li>otherwise controlling change is very hard and fault tolerance, scalability, elasticity, maintainability, testability and deployability suffer</li>
+</ul>
+</li>
+<li>Some styles, like <strong>service-based</strong> (Chapter 14), are more flexible.</li>
+</ul>
+</li>
+<li><strong>Architectural characteristics:</strong>
+<ul>
+<li>every style has superpowers (4 to 5 stars) and weaknesses (1 to 2); so do database types</li>
+<li>In <em>Software Architecture: The Hard Parts</em> the authors rated six types: <strong>relational, key-value, document, columnar, graph, NoSQL</strong></li>
+<li>Scalability and elasticity are superpowers of microservices, event-driven and space-based architectures, and also of <strong>key-value and columnar</strong> databases, which amplify them.</li>
+</ul>
+</li>
+<li><strong>Data structure:</strong>
+<ul>
+<li>relational data (hierarchies of interdependent relationships) fits a relational database</li>
+<li><strong>key-value pairs in a relational database</strong>
+<ul>
+<li>are a misalignment, inefficient for both database and architecture</li>
+<li>Data may be relational, document-based (JSON event or request payloads) or key-value, so use <strong>polyglot databases</strong> when feasible.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Read/write priority:</strong></li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Priority</th>
+<th>Good fit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>High <strong>writes</strong> over infrequent reads</td>
+<td><strong>Columnar</strong></td>
+</tr>
+<tr>
+<td>High <strong>reads</strong></td>
+<td><strong>Key-value, document or graph</strong></td>
+</tr>
+<tr>
+<td>Reads and writes about equal</td>
+<td><strong>Relational and NewSQL</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Misaligning this produces poorly performing systems.</p>
+<h2 id="26-5-architecture-and-engineering-practices">26.5 Architecture and engineering practices</h2>
+<p>In the late 20th century architects thought methodologies (Waterfall, Scrum, Extreme Programming, Lean, Crystal) did not affect architecture. Engineering advances changed that. Separate:</p>
+<ul>
+<li>
+<p><strong>Processes:</strong> how teams are formed and managed, meetings, workflows: the mechanics of how people organise.</p>
+</li>
+<li>
+<p><strong>Engineering practices:</strong></p>
+<ul>
+<li>process-agnostic techniques and tools to develop and release software: <strong>XP, continuous integration, continuous delivery, TDD</strong></li>
+<li><em>Software engineering</em> covers development plus these practices.</li>
+</ul>
+</li>
+<li>
+<p>Software lacks the maturity of other engineering:</p>
+<ul>
+<li>civil engineers predict structural change far better</li>
+<li>The <strong>Achilles' heel is estimation</strong>, because traditional estimation ignores the exploratory nature and unknowns of software.</li>
+</ul>
+</li>
+<li>
+<p>Iterative processes fit architecture better</p>
+<ul>
+<li>building microservices with <strong>Waterfall</strong> creates friction. <strong>Agile shines when migrating between styles</strong> (tight feedback loops, the <strong>Strangler Pattern</strong>, <strong>feature toggles</strong>).</li>
+</ul>
+</li>
+<li>
+<p>Match style and practices:</p>
+<ul>
+<li>microservices assumes automated machine provisioning, testing and deployment</li>
+<li>with an antiquated operations group, manual processes and little testing it would likely fail.</li>
+</ul>
+</li>
+<li>
+<p>Neal Ford's <em>Building Evolutionary Architectures</em> offers <strong>architectural fitness functions</strong> to protect characteristics as change occurs (metrics, unit tests, monitors, chaos engineering) and techniques for architectures that change gracefully.</p>
+</li>
+<li>
+<p><strong>Example:</strong></p>
+<ul>
+<li>fast <strong>time to market</strong> translates to <strong>agility</strong>, a composite of <strong>maintainability, testability and deployability</strong> (Chapter 6), all influenced by engineering practices and measurable by fitness functions
+<ul>
+<li>Microservices and service-based architectures support agility, but if practices don't align, the goals are missed</li>
+</ul>
+</li>
+<li>fitness functions reveal the misalignment so the architect can realign the practices or the architecture.</li>
+</ul>
+</li>
+</ul>
+<h2 id="26-6-team-topologies-systems-integration-and-the-enterprise">26.6 Team topologies, systems integration and the enterprise</h2>
+<ul>
+<li><strong>Team topologies.</strong>
+<ul>
+<li>Each style in Part II has a team section, because alignment is so important</li>
+<li>Teams are <strong>domain partitioned</strong> (cross-functional, organised by domain, e.g. a customer-facing team from UI to database) or <strong>technically partitioned</strong> (UI, backend, shared services, database teams: a natural fit for <strong>layered</strong>; business-function and data-synchronisation teams fit <strong>space-based</strong>)</li>
+<li>Misalignment means teams struggle to implement and maintain the architecture and probably miss business goals.</li>
+</ul>
+</li>
+<li><strong>Systems integration.</strong>
+<ul>
+<li>Systems rarely live alone</li>
+<li>Is the called system available? Does it scale and perform as the caller requires? Neglect gives <strong>static and dynamic coupling</strong> that cannot scale, respond or stay agile</li>
+<li>Consider <strong>communication protocols, contracts, compatibility of architectural characteristics, and whether the integration preserves each system's architectural quantum</strong>.</li>
+</ul>
+</li>
+<li><strong>The enterprise</strong>
+<ul>
+<li>(all systems and products in a company, department or division)</li>
+<li>Standards on security, platforms, technologies, documentation and diagramming</li>
+<li>Ignoring them usually gets a technically effective solution deemed a failed <strong>&quot;one-off&quot;</strong> and scrapped.</li>
+</ul>
+</li>
+</ul>
+<h2 id="26-7-architecture-and-the-business-environment">26.7 Architecture and the business environment</h2>
+<p>The business environment directly influences architecture and never stops changing: cost-cutting to survive, aggressive expansion, quarterly pivots, or stability. An effective architect understands the company's position and direction. The authors call the alignment <strong>domain-to-architecture isomorphism</strong>:</p>
+<ul>
+<li><strong>Severe cost-cutting</strong> companies don't match <strong>microservices or space-based</strong> (costly to create and maintain).</li>
+<li>Businesses <strong>expanding aggressively by mergers and acquisitions</strong> are poorly served by <strong>monolithic</strong> styles that cannot evolve and adapt.</li>
+</ul>
+<p>The big issue is <strong>unknown change</strong>. Donald Rumsfeld (former US Secretary of Defense) distinguished known knowns, known unknowns and <strong>unknown unknowns</strong>.</p>
+<p>Systems start with known unknowns (things developers will learn about the domain and technology) but fall victim to <strong>unknown unknowns</strong>, &quot;the nemeses of software systems&quot;, which is why all <strong>Big Design Up Front</strong> efforts suffer: you can't design for them.</p>
+<p>Mark Richards: &quot;All architectures become iterative because of unknown unknowns. Agile just recognizes this and does it sooner.&quot;</p>
+<p>Evolutionary architecture and iterative architecture help, as do characteristics such as <strong>portability, scalability, evolvability and adaptability</strong>.</p>
+<p><strong>Residuality theory.</strong> <strong>Barry O'Reilly</strong> (complexity theory and software design), in <em>Residues: Time, Change, and Uncertainty in Software Architecture</em> (Leanpub, 2024), treats business change as <strong>stressors</strong> and the architectural changes as <strong>residues</strong>.</p>
+<p>As the architect keeps applying residues, they start addressing unknown changes no one could predict, bringing the architecture to a <strong>critical state</strong> in complexity theory. &quot;An interesting theory, one we are watching closely.&quot;</p>
+<h2 id="26-8-architecture-and-generative-ai">26.8 Architecture and generative AI</h2>
+<p>Written in early 2025: LLMs have entered software development and design, used in systems and by some architects to think through hard problems.</p>
+<h3 id="incorporating-gen-ai-into-an-architecture">Incorporating Gen AI into an architecture</h3>
+<p>Use <strong>abstraction and modularity</strong>: swap one LLM for another quickly; allow <strong>guardrails (rails)</strong> and <strong>evaluating results (evals)</strong> from various LLMs.</p>
+<p><strong>Example:</strong> a job-search company uses an LLM to <strong>anonymise résumés</strong> to reduce bias. Are the results accurate? Does it remove too much, or keep demographic information? You must <strong>gather samples and metrics and compare engines</strong>; tools such as <strong>Langfuse</strong> add this <strong>observability</strong> to the architecture.</p>
+<h3 id="gen-ai-as-an-architect-assistant">Gen AI as an architect assistant</h3>
+<p>LLMs (Copilot) can write source code for specific, deterministic problems (&quot;C# code that generates a unique four-digit PIN with no repeating digits&quot;). For architects, typical prompts:</p>
+<ul>
+<li><strong>Risk assessment:</strong> &quot;Are there risk areas within this architecture?&quot;</li>
+<li><strong>Risk mitigation:</strong> &quot;How should I address this risk?&quot;</li>
+<li><strong>Antipatterns:</strong> &quot;Are there any common antipatterns in this architecture?&quot;</li>
+<li><strong>Decisions:</strong> &quot;Should I use orchestration or choreography for this workflow?&quot;</li>
+</ul>
+<p>As of early 2025 the authors hadn't had much success: asking an LLM whether microservices or space-based fits <strong>rarely if ever</strong> gives the right answer, because <strong>everything is a trade-off</strong>; <strong>LLMs understand knowledge but lack wisdom</strong>, and the context is so large it is faster to solve the problem yourself. Some tools show promise:</p>
+<ul>
+<li><strong>Thoughtworks Haiven</strong> can interpret an <strong>architecture diagram</strong> and describe it, saving an export to XML for prompting; users can then ask whether it sees bottlenecks or issues.</li>
+<li>Other efforts translate a <strong>PlantUML diagram</strong> or a pseudolanguage description into <strong>executable ArchUnit code</strong> to govern structure.</li>
+</ul>
+<p>Expect rapid change in how Gen AI assists architects.</p>
+<h2 id="26-9-summary">26.9 Summary</h2>
+<p>Architecture is <strong>holistic</strong>: much more than choosing a style and starting implementation. It means aligning with the rest of the environment, using the communication and collaboration skills from Part III.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Check each intersection explicitly; misalignment, not bad design, often causes failure.</li>
+<li>Govern structure and constraints in code with automated tools.</li>
+<li>Match infrastructure, data topology, engineering practices and team shape to the style.</li>
+<li>Fit the architecture to the business's position, and accept iteration because of unknown unknowns.</li>
+<li>Build AI features behind abstractions with evals; use AI to list trade-offs, not to decide.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Intersections of architecture.</strong></li>
+<li><strong>Operational concerns; structural integrity; constraints.</strong></li>
+<li><strong>Elastic scale; DevOps; polyglot databases.</strong></li>
+<li><strong>Domain-to-architecture isomorphism; unknown unknowns; residuality theory.</strong></li>
+<li><strong>Guardrails, evals, observability for LLMs.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 26 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch26.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch26.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-25-negotiation-and-leadership-skills/">Fundamentals of Software Architecture 25: Negotiation and Leadership Skills</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-27-the-laws-of-software-architecture-revisited/">Fundamentals of Software Architecture 27: The Laws of Software Architecture, Revisited</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-18-microservices-architecture/">Fundamentals of Software Architecture 18: Microservices Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-06-measuring-and-governing-architecture-characteristics/">Fundamentals of Software Architecture 6: Measuring and Governing Architecture Characteristics</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-25-negotiation-and-leadership-skills/">&larr; Fundamentals of Software Architecture 25: Negotiation and Leadership Skills</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-27-the-laws-of-software-architecture-revisited/">Fundamentals of Software Architecture 27: The Laws of Software Architecture, Revisited &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

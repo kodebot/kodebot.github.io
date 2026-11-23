@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 14: Service-Based Architecture Style</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-13-microkernel-architecture-style/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-14-service-based-architecture-style">Fundamentals of Software Architecture 14: Service-Based Architecture Style</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 14. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-13-microkernel-architecture-style/">Fundamentals of Software Architecture 13: Microkernel Architecture Style</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">Fundamentals of Software Architecture 15: Event-Driven Architecture Style</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>hybrid of microservices</strong>, and one of the most <strong>pragmatic</strong> styles: distributed, but without the cost and complexity of microservices or event-driven. A separately deployed UI, <strong>coarse-grained domain services</strong> (aim for no more than about 12) and, optionally, a <strong>monolithic database</strong>.</li>
+<li>Each <strong>domain service</strong> is typically layered (API facade, business, persistence) or split into subdomains. It can use <strong>ACID transactions</strong> inside one service, which microservices cannot.</li>
+<li>Flexible: separate UIs, an <strong>API gateway</strong>, one or several databases. A single shared entity library is an <strong>antipattern</strong>; <strong>logically partition</strong> the database and the shared libraries instead.</li>
+<li>Quanta: <strong>1 to many</strong>. Good ratings: maintainability, testability, deployability and evolvability <strong>4</strong>; simplicity, modularity, responsiveness, scalability and fault tolerance 3; elasticity 2; cost <code>$$</code>.</li>
+<li>A good <strong>stepping stone</strong> to other distributed styles: &quot;Not every portion of an application needs to be microservices.&quot;</li>
+</ul>
+</div></div>
+<h2 id="14-1-topology">14.1 Topology</h2>
+<p>A <strong>distributed macro-layered</strong> structure: a separately deployed user interface, separately deployed, remote, <strong>coarse-grained services</strong>, and (optionally) a monolithic database. It varies a lot (separate UIs, separate databases).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-1-topology.svg" alt="Figure 14-1: basic topology of the service-based style" loading="lazy" /></p>
+<ul>
+<li>Services usually represent a domain or subdomain, so they are called <strong>domain services</strong>: coarse-grained portions of functionality (such as order fulfilment or order shipping), generally independent and separately deployed.</li>
+<li>They deploy much like any monolith, so <strong>containerisation is not required</strong> (Docker or Kubernetes is possible).</li>
+<li>With a single monolithic database, <strong>minimise the number of domain services (no more than about 12)</strong> to avoid change-control, scalability and fault-tolerance issues.</li>
+<li>Each is typically a <strong>single instance</strong>
+<ul>
+<li>multiple instances for scalability, fault tolerance or throughput usually need <strong>load balancing</strong> between the UI and the service, so the UI reaches a healthy instance.</li>
+</ul>
+</li>
+<li><strong>Access</strong>
+<ul>
+<li>is remote from the UI, typically <strong>REST</strong></li>
+<li>alternatives are messaging, RPC, an API layer with a proxy or gateway, or even SOAP
+<ul>
+<li>Usually the UI embeds the <strong>service locator</strong> pattern to reach services directly (it can also sit in an API gateway or proxy).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>The <strong>centrally shared monolithic database</strong> lets services use SQL queries and joins as a layered monolith would
+<ul>
+<li>With so few services, <strong>exhausting database connections is rarely an issue</strong></li>
+<li>managing <strong>database changes</strong> is the challenge (see data topologies).</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-2-style-specifics">14.2 Style specifics</h2>
+<p>Because domain services are coarse-grained, each is typically designed as a <strong>layered</strong> service (API Facade, Business, Persistence) or partitioned into <strong>subdomains</strong> like a modular monolith (Chapter 11).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-2-domain-service-variants.svg" alt="Figure 14-2: domain service design variants" loading="lazy" /></p>
+<p>Every service needs an <strong>API access facade</strong> the UI calls, and it usually <strong>orchestrates</strong> the request.</p>
+<p>Example, an ecommerce order: the UI sends one request; the facade inside <strong>OrderService</strong> orchestrates placing the order, generating an order ID, applying payment and updating inventory for each product.</p>
+<p>In microservices the same request would orchestrate many separately deployed, remote single-purpose services. That difference, <strong>internal class-level orchestration versus external service orchestration</strong>, is one of the main differences between the styles.</p>
+<h3 id="acid-versus-base">ACID versus BASE</h3>
+<p>Coarse-grained services let a service use regular <strong>ACID</strong> transactions (commit and rollback) to keep the database consistent within it. Fine-grained microservices rely on distributed <strong>BASE</strong> transactions (basic availability, soft state, eventual consistency), which do not give the same integrity.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-acid-vs-compensating.svg" alt="An expired card: a rollback in service-based, a compensating update in microservices" loading="lazy" /></p>
+<ul>
+<li><strong>Service-based:</strong> the customer's card has expired. Payment is an atomic transaction in the same service, so it <strong>rolls back</strong> everything added so far and tells the customer.</li>
+<li><strong>Microservices:</strong>
+<ul>
+<li>OrderPlacement creates the order, generates an ID and inserts it, then remotely calls PaymentService, which fails</li>
+<li>The data is now inconsistent (order inserted but not approved), and a separate <strong>compensating update</strong> (Chapter 9) must be applied to OrderPlacement.</li>
+</ul>
+</li>
+</ul>
+<h3 id="service-design-and-granularity">Service design and granularity</h3>
+<p>Coarse granularity gives better data integrity and consistency, <strong>but a big trade-off</strong>: changing order placement in OrderService means testing and <strong>redeploying all the service's functionality, including payment processing</strong>, and more deployed functionality means more risk something else breaks. In microservices only the small OrderPlacement service changes, with no PaymentService testing or deployment.</p>
+<h3 id="user-interface-options">User interface options</h3>
+<p>Very flexible: the single monolithic UI can be split, even down to one per domain service, which increases scalability, fault tolerance and agility.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-3-ui-variants.svg" alt="Figure 14-3: three UI variants" loading="lazy" /></p>
+<p>Example: one UI for customers placing orders, separate internal UIs for order packers and for customer support.</p>
+<h3 id="api-gateway-options">API gateway options</h3>
+<p>Add an API layer, a <strong>reverse proxy or API gateway</strong>, between the UI and the services.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-4-api-layer.svg" alt="Figure 14-4: an API layer between the UI and the domain services" loading="lazy" /></p>
+<p>It is useful for:</p>
+<ul>
+<li>exposing domain service functionality to <strong>external systems</strong></li>
+<li>consolidating shared <strong>cross-cutting concerns</strong> (metrics, security, auditing, service discovery) in the gateway</li>
+<li><strong>load balancing</strong> services with multiple instances</li>
+</ul>
+<h2 id="14-3-data-topologies">14.3 Data topologies</h2>
+<p>The style is <strong>unique</strong> among distributed architectures in effectively supporting a <strong>monolithic database</strong>, yet the database can also be split, down to one <strong>domain-scoped database per service</strong> (like microservices).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-5-database-topologies.svg" alt="Figure 14-5: database topologies for service-based architecture" loading="lazy" /></p>
+<ul>
+<li>With several databases, make sure <strong>no other service needs that data</strong>, which would force inter-service communication
+<ul>
+<li>In this style it is usually <strong>preferable to share data</strong> rather than call another domain service.</li>
+</ul>
+</li>
+<li>A schema change to a shared table can, if mishandled, <strong>affect every domain service</strong>, making database changes costly, risky and demanding of coordination.</li>
+</ul>
+<p><strong>Entity classes.</strong> The class files for table schemas (<strong>entity objects</strong>) usually live in a <strong>shared library</strong> (a JAR or DLL) used by all services; it can also hold SQL.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-6-shared-library-antipattern.svg" alt="Figure 14-6: one shared entity library, the antipattern" loading="lazy" /></p>
+<ul>
+<li><strong>Antipattern:</strong>
+<ul>
+<li>one shared library of <em>all</em> entity objects is the least effective approach</li>
+<li>Any table change means changing the library, so <strong>every service changes and redeploys, whether or not it uses the table</strong></li>
+<li>Library versioning helps, but it is hard to know which services a table change affects without detailed manual analysis.</li>
+</ul>
+</li>
+</ul>
+<p><strong>The mitigation</strong> is to <strong>logically partition the database and mirror it in separate shared libraries</strong>:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-7-partitioned-libraries.svg" alt="Figure 14-7: a logically partitioned database with matching shared libraries" loading="lazy" /></p>
+<ul>
+<li>Figure 14-7 partitions the database into five domains:
+<ul>
+<li><strong>common, customer, invoicing, order and tracking</strong>, with five matching libraries</li>
+<li>A change to an Invoicing table affects only the services using the invoicing library, so no other service needs retesting or redeployment.</li>
+</ul>
+</li>
+<li>The <strong>common</strong> domain and <code>common_entities_lib</code> are used by all services, so changing them means coordinating everything
+<ul>
+<li>One mitigation: <strong>lock the common entity objects in version control</strong> and allow only the <strong>database team</strong> to change them.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">To better control database changes, make the logical partitioning in the database as fine-grained as possible while keeping well-defined data domains.</div><div class="callout-body">
+</div></div>
+<h2 id="14-4-cloud-risks-governance">14.4 Cloud, risks, governance</h2>
+<ul>
+<li><strong>Cloud:</strong>
+<ul>
+<li>being distributed it works well in the cloud</li>
+<li>Because of their large scope, domain services are typically <strong>containerised services, not serverless functions</strong>, and easily use cloud file storage, databases and messaging.</li>
+</ul>
+</li>
+<li><strong>Risks:</strong>
+<ul>
+<li><strong>Inter-service communication</strong>,
+<ul>
+<li>typical of microservices, is something to avoid here</li>
+<li>Ideally domains are independent with coupling only at the database</li>
+<li>Too much indicates mis-partitioned domains or the wrong style.</li>
+</ul>
+</li>
+<li><strong>Too many domain services:</strong> a practical upper limit of <strong>around 12</strong>; beyond it testing, deployment, monitoring and database connections and changes suffer.</li>
+</ul>
+</li>
+<li><strong>Governance:</strong>
+<ul>
+<li>besides the usual structural and operational checks (cyclomatic complexity, scalability, responsiveness), ensure <strong>changes do not span multiple domain services</strong>: if they do, the domain boundaries are wrong or the style is</li>
+<li>Where inter-service calls are unavailable, govern the <strong>amount</strong> of communication (an OrderProcessing service might need to tell CustomerNotification to email order status), but mostly services should be independent, with <strong>orchestration at the UI or API gateway</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-5-team-topology-considerations">14.5 Team topology considerations</h2>
+<p>Domain partitioned, so it works best with <strong>teams aligned by domain</strong> (cross-functional with specialisation); technically partitioned teams (UI, backend, database) do not suit it.</p>
+<table>
+<thead>
+<tr>
+<th>Team type</th>
+<th>Fit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream-aligned</strong></td>
+<td>Works well if domain boundaries line up with streams. Harder if streams <strong>cross</strong> domain service boundaries: then realign the services or choose another style</td>
+</tr>
+<tr>
+<td><strong>Enabling</strong></td>
+<td>Less effective than other distributed styles because services are coarse-grained; carefully designed components inside each service raise modularity for experiments</td>
+</tr>
+<tr>
+<td><strong>Complicated-subsystem</strong></td>
+<td>Use domain and subdomain modularity to focus on complicated processing independently</td>
+</tr>
+<tr>
+<td><strong>Platform</strong></td>
+<td>High modularity helps them use common tools, services, APIs and tasks</td>
+</tr>
+</tbody>
+</table>
+<h2 id="14-6-style-characteristics">14.6 Style characteristics</h2>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-8-ratings.svg" alt="Figure 14-8: service-based architecture characteristics ratings" loading="lazy" /></p>
+<p>It is <strong>domain partitioned</strong>. In a distributed architecture the quanta count can be <strong>one or more</strong>: if all services share a database or UI there is one; both can be <strong>federated</strong> (split) to get several.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-9-quanta.svg" alt="Figure 14-9: separate quanta in Going Green's service-based design" loading="lazy" /></p>
+<ul>
+<li><strong>Going Green quanta (Figure 14-9):</strong>
+<ul>
+<li>two</li>
+<li>One is <strong>customer facing</strong>: a separate customer UI, its own database, and the Quoting and Item Status services</li>
+<li>The other is <strong>internal operations</strong> (receiving, assessing, recycling): separately deployed services and two UIs, but they <strong>share one database</strong>, so it is a single quantum.</li>
+</ul>
+</li>
+<li>No five-star ratings, but <strong>four stars</strong> in key areas: <strong>agility, testability, deployability</strong> (and maintainability and evolvability), which give faster time to market.</li>
+<li><strong>Fault tolerance and availability</strong>
+<ul>
+<li>are described as high: services are self-contained and, thanks to shared code and database, do not typically call each other, so if one (Going Green's Receiving) goes down, the other six are unaffected</li>
+<li><em>(The text says four stars; the scorecard figure shows three for fault tolerance. The book prints both.)</em></li>
+</ul>
+</li>
+<li><strong>Scalability 3 and elasticity 2:</strong>
+<ul>
+<li>the coarse services replicate more functionality than finer-grained styles, so it is less cost-effective and efficient with machine resources</li>
+<li>Usually <strong>one instance per service</strong> unless throughput or failover needs more: in Going Green only Quoting and Item Status scale for customer volume, so the rest are single instances, which eases single in-memory caching and connection pooling.</li>
+</ul>
+</li>
+<li><strong>Simplicity and cost</strong>
+<ul>
+<li>differentiate it from microservices, event-driven and space-based: one of the easiest and most cost-effective distributed styles</li>
+<li>The trade-off: the higher the cost and complexity, the better characteristics such as scalability, elasticity and fault tolerance get.</li>
+</ul>
+</li>
+<li><strong>Pragmatism:</strong>
+<ul>
+<li>its flexibility and many three- and four-star characteristics make it one of the most pragmatic styles</li>
+<li>More powerful styles cost too much, or are not needed: &quot;like buying a Ferrari but only using it to commute to work in rush-hour traffic&quot;.</li>
+</ul>
+</li>
+<li><strong>A natural fit for DDD:</strong> coarse, domain-scoped services mean each domain sits in one deployed service.</li>
+<li><strong>ACID:</strong>
+<ul>
+<li>distributed styles usually rely on <strong>eventual consistency</strong> (independent updates eventually in sync) not traditional ACID (updates in one unit of work)</li>
+<li>Service-based uses ACID better than any other distributed style because the transaction scope is one coarse service.</li>
+</ul>
+</li>
+<li>It gives <strong>good modularity without the complexities of granularity and service coordination</strong> (see &quot;Choreography and Orchestration&quot;, Chapter 18).</li>
+</ul>
+<h2 id="14-7-examples-and-use-cases">14.7 Examples and use cases</h2>
+<p><strong>Going Green's flow:</strong></p>
+<ol>
+<li>The customer asks (website or kiosk) what GG will pay for an old device (<strong>quoting</strong>).</li>
+<li>If satisfied, they send the device (<strong>receiving</strong>).</li>
+<li>GG assesses its condition (<strong>assessment</strong>).</li>
+<li>If in good working order, GG pays (<strong>accounting</strong>); at any time the customer checks status (<strong>item status</strong>).</li>
+<li>By the assessment, GG destroys it and recycles parts, or resells it on a third-party platform such as Facebook Marketplace or eBay (<strong>recycling</strong>).</li>
+<li>GG periodically runs financial and operational reports (<strong>reporting</strong>).</li>
+</ol>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-14-fig-14-10-going-green.svg" alt="Figure 14-10: Going Green as a service-based architecture" loading="lazy" /></p>
+<ul>
+<li>Each domain is a <strong>separately deployed domain service</strong>. The services needing higher throughput (<strong>Quoting and ItemStatus</strong>) run multiple instances; the others one.</li>
+<li>UIs are separated by domain:
+<ul>
+<li><strong>Customer Facing, Receiving, and Recycling and Accounting</strong></li>
+<li>This gives UI fault tolerance, scalability and <strong>security</strong> (external customers have no network path to internal functions).</li>
+</ul>
+</li>
+<li><strong>Two physical databases</strong>:
+<ul>
+<li>one external, one internal, with internal data in a separate <strong>network zone</strong> (the horizontal line)</li>
+<li>This improves security-access restrictions and data protection and makes a separate quantum</li>
+<li><strong>One-way firewall access</strong> lets internal services update customer-facing information but not the reverse</li>
+<li>Alternatively, use internal table mirroring and external table synchronisation.</li>
+</ul>
+</li>
+<li>The <strong>Assessment</strong> service changes constantly as products arrive, so those changes are isolated in one domain service, giving agility, testability and deployability.</li>
+</ul>
+<p><strong>Stepping stone.</strong> It makes a good migration target before other distributed styles, or when building a distributed system from scratch:</p>
+<blockquote>
+<p>&quot;Not every portion of an application needs to be microservices.&quot; (Mark Richards)</p>
+</blockquote>
+<p>Starting service-based lets a team analyse the domains and decide which should become microservices. In Going Green, Recycling and Accounting need no further breakdown, but Assessment changes often and needs high agility, so it should split into one service per device type. Skipping the step and going straight to microservices would likely turn <strong>every</strong> piece into a microservice, needed or not.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>UI plus 12 or fewer coarse domain services, with an optional shared database.</li>
+<li>ACID within a service; coarse granularity means larger deployments per change.</li>
+<li>Partition the shared database and the entity libraries together; avoid one big shared library.</li>
+<li>Cost-effective distribution with 3 and 4 star ratings; ideal stepping stone.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Domain service; API access facade; service locator.</strong></li>
+<li><strong>Macro-layered structure.</strong></li>
+<li><strong>ACID versus BASE; compensating update.</strong></li>
+<li><strong>Entity objects; shared library antipattern; logical database partitioning; common domain.</strong></li>
+<li><strong>API gateway or reverse proxy.</strong></li>
+<li><strong>Federated UI and database; multiple quanta.</strong></li>
+<li><strong>Stepping-stone migration.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 14 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch14.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch14.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-13-microkernel-architecture-style/">Fundamentals of Software Architecture 13: Microkernel Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">Fundamentals of Software Architecture 15: Event-Driven Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-07-the-scope-of-architectural-characteristics/">Fundamentals of Software Architecture 7: The Scope of Architectural Characteristics</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-13-microkernel-architecture-style/">&larr; Fundamentals of Software Architecture 13: Microkernel Architecture Style</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">Fundamentals of Software Architecture 15: Event-Driven Architecture Style &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

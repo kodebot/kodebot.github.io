@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 16: Space-Based Architecture Style</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-16-space-based-architecture-style">Fundamentals of Software Architecture 16: Space-Based Architecture Style</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 16. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">Fundamentals of Software Architecture 15: Event-Driven Architecture Style</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/">Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Space-based architecture</strong> removes the central database from transaction processing: data lives in <strong>replicated in-memory data grids</strong> inside <strong>processing units</strong>, and updates reach the database asynchronously through <strong>data pumps</strong>.</li>
+<li>It exists for <strong>extreme, variable scalability, elasticity and concurrency</strong>, where scaling web, application and database tiers only moves the bottleneck down to the database.</li>
+<li>Artifacts: processing units, virtualized middleware (messaging grid, data grid, processing grid, deployment manager), data pumps, data writers, data readers.</li>
+<li>Replicated caching is the default (fast, no single point of failure); distributed caching suits large or highly dynamic data. A <strong>near-cache</strong> is not recommended.</li>
+<li>Main risks are data: <strong>collisions</strong>, pump bottlenecks, data loss, memory limits. Ratings: scalability, elasticity, responsiveness 5; simplicity and testability 1; cost <code>$$$$</code>.</li>
+</ul>
+</div></div>
+<h2 id="16-1-the-problem-the-triangle-of-scaling-limits">16.1 The problem: the triangle of scaling limits</h2>
+<p>A typical request flows browser, web server, application server, database server. Under rising load the bottleneck appears first at the web tier, then the application tier, then the database.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-1-scalability-triangle.svg" alt="Figure 16-1: scalability limits in a traditional web topology" loading="lazy" /></p>
+<ul>
+<li>Scaling out web servers is easy and cheap, but usually only moves the bottleneck to the application server.</li>
+<li>Scaling application servers is harder and dearer, and usually moves it to the database, the hardest and costliest tier to scale.</li>
+<li>The result is a <strong>triangle</strong>: widest at the web tier (easiest to scale), narrowest at the database. The database is the final limit on concurrent transactions.</li>
+<li>The authors argue it is often better to solve extreme and variable scalability <strong>architecturally</strong> than to scale a database or retrofit caching onto an architecture that cannot scale.</li>
+</ul>
+<h2 id="16-2-topology">16.2 Topology</h2>
+<p>The name comes from <strong>tuple space</strong>: multiple parallel processors communicating through shared memory. The style replaces the central database, as a synchronous constraint, with <strong>replicated in-memory data grids</strong>.</p>
+<ul>
+<li>Application data is kept in memory and replicated among all active processing units.</li>
+<li>A processing unit that updates data sends it <strong>asynchronously</strong> to the database through a <strong>data pump</strong>, usually messaging with persistent queues.</li>
+<li>Processing units start and stop dynamically with load, which addresses <strong>variable scalability</strong>.</li>
+<li>With no central database in normal transactional processing, the database bottleneck is gone.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Artifact</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Processing units</strong></td>
+<td>Contain the application functionality</td>
+</tr>
+<tr>
+<td><strong>Virtualized middleware</strong></td>
+<td>Infrastructure that manages and coordinates the processing units</td>
+</tr>
+<tr>
+<td><strong>Messaging grid</strong></td>
+<td>Manages input requests and session state</td>
+</tr>
+<tr>
+<td><strong>Data grid</strong></td>
+<td>Synchronises and replicates data between processing units</td>
+</tr>
+<tr>
+<td><strong>Processing grid</strong></td>
+<td>Orchestrates requests across multiple processing units (optional)</td>
+</tr>
+<tr>
+<td><strong>Deployment manager</strong></td>
+<td>Starts and tears down processing-unit instances as load changes</td>
+</tr>
+<tr>
+<td><strong>Data pumps</strong></td>
+<td>Asynchronously send updated data to the database</td>
+</tr>
+<tr>
+<td><strong>Data writers</strong></td>
+<td>Perform the database updates from the pumps</td>
+</tr>
+<tr>
+<td><strong>Data readers</strong></td>
+<td>Read database data and deliver it to processing units on startup</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-2-and-16-3-topology.svg" alt="Figures 16-2 and 16-3: the basic topology, and what a processing unit contains" loading="lazy" /></p>
+<h2 id="16-3-style-specifics">16.3 Style specifics</h2>
+<h3 id="processing-unit">Processing unit</h3>
+<p>It holds the application logic (or part of it): usually web components plus backend business logic. Small applications deploy into one unit; larger ones split by functional area. A unit can also hold small single-purpose services (much like microservices) and always holds an <strong>in-memory data grid and replication engine</strong> (Hazelcast, Apache Ignite, Oracle Coherence).</p>
+<h3 id="virtualized-middleware">Virtualized middleware</h3>
+<p>At a minimum a <strong>messaging grid</strong>, a <strong>data grid</strong> and a <strong>deployment manager</strong>; optionally a <strong>processing grid</strong>; plus anything else needed (security, metrics for observability). No single product does all of it, so it is built from third-party web servers, caches, load balancers, orchestrators and deployment managers.</p>
+<h3 id="messaging-grid">Messaging grid</h3>
+<p>When a request arrives, it decides which active processing units can take it and forwards it to one. Complexity ranges from <strong>round robin</strong> to <strong>next available</strong> (tracking which unit is most available). Usually a web server with load balancing (HA Proxy, Nginx).</p>
+<h3 id="data-grid">Data grid</h3>
+<p>Perhaps the most crucial component. In most modern implementations it lives <strong>inside the processing units</strong> as an in-memory replicated cache. Because the messaging grid can send a request to any unit, <strong>every unit's grid must hold exactly the same data</strong>. Replication is asynchronous and usually completes in <strong>under 100 ms</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-4-to-16-6-grids.svg" alt="Figures 16-4 to 16-6: messaging grid routing, and replicated caches kept in sync" loading="lazy" /></p>
+<p>Hazelcast creates a replicated map named for the data it holds; every unit needing customer profiles contains this code:</p>
+<pre class="hl"><code><span class="n">HazelcastInstance</span><span class="w"> </span><span class="n">hz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Hazelcast</span><span class="p">.</span><span class="na">newHazelcastInstance</span><span class="p">();</span>
+<span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">CustomerProfile</span><span class="o">&gt;</span><span class="w"> </span><span class="n">profileCache</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">hz</span><span class="p">.</span><span class="na">getReplicatedMap</span><span class="p">(</span><span class="s">"CustomerProfile"</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>An update in any unit is replicated to all units with the same named cache
+<ul>
+<li>A unit can hold as many replicated caches as it needs, or ask another unit for data (choreography) or use the processing grid (orchestration; see Chapter 20).</li>
+</ul>
+</li>
+<li><strong>Startup without the database:</strong>
+<ul>
+<li>while at least one instance holds the named cache, a new instance broadcasts a request through the caching provider to join</li>
+<li>the first unit to connect sends it the cache data.</li>
+</ul>
+</li>
+<li><strong>Member lists:</strong>
+<ul>
+<li>each instance holds the IP addresses and ports of all instances with the same named cache. One instance lists only itself (<code>size:1, ver:1</code>)</li>
+<li>a second start updates both lists (<code>size:2, ver:2</code>)</li>
+<li>a third updates all three (<code>size:3, ver:3</code>)</li>
+<li>when instance 2 dies the product immediately updates the others (<code>size:2, ver:4</code>).</li>
+</ul>
+</li>
+<li>Example: instance 1 receives a bill-to address change and calls <code>cache.put()</code>; the grid asynchronously updates the other two caches.</li>
+</ul>
+<h3 id="replicated-versus-distributed-caching">Replicated versus distributed caching</h3>
+<p><strong>Replicated:</strong> each unit holds its own in-memory grid, synchronised among all units with the same named cache. It is extremely fast and has <strong>no single point of failure</strong> (with exceptions for products that need an external controller). It fails when:</p>
+<ul>
+<li><strong>Data volume is high:</strong> caches above about <strong>100 MB</strong> force so much memory per unit (a VM or container with limited memory) that elasticity and scalability suffer.</li>
+<li><strong>Updates are very frequent:</strong> the grid cannot keep up and consistency suffers (see data collisions).</li>
+</ul>
+<p><strong>Distributed:</strong> an external server or service holds a centralised cache; units access it with a proprietary protocol. Strong <strong>consistency</strong> (one copy), but remote access adds latency, and the cache server is a <strong>single point of failure</strong> (mirroring helps but risks consistency if the primary dies before data reaches the mirror).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-7-distributed-cache.svg" alt="Figure 16-7: distributed caching" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Criteria</th>
+<th>Replicated cache</th>
+<th>Distributed cache</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Optimisation</td>
+<td>Performance</td>
+<td>Consistency</td>
+</tr>
+<tr>
+<td>Cache size</td>
+<td>Small (&lt; 100 MB)</td>
+<td>Large (&gt; 500 MB)</td>
+</tr>
+<tr>
+<td>Type of data</td>
+<td>Relatively static</td>
+<td>Highly dynamic</td>
+</tr>
+<tr>
+<td>Update frequency</td>
+<td>Relatively low</td>
+<td>High update rate</td>
+</tr>
+<tr>
+<td>Fault tolerance</td>
+<td>High</td>
+<td>Low</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Both models are usually applicable and <strong>different processing units may use different ones</strong>. Use distributed for a unit holding <strong>current inventory</strong> (consistency)
+<ul>
+<li>replicated for a <strong>customer profile</strong> (performance and fault tolerance)</li>
+<li>reference data such as product codes suits replicated.</li>
+</ul>
+</li>
+</ul>
+<h3 id="near-cache-considerations">Near-cache considerations</h3>
+<p>A hybrid: the distributed cache is the <strong>full backing cache</strong>; each unit's in-memory grid is a <strong>front cache</strong> holding a smaller subset, with an eviction policy: <strong>most recently used</strong>, <strong>most frequently used</strong>, or <strong>random replacement</strong> (good when no analysis favours the other two).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-8-near-cache.svg" alt="Figure 16-8: the near-cache model" loading="lazy" /></p>
+<p>Front caches stay in sync with the backing cache but <strong>not with each other</strong>, so units sharing a data context (a customer profile) will likely hold different data, giving inconsistent performance and responsiveness. <strong>The authors do not recommend near-cache in space-based architecture.</strong></p>
+<h3 id="processing-grid">Processing grid</h3>
+<p>An optional middleware piece that mediates and orchestrates a request needing <strong>more than one type of processing unit</strong> (an order-processing unit and a payment unit).</p>
+<p>Modern implementations (especially fine-grained ones) use separate fine-grained <strong>orchestration processing units</strong>, one per major workflow.</p>
+<p>Example: an <strong>Order Placement Orchestrator</strong> coordinating Order Placement, Payment and Inventory Adjustment, with others for order returns and stock replenishment.</p>
+<h3 id="deployment-manager">Deployment manager</h3>
+<p>Continually monitors response times and user loads, starting units as load rises and stopping them as it falls: <strong>critical to elasticity</strong>. Cloud infrastructure and orchestrators such as Kubernetes usually provide it.</p>
+<h3 id="data-pumps">Data pumps</h3>
+<p>A <strong>data pump</strong> sends data to another processor, which updates the database. Units never read or write the database directly, and pumps are <strong>always asynchronous</strong>, giving <strong>eventual consistency</strong> between cache and database. The unit that handled a request <strong>owns the update</strong> and must send it through the pump.</p>
+<ul>
+<li>They are usually messaging, which gives async communication, <strong>guaranteed delivery, persistence and FIFO order</strong>, and decouples the unit from the writer so that an unavailable writer does not interrupt processing.</li>
+<li>Most systems have several pumps, usually per domain or subdomain (customer, inventory), but possibly per cache type (CustomerProfile, CustomerWishlist) or per processing-unit domain.</li>
+<li>Pumps have <strong>contracts</strong> (JSON schema, XML schema, an object, or a value-driven map message) with an action (add, delete, update)
+<ul>
+<li>An update normally carries only <strong>the new values</strong>: for a changed phone number, the new number, the customer ID and the action <code>update</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="data-writers">Data writers</h3>
+<p>Accept pump messages and update the database; implemented as services, applications or data hubs (such as Ab Initio).</p>
+<ul>
+<li><strong>Domain-based writer:</strong>
+<ul>
+<li>holds the database logic for a whole domain whatever the number of pumps it reads</li>
+<li>Figure 16-11 has four units and four pumps (Profile, WishList, Wallet, Preferences) but <strong>one customer data writer</strong> holding the SQL for all customer data.</li>
+</ul>
+</li>
+<li><strong>Dedicated writers:</strong>
+<ul>
+<li>one per pump, containing only that unit's database logic (such as Wallet)</li>
+<li>It creates many components but gives better <strong>scalability and agility</strong>, since unit, pump and writer align.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-10-to-16-12-pumps-writers.svg" alt="Figures 16-10 to 16-12: data pump, domain-based writer, dedicated writers" loading="lazy" /></p>
+<h3 id="data-readers">Data readers</h3>
+<p>Read from the database and send data to units through a <strong>reverse data pump</strong>. Invoked in only three situations:</p>
+<ol>
+<li>All instances of a named cache <strong>crash</strong>.</li>
+<li>All units of a named cache are <strong>redeployed</strong>.</li>
+<li><strong>Archive data</strong> not in the replicated cache must be retrieved.</li>
+</ol>
+<p>The cold-start flow (Figure 16-13):</p>
+<ol>
+<li>Restarting instances each try to grab a <strong>lock</strong> on the cache; the first becomes the <strong>temporary cache owner</strong> and the others wait.</li>
+<li>The owner sends a message to a queue requesting data.</li>
+<li>The <strong>data reader</strong> runs the database queries and sends the data to a different queue, the <strong>reverse data pump</strong>, which delivers it to the owner.</li>
+<li>The owner loads the cache and releases the lock; the other instances synchronise and processing begins.</li>
+</ol>
+<p>Readers can be domain-based or dedicated (dedicated is more common) and are implemented like writers.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-13-data-readers.svg" alt="Figure 16-13: data readers and the reverse data pump" loading="lazy" /></p>
+<p><strong>Data abstraction layer, not data access layer.</strong> Writers and readers together form a layer. With a <strong>data access layer</strong> the units are coupled to the database table structures; with a <strong>data abstraction layer</strong> they are decoupled through separate contracts.</p>
+<p>Space-based architecture generally uses the abstraction layer, so the cache schema in a unit can differ from the database schema and incremental database changes do not necessarily affect units.</p>
+<p>Readers and writers contain <strong>transformation logic</strong> and can buffer a database change (a column type change, a dropped column or table) until the caches are updated.</p>
+<h2 id="16-4-data-topologies">16.4 Data topologies</h2>
+<p>Units do not touch the database, so request processing is largely independent of it, giving a wide choice of database topology and type. The deciding factor is <strong>how the system uses the backing database</strong>:</p>
+<ul>
+<li><strong>Reporting and analytics</strong> important: a monolithic database may be better (unless done through a data mesh, where a domain-based topology may be better).</li>
+<li><strong>Throughput and domain-based consistency:</strong>
+<ul>
+<li>one monolithic database can bottleneck synchronisation, slowing it and hurting consistency</li>
+<li>domain-based may sync faster if the data partitions cleanly by domain.</li>
+</ul>
+</li>
+<li><strong>Downstream systems</strong> that use the database for further processing: a monolithic topology may fit better.</li>
+</ul>
+<h2 id="16-5-cloud-considerations">16.5 Cloud considerations</h2>
+<p>The whole system can run in the cloud or on-prem, but also <strong>both at once</strong>, unique among the styles: units and virtualized middleware in managed cloud environments while the <strong>physical databases stay on-prem</strong>.</p>
+<p>Async pumps and eventual consistency make the cloud synchronisation effective: elastic transactional processing in the cloud; data management, reporting and analytics in secure on-prem environments. Elastic cloud services match the style's shape.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-14-hybrid-cloud.svg" alt="Figure 16-14: hybrid cloud and on-prem topology" loading="lazy" /></p>
+<h2 id="16-6-common-risks">16.6 Common risks</h2>
+<p>Mostly about data, given caching and background synchronisation.</p>
+<ul>
+<li><strong>Frequent reads from the database.</strong>
+<ul>
+<li>Caching all transactional data prevents excess reads and writes</li>
+<li>Reads should occur only for <strong>archived data</strong> (order history, past bank statements) or a <strong>cold start</strong> (no instance running)</li>
+<li>If most data must be archived and fetched, or units crash or redeploy often, the style may be wrong for the problem.</li>
+</ul>
+</li>
+<li><strong>Data synchronisation and consistency.</strong>
+<ul>
+<li>Data is always <strong>eventually consistent</strong></li>
+<li>Under very high concurrency, <strong>pump bottlenecks</strong> are common and can delay data reaching the database, which matters if downstream systems need fresh data</li>
+<li><strong>Data loss in the pump</strong> is mitigated with persisted queues and <strong>client-acknowledgment mode</strong> in writers (the message stays in the queue until the writer acknowledges, and no other writer can read it), at the cost of responsiveness and consistency (see Preventing Data Loss, Chapter 15).</li>
+</ul>
+</li>
+<li><strong>High data volumes.</strong> All transactional memory sits in the units, so volumes must stay low as instances are added; watch cache size to avoid a unit running out of memory and crashing.</li>
+<li><strong>Data collisions</strong> (below).</li>
+</ul>
+<h3 id="data-collisions">Data collisions</h3>
+<p>A <strong>data collision</strong> happens in <strong>active/active</strong> replicated caching: instance A updates the data and, during replication to B, B updates the same data. It occurs when the update rate exceeds the <strong>replication latency (RL)</strong>, the time to sync each same-named cache. Worked example, two instances of an order placement service holding a replicated blue-widget inventory:</p>
+<ol>
+<li>Both caches hold <strong>500</strong> units.</li>
+<li>A takes an order for 10 and sets its cache to <strong>490</strong>.</li>
+<li>Before replication, B takes an order for 5 and sets its cache to <strong>495</strong>.</li>
+<li>B receives A's replication and becomes <strong>490</strong>.</li>
+<li>A receives B's replication and becomes <strong>495</strong>.</li>
+<li>Both caches are wrong and out of sync; the correct value is <strong>485</strong> in each.</li>
+</ol>
+<p>The collision rate, with N instances of the same named cache, UR update rate in milliseconds (squared), S cache size in rows and RL replication latency in milliseconds, is:</p>
+<pre class="hl"><code>Collision rate = N * UR^2 / (S * RL)
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>UR</th>
+<th>N</th>
+<th>S (rows)</th>
+<th>RL</th>
+<th>Updates/hr</th>
+<th>Collisions/hr</th>
+<th>%</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Base (Table 16-2)</td>
+<td>20/s</td>
+<td>5</td>
+<td>50,000</td>
+<td>100 ms</td>
+<td>72,000</td>
+<td>14.4</td>
+<td>0.02%</td>
+</tr>
+<tr>
+<td>Lower latency (16-3)</td>
+<td>20/s</td>
+<td>5</td>
+<td>50,000</td>
+<td><strong>1 ms</strong></td>
+<td>72,000</td>
+<td>0.1</td>
+<td>0.0002%</td>
+</tr>
+<tr>
+<td>Fewer instances (16-4)</td>
+<td>20/s</td>
+<td><strong>2</strong></td>
+<td>50,000</td>
+<td>100 ms</td>
+<td>72,000</td>
+<td>5.8</td>
+<td>0.008%</td>
+</tr>
+<tr>
+<td>Smaller cache (16-5)</td>
+<td>20/s</td>
+<td>5</td>
+<td><strong>10,000</strong></td>
+<td>100 ms</td>
+<td>72,000</td>
+<td>72.0</td>
+<td>0.1%</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Base: 14 colliding updates in 72,000 (0.02%), so replication is viable.</li>
+<li>Collisions are proportional to <strong>N</strong> and the update rate, and <strong>inversely proportional to cache size</strong> (a smaller cache collides more).</li>
+<li>RL varies with network type and physical distance and <strong>must be measured in production</strong>; <strong>100 ms</strong> is a good planning number if unknown.</li>
+<li>Compute <strong>minimum, normal and peak</strong> rates, since update rates are rarely constant over an eight-hour day.</li>
+<li>The 2 instance figure is printed as 6 per hour in the prose and 5.8 in the table.</li>
+</ul>
+<h2 id="16-7-governance">16.7 Governance</h2>
+<p>Many moving parts mean governance is critical, especially <strong>memory</strong>.</p>
+<ul>
+<li><strong>Memory:</strong> a continuous fitness function has each instance report its memory use periodically (one report per unit name suffices, since all instances hold the same cache), plus a second one recording instance counts, to compute total memory per unit (Figure 16-15).</li>
+<li><strong>Synchronisation time:</strong>
+<ul>
+<li>each unit streams the request ID and a timestamp of an update</li>
+<li>each data writer streams the same ID and a timestamp after the database commit</li>
+<li>a fitness function matches IDs and subtracts timestamps, per unit or as an overall average (Figure 16-16)
+<ul>
+<li>Trends show whether changes help and whether the business's sync goals are met.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Pump bottlenecks:</strong>
+<ul>
+<li>pumps are a backpressure point and database writes are slower than cache writes, so a fitness function tracks the <strong>queue depth</strong> of each pump (Figure 16-17, an Order Placement unit and its pump)</li>
+<li>Deep queues raise sync time and the chance of loss and collisions.</li>
+</ul>
+</li>
+<li>Also track the <strong>frequency of database reads</strong> (requests to data readers) and measure <strong>scalability, elasticity and responsiveness</strong>, the reasons for choosing the style.</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-15-to-16-17-fitness.svg" alt="Figures 16-15 to 16-17: what each governance fitness function measures" loading="lazy" /></p>
+<h2 id="16-8-team-topologies">16.8 Team topologies</h2>
+<p>Technically partitioned (many artifacts per domain), so it is most effective with <strong>technically aligned teams</strong> (functionality, pumps, readers and writers, database), though domain-aligned cross-functional teams still work.</p>
+<table>
+<thead>
+<tr>
+<th>Team type</th>
+<th>Fit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream-aligned</strong></td>
+<td>A domain change may touch units, pumps, readers, writers, cache contracts, orchestrators and the database; the bigger the system, the less effective</td>
+</tr>
+<tr>
+<td><strong>Enabling</strong></td>
+<td>Good: pumps, readers, writers and middleware are shared or cross-cutting, so a team can experiment on one artifact</td>
+</tr>
+<tr>
+<td><strong>Complicated-subsystem</strong></td>
+<td>Good: data grid and pump complexity, and collision and async sync errors in writers, are the kind of problem domain teams should not carry</td>
+</tr>
+<tr>
+<td><strong>Platform</strong></td>
+<td>Good, especially if pumps and virtualized middleware count as platform</td>
+</tr>
+</tbody>
+</table>
+<h2 id="16-9-style-characteristics">16.9 Style characteristics</h2>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-16-fig-16-18-ratings.svg" alt="Figure 16-18: space-based architecture characteristics ratings" loading="lazy" /></p>
+<ul>
+<li><strong>Elasticity, scalability and performance (five stars):</strong> the driving characteristics; in-memory caching and no database constraint can serve <strong>millions of concurrent users</strong>.</li>
+<li><strong>Trade-offs:</strong> simplicity (complicated: caching, and eventual consistency of the primary store, the system of record) and <strong>testability (one star)</strong>, because simulating hundreds of thousands of concurrent users is complex and costly, so most high-volume testing happens in production under real load, with risk to normal operations.</li>
+<li><strong>Cost:</strong> relatively expensive: complexity, <strong>caching product licences</strong>, and cloud and on-prem resources for the scale.</li>
+<li><strong>Technically partitioned:</strong> any domain spreads across units, pumps, readers, writers and the database.</li>
+<li><strong>Quanta: one to many.</strong>
+<ul>
+<li>The database is not part of the quantum equation (units never call it synchronously)</li>
+<li>quanta follow the <strong>UI to processing-unit associations</strong>, and units that communicate synchronously (with each other or via the processing grid) share one quantum.</li>
+</ul>
+</li>
+<li>The text asks architects to avoid data loss in a crash (see Chapter 15); the fault-tolerance figure shows <strong>two stars</strong>.</li>
+</ul>
+<h2 id="16-10-examples-and-use-cases">16.10 Examples and use cases</h2>
+<p>Suited to spiky user or request volume, and throughput over <strong>10,000 concurrent users</strong>.</p>
+<ul>
+<li><strong>Concert ticketing.</strong>
+<ul>
+<li>Volume is low until a popular concert is announced, then jumps from hundreds to thousands or tens of thousands, and tickets sell out in minutes</li>
+<li>A fixed number of tickets, with seat availability updated continually and fast, makes synchronous database transactions at that rate unlikely to work</li>
+<li>The deployment manager sees the surge and starts many units, or can be <strong>configured to start them shortly before tickets go on sale</strong>.</li>
+</ul>
+</li>
+<li><strong>Online auction.</strong>
+<ul>
+<li>Like ticketing, with unpredictable bidders and concurrent bids per asking price. Units start as load rises and are destroyed as the auction winds down</li>
+<li><strong>individual units can be devoted to each auction</strong>, keeping bidding data consistent</li>
+<li>async pumps send bid history, analytics and auditing data onward with little latency.</li>
+</ul>
+</li>
+</ul>
+<p>Space-based architecture is complicated but powerful: the only style that maximises <strong>responsiveness, scalability and elasticity together</strong>, a <strong>specialised</strong> style for situations that must maximise those.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>It removes the database from transactions: replicated in-memory grids plus asynchronous pumps.</li>
+<li>Use replicated caches for small, stable data and distributed caches for large, dynamic data; avoid near-cache.</li>
+<li>Collision rate = N * UR^2 / (S * RL): measure latency, size caches carefully.</li>
+<li>Govern memory, sync time and pump queue depth.</li>
+<li>Superb scale and elasticity, poor simplicity and testability, high cost.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Tuple space; processing unit; virtualized middleware; messaging, data, processing grids; deployment manager.</strong></li>
+<li><strong>Data pump, data writer, data reader, reverse data pump; data abstraction layer.</strong></li>
+<li><strong>Replicated, distributed and near-cache; front cache and backing cache.</strong></li>
+<li><strong>Data collision; replication latency (RL).</strong></li>
+<li><strong>Cold start; temporary cache owner.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 16 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch16.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch16.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">Fundamentals of Software Architecture 15: Event-Driven Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/">Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">&larr; Fundamentals of Software Architecture 15: Event-Driven Architecture Style</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/">Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

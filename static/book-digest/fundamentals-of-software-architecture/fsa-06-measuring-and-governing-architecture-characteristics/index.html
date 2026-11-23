@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 6: Measuring and Governing Architecture Characteristics</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-05-identifying-architectural-characteristics/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-07-the-scope-of-architectural-characteristics/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-6-measuring-and-governing-architecture-characteristics">Fundamentals of Software Architecture 6: Measuring and Governing Architecture Characteristics</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 6. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-05-identifying-architectural-characteristics/">Fundamentals of Software Architecture 5: Identifying Architectural Characteristics</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-07-the-scope-of-architectural-characteristics/">Fundamentals of Software Architecture 7: The Scope of Architectural Characteristics</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Characteristics are hard to define because they <strong>are not physics</strong>, have <strong>wildly varying definitions</strong> and are often <strong>composite</strong>. Decomposing them into measurable parts fixes all three.</li>
+<li>Measure <strong>operational</strong> (response time, scalability models), <strong>structural</strong> (Cyclomatic Complexity) and <strong>process</strong> (code coverage, deployment success) aspects. Every metric needs interpretation.</li>
+<li><strong>Governance</strong> means steering what developers do. <strong>Fitness functions</strong> automate it: any mechanism giving an objective integrity assessment of a characteristic.</li>
+<li>Examples: a <strong>cycle test</strong> with JDepend, a <strong>Distance from the Main Sequence</strong> threshold, <strong>ArchUnit</strong> and <strong>NetArchTest</strong> layer rules, and Netflix's <strong>Chaos Monkey</strong> family.</li>
+<li>Fitness functions are a <strong>checklist</strong> for important-but-not-urgent concerns, not heavyweight governance.</li>
+</ul>
+</div></div>
+<h2 id="6-1-why-measuring-is-hard">6.1 Why measuring is hard</h2>
+<p>Architects deal with a huge range of characteristics: operational (performance, elasticity, scalability) mixed with structural (modularity, deployability). Three reasons they struggle to define them:</p>
+<ul>
+<li><strong>They are not physics.</strong> Many terms are vague: how do you design for agility, or &quot;wicked fast&quot; performance? Industry views differ, sometimes legitimately and sometimes by accident.</li>
+<li><strong>Wildly varying definitions.</strong> Even inside one organisation, departments disagree on critical characteristics such as performance, so no proper conversation is possible until developers, architects and operations unify.</li>
+<li><strong>Too composite.</strong> Many are collections of smaller ones (agility breaks into modularity, deployability, testability).</li>
+</ul>
+<p><strong>Decomposing composites into parts with objective definitions solves all three.</strong> When an organisation agrees on standard, concrete definitions it creates a <strong>ubiquitous language</strong> around architecture and can unpack composites into measurable features.</p>
+<h2 id="6-2-operational-measures">6.2 Operational measures</h2>
+<p>Many characteristics have obvious direct measures, yet with nuance.</p>
+<ul>
+<li>If a team measures only the <strong>average response time</strong>, what if a boundary condition makes 1% of requests take 10 times longer? With enough traffic the outliers may not show
+<ul>
+<li>Also track <strong>maximum</strong> response times.</li>
+</ul>
+</li>
+<li>High-level teams base definitions on <strong>statistical analysis</strong>, not hard numbers
+<ul>
+<li>Example: a video streaming service measures scale over time, builds statistical models and <strong>raises alarms when real-time metrics leave the prediction</strong></li>
+<li>A miss means either the model is wrong or something is amiss; teams want to know both.</li>
+</ul>
+</li>
+<li>What teams measure evolves with tools, targets and devices
+<ul>
+<li>Recently many teams set <strong>performance budgets</strong> for <strong>first contentful paint</strong> and <strong>first CPU idle</strong>, which say much about mobile page performance.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">The many flavours of performance</div><div class="callout-body">
+<ul>
+<li>Performance has multiple definitions: general request and response time, or budgets for specific parts of an application.</li>
+<li>Organisations have researched user behaviour and found the optimum <strong>first-page render</strong> (first visible progress in a browser or mobile device) is a fraction of a second, whereas most applications are in the double-digit range.</li>
+<li>Some metrics affect design: forward-thinking organisations set <strong>K-weight budgets</strong> for page downloads, a maximum number of bytes of libraries and frameworks per page, because only so many bytes can cross a network at once, especially on mobile in low-bandwidth areas.</li>
+</ul>
+</div></div>
+<h2 id="6-3-structural-measures">6.3 Structural measures</h2>
+<p>Internal structure such as modularity is an <strong>implicit</strong> characteristic. No comprehensive metrics for architecture quality exist yet, but tools address narrow dimensions of code structure. One is <strong>complexity</strong>, measured by Cyclomatic Complexity.</p>
+<h3 id="cyclomatic-complexity">Cyclomatic Complexity</h3>
+<ul>
+<li><strong>Cyclomatic Complexity (CC)</strong>
+<ul>
+<li>was designed by Thomas McCabe Sr</li>
+<li>in <strong>1976</strong> as an objective measure of code complexity at function, class or application level</li>
+<li>It applies graph theory to <strong>decision points</strong> that create different execution paths.</li>
+</ul>
+</li>
+<li>No decisions (<code>if</code> statements) gives CC = 1; one conditional gives CC = 2, since there are two paths.</li>
+<li>For one function: <code>CC = E - N + 2</code>, where N is nodes (lines of code) and E is edges (possible decisions).</li>
+</ul>
+<p>Example 6-1 (as printed in the book) has a CC of 3 (3 - 2 + 2):</p>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">decision</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">c2</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">c1</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">c1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">C2</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">500</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="k">else</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-06-fig-6-1-cyclomatic.svg" alt="Figure 6-1: Cyclomatic Complexity graph for the decision function" loading="lazy" /></p>
+<ul>
+<li>The 2 in the formula simplifies a single function
+<ul>
+<li>For fan-out calls to other methods (<strong>connected components</strong> in graph theory) the general form is <code>CC = E - N + 2P</code>, where P is the number of connected components.</li>
+</ul>
+</li>
+<li>Overly complex code is a <strong>code smell</strong> that harms modularity, testability, deployability and more. Unwatched, growing complexity dominates a code base.</li>
+<li>CC shows how <strong>blunt</strong> architects' metrics are:
+<ul>
+<li>it cannot tell <strong>essential</strong> complexity (a complicated problem) from <strong>accidental</strong> complexity (a poor design)</li>
+<li>It is useful for assessing code from developers or <strong>generative AI</strong>, which tends to solve problems by brute force and add accidental complexity.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">What is a good value for Cyclomatic Complexity?</div><div class="callout-body">
+<ul>
+<li><strong>It depends</strong> on the problem domain: an algorithmically complex problem yields complex functions. Watch whether complexity comes from the domain or poor coding, and whether the code is partitioned badly (could a large method split into well-factored ones?).</li>
+<li>Industry thresholds say <strong>under 10</strong> is acceptable; the authors find that very high and prefer <strong>under 5</strong>, signalling cohesive, well-factored code.</li>
+<li>The Java tool <strong>Crap4J</strong> combines CC and code coverage: past a CC of 50, no coverage rescues the code.</li>
+<li>Neal Ford's most terrifying artefact: one C function, the heart of a commercial package, with a CC <strong>over 800</strong>, over 4,000 lines and liberal GOTOs to escape deeply nested loops.</li>
+<li><strong>TDD</strong> tends to produce smaller, less complex methods: write a simple test, then the least code to pass it, which encourages well-factored, cohesive methods with low CC.</li>
+</ul>
+</div></div>
+<h2 id="6-4-process-measures">6.4 Process measures</h2>
+<p>Some characteristics overlap with the development process. <strong>Agility</strong> is composite: testability, deployability and more.</p>
+<ul>
+<li><strong>Testability</strong> is measurable with <strong>code-coverage</strong> tools (percentage of code the tests execute), but a code base can have <strong>100% coverage with poor assertions</strong> that give no confidence.</li>
+<li><strong>Deployability</strong> metrics: percentage of successful deployments, how long deployments take, and issues raised by deployments. Each team chooses measures that fit its goals.</li>
+<li>Process can shape structure:
+<ul>
+<li>if ease of deployment and testability are priorities, the architect emphasises <strong>modularity and isolation</strong>, a characteristic driving a structural decision</li>
+<li>Anything in a project can become an architectural characteristic if it meets the three criteria.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-5-governance-and-fitness-functions">6.5 Governance and fitness functions</h2>
+<p>Once characteristics are chosen, how do you ensure developers respect them under schedule pressure? Modularity is a classic <strong>important but not urgent</strong> concern.</p>
+<p><strong>Governance</strong> comes from the Greek <em>kubernan</em>, &quot;to steer&quot;. It covers any part of the development process architects want to influence; ensuring software quality falls under it.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-06-governance-chain.svg" alt="From Extreme Programming to architectural governance" loading="lazy" /></p>
+<ul>
+<li>The drive for automation from Extreme Programming created <strong>continuous integration</strong>, which led to automation in operations (<strong>DevOps</strong>), and this chain continues through to architectural governance.</li>
+<li><em>Building Evolutionary Architectures</em> (O'Reilly, 2022, Neal Ford et al.) describes <strong>fitness functions</strong> to automate governance.</li>
+</ul>
+<h3 id="what-a-fitness-function-is">What a fitness function is</h3>
+<ul>
+<li>&quot;Evolutionary&quot; in that title comes from <strong>evolutionary computing</strong>, not biology
+<ul>
+<li>Co-author Dr Rebecca Parsons worked with tools such as <strong>genetic algorithms</strong>, which are guided by an objective measure of the quality of the result: a <strong>fitness function</strong>.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>the <strong>travelling salesperson problem</strong> (shortest route through a list of cities)</li>
+<li>A genetic algorithm could use one fitness function for route length, another for cost and another for time away.</li>
+</ul>
+</li>
+<li>An <strong>architectural fitness function</strong> is <strong>any mechanism that provides an objective integrity assessment of some architecture characteristic or combination of them</strong>.</li>
+<li>It is not a new framework to download but a new perspective on existing tools. It overlaps chaos engineering, metrics, monitors and unit-testing libraries.</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-06-fig-6-2-fitness-mechanisms.svg" alt="Figure 6-2: the mechanisms of fitness functions" loading="lazy" /></p>
+<h3 id="cyclic-dependencies">Cyclic dependencies</h3>
+<ul>
+<li>Modularity is implicit, so architects prioritise it, but tools work against it: in a Java or .NET IDE, referencing a class not yet imported brings an <strong>auto-import</strong> dialog that programmers reflexively accept
+<ul>
+<li>Arbitrary imports between components damage modularity.</li>
+</ul>
+</li>
+<li><strong>Cyclic dependencies</strong> are a damaging antipattern: each component references the others, so you cannot reuse one without bringing the rest, and the architecture drifts toward the <strong>Big Ball of Mud</strong>.</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-06-fig-6-3-cycles.svg" alt="Figure 6-3: cyclic dependencies between components" loading="lazy" /></p>
+<ul>
+<li><strong>Code reviews</strong> help but come too late: a week of rampant imports has already done serious damage.</li>
+<li>The solution is a <strong>fitness function</strong> in the continuous build. Example 6-2 uses <strong>JDepend</strong>, which understands Java packages and fails the test if it finds a cycle:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CycleTest</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">JDepend</span><span class="w"> </span><span class="n">jdepend</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nd">@BeforeEach</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">init</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">jdepend</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">JDepend</span><span class="p">();</span>
+<span class="w">        </span><span class="n">jdepend</span><span class="p">.</span><span class="na">addDirectory</span><span class="p">(</span><span class="s">"/path/to/project/persistence/classes"</span><span class="p">);</span>
+<span class="w">        </span><span class="n">jdepend</span><span class="p">.</span><span class="na">addDirectory</span><span class="p">(</span><span class="s">"/path/to/project/web/classes"</span><span class="p">);</span>
+<span class="w">        </span><span class="n">jdepend</span><span class="p">.</span><span class="na">addDirectory</span><span class="p">(</span><span class="s">"/path/to/project/thirdpartyjars"</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nd">@Test</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">testAllPackages</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Collection</span><span class="w"> </span><span class="n">packages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jdepend</span><span class="p">.</span><span class="na">analyze</span><span class="p">();</span>
+<span class="w">        </span><span class="n">assertEquals</span><span class="p">(</span><span class="s">"Cycles exist"</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="n">jdepend</span><span class="p">.</span><span class="na">containsCycles</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p>It guards a practice that is <strong>important but not urgent</strong>: it matters to architects but has little effect on day-to-day coding.</p>
+<h3 id="distance-from-the-main-sequence">Distance from the Main Sequence</h3>
+<p>The metric from Chapter 3 can also be verified. Example 6-3 sets a threshold and fails any package outside it (ArchUnit can build similar tests):</p>
+<pre class="hl"><code><span class="nd">@Test</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">AllPackages</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">double</span><span class="w"> </span><span class="n">ideal</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.0</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">double</span><span class="w"> </span><span class="n">tolerance</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.5</span><span class="p">;</span><span class="w"> </span><span class="c1">// project-dependent</span>
+<span class="w">    </span><span class="n">Collection</span><span class="w"> </span><span class="n">packages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jdepend</span><span class="p">.</span><span class="na">analyze</span><span class="p">();</span>
+<span class="w">    </span><span class="n">Iterator</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">packages</span><span class="p">.</span><span class="na">iterator</span><span class="p">();</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">iter</span><span class="p">.</span><span class="na">hasNext</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">JavaPackage</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">JavaPackage</span><span class="p">)</span><span class="w"> </span><span class="n">iter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span>
+<span class="w">        </span><span class="n">assertEquals</span><span class="p">(</span><span class="s">"Distance exceeded: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="na">getName</span><span class="p">(),</span><span class="w"> </span><span class="n">ideal</span><span class="p">,</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="na">distance</span><span class="p">(),</span><span class="w"> </span><span class="n">tolerance</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<div class="callout c-tip"><div class="callout-title">Architects must ensure developers understand the purpose of a fitness function before imposing it on them.</div><div class="callout-body">
+</div></div>
+<p>The intent is not for architects in an ivory tower to write esoteric rules; it is automated governance that protects code quality, built together with developers.</p>
+<h3 id="archunit-and-netarchtest">ArchUnit and NetArchTest</h3>
+<p><strong>ArchUnit</strong> is a Java testing framework inspired by and using parts of the JUnit ecosystem, with predefined governance rules as unit tests and the ability to write modularity tests. Take the layered architecture of Figure 6-4 (Chapter 10 covers its motivations and trade-offs):</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-06-fig-6-4-layered.svg" alt="Figure 6-4: a layered architecture over a database" loading="lazy" /></p>
+<p>Some developers do not grasp why the layers exist, or adopt &quot;better to ask forgiveness than permission&quot; for a local concern such as performance; that erodes the architecture's long-term health. Example 6-4 states the allowed relationships and verifies them:</p>
+<pre class="hl"><code><span class="n">layeredArchitecture</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="na">layer</span><span class="p">(</span><span class="s">"Controller"</span><span class="p">).</span><span class="na">definedBy</span><span class="p">(</span><span class="s">"..controller.."</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">layer</span><span class="p">(</span><span class="s">"Service"</span><span class="p">).</span><span class="na">definedBy</span><span class="p">(</span><span class="s">"..service.."</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">layer</span><span class="p">(</span><span class="s">"Persistence"</span><span class="p">).</span><span class="na">definedBy</span><span class="p">(</span><span class="s">"..persistence.."</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">whereLayer</span><span class="p">(</span><span class="s">"Controller"</span><span class="p">).</span><span class="na">mayNotBeAccessedByAnyLayer</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="na">whereLayer</span><span class="p">(</span><span class="s">"Service"</span><span class="p">).</span><span class="na">mayOnlyBeAccessedByLayers</span><span class="p">(</span><span class="s">"Controller"</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">whereLayer</span><span class="p">(</span><span class="s">"Persistence"</span><span class="p">).</span><span class="na">mayOnlyBeAccessedByLayers</span><span class="p">(</span><span class="s">"Service"</span><span class="p">)</span>
+</code></pre>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-06-archunit-rules.svg" alt="The access rules the ArchUnit example enforces" loading="lazy" /></p>
+<p>The .NET equivalent is <strong>NetArchTest</strong>. Example 6-5 checks that presentation classes do not depend on the data layer:</p>
+<pre class="hl"><code><span class="c1">// Classes in the presentation should not directly reference repositories</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Types</span><span class="p">.</span><span class="n">InCurrentDomain</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">That</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">ResideInNamespace</span><span class="p">(</span><span class="s">"NetArchTest.SampleLibrary.Presentation"</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">ShouldNot</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">HaveDependencyOn</span><span class="p">(</span><span class="s">"NetArchTest.SampleLibrary.Data"</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">GetResult</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">IsSuccessful</span><span class="p">;</span>
+</code></pre>
+<p><strong>Gaming the metric.</strong> Once developers learn how compliance is measured they may code to the metric. Example: unit tests with <strong>no assertions</strong> merely &quot;touch&quot; the code to inflate coverage. A governance rule (via ArchUnit) can require every unit test to have at least one assertion. Dedicated rule-breakers will find a way, but this prevents accidental lapses.</p>
+<h3 id="chaos-engineering-at-netflix">Chaos engineering at Netflix</h3>
+<ul>
+<li>When Netflix moved operations to Amazon's cloud, architects lost control of operations and worried about operational defects. That spawned <strong>chaos engineering</strong>.</li>
+<li>The <strong>Chaos Monkey</strong> is a production fitness function that simulates general chaos to see how well the system endures it.</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-06-chaos-monkeys.svg" alt="Netflix's monkeys as fitness functions in production" loading="lazy" /></p>
+<ul>
+<li>Latency was a problem with some AWS instances, so Chaos Monkey simulated high latency; later a specialised <strong>Latency Monkey</strong> was created.</li>
+<li><strong>Chaos Kong</strong> simulates a whole Amazon datacentre failing, helping Netflix avoid such outages for real.</li>
+<li><strong>Conformity Monkey:</strong> enforces governance rules in production (example: each service must respond without errors for all requests).</li>
+<li><strong>Security Monkey:</strong> checks each service for well-known defects such as ports that should not be active and configuration errors.</li>
+<li><strong>Janitor Monkey:</strong>
+<ul>
+<li>looks for instances nothing routes to any more. Developers migrate to newer services and leave old ones running with no collaborators</li>
+<li>since cloud instances cost money, it removes the orphans.</li>
+</ul>
+</li>
+<li>The perspective shift:
+<ul>
+<li>it is not whether something will break but <strong>when</strong></li>
+<li>Anticipating and testing for breakage makes systems more robust</li>
+<li>See <em>Chaos Engineering</em> (Casey Rosenthal and Nora Jones, O'Reilly, 2020).</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-checklist-perspective">The checklist perspective</h3>
+<p>Atul Gawande's <em>The Checklist Manifesto</em> (Metropolitan, 2009) describes how pilots and surgeons (sometimes legally) use checklists. They are not forgetful: when you do a highly detailed job repeatedly, details slip, and a succinct checklist is an effective reminder.</p>
+<p>Fitness functions are the same: <strong>not a heavyweight governance mechanism, but a way to express and automatically verify important architectural principles.</strong> Developers know not to release insecure code, but that competes with dozens of other priorities; tools like the Security Monkey build the check into the substrate of the architecture.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Decompose composites into objectively defined, measurable parts.</li>
+<li>Operational, structural and process measures all need interpretation (averages hide outliers, CC cannot separate essential from accidental complexity, coverage can be gamed).</li>
+<li>Governance steers; fitness functions automate it for important-but-not-urgent concerns.</li>
+<li>Cycle tests, main-sequence thresholds, ArchUnit and NetArchTest, and chaos engineering are examples; build them with developers.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Ubiquitous language (for characteristics):</strong> agreed, concrete definitions.</li>
+<li><strong>Performance budget, K-weight budget, first contentful paint.</strong></li>
+<li><strong>Cyclomatic Complexity:</strong> <code>E - N + 2</code> (or <code>E - N + 2P</code>); under 5 preferred, under 10 acceptable.</li>
+<li><strong>Essential versus accidental complexity.</strong></li>
+<li><strong>Governance and fitness function.</strong></li>
+<li><strong>Cyclic dependencies and Big Ball of Mud.</strong></li>
+<li><strong>JDepend, ArchUnit, NetArchTest.</strong></li>
+<li><strong>Chaos engineering:</strong> Chaos Monkey, Latency Monkey, Chaos Kong, Conformity, Security and Janitor Monkeys.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 6 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch06.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch06.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-05-identifying-architectural-characteristics/">Fundamentals of Software Architecture 5: Identifying Architectural Characteristics</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-07-the-scope-of-architectural-characteristics/">Fundamentals of Software Architecture 7: The Scope of Architectural Characteristics</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-05-identifying-architectural-characteristics/">&larr; Fundamentals of Software Architecture 5: Identifying Architectural Characteristics</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-07-the-scope-of-architectural-characteristics/">Fundamentals of Software Architecture 7: The Scope of Architectural Characteristics &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

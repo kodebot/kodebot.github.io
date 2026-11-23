@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 20: Architectural Patterns</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-19-choosing-the-appropriate-architecture-style/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-21-architectural-decisions/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-20-architectural-patterns">Fundamentals of Software Architecture 20: Architectural Patterns</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 20. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-19-choosing-the-appropriate-architecture-style/">Fundamentals of Software Architecture 19: Choosing the Appropriate Architecture Style</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-21-architectural-decisions/">Fundamentals of Software Architecture 21: Architectural Decisions</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Styles</strong> are named topologies; <strong>patterns</strong> are contextualised solutions to problems (the idea inspired by <em>Design Patterns</em>). A pattern is not a &quot;best practice&quot;, and not an <strong>implementation</strong>: pick the pattern first, then the implementation.</li>
+<li><strong>Reuse:</strong> separate domain from operational coupling. <strong>Hexagonal</strong> (Ports and Adapters, by Alistair Cockburn) and <strong>Sidecar and Service Mesh</strong> are two implementations of the same orthogonal-reuse idea.</li>
+<li><strong>Communication:</strong> orchestration versus choreography (every trade-off flips between them) and <strong>CQRS</strong> (split reads from writes).</li>
+<li><strong>Infrastructure:</strong> <strong>Single-Broker</strong> versus <strong>Domain-Broker</strong> for event-driven workflows (centralised discovery versus isolation, scale and fault tolerance).</li>
+<li>The Second Law: trade-off analysis is never done once.</li>
+</ul>
+</div></div>
+<h2 id="20-1-patterns-versus-best-practices-and-implementations">20.1 Patterns versus best practices and implementations</h2>
+<ul>
+<li><strong>Styles</strong>
+<ul>
+<li>differ by topology, physical architecture, deployment, communication style and data topology (Chapter 9)</li>
+<li><strong>Patterns</strong>, inspired by <em>Design Patterns</em>, are <strong>contextualised solutions to problems</strong>.</li>
+</ul>
+</li>
+<li><strong>A pattern is not a &quot;best practice&quot;.</strong>
+<ul>
+<li>&quot;Best practice&quot; implies a duty to use it whenever a situation arises</li>
+<li>The authors' joke: calling it the <em>best</em> practice lets architects &quot;shut off their brains&quot; and always follow the same solution</li>
+<li>(More in Chapter 21.)</li>
+</ul>
+</li>
+<li><strong>A pattern is not a solution (an implementation).</strong>
+<ul>
+<li>Tools, frameworks and libraries encapsulate one or more patterns, with varying fidelity and intermingling</li>
+<li><strong>Identify the most appropriate pattern first, then choose the implementation.</strong></li>
+</ul>
+</li>
+</ul>
+<h2 id="20-2-reuse-separating-domain-and-operational-coupling">20.2 Reuse: separating domain and operational coupling</h2>
+<p>Microservices aim for high decoupling: &quot;duplication is preferable to coupling&quot;.</p>
+<ul>
+<li><strong>Domain duplication.</strong>
+<ul>
+<li>Two services pass customer profile information, but the bounded context keeps implementation details private</li>
+<li>Each service has its <strong>own internal Profile</strong> and passes data loosely coupled, as <strong>name-value pairs in JSON</strong>, so each can change its internal representation, even its technology stack, without breaking the integration</li>
+<li>Duplicating code can cause synchronisation problems and semantic drift, &quot;but some things are worse than duplication...and in microservices, that includes coupling&quot;.</li>
+</ul>
+</li>
+<li><strong>Operational capabilities want coupling.</strong>
+<ul>
+<li>Every service needs monitoring, logging, authentication and authorisation, circuit breakers</li>
+<li>If each team (Payment, Inventory) implements the standard monitoring tool itself, how does operations know they did, and how do all teams coordinate an upgrade? Letting each team manage these descends into chaos.</li>
+</ul>
+</li>
+</ul>
+<h3 id="hexagonal-architecture-ports-and-adapters">Hexagonal architecture (Ports and Adapters)</h3>
+<p>The <strong>domain logic is in the centre</strong> of a hexagon, surrounded by <strong>ports and adapters</strong> to the rest of the ecosystem.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-20-fig-20-1-hexagonal.svg" alt="Figure 20-1: the Hexagonal architecture pattern" loading="lazy" /></p>
+<ul>
+<li>Only <strong>four of the six sides</strong> are used. Its creator
+<ul>
+<li><strong>Alistair Cockburn</strong>, drew a hexagon and called it Hexagonal</li>
+<li><strong>almost instantly regretted it</strong> (Ports and Adapters is more descriptive), but the name stuck.</li>
+</ul>
+</li>
+<li><strong>Mistaking pattern for implementation</strong>
+<ul>
+<li>is a hazard</li>
+<li>Hexagonal predates microservices and resembles them, with one significant difference: <strong>data fidelity</strong></li>
+<li>It treats the database as <strong>just another pluggable adapter</strong>, excluding the schema from business logic, a then-common misperception that the database was separate machinery</li>
+<li><strong>Eric Evans</strong> corrected this in <em>Domain-Driven Design</em>: schemas must change to reflect business logic wherever they reside.</li>
+</ul>
+</li>
+<li>So when someone says &quot;Hexagonal&quot;, do they mean separating operational and domain concerns, or the literal pattern, which would isolate the data and <strong>violate a core microservices principle</strong>? Using the name as shorthand for separation is fine if not misleading
+<ul>
+<li>Today there is a more suitable mechanism: the <strong>Service Mesh</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sidecar-and-service-mesh">Sidecar and Service Mesh</h3>
+<p>The Sidecar (see Chapter 18) decouples operational capabilities from domains, and is an <strong>orthogonal reuse pattern</strong>: a way to reuse some aspect that does not fit the preferred hierarchical organisation. Microservices are organised around domains, but operational coupling <strong>cuts across</strong> them; a sidecar isolates those concerns in a <strong>cross-cutting but consistent layer</strong>.</p>
+<blockquote>
+<p>[!note] Orthogonal coupling
+In mathematics, orthogonal lines intersect at right angles, implying independence. In architecture, two parts may be orthogonally coupled: distinct purposes that must still intersect for a complete solution. Example: <strong>monitoring</strong> is necessary but independent of domain behaviour like catalog checkout. Recognising orthogonal coupling helps find intersection points that cause the least entanglement.</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A consistent way to create isolated coupling</td>
+<td>Must implement a sidecar <strong>per platform</strong></td>
+</tr>
+<tr>
+<td>Consistent infrastructure coordination</td>
+<td>The sidecar component may grow <strong>large and complex</strong></td>
+</tr>
+<tr>
+<td>Ownership per team, centralised, or a combination</td>
+<td>Implementation <strong>drift</strong> between independent teams</td>
+</tr>
+</tbody>
+</table>
+<p>Both illustrate the <strong>separation</strong> pattern: Hexagonal is general purpose; the service mesh suits microservices and other distributed architectures. <strong>Identify the pattern first, then decide how to implement it.</strong></p>
+<h2 id="20-3-communication">20.3 Communication</h2>
+<p>Many patterns come from event-driven architecture and apply to any distributed architecture that communicates by messages or events (Chapters 15 and 18). Architects often implement patterns without recognising them: patterns are solutions to common problems.</p>
+<h3 id="orchestration-versus-choreography">Orchestration versus choreography</h3>
+<p>Both appeared earlier (mediated EDA; microservices). In Figure 20-2, <strong>four domain services (A to D) collaborate in a workflow</strong>; in the orchestration case a separate <strong>orchestrator</strong> coordinates it. Whether called orchestration or mediation, the pattern is the same, and recognising it makes trade-offs apparent.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-20-fig-20-2-orchestration-choreography.svg" alt="Figure 20-2: orchestration and choreography in a microservices architecture" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><strong>Orchestration</strong></th>
+<th><strong>Choreography</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Advantages</strong></td>
+<td><strong>Centralised workflow:</strong> one component for state, behaviour and boundary conditions as complexity rises; <strong>error handling:</strong> a state owner for the workflow; <strong>recoverability:</strong> the orchestrator monitors state, so it can add retry logic if a service has a short outage; <strong>state management:</strong> queryable workflow state</td>
+<td><strong>Responsiveness:</strong> fewer chokepoints, more parallelism; <strong>scalability:</strong> no coordination points, more independent scaling; <strong>fault tolerance:</strong> no single orchestrator (multiple orchestrators are more sensitive to overall workflow fault tolerance); <strong>service decoupling:</strong> no orchestrator, less coupling</td>
+</tr>
+<tr>
+<td><strong>Disadvantages</strong></td>
+<td><strong>Responsiveness:</strong> all communication passes through the orchestrator, a possible throughput bottleneck; <strong>fault tolerance:</strong> a single point of failure for the workflow (redundancy adds complexity); <strong>scalability:</strong> more coordination points cut parallelism; <strong>service coupling:</strong> tighter coupling to the orchestrator, frowned on in microservices</td>
+<td><strong>Distributed workflow:</strong> no owner makes errors and boundary conditions harder; <strong>state management:</strong> no central state holder; <strong>error handling:</strong> domain services need more workflow knowledge; <strong>recoverability:</strong> no orchestrator to retry or remediate</td>
+</tr>
+</tbody>
+</table>
+<p>Any distributed architecture can use either; understand the trade-offs. Remember the <strong>Second Law</strong>: you cannot do trade-off analysis once and be done.</p>
+<h3 id="cqrs">CQRS</h3>
+<p><strong>Command-Query-Responsibility-Segregation</strong> splits a commonly monolithic communication with a database into two.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-20-fig-20-3-cqrs.svg" alt="Figure 20-3: client/server versus CQRS" loading="lazy" /></p>
+<ul>
+<li><strong>Client/server (left):</strong> the application queries the database and does transactional writes, using the database as part of the application infrastructure.</li>
+<li><strong>CQRS (right):</strong> isolates <strong>writes into one datastore</strong> (usually a database, sometimes a durable message queue) that <strong>synchronises (usually asynchronously) to another database</strong> serving <strong>reads</strong>.</li>
+<li>Some systems have <strong>stark differences between read and write volumes</strong>, or want to isolate reads from writes for security and other reasons.</li>
+<li>Separating them isolates different architecture characteristics by data type and <strong>allows a different data model per database</strong>: a data communication pattern for differing characteristics, security concerns and other factors that benefit from physical separation.</li>
+</ul>
+<h2 id="20-4-infrastructure-broker-domain-patterns">20.4 Infrastructure: Broker-Domain patterns</h2>
+<p>Patterns exist wherever teams find useful solutions; they intersect with other parts of the ecosystem (Chapter 26). Architects care about coupling between components, data, APIs and <strong>infrastructure</strong>.</p>
+<p>The same order-placement workflow as Chapter 15, as EDA (Figure 20-4): events pass between services (Order Placement, Payment, Inventory, Warehouse, Notification, Order Fulfillment, Shipping) through channels such as <code>inventory-updated</code>, <code>payment-denied</code>, <code>payment-applied</code>, <code>inventory-resupplied</code> and <code>email-sent</code>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-20-fig-20-4-to-20-7-brokers.svg" alt="Figures 20-4 to 20-7: the order workflow in EDA, with one broker per sender, a single broker, and a broker per domain" loading="lazy" /></p>
+<ul>
+<li><strong>Event handlers are implemented by brokers, part of the infrastructure.</strong> In EDA the topic or queue is typically <strong>owned by the sender</strong>: Payment needs the topic's address to subscribe (Figure 20-5: Order Placement &quot;owns&quot; the broker its subscribers use, so the infrastructure to support the service includes the broker).</li>
+<li><strong>Single-Broker pattern</strong>
+<ul>
+<li>(Figure 20-6): one broker for the whole workflow, so every processor knows where to subscribe to collaborators and there is one place for logging, monitoring and governance</li>
+<li>But if the broker goes down the <strong>whole workflow stops</strong>, and at high message volume it may be <strong>swamped</strong>.</li>
+</ul>
+</li>
+<li><strong>Domain-Broker pattern</strong>
+<ul>
+<li>(Figure 20-7): infrastructure follows the granularity of domains: each group of related services shares a broker, mirroring the domain partitioning</li>
+<li>It keeps good discovery while raising fault tolerance, scalability, elasticity and other operational characteristics.</li>
+</ul>
+</li>
+<li>Neither is a &quot;best practice&quot;.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Single-Broker</th>
+<th>Domain-Broker</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Advantages:</strong> centralised discovery; least possible infrastructure</td>
+<td><strong>Advantages:</strong> better isolation; matches domain boundaries; more scalable</td>
+</tr>
+<tr>
+<td><strong>Disadvantages:</strong> fault tolerance; throughput limits</td>
+<td><strong>Disadvantages:</strong> harder discovery of queues and topics; more infrastructure, more expensive; more moving parts to maintain</td>
+</tr>
+</tbody>
+</table>
+<p>Architects must balance <strong>discovery</strong> against <strong>isolating domains</strong>.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Patterns are contextual solutions; never &quot;best practice&quot;, and never confused with their implementations.</li>
+<li>Domain duplication plus operational coupling (sidecar and mesh) is the microservices answer to reuse.</li>
+<li>Orchestration and choreography mirror each other's trade-offs; CQRS separates read and write characteristics.</li>
+<li>One broker per workflow centralises discovery; a broker per domain isolates failures.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Pattern versus implementation; best practice.</strong></li>
+<li><strong>Hexagonal / Ports and Adapters; data fidelity.</strong></li>
+<li><strong>Sidecar; Service Mesh; orthogonal coupling.</strong></li>
+<li><strong>Orchestration; choreography; CQRS.</strong></li>
+<li><strong>Single-Broker; Domain-Broker.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 20 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch20.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch20.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-19-choosing-the-appropriate-architecture-style/">Fundamentals of Software Architecture 19: Choosing the Appropriate Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-21-architectural-decisions/">Fundamentals of Software Architecture 21: Architectural Decisions</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-18-microservices-architecture/">Fundamentals of Software Architecture 18: Microservices Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">Fundamentals of Software Architecture 15: Event-Driven Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-19-choosing-the-appropriate-architecture-style/">&larr; Fundamentals of Software Architecture 19: Choosing the Appropriate Architecture Style</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-21-architectural-decisions/">Fundamentals of Software Architecture 21: Architectural Decisions &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

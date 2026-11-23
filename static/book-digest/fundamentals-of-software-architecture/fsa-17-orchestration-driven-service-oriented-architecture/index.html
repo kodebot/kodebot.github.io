@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-18-microservices-architecture/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-17-orchestration-driven-service-oriented-architecture">Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 17. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/">Fundamentals of Software Architecture 16: Space-Based Architecture Style</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-18-microservices-architecture/">Fundamentals of Software Architecture 18: Microservices Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Orchestration-driven SOA</strong> (late 1990s) is a distributed style built on a strict <strong>service taxonomy</strong> and <strong>enterprise-level reuse</strong>. The authors call it mostly a historical lesson in how a logical organisational idea can hinder development.</li>
+<li>Layers: <strong>business</strong>, <strong>enterprise</strong>, <strong>application</strong> and <strong>infrastructure</strong> services, tied together by an <strong>orchestration engine and message bus</strong> (an ESB).</li>
+<li><strong>Reuse is implemented via coupling</strong>: a canonical Customer service ripples every change to every division and drags in details most callers do not need.</li>
+<li>Extreme <strong>technical partitioning</strong> spreads one domain concept such as CatalogCheckout across dozens of services; the style is a single quantum, with the disadvantages of both monolithic and distributed designs.</li>
+<li>Today the ESB is still used for <strong>integration</strong>; beware <strong>Accidental SOA</strong>. Cost <code>$$$$</code>; only scalability (4) and modularity (4) rate well.</li>
+</ul>
+</div></div>
+<h2 id="17-1-context-why-this-style-existed">17.1 Context: why this style existed</h2>
+<p>The authors compare architecture styles to art movements: they make sense in their era and then lose relevance. SOA appeared in the <strong>late 1990s</strong> as small companies grew into enterprises through mergers and needed more sophisticated IT.</p>
+<ul>
+<li><strong>Scarce, commercial resources:</strong>
+<ul>
+<li>operating systems were licensed per machine (open source was not yet trusted for serious work), database servers had Byzantine licensing, and application-server vendors fought database vendors over connection pooling</li>
+<li>Since resources were expensive at scale, architects adopted a philosophy of <strong>reusing as much as possible</strong>.</li>
+</ul>
+</li>
+<li><strong>Organisational concerns:</strong>
+<ul>
+<li>mergers and growth left duplicated information and workflows and inconsistent core business entities, so SOA's goals were attractive</li>
+<li>Reuse in all forms became the dominant philosophy.</li>
+</ul>
+</li>
+<li>It shows how far technical partitioning can be pushed: good motivations, bad consequences at the extreme.</li>
+</ul>
+<blockquote>
+<p>[!note] Why so many &quot;service&quot; names?
+The book covers three &quot;services&quot; styles: SOA (this chapter), microservices (Chapter 18) and service-based (Chapter 14). <em>Service</em> is a nice generic name, so it gets reused, and its meaning shifts as styles evolve: an <strong>entity service</strong> in orchestration-driven SOA differs in virtually every way from a microservice, which differs from a service-based service. Architects must parse the context; the term has suffered from <strong>semantic diffusion</strong>.</p>
+</blockquote>
+<h2 id="17-2-topology-and-taxonomy">17.2 Topology and taxonomy</h2>
+<p>Not every example has these exact layers, but all establish a taxonomy of services with well-defined responsibilities per layer. The exact boundaries vary by organisation and tools (some parts may sit inside an application server).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-17-fig-17-1-topology.svg" alt="Figure 17-1: topology of orchestration-driven SOA" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What it is</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Business services</strong></td>
+<td>Top-level entry points for business processes: <strong>no code</strong>, only input, output and sometimes schema, defined by business users or analysts</td>
+<td><code>ExecuteTrade</code>, <code>PlaceOrder</code></td>
+</tr>
+<tr>
+<td><strong>Enterprise services</strong></td>
+<td><strong>Fine-grained shared implementations</strong>: atomic behaviour around business domains and transactional entities; the building blocks of business services, tied together by the orchestration engine</td>
+<td><code>CreateCustomer</code>, <code>CalculateQuote</code>; entities <code>Customer</code>, <code>Order</code>, <code>Lineitem</code></td>
+</tr>
+<tr>
+<td><strong>Application services</strong></td>
+<td><strong>One-off, single-implementation</strong> services owned by one application team, not worth making reusable</td>
+<td>a geolocation service for one app</td>
+</tr>
+<tr>
+<td><strong>Infrastructure services</strong></td>
+<td>Operational concerns (monitoring, logging, authentication, authorisation): concrete implementations owned by a shared infrastructure team working with operations</td>
+<td>logging, auth</td>
+</tr>
+<tr>
+<td><strong>Orchestration engine and message bus</strong></td>
+<td>The heart: stitches business services together with orchestration, including <strong>transactional coordination and message transformation</strong>; also an <strong>integration hub</strong> for custom code, packages and legacy systems</td>
+<td>an ESB</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Litmus test for a business service:</strong>
+<ul>
+<li>can the architect answer yes to &quot;Are we in the business of...?&quot; <code>PlaceOrder</code> passes</li>
+<li><code>CreateCustomer</code> fails: the company needs to create customers to execute trades but is not in the business of creating customers.</li>
+</ul>
+</li>
+<li><strong>The elusive granularity.</strong>
+<ul>
+<li>The goal for enterprise services was perfectly encapsulated blocks of isolated business functionality, freely composed into workflows, so the business would never rewrite that behaviour: a growing collection of reusable assets, in theory</li>
+<li>The authors say the sweet spot is elusive at best and likely impossible</li>
+<li><strong>Business components are not construction materials</strong> whose solutions last decades; markets, technology and engineering practice keep changing.</li>
+</ul>
+</li>
+<li><strong>ESBs today.</strong>
+<ul>
+<li>The authors consider building a whole architecture around an ESB a bad idea, but ESBs are immensely useful in integration-heavy environments: if you need both an integration hub and an orchestration engine, use a tool that bundles them</li>
+<li>(Learn to discern the true uses of tools, apart from the hype, good and bad.)</li>
+</ul>
+</li>
+<li><strong>Conway's Law:</strong> the integration architects who own the message bus become a <strong>political force</strong>, then a <strong>bureaucratic bottleneck</strong>.</li>
+<li><strong>Transactions.</strong>
+<ul>
+<li>Offloading transaction behaviour to the engine sounds good, but architects struggle to find the right granularity</li>
+<li>a few services in a distributed transaction is fine, but complexity grows because entities appear in many workflows and developers must work out the transaction boundaries.</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-3-message-flow">17.3 Message flow</h2>
+<p>All requests go through the orchestration engine, <strong>even internal calls</strong>. In Figure 17-2 the <code>CreateQuote</code> business service calls the service bus, which defines the workflow: calls to <code>CreateCustomer</code> and <code>CalculateQuote</code>, each also calling application services. The bus is the intermediary for every call, both integration hub and orchestration engine.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-17-fig-17-2-message-flow.svg" alt="Figure 17-2: message flow, every call goes through the service bus" loading="lazy" /></p>
+<h2 id="17-4-reuse-and-coupling">17.4 Reuse...and coupling</h2>
+<p>Early architects were told to find reuse opportunities as aggressively as possible. Example: an architect sees that each of <strong>six divisions</strong> of an insurance company has a notion of <strong>Customer</strong> (Figure 17-3). The &quot;proper&quot; SOA response extracts Customer into one <strong>canonical Customer service</strong> that the other services reference (Figure 17-4).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-17-fig-17-3-and-17-4-canonical-customer.svg" alt="Figures 17-3 and 17-4: six Customer notions become one canonical Customer service" loading="lazy" /></p>
+<p>The negative trade-offs arrived slowly:</p>
+<ul>
+<li><strong>Reuse is implemented via coupling.</strong> A change to the Customer service ripples out to every other service, making even incremental change risky and forcing coordinated deployments and holistic testing.</li>
+<li><strong>Everyone inherits everyone's details.</strong>
+<ul>
+<li>Auto insurance needs a <strong>driver's licence</strong> (a property of the person), so the shared Customer must carry licence details that disability insurance does not care about, yet that team must handle the extra complexity</li>
+<li>DDD's insistence on <strong>avoiding holistic reuse</strong> derives from experiences like this.</li>
+</ul>
+</li>
+<li><strong>The nightmare of technical partitioning.</strong>
+<ul>
+<li>A task like &quot;add a new address line to CatalogCheckout&quot; touches <strong>dozens of services across several tiers plus the single database schema</strong></li>
+<li>the domain concept is &quot;ground to dust&quot;
+<ul>
+<li>If an enterprise service has the wrong transactional granularity, developers must change the design or build a near-identical new service: &quot;so much for reuse&quot;.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-5-data-topologies">17.5 Data topologies</h2>
+<p>Not very interesting: usually <strong>one or a few relational databases</strong>, the common practice of the era. Even transactionality was pushed from the database to the bus, which often offered <strong>declarative transactions</strong> per entity. Architects of the time treated data as a &quot;foreign country&quot;, an integration point rather than part of the problem domain.</p>
+<blockquote>
+<p>[!warning] Declarative transactions largely failed
+Application servers let configuration managers change the transactional scope of individual entities (EntityBeans, declared in XML), and the server then created matching database transactions. It failed for two reasons:</p>
+<ol>
+<li>Not knowing the runtime transactional behaviour adds complexity, so developers made <strong>almost identical copies of entities</strong> differing only in transaction scope.</li>
+<li>Whatever vendors built into buses, <strong>edge cases and failure modes</strong> left tangled inconsistency for humans. Some complex features (transactions) <strong>cannot be cleanly abstracted</strong>; too many leaks.</li>
+</ol>
+</blockquote>
+<h2 id="17-6-cloud-risks-governance-teams">17.6 Cloud, risks, governance, teams</h2>
+<ul>
+<li><strong>Cloud:</strong>
+<ul>
+<li>the style predates the cloud by decades, so there was no original cloud design</li>
+<li>Today it is a good <strong>integration architecture</strong> for cloud and on-prem services that must participate in workflows.</li>
+</ul>
+</li>
+<li><strong>Original risks:</strong>
+<ul>
+<li>cost, implementation time (multiyear endeavours with decisions high in the hierarchy) and surprising difficulty to maintain</li>
+<li>Rather than call them failures, companies mostly turned them into <strong>integration architectures</strong> with better boundaries aligned with DDD.</li>
+</ul>
+</li>
+<li><strong>Accidental SOA:</strong>
+<ul>
+<li>when an ESB is used for integration, the slippery slope is letting it gradually encapsulate the whole architecture, building a full orchestration-driven SOA unintentionally</li>
+<li>Avoid it with reasonable <strong>encapsulation boundaries</strong> for orchestration and attention to transactional boundaries.</li>
+</ul>
+</li>
+<li><strong>Governance:</strong>
+<ul>
+<li>testing outside formal QA was uncommon, mock frameworks for buses were cumbersome and inconsistent, and &quot;governance&quot; meant heavyweight frameworks, meetings and manual code reviews</li>
+<li>Today, <strong>fitness functions</strong> can stop data and bounded contexts leaking across an ESB.</li>
+</ul>
+</li>
+<li><strong>Fitness function example.</strong>
+<ul>
+<li>An ESB links an <strong>ERP package</strong>, an <strong>online sales tool</strong> and modern <strong>Accounting microservices</strong></li>
+<li>the system may only read from ERP and sales and write to Accounting. First ensure all communication is logged consistently, then:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>READ logs for ERP into ERP-logs for past 24 hours
+READ logs for Sales into Sales-logs for past 24 hours
+FOREACH entry IN ERP-logs
+    IF 'operation' is 'update' and 'target' != 'accounting' THEN
+        raise fitness function violation
+            "Invalid communication between integration points"
+    END IF
+FOREACH entry IN Sales-logs
+    IF 'operation' is 'update' and 'target' != 'accounting' THEN
+        raise fitness function violation
+            "Invalid communication between integration points"
+    END IF
+</code></pre>
+<ul>
+<li><strong>Teams:</strong>
+<ul>
+<li>team topologies was unknown then
+<ul>
+<li>The strict taxonomy is a <strong>communication antipattern</strong> that helped inspire the team-topologies principles: someone building business services rarely spoke to someone building enterprise services</li>
+</ul>
+</li>
+<li>they communicated through contracts and interfaces and <strong>enterprise ticketing tools</strong>, so building features was slow.</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-7-style-characteristics">17.7 Style characteristics</h2>
+<p>Agile had only just started and had not reached the large organisations that used this style, so many modern criteria were not priorities.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-17-fig-17-5-ratings.svg" alt="Figure 17-5: SOA characteristics ratings" loading="lazy" /></p>
+<ul>
+<li>It is <strong>perhaps the most technically partitioned general-purpose architecture ever attempted</strong>; the backlash led to microservices.</li>
+<li><strong>One quantum</strong>,
+<ul>
+<li>although distributed, for two reasons: it uses a single or few databases (coupling points), and, more importantly, the <strong>orchestration engine is a giant coupling point</strong>: no part can have different characteristics than the mediator that orchestrates everything</li>
+<li>It finds the disadvantages of both monolithic and distributed architectures.</li>
+</ul>
+</li>
+<li><strong>Deployability and testability score disastrously:</strong> poorly supported, and not goals of the era.</li>
+<li><strong>Elasticity and scalability</strong>
+<ul>
+<li>are supported despite difficulty: vendors poured effort into session replication across application servers</li>
+<li><strong>Performance</strong> was never a highlight, because each business request is split across so much of the architecture.</li>
+</ul>
+</li>
+<li><strong>Simplicity and cost</strong>
+<ul>
+<li>have the inverse of the relationship architects would prefer</li>
+<li>Lessons: the practical limits of technical partitioning, and how hard real-world distributed transactions are.</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-8-examples-and-use-cases">17.8 Examples and use cases</h2>
+<p>Late 1990s and early 2000s large enterprises, since displaced by domain-based distributed styles such as microservices.</p>
+<ul>
+<li><strong>Change is a lottery.</strong>
+<ul>
+<li>On a lucky day, an entity change touches only the enterprise services layer</li>
+<li>on a bad day (an unanticipated change), <strong>four or five layers</strong> change, highly coupled in each. Architects dread the word <em>change</em>, because the analysis is deep and the scope variable.</li>
+</ul>
+</li>
+<li><strong>Modern relevance.</strong>
+<ul>
+<li>An ESB's integration hub (protocol and contract transformation) and orchestration engine (workflows across endpoints) still suit <strong>integration architectures</strong>
+<ul>
+<li>The many layers of indirection let enterprise services be implemented as <strong>integration points, package software or bespoke code</strong> (Figure 17-6): client requests use the bus to decide which enterprise services to call, in what order and what to aggregate</li>
+</ul>
+</li>
+<li>the services reach custom code, old systems or packages through APIs.</li>
+</ul>
+</li>
+<li>Since most organisations then lacked open source operating systems, alternatives such as microservices were impossibly expensive
+<ul>
+<li><strong>Learn from past approaches</strong>: keep what still makes sense and internalise what failed and why.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-17-fig-17-6-integration-layers.svg" alt="Figure 17-6: layers of abstraction give implementation flexibility" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>A taxonomy of services plus a central orchestration engine, aimed at enterprise reuse.</li>
+<li>Reuse is coupling: shared canonical entities spread change and carry everyone's details.</li>
+<li>Technical partitioning scatters domain concepts; one quantum, poor evolvability and deployability.</li>
+<li>Keep the ESB for integration only; guard against Accidental SOA with encapsulation and fitness functions.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Business, enterprise, application, infrastructure services.</strong></li>
+<li><strong>Orchestration engine; ESB; integration hub.</strong></li>
+<li><strong>Canonical service; reuse via coupling.</strong></li>
+<li><strong>Declarative transactions; semantic diffusion; Accidental SOA.</strong></li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 17 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch17.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch17.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/">Fundamentals of Software Architecture 16: Space-Based Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-18-microservices-architecture/">Fundamentals of Software Architecture 18: Microservices Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/">&larr; Fundamentals of Software Architecture 16: Space-Based Architecture Style</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-18-microservices-architecture/">Fundamentals of Software Architecture 18: Microservices Architecture &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

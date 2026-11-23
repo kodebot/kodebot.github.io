@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Fundamentals of Software Architecture 10: Layered Architecture Style</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/">Contents</a><span class="ttl">Fundamentals Of Software Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-09-foundations/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/fundamentals-of-software-architecture/fsa-11-the-modular-monolith-architecture-style/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="fundamentals-of-software-architecture-10-layered-architecture-style">Fundamentals of Software Architecture 10: Layered Architecture Style</h1>
+<p>Source: Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, 2025), chapter 10. Previous: <a href="/book-digest/fundamentals-of-software-architecture/fsa-09-foundations/">Fundamentals of Software Architecture 9: Foundations</a>. Next: <a href="/book-digest/fundamentals-of-software-architecture/fsa-11-the-modular-monolith-architecture-style/">Fundamentals of Software Architecture 11: The Modular Monolith Architecture Style</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Layered (n-tiered)</strong> is one of the most common styles and the de facto standard for many legacy applications because it is <strong>simple, familiar and cheap</strong>. &quot;Just start coding&quot; usually ends up here.</li>
+<li>Most have four layers (<strong>Presentation, Business, Persistence, Database</strong>); the physical deployment has three variants.</li>
+<li>It is <strong>technically partitioned</strong>, so a domain such as &quot;customer&quot; is smeared across every layer, which fits DDD poorly.</li>
+<li><strong>Closed layers</strong> give <strong>layers of isolation</strong>; open layers (for example a Services layer) are added deliberately. Watch for the <strong>Architecture Sinkhole</strong> antipattern (the 80-20 rule).</li>
+<li>Strengths: <strong>cost and simplicity</strong>. Weak on everything else as it grows: <strong>1 star</strong> for modularity, maintainability, deployability, evolvability, scalability, elasticity, fault tolerance; testability 2; responsiveness 3. Quanta = 1.</li>
+</ul>
+</div></div>
+<h2 id="10-1-topology">10.1 Topology</h2>
+<p>Components sit in <strong>logical horizontal layers</strong>, each with a specific role (such as presentation or business logic).</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-10-fig-10-1-layers.svg" alt="Figure 10-1: the standard logical layers" loading="lazy" /></p>
+<ul>
+<li>No rule fixes the number or types of layers, but most have four: <strong>Presentation, Business, Persistence, Database</strong>.</li>
+<li>Some merge Business and Persistence, especially when persistence logic (SQL or HSQL) is embedded in Business components. Small applications may have three layers
+<ul>
+<li>large, complex ones five or more.</li>
+</ul>
+</li>
+</ul>
+<p>Three <strong>physical (deployment) variants</strong>:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-10-fig-10-2-deployment-variants.svg" alt="Figure 10-2: physical topology (deployment) variants" loading="lazy" /></p>
+<ol>
+<li><strong>Presentation, Business and Persistence in one deployment unit</strong>, with the Database as a separate external database or filesystem.</li>
+<li><strong>Presentation in its own unit</strong>, Business and Persistence combined in a second, and the Database external.</li>
+<li><strong>All four layers in one deployment</strong>, including the database. Useful for small applications with an embedded or in-memory database, such as mobile apps. Many on-premises products ship this way.</li>
+</ol>
+<p><strong>Responsibilities.</strong> Each layer abstracts part of the work for a business request:</p>
+<ul>
+<li>The <strong>Presentation</strong> layer handles UI and browser communication. It only needs to display customer data in a format, not know how to get it.</li>
+<li>The <strong>Business</strong> layer runs business rules
+<ul>
+<li>It does not care how data is formatted for the screen or where it comes from: it gets data from Persistence, applies logic (calculate, aggregate) and passes it up.</li>
+</ul>
+</li>
+<li>This <strong>separation of concerns</strong> makes role-and-responsibility models easy, and lets developers use their technical specialism (presentation or persistence logic)
+<ul>
+<li>The cost is a lack of <strong>overall holistic agility</strong>: the whole system's ability to respond quickly to change.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Technically partitioned.</strong> As Chapter 9 showed, components are split by technical role, not domain. Any business domain (customer, say) is spread through the Presentation, Business, Rules, Services and Database layers, making changes to it hard. So a <strong>DDD approach does not fit</strong> the style well.</p>
+<h2 id="10-2-style-specifics">10.2 Style specifics</h2>
+<h3 id="layers-of-isolation">Layers of isolation</h3>
+<p>A layer is <strong>closed</strong> or <strong>open</strong>. If closed, a request moving down cannot skip a layer: Presentation goes to Business, then Persistence, then Database.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-10-fig-10-3-closed-layers.svg" alt="Figure 10-3: closed layers; the bypass would need open layers" loading="lazy" /></p>
+<ul>
+<li>For a simple retrieval it would be faster for Presentation to read the database directly (the early-2000s <strong>Fast-Lane Reader</strong> pattern), but that needs Business and Persistence to be <strong>open</strong>.</li>
+<li>Which is better? The answer is <strong>layers of isolation</strong>:
+<ul>
+<li>changes in one layer generally do not affect others as long as the <strong>contracts between layers</strong> stay unchanged</li>
+<li>Each layer knows little of the others' internals.</li>
+</ul>
+</li>
+<li>To support this, layers on the <strong>major request flow must be closed</strong>
+<ul>
+<li>If Presentation reaches Persistence directly, a Persistence change hits both Business and Presentation: tightly coupled, &quot;very brittle&quot;, and hard and expensive to change.</li>
+</ul>
+</li>
+<li>Isolation also lets any layer be <strong>replaced</strong> without affecting the others (given well-defined contracts and the <strong>Business Delegate</strong> pattern, which reduces coupling between business services and the UI by acting as an adapter)
+<ul>
+<li>Example: swap the old UI framework for a new one inside Presentation.</li>
+</ul>
+</li>
+</ul>
+<h3 id="adding-layers">Adding layers</h3>
+<p>Sometimes a layer should be open. Suppose the Business layer has shared objects (date and string utilities, auditing, logging) and you decide Presentation may not use them.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-10-fig-10-4-and-10-5-services-layer.svg" alt="Figures 10-4 and 10-5: shared business objects, then a Services layer added" loading="lazy" /></p>
+<ul>
+<li><strong>Figure 10-4:</strong>
+<ul>
+<li>a dotted line from a presentation component to a shared object shows the problem</li>
+<li>Presentation can reach the Business layer, so it can reach the shared objects, which is hard to govern.</li>
+</ul>
+</li>
+<li><strong>Figure 10-5:</strong> add a <strong>Services layer</strong> holding the shared objects. Business is closed, so Presentation is architecturally barred from them.</li>
+<li>Mark the new Services layer <strong>open</strong>, otherwise Business would have to go through it to reach Persistence. Open lets Business use it (solid arrow) or bypass it (dotted arrow).</li>
+<li><strong>Document which layers are open or closed, and why.</strong> Failing to do so usually yields tightly coupled, brittle architectures hard to test, maintain and deploy.</li>
+</ul>
+<h3 id="architecture-sinkhole-antipattern">Architecture Sinkhole antipattern</h3>
+<p>Every layered architecture has some requests that are simply passed layer to layer with <strong>no business logic</strong>.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-10-architecture-sinkhole.svg" alt="Architecture Sinkhole: a request passes through every layer unchanged" loading="lazy" /></p>
+<ul>
+<li>Example:
+<ul>
+<li>Presentation asks for a customer's name and address, Business passes it to Rules, which passes it to Persistence, which makes a simple SQL call</li>
+<li>The data returns up the stack with no aggregation, calculation, rules or transformation.</li>
+</ul>
+</li>
+<li>The cost is <strong>unnecessary object instantiation and processing</strong>, draining memory and performance.</li>
+<li>Measure the <strong>percentage</strong> of requests like this. The <strong>80-20 rule</strong> is a good guide: 20% sinkholes is acceptable; <strong>80% is a sign layered is the wrong style</strong> for the domain.</li>
+<li>Another fix is to make all layers open, accepting that change becomes harder to manage.</li>
+</ul>
+<h2 id="10-3-data-topologies-cloud-risks">10.3 Data topologies, cloud, risks</h2>
+<ul>
+<li><strong>Data:</strong>
+<ul>
+<li>traditionally a monolithic system with a single monolithic database</li>
+<li>The shared Persistence layer often <strong>maps object hierarchies</strong> between object-oriented languages and the set-based relational world.</li>
+</ul>
+</li>
+<li><strong>Cloud:</strong>
+<ul>
+<li>because the style is monolithic and partitioned into layers, cloud options are limited to deploying one or more layers with a cloud provider</li>
+<li>The technical partitioning suits separated deployments, but <strong>latency between on-premises servers and the cloud</strong> can bite because workflows usually pass through most layers.</li>
+</ul>
+</li>
+<li><strong>Common risks:</strong>
+<ul>
+<li><strong>no fault tolerance</strong>: monolithic deployment and no modularity mean one small out-of-memory condition crashes the whole application</li>
+<li><strong>Availability</strong> suffers from a high <strong>mean time to recover (MTTR)</strong>: startup takes about <strong>2 minutes for small applications to 15 minutes or more for large ones</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-4-governance">10.4 Governance</h2>
+<p>Excellent news: the style is so common that the authors of the original structural testing tools built them for it. The Chapter 6 fitness function was created for it (Example 10-1):</p>
+<pre class="hl"><code><span class="n">layeredArchitecture</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="na">layer</span><span class="p">(</span><span class="s">"Controller"</span><span class="p">).</span><span class="na">definedBy</span><span class="p">(</span><span class="s">"..controller.."</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">layer</span><span class="p">(</span><span class="s">"Service"</span><span class="p">).</span><span class="na">definedBy</span><span class="p">(</span><span class="s">"..service.."</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">layer</span><span class="p">(</span><span class="s">"Persistence"</span><span class="p">).</span><span class="na">definedBy</span><span class="p">(</span><span class="s">"..persistence.."</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">whereLayer</span><span class="p">(</span><span class="s">"Controller"</span><span class="p">).</span><span class="na">mayNotBeAccessedByAnyLayer</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="na">whereLayer</span><span class="p">(</span><span class="s">"Service"</span><span class="p">).</span><span class="na">mayOnlyBeAccessedByLayers</span><span class="p">(</span><span class="s">"Controller"</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">whereLayer</span><span class="p">(</span><span class="s">"Persistence"</span><span class="p">).</span><span class="na">mayOnlyBeAccessedByLayers</span><span class="p">(</span><span class="s">"Service"</span><span class="p">)</span>
+</code></pre>
+<ul>
+<li>The architect names the layers after packages (in ArchUnit syntax two periods either side of a package name indicate its ownership), then defines the allowed communication, governing the open and closed layers.</li>
+<li>Fitness function libraries support layered architecture extremely well, automating governance of the layer relationships during implementation.</li>
+</ul>
+<h2 id="10-5-team-topology-considerations">10.5 Team topology considerations</h2>
+<p>Unlike some styles, layered is <strong>generally independent of team topologies</strong> and works with any configuration:</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-10-team-fit.svg" alt="How the layered style fits each team type" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Team type</th>
+<th>Why it fits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream-aligned</strong></td>
+<td>The architecture is small and self-contained and represents a single journey through the system; teams own the flow through every layer</td>
+</tr>
+<tr>
+<td><strong>Enabling</strong></td>
+<td>Highly modular by technical concern: specialists can experiment with one or more layers (a new UI library in Presentation) without affecting the rest</td>
+</tr>
+<tr>
+<td><strong>Complicated-subsystem</strong></td>
+<td>Each layer does one specific task: Persistence is a hook for a team needing operational data for analytics, without touching the layers stream-aligned teams own</td>
+</tr>
+<tr>
+<td><strong>Platform</strong></td>
+<td>Many tools exist, but as with monoliths in general it becomes <strong>unwieldy</strong> as it grows: strain on database connections, memory, performance, concurrent users, making the platform team's work increasingly difficult</td>
+</tr>
+</tbody>
+</table>
+<h2 id="10-6-style-characteristics">10.6 Style characteristics</h2>
+<p>A <strong>one-star</strong> rating means the characteristic is not well supported; <strong>five stars</strong> means it is one of the style's strongest features. Definitions are in Chapter 4.</p>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-10-fig-10-6-ratings.svg" alt="Figure 10-6: layered architecture characteristics ratings" loading="lazy" /></p>
+<ul>
+<li><strong>Cost and simplicity</strong>
+<ul>
+<li>are the primary strengths: monolithic, simpler and easier to understand than distributed styles, and cheap to build and maintain</li>
+<li>But ratings <strong>diminish quickly as the code base grows</strong>.</li>
+</ul>
+</li>
+<li><strong>Deployability (1 star)</strong>
+<ul>
+<li>is low because deployments are high risk, infrequent and ceremonial</li>
+<li>A three-line change to a class means redeploying the whole unit, so database, configuration or other changes can sneak in beside it, and it is bundled with dozens of other changes.</li>
+</ul>
+</li>
+<li><strong>Testability (2 stars)</strong>
+<ul>
+<li>is low because developers will not run the whole regression suite for three lines (if they have one)</li>
+<li>It earns <strong>two stars, not one</strong>, because you can <strong>mock or stub</strong> components or a whole layer.</li>
+</ul>
+</li>
+<li>The engineering characteristics all <strong>start well but degrade as the code base grows</strong>.</li>
+<li><strong>Elasticity and scalability (1 star)</strong>
+<ul>
+<li>come from monolithic deployment and lack of modularity</li>
+<li>You can make some functions scale more, but it needs complex techniques (multithreading, internal messaging, parallel processing) the style suits poorly</li>
+<li>The <strong>architecture quantum is always 1</strong> (monolithic UI, database and backend), so it scales only to a point.</li>
+</ul>
+</li>
+<li><strong>Responsiveness (3 stars)</strong>: achievable by careful design and improved with caching and multithreading, but held back by no inherent parallel processing, closed layering and the Architecture Sinkhole.</li>
+</ul>
+<h2 id="10-7-when-to-use-and-when-not-to-use">10.7 When to use and when not to use</h2>
+<ul>
+<li><strong>Use</strong>
+<ul>
+<li>it for small, simple applications or websites</li>
+<li>as a starting point under very tight budget and time constraints</li>
+<li>and when architects are still deciding whether a more complex style is needed but must begin development. It is probably one of the lowest-cost styles.</li>
+</ul>
+</li>
+<li>When doing so, <strong>minimise code reuse and keep object hierarchies shallow</strong> to preserve modularity and ease a later move to another style.</li>
+<li><strong>Do not use</strong> it for large applications and systems: maintainability, agility, testability and deployability suffer as it grows, so more modular styles suit them better.</li>
+</ul>
+<h2 id="10-8-examples-and-use-cases">10.8 Examples and use cases</h2>
+<p><img src="/book-digest/fundamentals-of-software-architecture/img/fsa-10-examples-os-tcpip.svg" alt="Layers in operating systems and in TCP/IP" loading="lazy" /></p>
+<p><strong>Operating systems</strong> (Linux, Windows) use layers for separation of concerns:</p>
+<ul>
+<li><strong>Hardware:</strong> CPU, memory, I/O devices.</li>
+<li><strong>Kernel:</strong> hardware abstraction, memory management, process scheduling.</li>
+<li><strong>System Call Interface:</strong> interacts with the kernel to provide system services.</li>
+<li><strong>User:</strong> applications and utilities.</li>
+</ul>
+<p><strong>The networking OSI model</strong> and the internet's TCP/IP:</p>
+<ul>
+<li><strong>Physical:</strong> physically transmits data.</li>
+<li><strong>Data Link:</strong> error detection and frame synchronisation.</li>
+<li><strong>Network:</strong> routing (for example IP).</li>
+<li><strong>Transport:</strong> reliable transmission (for example TCP).</li>
+<li><strong>Application:</strong> services such as email (SMTP), file transfer (FTP) and web browsing (HTTP).</li>
+</ul>
+<p>Any architecture that values <strong>separation of concerns, maintainability and independent layer development</strong> benefits. It is also common for teams optimising <strong>feasibility</strong>: can we deliver the stated scope in the time and with the resources available? An investor-funded organisation that must ship fast often chooses it, even if parts are rewritten later.</p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Four logical layers; three deployment variants; technically partitioned; quanta = 1.</li>
+<li>Keep layers on the main flow closed for isolation; add open layers deliberately and document them.</li>
+<li>Beware the Architecture Sinkhole; apply the 80-20 rule.</li>
+<li>Cheap and simple, but modularity, deployability, scalability and fault tolerance rate 1 star and degrade as it grows.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Layered (n-tiered) architecture; technical partitioning.</strong></li>
+<li><strong>Closed and open layers; layers of isolation.</strong></li>
+<li><strong>Fast-Lane Reader pattern; Business Delegate pattern.</strong></li>
+<li><strong>Architecture Sinkhole antipattern; 80-20 rule.</strong></li>
+<li><strong>Architecture by Implication and Accidental Architecture antipatterns.</strong></li>
+<li><strong>MTTR (mean time to recover).</strong></li>
+<li><strong>Star ratings scorecard</strong> (Chapter 4 definitions).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards and Neal Ford, <em>Fundamentals of Software Architecture</em>, 2nd edition (O'Reilly, March 2025), chapter 10 — <a href="https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch10.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/fundamentals-of-software/9781098175504/ch10.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-09-foundations/">Fundamentals of Software Architecture 9: Foundations</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-11-the-modular-monolith-architecture-style/">Fundamentals of Software Architecture 11: The Modular Monolith Architecture Style</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-06-measuring-and-governing-architecture-characteristics/">Fundamentals of Software Architecture 6: Measuring and Governing Architecture Characteristics</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/fundamentals-of-software-architecture/fsa-09-foundations/">&larr; Fundamentals of Software Architecture 9: Foundations</a><a href="/book-digest/fundamentals-of-software-architecture/">Contents</a><a href="/book-digest/fundamentals-of-software-architecture/fsa-11-the-modular-monolith-architecture-style/">Fundamentals of Software Architecture 11: The Modular Monolith Architecture Style &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

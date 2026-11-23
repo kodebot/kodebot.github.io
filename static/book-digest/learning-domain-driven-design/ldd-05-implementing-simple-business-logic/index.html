@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Learning DDD 5: Implementing Simple Business Logic</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/learning-domain-driven-design/">Contents</a><span class="ttl">Learning Domain Driven Design</span><span class="sp"></span><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-04-integrating-bounded-contexts/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-06-tackling-complex-business-logic/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="learning-ddd-5-implementing-simple-business-logic">Learning DDD 5: Implementing Simple Business Logic</h1>
+<p>Source: Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), ch. 5. Previous: <a href="/book-digest/learning-domain-driven-design/ldd-04-integrating-bounded-contexts/">Learning DDD 4: Integrating Bounded Contexts</a>. Next: <a href="/book-digest/learning-domain-driven-design/ldd-06-tackling-complex-business-logic/">Learning DDD 6: Tackling Complex Business Logic</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Business logic is the most important part of software; this chapter covers two patterns for <strong>simple</strong> logic: <strong>transaction script</strong> and <strong>active record</strong>.</li>
+<li><strong>Transaction script:</strong> one procedure per public operation, which must be <strong>transactional</strong> (succeed or fail, never leave invalid state). Deceptively easy to get wrong.</li>
+<li>Three real corruption cases: <strong>no transaction</strong>, <strong>database plus message bus</strong>, <strong>implicit distributed transaction</strong> (the caller never learns the result and retries).</li>
+<li><strong>Active record:</strong> objects that wrap a table row, own CRUD, hold data structures with public getters and setters, for simple logic over <strong>complicated data structures</strong>.</li>
+<li>Both suit <strong>supporting</strong> subdomains, integration adapters and anticorruption layers; <strong>never core</strong> subdomains. Be pragmatic: relax consistency where the business can bear it.</li>
+</ul>
+</div></div>
+<h2 id="why-this-matters">Why this matters</h2>
+<ul>
+<li>Business logic is <strong>the reason the software exists</strong>. A sexy UI and a fast database are an expensive tech demo if the software is not useful to the business.</li>
+<li>Subdomains differ in strategic importance and complexity (chapter 2), so we start with <strong>two patterns for rather simple logic</strong>.</li>
+</ul>
+<h2 id="transaction-script">Transaction script</h2>
+<blockquote>
+<p>&quot;Organizes business logic by procedures where each procedure handles a single request from the presentation.&quot; Martin Fowler (<em>Patterns of Enterprise Application Architecture</em>, 2002).</p>
+</blockquote>
+<ul>
+<li>A system's public interface is a collection of <strong>business transactions</strong> that consumers run (Figure 5-1), retrieving information, modifying it, or both
+<ul>
+<li>The pattern organises logic into <strong>procedures</strong>, one per public operation: the <strong>public operations are the encapsulation boundaries</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="implementation">Implementation</h3>
+<ul>
+<li>Each procedure is a simple procedural script. It may use a <strong>thin abstraction over storage</strong> or access databases directly.</li>
+<li>The one requirement is <strong>transactional behaviour</strong>:
+<ul>
+<li>each operation <strong>succeeds or fails, never leaving an invalid state</strong></li>
+<li>Even if it fails at the worst moment the system must stay consistent, by <strong>rolling back</strong> or by <strong>compensating actions</strong></li>
+<li>This gives the pattern its name.</li>
+</ul>
+</li>
+<li>Example: a script that converts batches of JSON files to XML:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// ConvertJob transaction script</span>
+<span class="n">DB</span><span class="p">.</span><span class="n">StartTransaction</span><span class="p">();</span>
+
+<span class="kt">var</span><span class="w"> </span><span class="n">job</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DB</span><span class="p">.</span><span class="n">LoadNextJob</span><span class="p">();</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">json</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LoadFile</span><span class="p">(</span><span class="n">job</span><span class="p">.</span><span class="n">Source</span><span class="p">);</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">xml</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ConvertJsonToXml</span><span class="p">(</span><span class="n">json</span><span class="p">);</span>
+<span class="n">WriteFile</span><span class="p">(</span><span class="n">job</span><span class="p">.</span><span class="n">Destination</span><span class="p">,</span><span class="w"> </span><span class="n">xml</span><span class="p">.</span><span class="n">ToString</span><span class="p">());</span>
+<span class="n">DB</span><span class="p">.</span><span class="n">MarkJobAsCompleted</span><span class="p">(</span><span class="n">job</span><span class="p">);</span>
+
+<span class="n">DB</span><span class="p">.</span><span class="n">Commit</span><span class="p">();</span>
+</code></pre>
+<blockquote>
+<p>[!note] Book typos
+The printed listing has <code>xml.ToString();</code> with a missing closing parenthesis; the note shows it corrected.</p>
+</blockquote>
+<h3 id="it-s-not-that-easy">It's not that easy!</h3>
+<ul>
+<li>Students ask &quot;is it worth our time?&quot; The pattern is the <strong>foundation of the advanced patterns</strong>, and, despite its simplicity, <strong>the easiest to get wrong</strong>: many production issues the author has debugged came from misimplemented transactional behaviour.</li>
+</ul>
+<h4 id="lack-of-transactional-behaviour">Lack of transactional behaviour</h4>
+<ul>
+<li>Two updates with <strong>no overarching transaction</strong>: update <code>Users.last_visit</code>, then insert into <code>VisitsLog</code>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// LogVisit.cs (no transaction)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">LogVisit</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="n">DateTime</span><span class="w"> </span><span class="n">visitedOn</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_db</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="s">"UPDATE Users SET last_visit=@p1 WHERE user_id=@p2"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">visitedOn</span><span class="p">,</span><span class="w"> </span><span class="n">userId</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_db</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="s">@"INSERT INTO VisitsLog(user_id, visit_date)</span>
+<span class="s">            VALUES(@p1, @p2)"</span><span class="p">,</span><span class="w"> </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="n">visitedOn</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>A failure <strong>between the two statements</strong> (network outage, database timeout or deadlock, server crash) leaves <code>Users</code> updated with no <code>VisitsLog</code> row.</li>
+<li>Fix: a <strong>proper transaction</strong> wrapping both, with rollback on error. Easy because relational databases support multi-record transactions.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// LogVisit.cs (with a transaction)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">LogVisit</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="n">DateTime</span><span class="w"> </span><span class="n">visitedOn</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">try</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">_db</span><span class="p">.</span><span class="n">StartTransaction</span><span class="p">();</span>
+
+<span class="w">            </span><span class="n">_db</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="s">@"UPDATE Users SET last_visit=@p1</span>
+<span class="s">                WHERE user_id=@p2"</span><span class="p">,</span>
+<span class="w">                </span><span class="n">visitedOn</span><span class="p">,</span><span class="w"> </span><span class="n">userId</span><span class="p">);</span>
+
+<span class="w">            </span><span class="n">_db</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="s">@"INSERT INTO VisitsLog(user_id, visit_date)</span>
+<span class="s">                VALUES(@p1, @p2)"</span><span class="p">,</span>
+<span class="w">                </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="n">visitedOn</span><span class="p">);</span>
+
+<span class="w">            </span><span class="n">_db</span><span class="p">.</span><span class="n">Commit</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">catch</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">_db</span><span class="p">.</span><span class="n">Rollback</span><span class="p">();</span>
+<span class="w">            </span><span class="k">throw</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>It gets harder when the database <strong>lacks multi-record transactions</strong>, or when several storage mechanisms <strong>cannot be united in a distributed transaction</strong>.</li>
+</ul>
+<h4 id="distributed-transactions">Distributed transactions</h4>
+<ul>
+<li>Common in distributed systems: <strong>change the database, then publish a message</strong> to a bus.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// LogVisit.cs (database plus message bus)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">LogVisit</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="n">DateTime</span><span class="w"> </span><span class="n">visitedOn</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_db</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="s">"UPDATE Users SET last_visit=@p1 WHERE user_id=@p2"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">visitedOn</span><span class="p">,</span><span class="w"> </span><span class="n">userId</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_messageBus</span><span class="p">.</span><span class="n">Publish</span><span class="p">(</span><span class="s">"VISITS_TOPIC"</span><span class="p">,</span>
+<span class="w">            </span><span class="k">new</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">UserId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="n">VisitDate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">visitedOn</span><span class="w"> </span><span class="p">});</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>A failure after the update and before the publish corrupts state: the table changed but <strong>others are never notified</strong>.</li>
+<li>No easy fix:
+<ul>
+<li>distributed transactions across storages are <strong>complex, hard to scale, error prone</strong>, so usually avoided</li>
+<li>Later: <strong>CQRS</strong> (chapter 8) to populate several stores and the <strong>outbox pattern</strong> (chapter 9) for reliable publishing after committing.</li>
+</ul>
+</li>
+</ul>
+<h4 id="implicit-distributed-transactions">Implicit distributed transactions</h4>
+<ul>
+<li>A deceptively simple method that maintains a <strong>visit counter</strong>: one value, one table, one database.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// LogVisit.cs (counter)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">LogVisit</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">userId</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_db</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="s">"UPDATE Users SET visits=visits+1 WHERE user_id=@p1"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">userId</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>It is <strong>still a distributed transaction</strong>:
+<ul>
+<li>it communicates with the database <strong>and the external caller</strong> (Figure 5-2)</li>
+<li>A <code>void</code> method still tells the caller success or failure (an exception on failure)</li>
+<li>If it <strong>succeeds but the result is not delivered</strong> (REST network outage, or both in one process that fails before the caller records success), the caller assumes failure and <strong>retries</strong>: the counter goes up by <strong>2 instead of 1</strong>.</li>
+</ul>
+</li>
+<li>No simple fix; it depends on the business domain. Options:
+<ul>
+<li>Make the operation <strong>idempotent</strong>: the caller reads the counter, increments it locally, and passes the new value. Repeating the call changes nothing.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// LogVisit.cs (idempotent)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">LogVisit</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">visits</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_db</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="s">"UPDATE Users SET visits = @p1 WHERE user_id=@p2"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">visits</span><span class="p">,</span><span class="w"> </span><span class="n">userId</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Use <strong>optimistic concurrency control</strong>: the caller passes the value it read, and the update applies only if the stored value still equals it, so repeats with the same inputs change nothing.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// LogVisit.cs (optimistic concurrency)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">LogVisit</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">expectedVisits</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_db</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="s">@"UPDATE Users SET visits=visits+1</span>
+<span class="s">            WHERE user_id=@p1 and visits = @p2"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">userId</span><span class="p">,</span><span class="w"> </span><span class="n">expectedVisits</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<blockquote>
+<p>[!note] Book typos
+The printed listings use <code>DataTime</code> for the date type and pass <code>visits</code> (not the parameter <code>expectedVisits</code>) in the last listing; the notes show the evident intent.</p>
+</blockquote>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-05-transaction-script-failures.svg" alt="Three ways a transaction script corrupts data" loading="lazy" /></p>
+<h3 id="when-to-use-transaction-script">When to use transaction script</h3>
+<ul>
+<li>Suits the simplest domains where logic is <strong>simple procedural operations</strong>, for example <strong>ETL</strong> (extract from a source, transform, load into a destination, Figure 5-3).</li>
+<li>Naturally fits <strong>supporting subdomains</strong>, and can be an <strong>adapter for external systems</strong> (generic subdomains) or part of an <strong>anticorruption layer</strong> (chapter 9).</li>
+<li><strong>Advantage: simplicity</strong>, minimal abstractions and overhead in runtime and in understanding.</li>
+<li><strong>Disadvantage:</strong> the same simplicity. As logic grows, <strong>duplication across transactions</strong> grows and copies drift out of sync, giving inconsistent behaviour.</li>
+<li><strong>Never for core subdomains.</strong>
+<ul>
+<li>Complex logic in transaction scripts becomes an unmaintainable <strong>big ball of mud</strong>, so the pattern even has a dubious reputation (sometimes called an antipattern)</li>
+<li>Yet it is <strong>ubiquitous</strong>, and every business-logic pattern in the following chapters builds on it.</li>
+</ul>
+</li>
+</ul>
+<h2 id="active-record">Active record</h2>
+<blockquote>
+<p>&quot;An object that wraps a row in a database table or view, encapsulates the database access, and adds domain logic on that data.&quot; Martin Fowler (<em>PoEAA</em>, 2002).</p>
+</blockquote>
+<ul>
+<li>Also for <strong>simple business logic</strong>, but over <strong>more complex data structures</strong>: object trees and hierarchies with one-to-many and many-to-many relations (Figure 5-4)
+<ul>
+<li>A plain transaction script would <strong>repeat the mapping</strong> to in-memory structures everywhere.</li>
+</ul>
+</li>
+</ul>
+<h3 id="implementation">Implementation</h3>
+<ul>
+<li>Dedicated objects, <strong>active records</strong>, represent complicated structures and also implement <strong>CRUD data access</strong>
+<ul>
+<li>They are coupled to an <strong>ORM</strong> or data access framework</li>
+<li>&quot;Active&quot; because each structure implements its own data access.</li>
+</ul>
+</li>
+<li>The business logic is still a <strong>transaction script</strong>, but it manipulates active records instead of the database directly, and the operation must still be <strong>atomic</strong>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// CreateUser.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">CreateUser</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">UserDetails</span><span class="w"> </span><span class="n">userDetails</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">try</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">_db</span><span class="p">.</span><span class="n">StartTransaction</span><span class="p">();</span>
+
+<span class="w">            </span><span class="kt">var</span><span class="w"> </span><span class="n">user</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">User</span><span class="p">();</span>
+<span class="w">            </span><span class="n">user</span><span class="p">.</span><span class="n">Name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">userDetails</span><span class="p">.</span><span class="n">Name</span><span class="p">;</span>
+<span class="w">            </span><span class="n">user</span><span class="p">.</span><span class="n">Email</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">userDetails</span><span class="p">.</span><span class="n">Email</span><span class="p">;</span>
+<span class="w">            </span><span class="n">user</span><span class="p">.</span><span class="n">Save</span><span class="p">();</span>
+
+<span class="w">            </span><span class="n">_db</span><span class="p">.</span><span class="n">Commit</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">catch</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">_db</span><span class="p">.</span><span class="n">Rollback</span><span class="p">();</span>
+<span class="w">            </span><span class="k">throw</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The goal is to <strong>encapsulate the complexity of mapping</strong> objects to the schema
+<ul>
+<li>Active records can hold <strong>business logic</strong> such as field validation or procedures on their data, but the distinctive feature is the <strong>separation of data structure and behaviour</strong>: fields usually have <strong>public getters and setters</strong> so external procedures change state.</li>
+</ul>
+</li>
+</ul>
+<h3 id="when-to-use-active-record">When to use active record</h3>
+<ul>
+<li>It is a <strong>transaction script that optimises database access</strong>, so it supports only <strong>relatively simple logic</strong> (CRUD, at most input validation).</li>
+<li>Like transaction script it suits <strong>supporting subdomains</strong>, integrating <strong>generic</strong> solutions, and <strong>model transformation</strong>
+<ul>
+<li>The difference: it handles <strong>complicated data structure to schema mapping</strong>.</li>
+</ul>
+</li>
+<li>It is also known as the <strong>anemic domain model antipattern</strong>
+<ul>
+<li>The author avoids the negative connotation: it is <strong>a tool</strong>, harmful only in the wrong context</li>
+<li>Using an elaborate pattern for simple logic <strong>also harms</strong>, by adding <strong>accidental complexity</strong></li>
+<li>The next chapter shows how a <strong>domain model</strong> differs.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] Pattern, not framework
+&quot;Active record&quot; here is the <strong>design pattern</strong> from Fowler's <em>PoEAA</em>, not the Active Record framework, which came later as one implementation.</p>
+</blockquote>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-05-script-vs-active-record.svg" alt="Transaction script versus active record" loading="lazy" /></p>
+<h2 id="be-pragmatic">Be pragmatic</h2>
+<ul>
+<li>Data integrity matters, but a <strong>pragmatic approach</strong> is sometimes better
+<ul>
+<li>At <strong>high scale</strong>, consistency guarantees can be <strong>relaxed</strong></li>
+<li>Is corrupting <strong>one record in a million</strong> a showstopper? For a system ingesting <strong>billions of IoT events a day</strong>, is it a big deal if <strong>0.001%</strong> are duplicated or lost?</li>
+</ul>
+</li>
+<li>There are <strong>no universal laws</strong>; it depends on the domain. It is fine to <strong>cut corners</strong> if you evaluate the <strong>risks and business implications</strong>.</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Summary</th>
+<th>Fit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transaction script</td>
+<td>Simple procedural scripts per operation, each transactional (succeeds or fails)</td>
+<td>Supporting subdomains, ETL-like logic</td>
+</tr>
+<tr>
+<td>Active record</td>
+<td>Data structures that provide simple CRUD access methods, used by a transaction script</td>
+<td>Simple logic over complicated data structures</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Next: <strong>domain model</strong> for complex logic.</li>
+</ul>
+<h2 id="exercises">Exercises</h2>
+<ol>
+<li>Which pattern for a <strong>core</strong> subdomain? Transaction script / active record / <strong>neither</strong> / both.</li>
+<li>Which for a <strong>supporting</strong> subdomain? Transaction script / active record / neither / <strong>both</strong>.</li>
+<li>Given a <code>CreateTicket</code> method (below) with no high-level transaction, which consistency issues are possible (select all)? The agent's counter increases by <strong>more than 1</strong>; the counter increases but the agent <strong>gets no ticket</strong>; an agent gets a ticket but <strong>is not notified</strong>; <strong>all of the above</strong>.</li>
+<li>Is there <strong>at least one more</strong> edge case that can corrupt state? No / Yes.</li>
+</ol>
+<pre class="hl"><code><span class="c1">// CreateTicket (exercise)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">CreateTicket</span><span class="p">(</span><span class="n">TicketData</span><span class="w"> </span><span class="n">data</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">var</span><span class="w"> </span><span class="n">agent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FindLeastBusyAgent</span><span class="p">();</span>
+
+<span class="w">    </span><span class="n">agent</span><span class="p">.</span><span class="n">ActiveTickets</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">ActiveTickets</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="n">agent</span><span class="p">.</span><span class="n">Save</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kt">var</span><span class="w"> </span><span class="n">ticket</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Ticket</span><span class="p">();</span>
+<span class="w">    </span><span class="n">ticket</span><span class="p">.</span><span class="n">Id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Guid</span><span class="p">.</span><span class="n">New</span><span class="p">();</span>
+<span class="w">    </span><span class="n">ticket</span><span class="p">.</span><span class="n">Data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">data</span><span class="p">;</span>
+<span class="w">    </span><span class="n">ticket</span><span class="p">.</span><span class="n">AssignedAgent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">agent</span><span class="p">;</span>
+<span class="w">    </span><span class="n">ticket</span><span class="p">.</span><span class="n">Save</span><span class="p">();</span>
+
+<span class="w">    </span><span class="n">_alerts</span><span class="p">.</span><span class="n">Send</span><span class="p">(</span><span class="n">agent</span><span class="p">,</span><span class="w"> </span><span class="s">"You have a new ticket!"</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<details class="callout c-note"><summary>Answers (book appendix B)</summary><div class="callout-body">
+<ol>
+<li>C: neither can implement a core subdomain's complexity.</li>
+<li>D: both suit supporting subdomains.</li>
+<li>D: all issues are possible (retry increments the counter more than once; counter up without a ticket; ticket assigned but no notification).</li>
+<li>B: yes, for example a failure after line 12 then a retry persists and assigns the same ticket twice.</li>
+</ol>
+</div></details>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Pick <strong>transaction script</strong> or <strong>active record</strong> only for <strong>simple</strong> logic; both are fine for supporting subdomains, never for core.</li>
+<li>Always make operations <strong>transactional</strong>, mind <strong>distributed and implicit distributed</strong> transactions, use <strong>idempotency</strong> or <strong>optimistic concurrency</strong> where needed.</li>
+<li>Weigh consistency against cost: <strong>be pragmatic</strong>.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Transaction script</strong>: procedure per operation, transactional.</li>
+<li><strong>Active record</strong>: object wrapping a row with CRUD, data separate from behaviour.</li>
+<li><strong>Idempotent operation</strong>: repeating gives the same result.</li>
+<li><strong>Optimistic concurrency control</strong>: update only if the value is still the one read.</li>
+<li><strong>Anemic domain model</strong>: the criticism of active record when misapplied.</li>
+<li><strong>Big ball of mud</strong>: unmaintainable result of complex logic in scripts.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), chapter 5, read on O'Reilly.</li>
+<li>Martin Fowler (2002), <em>Patterns of Enterprise Application Architecture</em> (Addison-Wesley).</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-04-integrating-bounded-contexts/">Learning DDD 4: Integrating Bounded Contexts</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-06-tackling-complex-business-logic/">Learning DDD 6: Tackling Complex Business Logic</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/learning-domain-driven-design/ldd-04-integrating-bounded-contexts/">&larr; Learning DDD 4: Integrating Bounded Contexts</a><a href="/book-digest/learning-domain-driven-design/">Contents</a><a href="/book-digest/learning-domain-driven-design/ldd-06-tackling-complex-business-logic/">Learning DDD 6: Tackling Complex Business Logic &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

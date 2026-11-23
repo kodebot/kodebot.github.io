@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Learning DDD 6: Tackling Complex Business Logic</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/learning-domain-driven-design/">Contents</a><span class="ttl">Learning Domain Driven Design</span><span class="sp"></span><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-05-implementing-simple-business-logic/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-07-modeling-the-dimension-of-time/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="learning-ddd-6-tackling-complex-business-logic">Learning DDD 6: Tackling Complex Business Logic</h1>
+<p>Source: Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), ch. 6. Previous: <a href="/book-digest/learning-domain-driven-design/ldd-05-implementing-simple-business-logic/">Learning DDD 5: Implementing Simple Business Logic</a>. Next: <a href="/book-digest/learning-domain-driven-design/ldd-07-modeling-the-dimension-of-time/">Learning DDD 7: Modeling the Dimension of Time</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The <strong>domain model</strong> pattern (Fowler) handles <strong>complex logic</strong>: state transitions, business rules and <strong>invariants</strong> that must always hold. Its building blocks are <strong>value objects</strong>, <strong>aggregates</strong> (with entities, commands and domain events) and <strong>domain services</strong>.</li>
+<li><strong>Value objects</strong> are identified by their values, <strong>immutable</strong>, carry behaviour, and replace primitive obsession; use them whenever you can (especially for money).</li>
+<li>An <strong>aggregate</strong> is a <strong>consistency and transaction boundary</strong>: only its own commands change state, <strong>one aggregate per transaction</strong>, referenced by ID elsewhere, kept as <strong>small</strong> as strong consistency allows, with a single <strong>aggregate root</strong>.</li>
+<li><strong>Domain events</strong> announce what happened (past tense); <strong>domain services</strong> host stateless logic spanning aggregates.</li>
+<li>These patterns reduce <strong>degrees of freedom</strong>, that is complexity. Use for <strong>core</strong> subdomains.</li>
+</ul>
+</div></div>
+<h2 id="history">History</h2>
+<ul>
+<li>The domain model pattern comes from Fowler's <em>PoEAA</em>, which ended: &quot;Eric Evans is currently writing a book on building Domain Models&quot;, that is Evans's <em>Domain-Driven Design: Tackling Complexity in the Heart of Software</em>.</li>
+<li>Evans's patterns (aggregate, value objects, repositories and others) are often called <strong>tactical DDD</strong>. To avoid implying that DDD <em>requires</em> them, the author uses Fowler's term: the pattern is <strong>domain model</strong>
+<ul>
+<li>aggregates and value objects are its <strong>building blocks</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="domain-model">Domain model</h2>
+<ul>
+<li>For <strong>complex business logic</strong>: not CRUD but <strong>complicated state transitions, business rules and invariants</strong> (rules protected at all times).</li>
+<li><strong>Help desk example</strong> (support ticket lifecycle):
+<ul>
+<li>Customers open tickets; customer and agent append messages; the ticket tracks the correspondence.</li>
+<li>Priority: low, medium, high, urgent. An agent must offer a solution within an <strong>SLA</strong> based on priority.</li>
+<li>If the agent does not reply within the SLA, the customer can <strong>escalate</strong> to the agent's manager. Escalation <strong>reduces the agent's response time limit by 33%</strong>.</li>
+<li>If the agent has not opened an escalated ticket within <strong>50%</strong> of the response time limit, it is <strong>reassigned</strong> automatically.</li>
+<li>Tickets <strong>auto-close</strong> if the customer does not answer the agent's questions within <strong>seven days</strong>.</li>
+<li>Escalated tickets cannot be closed automatically or by the agent, only by the <strong>customer or the agent's manager</strong>.</li>
+<li>A customer can <strong>reopen</strong> a closed ticket only if it was closed in the <strong>past seven days</strong>.</li>
+</ul>
+</li>
+<li>An entangled net of rules. Implemented with active records it is easy to <strong>duplicate logic and corrupt state</strong>.</li>
+</ul>
+<h3 id="implementation">Implementation</h3>
+<ul>
+<li>A domain model is an <strong>object model of the domain incorporating behaviour and data</strong>
+<ul>
+<li>Building blocks: aggregates, value objects, domain events, domain services</li>
+<li>All put <strong>business logic first</strong></li>
+<li>(Samples are OOP, but the concepts also apply to functional programming.)</li>
+</ul>
+</li>
+<li><strong>Complexity:</strong>
+<ul>
+<li>the logic is already complex, so objects must add <strong>no accidental complexity</strong>: no infrastructure or technology concerns (no DB or external calls)</li>
+<li>Use <strong>plain old objects</strong> (POCOs in .NET, POJOs in Java, POPOs in Python).</li>
+</ul>
+</li>
+<li><strong>Ubiquitous language:</strong> emphasis on business logic makes the code &quot;speak&quot; the language and follow the experts' mental models.</li>
+</ul>
+<h2 id="building-blocks">Building blocks</h2>
+<h3 id="value-object">Value object</h3>
+<ul>
+<li>Identified by the <strong>composition of its values</strong>: a <code>Color</code> of red, green and blue. Change a field and it is a <strong>new colour</strong>; same values means same colour, so <strong>no ID field</strong> is needed.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Color.cs</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Color</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">_red</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">_green</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">_blue</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>A <code>ColorId</code> (Figure 6-1) is <strong>redundant and creates bugs</strong>: two rows with the same RGB but different ids.</li>
+<li><strong>Primitive obsession</strong>
+<ul>
+<li>code smell: representing domain concepts with strings, integers or dictionaries</li>
+<li>In a <code>Person</code> class (id, names, landline, mobile, email, heightMetric, countryCode) values are strings assigned by convention, so the class must validate everything: validation <strong>duplicates</strong> and is <strong>hard to enforce</strong> before use, worse as others evolve the code.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Person.cs (primitive obsession)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Person</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">_id</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">_firstName</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">_lastName</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">_landlinePhone</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">_mobilePhone</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">_email</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">_heightMetric</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">_countryCode</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="nf">Person</span><span class="p">(</span><span class="cm">/* ... */</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kt">var</span><span class="w"> </span><span class="n">dave</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">(</span>
+<span class="w">    </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="mi">30217</span><span class="p">,</span>
+<span class="w">    </span><span class="n">firstName</span><span class="p">:</span><span class="w"> </span><span class="s">"Dave"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">lastName</span><span class="p">:</span><span class="w"> </span><span class="s">"Ancelovici"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">landlinePhone</span><span class="p">:</span><span class="w"> </span><span class="s">"023745001"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">mobilePhone</span><span class="p">:</span><span class="w"> </span><span class="s">"0873712503"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">email</span><span class="p">:</span><span class="w"> </span><span class="s">"dave@learning-ddd.com"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">heightMetric</span><span class="p">:</span><span class="w"> </span><span class="mi">180</span><span class="p">,</span>
+<span class="w">    </span><span class="n">countryCode</span><span class="p">:</span><span class="w"> </span><span class="s">"BG"</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>With value objects the intent is <strong>clear even with short names</strong>, and <strong>validation lives in the value objects</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Person.cs (value objects)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Person</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">PersonId</span><span class="w"> </span><span class="n">_id</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">Name</span><span class="w"> </span><span class="n">_name</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">PhoneNumber</span><span class="w"> </span><span class="n">_landline</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">PhoneNumber</span><span class="w"> </span><span class="n">_mobile</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">EmailAddress</span><span class="w"> </span><span class="n">_email</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">Height</span><span class="w"> </span><span class="n">_height</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">CountryCode</span><span class="w"> </span><span class="n">_country</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="nf">Person</span><span class="p">(</span><span class="cm">/* ... */</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kt">var</span><span class="w"> </span><span class="n">dave</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">(</span>
+<span class="w">    </span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">PersonId</span><span class="p">(</span><span class="mi">30217</span><span class="p">),</span>
+<span class="w">    </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Name</span><span class="p">(</span><span class="s">"Dave"</span><span class="p">,</span><span class="w"> </span><span class="s">"Ancelovici"</span><span class="p">),</span>
+<span class="w">    </span><span class="n">landline</span><span class="p">:</span><span class="w"> </span><span class="n">PhoneNumber</span><span class="p">.</span><span class="n">Parse</span><span class="p">(</span><span class="s">"023745001"</span><span class="p">),</span>
+<span class="w">    </span><span class="n">mobile</span><span class="p">:</span><span class="w"> </span><span class="n">PhoneNumber</span><span class="p">.</span><span class="n">Parse</span><span class="p">(</span><span class="s">"0873712503"</span><span class="p">),</span>
+<span class="w">    </span><span class="n">email</span><span class="p">:</span><span class="w"> </span><span class="n">EmailAddress</span><span class="p">.</span><span class="n">Parse</span><span class="p">(</span><span class="s">"dave@learning-ddd.com"</span><span class="p">),</span>
+<span class="w">    </span><span class="n">height</span><span class="p">:</span><span class="w"> </span><span class="n">Height</span><span class="p">.</span><span class="n">FromMetric</span><span class="p">(</span><span class="mi">180</span><span class="p">),</span>
+<span class="w">    </span><span class="n">country</span><span class="p">:</span><span class="w"> </span><span class="n">CountryCode</span><span class="p">.</span><span class="n">Parse</span><span class="p">(</span><span class="s">"BG"</span><span class="p">));</span>
+</code></pre>
+<ul>
+<li>Value objects shine when they <strong>centralise business logic</strong> that manipulates the values: cohesive, easy to test, and they express domain concepts.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Examples of value object behaviour</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">heightMetric</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Height</span><span class="p">.</span><span class="n">Metric</span><span class="p">(</span><span class="mi">180</span><span class="p">);</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">heightImperial</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Height</span><span class="p">.</span><span class="n">Imperial</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
+
+<span class="kt">var</span><span class="w"> </span><span class="n">string1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">heightMetric</span><span class="p">.</span><span class="n">ToString</span><span class="p">();</span><span class="w">                   </span><span class="c1">// "180cm"</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">string2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">heightImperial</span><span class="p">.</span><span class="n">ToString</span><span class="p">();</span><span class="w">                 </span><span class="c1">// "5 feet 3 inches"</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">string3</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">heightMetric</span><span class="p">.</span><span class="n">ToImperial</span><span class="p">().</span><span class="n">ToString</span><span class="p">();</span><span class="w">      </span><span class="c1">// "5 feet 11 inches"</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">firstIsHigher</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">heightMetric</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">heightImperial</span><span class="p">;</span><span class="w">       </span><span class="c1">// true</span>
+
+<span class="kt">var</span><span class="w"> </span><span class="n">phone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PhoneNumber</span><span class="p">.</span><span class="n">Parse</span><span class="p">(</span><span class="s">"+359877123503"</span><span class="p">);</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">country</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">phone</span><span class="p">.</span><span class="n">Country</span><span class="p">;</span><span class="w">                             </span><span class="c1">// "BG"</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">phoneType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">phone</span><span class="p">.</span><span class="n">PhoneType</span><span class="p">;</span><span class="w">                         </span><span class="c1">// "MOBILE"</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">isValid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PhoneNumber</span><span class="p">.</span><span class="n">IsValid</span><span class="p">(</span><span class="s">"+972120266680"</span><span class="p">);</span><span class="w">      </span><span class="c1">// false</span>
+
+<span class="kt">var</span><span class="w"> </span><span class="n">red</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Color</span><span class="p">.</span><span class="n">FromRGB</span><span class="p">(</span><span class="mi">255</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">green</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">;</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">yellow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">red</span><span class="p">.</span><span class="n">MixWith</span><span class="p">(</span><span class="n">green</span><span class="p">);</span>
+<span class="kt">var</span><span class="w"> </span><span class="n">yellowString</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">yellow</span><span class="p">.</span><span class="n">ToString</span><span class="p">();</span><span class="w">                    </span><span class="c1">// "#FFFF00"</span>
+</code></pre>
+<ul>
+<li>They <strong>eliminate conventions</strong> (&quot;this string is an email, that one a phone number&quot;).</li>
+</ul>
+<h4 id="implementation">Implementation</h4>
+<ul>
+<li>A field change means a different value, so value objects are <strong>immutable</strong>: <code>MixWith</code> returns a <strong>new instance</strong>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Color.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Color</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="kt">byte</span><span class="w"> </span><span class="n">Red</span><span class="p">;</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="kt">byte</span><span class="w"> </span><span class="n">Green</span><span class="p">;</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="kt">byte</span><span class="w"> </span><span class="n">Blue</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="nf">Color</span><span class="p">(</span><span class="kt">byte</span><span class="w"> </span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="kt">byte</span><span class="w"> </span><span class="n">g</span><span class="p">,</span><span class="w"> </span><span class="kt">byte</span><span class="w"> </span><span class="n">b</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="n">Red</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r</span><span class="p">;</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="n">Green</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">g</span><span class="p">;</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="n">Blue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">Color</span><span class="w"> </span><span class="nf">MixWith</span><span class="p">(</span><span class="n">Color</span><span class="w"> </span><span class="n">other</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="nf">Color</span><span class="p">(</span>
+<span class="w">            </span><span class="n">r</span><span class="p">:</span><span class="w"> </span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="n">Math</span><span class="p">.</span><span class="n">Min</span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="n">Red</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="n">Red</span><span class="p">,</span><span class="w"> </span><span class="mi">255</span><span class="p">),</span>
+<span class="w">            </span><span class="n">g</span><span class="p">:</span><span class="w"> </span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="n">Math</span><span class="p">.</span><span class="n">Min</span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="n">Green</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="n">Green</span><span class="p">,</span><span class="w"> </span><span class="mi">255</span><span class="p">),</span>
+<span class="w">            </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="n">Math</span><span class="p">.</span><span class="n">Min</span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="n">Blue</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="n">Blue</span><span class="p">,</span><span class="w"> </span><span class="mi">255</span><span class="p">)</span>
+<span class="w">        </span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Equality is <strong>by value</strong>, so override equality properly (C#):</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Color.cs (equality)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Color</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">Equals</span><span class="p">(</span><span class="kt">object</span><span class="w"> </span><span class="n">obj</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">other</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">obj</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Color</span><span class="p">;</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">other</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="k">null</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">            </span><span class="k">this</span><span class="p">.</span><span class="n">Red</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="n">Red</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">            </span><span class="k">this</span><span class="p">.</span><span class="n">Green</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="n">Green</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">            </span><span class="k">this</span><span class="p">.</span><span class="n">Blue</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="n">Blue</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="k">operator</span><span class="w"> </span><span class="o">==</span><span class="p">(</span><span class="n">Color</span><span class="w"> </span><span class="n">lhs</span><span class="p">,</span><span class="w"> </span><span class="n">Color</span><span class="w"> </span><span class="n">rhs</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">Object</span><span class="p">.</span><span class="n">ReferenceEquals</span><span class="p">(</span><span class="n">lhs</span><span class="p">,</span><span class="w"> </span><span class="k">null</span><span class="p">))</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">Object</span><span class="p">.</span><span class="n">ReferenceEquals</span><span class="p">(</span><span class="n">rhs</span><span class="p">,</span><span class="w"> </span><span class="k">null</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">lhs</span><span class="p">.</span><span class="n">Equals</span><span class="p">(</span><span class="n">rhs</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="k">operator</span><span class="w"> </span><span class="o">!=</span><span class="p">(</span><span class="n">Color</span><span class="w"> </span><span class="n">lhs</span><span class="p">,</span><span class="w"> </span><span class="n">Color</span><span class="w"> </span><span class="n">rhs</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="o">!</span><span class="p">(</span><span class="n">lhs</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">rhs</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">GetHashCode</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nf">ToString</span><span class="p">().</span><span class="n">GetHashCode</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>In C# 9.0 the <strong><code>record</code></strong> type has value-based equality and needs no overrides.</li>
+<li>The core library <strong>string</strong> is a value object in .NET and Java: immutable, every operation returns a new instance, with rich behaviour (trim, concatenate, replace, substring).</li>
+</ul>
+<h4 id="when-to-use-value-objects">When to use value objects</h4>
+<ul>
+<li><strong>Whenever you can.</strong> More expressive, centralises logic, and is <strong>safer</strong>: immutable so <strong>side-effect free and thread safe</strong>.</li>
+<li>Rule of thumb: use them for elements that <strong>describe properties of other objects</strong>, especially <strong>entity properties</strong> (ids, names, phone numbers, email, statuses, passwords).</li>
+<li>Especially for <strong>money</strong>: primitives scatter money logic and cause <strong>rounding and precision bugs</strong>.</li>
+</ul>
+<h3 id="entities">Entities</h3>
+<ul>
+<li>The <strong>opposite of a value object</strong>: needs an <strong>explicit identification field</strong>. A <code>Person</code> with only a <code>Name</code> is suboptimal because <strong>namesakes</strong> exist.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Person.cs (entity)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Person</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">PersonId</span><span class="w"> </span><span class="n">Id</span><span class="p">;</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">Name</span><span class="w"> </span><span class="n">Name</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="nf">Person</span><span class="p">(</span><span class="n">PersonId</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">Name</span><span class="w"> </span><span class="n">name</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="n">Id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">id</span><span class="p">;</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="n">Name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">name</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>PersonId</code> is itself a value object over any suitable type (GUID, number, string, a domain value such as a Social Security number)
+<ul>
+<li>It must be <strong>unique per instance</strong> (Figure 6-2) and, with rare exceptions, <strong>immutable for the entity's life</strong>.</li>
+</ul>
+</li>
+<li>Entities <strong>are mutable</strong> and expected to change; value objects <strong>describe</strong> an entity's properties.</li>
+<li>&quot;Entity&quot; is <strong>not</strong> in the domain model's building-block list on purpose: entities are implemented <strong>only inside aggregates</strong>.</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-06-value-vs-entity.svg" alt="Value object versus entity" loading="lazy" /></p>
+<h3 id="aggregates">Aggregates</h3>
+<ul>
+<li>An aggregate is an entity (explicit id, mutable state) but <strong>much more</strong>: its goal is to <strong>protect the consistency</strong> of its data.</li>
+</ul>
+<h4 id="consistency-enforcement">Consistency enforcement</h4>
+<ul>
+<li>Mutable state can be corrupted in many ways, so the aggregate draws a clear boundary: it is a <strong>consistency enforcement boundary</strong>
+<ul>
+<li>Its logic validates all incoming changes against its rules.</li>
+</ul>
+</li>
+<li>Implementation: <strong>only the aggregate's own logic modifies its state</strong>. External processes and objects may only <strong>read</strong>; changes go through its public interface.</li>
+<li>State-modifying methods are <strong>commands</strong>. Two styles:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Ticket.cs (method style)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Ticket</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">AddMessage</span><span class="p">(</span><span class="n">UserId</span><span class="w"> </span><span class="k">from</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">body</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Message</span><span class="p">(</span><span class="k">from</span><span class="p">,</span><span class="w"> </span><span class="n">body</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_messages</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">message</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Ticket.cs (command object style)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Ticket</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">AddMessage</span><span class="w"> </span><span class="n">cmd</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Message</span><span class="p">(</span><span class="n">cmd</span><span class="p">.</span><span class="k">from</span><span class="p">,</span><span class="w"> </span><span class="n">cmd</span><span class="p">.</span><span class="n">body</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_messages</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">message</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Style is preference; the author prefers explicit <strong>command structures</strong> passed polymorphically to <code>Execute</code>.</li>
+<li>The public interface validates input and enforces all rules and invariants, so <strong>all business logic for the aggregate lives in the aggregate</strong>
+<ul>
+<li>That keeps the <strong>application layer</strong> (service layer) simple: load the state, execute the action, persist, return the result</li>
+<li>(Footnote: it implements <strong>transaction scripts</strong> and must be atomic.)</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Application layer</span>
+<span class="k">public</span><span class="w"> </span><span class="n">ExecutionResult</span><span class="w"> </span><span class="nf">Escalate</span><span class="p">(</span><span class="n">TicketId</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EscalationReason</span><span class="w"> </span><span class="n">reason</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">try</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">ticket</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_ticketRepository</span><span class="p">.</span><span class="n">Load</span><span class="p">(</span><span class="n">id</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">cmd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Escalate</span><span class="p">(</span><span class="n">reason</span><span class="p">);</span>
+<span class="w">        </span><span class="n">ticket</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="n">cmd</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_ticketRepository</span><span class="p">.</span><span class="n">Save</span><span class="p">(</span><span class="n">ticket</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">ExecutionResult</span><span class="p">.</span><span class="n">Success</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">ConcurrencyException</span><span class="w"> </span><span class="n">ex</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">ExecutionResult</span><span class="p">.</span><span class="n">Error</span><span class="p">(</span><span class="n">ex</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The <strong>concurrency check</strong> (the <code>catch</code>) is vital:
+<ul>
+<li>concurrent updates must not blindly overwrite earlier commits</li>
+<li>The second process is told its state is <strong>out of date</strong> and <strong>retries</strong></li>
+<li>The database must support concurrency management; simplest is a <strong>version field</strong> incremented per update.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Ticket.cs</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Ticket</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">TicketId</span><span class="w"> </span><span class="n">_id</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">_version</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">-- optimistic concurrency on commit</span>
+<span class="k">UPDATE</span><span class="w"> </span><span class="n">tickets</span>
+<span class="k">SET</span><span class="w"> </span><span class="n">ticket_status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">@</span><span class="n">new_status</span><span class="p">,</span>
+<span class="w">    </span><span class="n">agg_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">agg_version</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">ticket_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">@</span><span class="n">id</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">agg_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">@</span><span class="n">expected_version</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>The update applies changes and bumps the version <strong>only if the current version equals the one read</strong>. It can be done outside a relational database
+<ul>
+<li><strong>document databases</strong> suit aggregates, but concurrency management must be supported.</li>
+</ul>
+</li>
+</ul>
+<h4 id="transaction-boundary">Transaction boundary</h4>
+<ul>
+<li>The aggregate is also the <strong>transaction boundary</strong>: all its changes commit <strong>atomically</strong> (all or none).</li>
+<li><strong>No operation may assume a multi-aggregate transaction: one aggregate per database transaction.</strong> This forces careful boundary design
+<ul>
+<li><strong>Needing to commit several aggregates signals wrong boundaries.</strong></li>
+</ul>
+</li>
+</ul>
+<h4 id="hierarchy-of-entities">Hierarchy of entities</h4>
+<ul>
+<li>Sometimes several objects must share a transactional boundary (modified together, or one's rules depend on the other's state)
+<ul>
+<li>Design follows the domain: an aggregate is a <strong>hierarchy of entities</strong> sharing transactional consistency (Figure 6-3), containing entities and value objects bound by the domain's logic</li>
+<li>Hence the name: it <strong>aggregates</strong> them.</li>
+</ul>
+</li>
+<li>Rule spanning entities: <em>if an agent did not open an escalated ticket within 50% of the response time limit, reassign it</em>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Ticket.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Ticket</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_messages</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">EvaluateAutomaticActions</span><span class="w"> </span><span class="n">cmd</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="n">IsEscalated</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="n">RemainingTimePercentage</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">0.5</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">            </span><span class="n">GetUnreadMessagesCount</span><span class="p">(</span><span class="k">for</span><span class="p">:</span><span class="w"> </span><span class="n">AssignedAgent</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">_agent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AssignNewAgent</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">GetUnreadMessagesCount</span><span class="p">(</span><span class="n">UserId</span><span class="w"> </span><span class="n">id</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">_messages</span><span class="p">.</span><span class="n">Where</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">To</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">!</span><span class="n">x</span><span class="p">.</span><span class="n">WasRead</span><span class="p">).</span><span class="n">Count</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>It checks escalation, remaining time (under 50%) and unread messages for the agent, against <strong>strongly consistent data</strong> that cannot change after the checks, since the changes are one atomic transaction.</li>
+</ul>
+<h4 id="referencing-other-aggregates">Referencing other aggregates</h4>
+<ul>
+<li>All objects share one transaction, so <strong>large aggregates hurt performance and scalability</strong>
+<ul>
+<li>Use <strong>consistency</strong> as the guide:
+<ul>
+<li>only data that logic needs <strong>strongly consistent</strong> belongs inside</li>
+<li><strong>eventually consistent</strong> data lives outside, for example in another aggregate (Figure 6-4)</li>
+</ul>
+</li>
+<li>Rule: <strong>keep aggregates as small as possible</strong>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Ticket.cs (references)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Ticket</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">UserId</span><span class="w"> </span><span class="n">_customer</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">ProductId</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_products</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">UserId</span><span class="w"> </span><span class="n">_assignedAgent</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_messages</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Messages are inside; customer, products and agent are referenced <strong>by ID</strong> to make clear they are outside and each aggregate has its own transaction boundary.</li>
+<li>Test for membership: could the logic lead to an <strong>invalid state if it worked on eventually consistent data</strong>? If read acknowledgements arrived late, many tickets would be needlessly reassigned (corrupt state), so the messages <strong>belong inside</strong>.</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-06-aggregate-boundary.svg" alt="Aggregate: a consistency and transaction boundary" loading="lazy" /></p>
+<h4 id="the-aggregate-root">The aggregate root</h4>
+<ul>
+<li>Only <strong>one entity</strong> is the public interface: the <strong>aggregate root</strong> (Figure 6-5). A message can be marked read, but only <strong>through <code>Ticket</code></strong>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Ticket.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Ticket</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_messages</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">AcknowledgeMessage</span><span class="w"> </span><span class="n">cmd</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_messages</span><span class="p">.</span><span class="n">Where</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">Id</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">cmd</span><span class="p">.</span><span class="n">id</span><span class="p">).</span><span class="n">First</span><span class="p">();</span>
+<span class="w">        </span><span class="n">message</span><span class="p">.</span><span class="n">WasRead</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<h4 id="domain-events">Domain events</h4>
+<ul>
+<li>Besides the root's interface, the outer world hears about aggregates through <strong>domain events</strong>: messages describing a <strong>significant event that has occurred</strong> (ticket assigned, ticket escalated, message received)
+<ul>
+<li>Names are in the <strong>past tense</strong>.</li>
+</ul>
+</li>
+<li>They carry all the data about the event, for example (JSON):</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"ticket-id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"c9d286ff-3bca-4f57-94d4-4d4e490867d1"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">146</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ticket-escalated"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"escalation-reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"missed-sla"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"escalation-time"</span><span class="p">:</span><span class="w"> </span><span class="mi">1628970815</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Events are <strong>part of the aggregate's public interface</strong>. The aggregate <strong>publishes</strong> them
+<ul>
+<li>other processes, aggregates or external systems <strong>subscribe</strong> (Figure 6-6). Chapter 9 covers reliable publishing.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Ticket.cs (publishing an event)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Ticket</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">DomainEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_domainEvents</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">RequestEscalation</span><span class="w"> </span><span class="n">cmd</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="k">this</span><span class="p">.</span><span class="n">IsEscalated</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="n">RemainingTimePercentage</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">this</span><span class="p">.</span><span class="n">IsEscalated</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+<span class="w">            </span><span class="kt">var</span><span class="w"> </span><span class="n">escalatedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TicketEscalated</span><span class="p">(</span><span class="n">_id</span><span class="p">,</span><span class="w"> </span><span class="n">cmd</span><span class="p">.</span><span class="n">Reason</span><span class="p">);</span>
+<span class="w">            </span><span class="n">_domainEvents</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">escalatedEvent</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<h4 id="ubiquitous-language">Ubiquitous language</h4>
+<ul>
+<li>Aggregate name, data members, actions and events all use the <strong>bounded context's language</strong>
+<ul>
+<li>Evans: the code must be based on the language developers use <strong>with one another and with domain experts</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-06-aggregate-root-flow.svg" alt="Aggregate root, commands and domain events" loading="lazy" /></p>
+<h3 id="domain-services">Domain services</h3>
+<ul>
+<li>Logic that fits <strong>no aggregate or value object</strong>, or concerns <strong>several aggregates</strong>, becomes a <strong>domain service</strong>: a <strong>stateless object</strong> hosting business logic, usually <strong>orchestrating calls</strong> to components for a calculation or analysis.</li>
+<li>Example: the <strong>response time frame</strong> depends on the ticket (priority, escalation), the <strong>department's SLA policy</strong> and the agent's <strong>work schedule (shifts)</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// ResponseTimeFrameCalculationService.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">ResponseTimeFrameCalculationService</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">ResponseTimeframe</span><span class="w"> </span><span class="nf">CalculateAgentResponseDeadline</span><span class="p">(</span><span class="n">UserId</span><span class="w"> </span><span class="n">agentId</span><span class="p">,</span>
+<span class="w">        </span><span class="n">Priority</span><span class="w"> </span><span class="n">priority</span><span class="p">,</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">escalated</span><span class="p">,</span><span class="w"> </span><span class="n">DateTime</span><span class="w"> </span><span class="n">startTime</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_departmentRepository</span><span class="p">.</span><span class="n">GetDepartmentPolicy</span><span class="p">(</span><span class="n">agentId</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">maxProcTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">policy</span><span class="p">.</span><span class="n">GetMaxResponseTimeFor</span><span class="p">(</span><span class="n">priority</span><span class="p">);</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">escalated</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">maxProcTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">maxProcTime</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">policy</span><span class="p">.</span><span class="n">EscalationFactor</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">shifts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_departmentRepository</span><span class="p">.</span><span class="n">GetUpcomingShifts</span><span class="p">(</span><span class="n">agentId</span><span class="p">,</span>
+<span class="w">            </span><span class="n">startTime</span><span class="p">,</span><span class="w"> </span><span class="n">startTime</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="n">policy</span><span class="p">.</span><span class="n">MaxAgentResponseTime</span><span class="p">));</span>
+
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nf">CalculateTargetTime</span><span class="p">(</span><span class="n">maxProcTime</span><span class="p">,</span><span class="w"> </span><span class="n">shifts</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Domain services coordinate several aggregates <strong>but are not a loophole</strong>: still <strong>one aggregate instance modified per transaction</strong>
+<ul>
+<li>they suit <strong>calculation logic reading several aggregates</strong>.</li>
+</ul>
+</li>
+<li>They have <strong>nothing to do with microservices, SOA or other uses of &quot;service&quot;</strong>.</li>
+</ul>
+<h2 id="managing-complexity">Managing complexity</h2>
+<ul>
+<li>Goldratt (<em>The Choice</em>): complexity is the <strong>difficulty of controlling and predicting behaviour</strong>, reflected in <strong>degrees of freedom</strong>: the data points needed to describe a state.</li>
+<li>Two classes:
+<ul>
+<li><code>ClassA</code> has five independent properties: <strong>five degrees of freedom</strong></li>
+<li><code>ClassB</code> has five variables but <code>B</code> and <code>C</code> derive from <code>A</code> (<code>value / 2</code>, <code>value / 3</code>) and <code>E</code> from <code>D</code> (<code>value * 2</code>): <strong>two degrees of freedom</strong></li>
+<li><code>ClassA</code> is harder to control and predict, so <code>ClassB</code>'s <strong>invariants reduce complexity</strong>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// ClassA.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">ClassA</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">D</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ClassB.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">ClassB</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">_a</span><span class="p">,</span><span class="w"> </span><span class="n">_d</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">A</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">get</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">_a</span><span class="p">;</span>
+<span class="w">        </span><span class="k">set</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">_a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">value</span><span class="p">;</span>
+<span class="w">            </span><span class="n">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">value</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">            </span><span class="n">C</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">value</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">D</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">get</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">_d</span><span class="p">;</span>
+<span class="w">        </span><span class="k">set</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">_d</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">value</span><span class="p">;</span>
+<span class="w">            </span><span class="n">E</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">value</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Value objects and aggregates <strong>encapsulate invariants</strong>, reducing degrees of freedom: their logic sits within their boundaries and state changes only through their own methods.</li>
+<li>Since the pattern is for <strong>complex logic</strong>, it targets <strong>core subdomains</strong>.</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-06-degrees-of-freedom.svg" alt="Degrees of freedom: ClassA five, ClassB two" loading="lazy" /></p>
+<h2 id="conclusion">Conclusion</h2>
+<table>
+<thead>
+<tr>
+<th>Building block</th>
+<th>Summary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Value object</td>
+<td>Identified only by values, immutable, models data <strong>and behaviour</strong></td>
+</tr>
+<tr>
+<td>Aggregate</td>
+<td>Hierarchy of entities sharing a transactional boundary; strongly consistent data; modified only through commands; committed atomically; publishes <strong>domain events</strong></td>
+</tr>
+<tr>
+<td>Domain service</td>
+<td>Stateless object hosting logic belonging to no aggregate or value object</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Because state cannot be changed from outside, business logic is <strong>not duplicated in the application layer</strong>. Next: <strong>event sourcing</strong>, making <strong>time</strong> part of the model.</li>
+</ul>
+<h2 id="exercises">Exercises</h2>
+<ol>
+<li>True statement: value objects hold only data / only behaviour / <strong>are immutable</strong> / their state can change.</li>
+<li>Guiding principle for aggregate boundaries: only one entity / <strong>as small as possible while keeping consistency requirements</strong> / as wide as possible / depends.</li>
+<li>Why one aggregate instance per transaction? Performance / <strong>correct transactional boundaries</strong> / no such requirement / databases without multirecord transactions.</li>
+<li>Relationships between building blocks (select all): <strong>value objects describe entities' properties</strong> / value objects emit domain events / <strong>an aggregate contains one or more entities</strong>.</li>
+<li>Active records versus aggregates: active records hold only data / <strong>an aggregate encapsulates all its business logic, but logic manipulating an active record can sit outside</strong> / aggregates hold only data / an aggregate contains active records.</li>
+</ol>
+<details class="callout c-note"><summary>Answers (book appendix B)</summary><div class="callout-body">
+<ol>
+<li>C: value objects are immutable and can hold data and behaviour.</li>
+<li>B: as small as possible while keeping consistency requirements.</li>
+<li>B: one aggregate per transaction is another way to ensure all strongly consistent information sits inside the boundary.</li>
+<li>A and C: value objects describe entities' properties; an aggregate contains one or more entities.</li>
+<li>B: both can have behaviour, but the aggregate enforces that all related behaviour lives in its boundary.</li>
+</ol>
+</div></details>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Domain model for <strong>complex logic</strong>, built from <strong>value objects, aggregates and domain services</strong>.</li>
+<li>Aggregates: <strong>commands in, events out</strong>, one root, one transaction, small, referenced by ID, versioned for concurrency.</li>
+<li>Invariants <strong>cut degrees of freedom</strong> and so complexity.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Value object / entity</strong>: identified by values and immutable / identified by id and mutable.</li>
+<li><strong>Aggregate / aggregate root</strong>: consistency and transaction boundary / its only public entry point.</li>
+<li><strong>Command / domain event</strong>: state-modifying call / past-tense fact it publishes.</li>
+<li><strong>Domain service</strong>: stateless logic spanning aggregates.</li>
+<li><strong>Invariant</strong>: rule that must always hold.</li>
+<li><strong>Primitive obsession</strong>: using primitives for domain concepts.</li>
+<li><strong>Degrees of freedom</strong>: data points describing a state.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), chapter 6, read on O'Reilly.</li>
+<li>Martin Fowler (2002), <em>Patterns of Enterprise Application Architecture</em>; Eric Evans, <em>Domain-Driven Design</em> (Addison-Wesley); Eliyahu M. Goldratt, <em>The Choice</em>.</li>
+<li>&quot;Primitive Obsession&quot;: <a href="https://wiki.c2.com/?PrimitiveObsession" target="_blank" rel="noopener noreferrer">https://wiki.c2.com/?PrimitiveObsession</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-05-implementing-simple-business-logic/">Learning DDD 5: Implementing Simple Business Logic</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-07-modeling-the-dimension-of-time/">Learning DDD 7: Modeling the Dimension of Time</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/learning-domain-driven-design/ldd-05-implementing-simple-business-logic/">&larr; Learning DDD 5: Implementing Simple Business Logic</a><a href="/book-digest/learning-domain-driven-design/">Contents</a><a href="/book-digest/learning-domain-driven-design/ldd-07-modeling-the-dimension-of-time/">Learning DDD 7: Modeling the Dimension of Time &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

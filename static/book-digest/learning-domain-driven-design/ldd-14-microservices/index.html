@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Learning DDD 14: Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/learning-domain-driven-design/">Contents</a><span class="ttl">Learning Domain Driven Design</span><span class="sp"></span><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-13-domain-driven-design-in-the-real-world/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-15-event-driven-architecture/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="learning-ddd-14-microservices">Learning DDD 14: Microservices</h1>
+<p>Source: Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), ch. 14. Previous: <a href="/book-digest/learning-domain-driven-design/ldd-13-domain-driven-design-in-the-real-world/">Learning DDD 13: Domain-Driven Design in the Real World</a>. Next: <a href="/book-digest/learning-domain-driven-design/ldd-15-event-driven-architecture/">Learning DDD 15: Event-Driven Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>service</strong> is defined by its <strong>public interface</strong> (its front door); a <strong>microservice</strong> is a service with a <strong>micro public interface</strong>, which is why it never exposes its database.</li>
+<li><strong>One method per service</strong> fails: integration methods widen every interface and you get a <strong>distributed big ball of mud</strong>. <strong>Global complexity</strong> matters more than local complexity.</li>
+<li>Microservices should be <strong>deep modules</strong> (Ousterhout): a simple interface hiding complex logic. Splitting past the microservice threshold makes them <strong>shallow</strong> and raises cost of change.</li>
+<li><strong>All microservices are bounded contexts, but not all bounded contexts are microservices.</strong> A bounded context is the <strong>widest</strong> safe boundary, the microservice (often a <strong>subdomain</strong>) the <strong>narrowest</strong>; the aggregate is too narrow in most cases.</li>
+<li><strong>Open-host service</strong> and <strong>anticorruption layer</strong> compress public interfaces.</li>
+</ul>
+</div></div>
+<h2 id="context">Context</h2>
+<ul>
+<li>In the mid-2010s microservices took off to meet fast change, scale and cloud-fit
+<ul>
+<li>Many companies ended with <strong>distributed big balls of mud</strong>, more fragile, clumpy and expensive than the monoliths.</li>
+</ul>
+</li>
+<li>Microservices and bounded contexts are often used interchangeably. This chapter tests that.</li>
+</ul>
+<h2 id="what-is-a-service">What is a service?</h2>
+<ul>
+<li>OASIS: a <strong>mechanism that enables access to one or more capabilities</strong>, via a <strong>prescribed interface</strong> (any way of getting data in or out): synchronous (request/response) or asynchronous (producing and consuming events) (Figure 14-1).</li>
+<li>Randy Shoup:
+<ul>
+<li>the interface is a <strong>front door</strong>: all data in and out passes through it</li>
+<li>The <strong>public interface defines the service</strong>: a well-expressed interface describes its functionality (Figure 14-2).</li>
+</ul>
+</li>
+</ul>
+<h2 id="what-is-a-microservice">What is a microservice?</h2>
+<ul>
+<li>Since a service is defined by its public interface, a microservice is a service with a <strong>micro public interface: a micro front door</strong>.</li>
+<li>Benefits: easier to understand the function and the integration; <strong>fewer reasons to change</strong>; more <strong>autonomy</strong> for development, management and scale.</li>
+<li>It also explains why microservices <strong>do not expose their databases</strong>: that would make the interface huge (how many SQL queries can you run? effectively infinite)
+<ul>
+<li>Data is accessed only through a compact, integration-oriented interface.</li>
+</ul>
+</li>
+</ul>
+<h3 id="method-as-a-service-perfect-microservices">Method as a service: perfect microservices?</h3>
+<ul>
+<li>Naive idea: one public method per service. Take a <strong>backlog management service</strong> with <strong>eight public methods</strong> and apply it (Figure 14-3).</li>
+<li>Each service encapsulates its own database, so none can read another's
+<ul>
+<li>They must work together and synchronise changes, so we <strong>add integration methods</strong> to the interfaces</li>
+<li>The integrations and data flows look like a <strong>distributed big ball of mud</strong> (Figure 14-4).</li>
+</ul>
+</li>
+<li>Shoup's metaphor: we minimised the front doors but added <strong>enormous &quot;staff only&quot; entrances</strong> to every service.</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-14-method-as-service.svg" alt="One method per service ends as a distributed big ball of mud" loading="lazy" /></p>
+<h4 id="design-goal">Design goal</h4>
+<ul>
+<li>Why the heuristic is wrong:
+<ol>
+<li>It is <strong>not possible</strong>: services must cooperate, so interfaces grow with integration methods.</li>
+<li><strong>Won the battle, lost the war:</strong> each service is simpler, the <strong>system orders of magnitude more complex</strong>.</li>
+</ol>
+</li>
+<li>The goal is a <strong>flexible system</strong>. A system is &quot;a set of connected things or devices that operate together&quot;
+<ul>
+<li>it <strong>cannot be built from independent components</strong>, so services still have to be integrated.</li>
+</ul>
+</li>
+</ul>
+<h3 id="system-complexity">System complexity</h3>
+<ul>
+<li>Forty years ago there was no cloud or global scale or deployments every 11.7 seconds, but complexity still had to be tamed. Glenford Myers (<em>Composite/Structured Design</em>): minimising the <strong>local</strong> complexity of each part is not enough
+<ul>
+<li>the more important type is <strong>global complexity</strong>: the complexity of the overall structure, the degree of association or interdependence among major pieces.</li>
+</ul>
+</li>
+<li><strong>Local complexity</strong> = each microservice's implementation. <strong>Global complexity</strong> = interactions and dependencies between services.
+<ul>
+<li>Minimise global: put everything in <strong>one monolith</strong> (no interactions), possibly yielding a <strong>big ball of mud</strong> (highest local complexity).</li>
+<li>Optimise only local: the <strong>distributed big ball of mud</strong> (Figure 14-5).</li>
+</ul>
+</li>
+<li>Optimising either alone is a <strong>local optimum</strong>; the <strong>global optimum balances both</strong>.</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-14-complexity-granularity.svg" alt="Local versus global complexity across service granularity" loading="lazy" /></p>
+<h3 id="microservices-as-deep-services">Microservices as deep services</h3>
+<ul>
+<li>A module has a <strong>function</strong> (what it does) and <strong>logic</strong> (how)
+<ul>
+<li>John Ousterhout (<em>A Philosophy of Software Design</em>) proposes <strong>depth</strong> as a heuristic: draw a module as a <strong>rectangle</strong> whose <strong>top edge</strong> is the <strong>function</strong> (interface complexity, wider = broader function) and whose <strong>area</strong> is the <strong>logic</strong> (implementation) (Figure 14-6).</li>
+</ul>
+</li>
+<li><strong>Deep</strong> modules: a simple interface encapsulating complex logic. <strong>Shallow</strong> modules encapsulate little. The extreme shallow case:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// AddTwoNumbers</span>
+<span class="kt">int</span><span class="w"> </span><span class="nf">AddTwoNumbers</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">b</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Interface and logic are the same: it adds <strong>moving parts and accidental complexity</strong> rather than encapsulating it.</li>
+</ul>
+<h4 id="microservices-as-deep-modules">Microservices as deep modules</h4>
+<ul>
+<li>Same principles, different terms; the difference: modules can be <strong>logical or physical</strong> boundaries, microservices are <strong>strictly physical</strong>.</li>
+<li>Services of a single business method (Figure 14-3) are <strong>shallow</strong>, with wider interfaces than necessary. <strong>A deep module lowers global complexity; a shallow module raises it.</strong></li>
+<li>Shallow services explain why many projects fail
+<ul>
+<li>Definitions such as &quot;no more than X lines of code&quot; or &quot;easier to rewrite than to modify&quot; focus on <strong>the individual service and miss the system</strong>.</li>
+</ul>
+</li>
+<li>The <strong>microservice threshold</strong> is set by the system's use cases
+<ul>
+<li>Decomposing a monolith lowers the cost of change, <strong>minimised at microservices</strong></li>
+<li>Decomposing further makes deep services <strong>shallow</strong> again, interfaces grow back, <strong>cost of change rises</strong> and the architecture becomes a distributed big ball of mud (Figure 14-7).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-14-cost-of-change.svg" alt="Cost of change by granularity" loading="lazy" /></p>
+<h2 id="ddd-and-microservices-boundaries">DDD and microservices' boundaries</h2>
+<ul>
+<li>DDD boundaries: the bounded context (model), the subdomain (business capability), aggregates and value objects (transactions). Which suit microservices?</li>
+</ul>
+<h3 id="bounded-contexts">Bounded contexts</h3>
+<ul>
+<li>Both are <strong>physical</strong> boundaries, <strong>owned by one team</strong>, and neither can hold <strong>conflicting models</strong> (which complicates interfaces)
+<ul>
+<li><strong>Microservices are bounded contexts.</strong> Is the reverse true?</li>
+</ul>
+</li>
+<li>Example: an <strong>advertising management</strong> system where the entity <strong>Lead</strong> has different models in <strong>Promotions</strong> and <strong>Sales</strong> (Figure 14-8): those are bounded contexts, each with one model of Lead.</li>
+<li>With no other conflicts, the contexts are naturally <strong>wide</strong> and may hold several subdomains, which can move between contexts
+<ul>
+<li>Any decomposition without model conflicts is a valid context (Figure 14-9)</li>
+<li>Different decompositions suit different team sizes, lifecycle dependencies and so on</li>
+<li>But are all of them microservices? <strong>No</strong>, especially given the wide functionality of the two contexts in decomposition 1.</li>
+</ul>
+</li>
+<li>So the relation is <strong>asymmetric</strong>:
+<ul>
+<li>**microservices are bounded contexts</li>
+<li>not every bounded context is a microservice.** Bounded contexts mark <strong>the largest valid monolith</strong> (not a big ball of mud): a <strong>viable design</strong> that protects the consistency of the language</li>
+<li>chapter 15 shows broad boundaries beat microservices in some cases.</li>
+</ul>
+</li>
+<li>Figure 14-10:
+<ul>
+<li>the area <strong>between</strong> bounded contexts (widest) and microservices (narrowest) is <strong>safe</strong>. No proper bounded contexts gives a <strong>big ball of mud</strong></li>
+<li>decomposing <strong>past microservices</strong> gives a <strong>distributed big ball of mud</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-14-safe-boundaries.svg" alt="Safe boundaries lie between microservices and bounded contexts" loading="lazy" /></p>
+<h3 id="aggregates">Aggregates</h3>
+<ul>
+<li>The aggregate is the <strong>narrowest</strong> possible boundary; splitting an aggregate into several physical services or contexts is suboptimal and (appendix A) has <strong>undesired consequences</strong>.</li>
+<li>It is an <strong>indivisible business functionality unit</strong>. But a service must be seen <strong>with its interactions</strong>:
+<ul>
+<li>Does the aggregate talk to other aggregates in its subdomain?</li>
+<li>Does it share value objects with them?</li>
+<li>How likely do its logic changes affect other components of the subdomain, and vice versa?</li>
+</ul>
+</li>
+<li>The stronger the relationships, the <strong>shallower</strong> it is as a service
+<ul>
+<li>Sometimes an aggregate as a service gives a modular design, but <strong>much more often</strong> such fine-grained services <strong>raise global complexity</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="subdomains">Subdomains</h3>
+<ul>
+<li>A more balanced heuristic:
+<ul>
+<li><strong>align services with business subdomains</strong></li>
+<li>Subdomains are fine-grained <strong>business capabilities</strong> (the &quot;what&quot; not the &quot;how&quot;) and, technically, <strong>sets of coherent use cases</strong> using the same model, the same or closely related data and a strong functional relationship: a change to one use case likely affects the others (Figure 14-11).</li>
+</ul>
+</li>
+<li>Granularity and the &quot;what over how&quot; focus make subdomains <strong>naturally deep modules</strong>
+<ul>
+<li>splitting coherent use cases usually makes the interface more complex, so the module <strong>shallower</strong>. Subdomains are a <strong>safe boundary</strong> and give optimal solutions for the <strong>majority</strong> of microservices.</li>
+</ul>
+</li>
+<li>Exceptions:
+<ul>
+<li>stay in the <strong>wider bounded context</strong>, or use an <strong>aggregate</strong> as a microservice because of <strong>non-functional requirements</strong></li>
+<li>The answer depends on domain, organisation structure, strategy and non-functional requirements, and must keep adapting (chapter 11).</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Candidate boundary</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bounded context</td>
+<td><strong>Widest</strong> valid; some are too wide for a microservice</td>
+</tr>
+<tr>
+<td>Subdomain</td>
+<td><strong>Balanced</strong> and safe for most services</td>
+</tr>
+<tr>
+<td>Aggregate</td>
+<td><strong>Narrowest</strong>; usually too fine-grained and shallow</td>
+</tr>
+</tbody>
+</table>
+<h2 id="compressing-microservices-public-interfaces">Compressing microservices' public interfaces</h2>
+<ul>
+<li>DDD also helps make services <strong>deeper</strong>.</li>
+</ul>
+<h3 id="open-host-service">Open-host service</h3>
+<ul>
+<li>Decouples the context's domain model from the <strong>integration model</strong> (Figure 14-12). The <strong>published language</strong>:
+<ul>
+<li>lets the implementation evolve without affecting consumers (translate the new model to the existing language);</li>
+<li>is a <strong>more restrained model</strong> designed around integration needs, hiding irrelevant complexity (less data, more convenient shape).</li>
+</ul>
+</li>
+<li>A simpler public interface (function) over the same logic makes the service <strong>deeper</strong>.</li>
+</ul>
+<h3 id="anticorruption-layer">Anticorruption layer</h3>
+<ul>
+<li>The reverse:
+<ul>
+<li>it <strong>reduces the complexity of integrating</strong> the service with other contexts. Traditionally it lives inside the context it protects</li>
+<li>as in chapter 9 it can be a <strong>standalone service</strong> (Figure 14-13).</li>
+</ul>
+</li>
+<li>It reduces <strong>local</strong> complexity of the consumer (business complexity is separated from integration complexity) and <strong>global</strong> complexity
+<ul>
+<li>The consumer works with a convenient integration-oriented model, so its <strong>public interface is compressed</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-14-compressing-interfaces.svg" alt="Compressing interfaces with a published language and an ACL service" loading="lazy" /></p>
+<h2 id="conclusion">Conclusion</h2>
+<ul>
+<li><strong>All microservices are bounded contexts, not all bounded contexts are microservices.</strong> A microservice defines the <strong>smallest</strong> valid boundary, a bounded context the <strong>widest</strong> (protecting model consistency). Wider than a bounded context gives a big ball of mud
+<ul>
+<li>narrower than a microservice gives a distributed one.</li>
+</ul>
+</li>
+<li>The DDD-microservices link is tight: use DDD tools to find effective boundaries. Next: <strong>event-driven architecture</strong> and event message types that further optimise boundaries.</li>
+</ul>
+<h2 id="exercises">Exercises</h2>
+<ol>
+<li>Relationship: <strong>all microservices are bounded contexts</strong> / all bounded contexts are microservices / same concept / unrelated.</li>
+<li>What should be &quot;micro&quot;? Pizzas for the team / lines of code / certified middleware / <strong>the knowledge of the business domain exposed across the service boundary and reflected by its public interface</strong>.</li>
+<li>Safe component boundaries: wider than bounded contexts / narrower than microservices / <strong>between bounded contexts (widest) and microservices (narrowest)</strong>.</li>
+<li>Align microservices with aggregates? Always / never / impossible / <strong>it depends on the business domain</strong>.</li>
+</ol>
+<details class="callout c-note"><summary>Answers (book appendix B)</summary><div class="callout-body">
+<ol>
+<li>A: all microservices are bounded contexts, not all bounded contexts are microservices.</li>
+<li>D: manage local and global complexity by encapsulating domain knowledge in service boundaries.</li>
+<li>C: the range between the widest bounded contexts and microservices is the safe zone.</li>
+<li>D: depending on aggregate interactions, exposing aggregates as microservices can help or not.</li>
+</ol>
+</div></details>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li><strong>Micro</strong> means a <strong>micro public interface</strong> over <strong>deep logic</strong>, not few lines of code.</li>
+<li>Balance <strong>local and global</strong> complexity; avoid both big balls of mud.</li>
+<li>Default to <strong>subdomain-aligned</strong> services, between microservice and bounded context limits.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Front door / public interface</strong>: what defines a service.</li>
+<li><strong>Local versus global complexity</strong>: inside a service versus between services.</li>
+<li><strong>Deep versus shallow module</strong>: simple interface over rich logic versus the opposite.</li>
+<li><strong>Distributed big ball of mud</strong>: over-decomposed system.</li>
+<li><strong>Microservice threshold</strong>: point past which cost of change rises.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), chapter 14, read on O'Reilly.</li>
+<li>Cited:
+<ul>
+<li>OASIS, <em>Reference Model for Service-Oriented Architecture v1.0</em></li>
+<li>Randy Shoup (front-door metaphor)</li>
+<li>Glenford J. Myers, <em>Composite/Structured Design</em></li>
+<li>John Ousterhout, <em>The Philosophy of Software Design</em>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-13-domain-driven-design-in-the-real-world/">Learning DDD 13: Domain-Driven Design in the Real World</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-15-event-driven-architecture/">Learning DDD 15: Event-Driven Architecture</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/learning-domain-driven-design/ldd-13-domain-driven-design-in-the-real-world/">&larr; Learning DDD 13: Domain-Driven Design in the Real World</a><a href="/book-digest/learning-domain-driven-design/">Contents</a><a href="/book-digest/learning-domain-driven-design/ldd-15-event-driven-architecture/">Learning DDD 15: Event-Driven Architecture &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

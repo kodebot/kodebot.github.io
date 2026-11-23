@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Learning DDD 16: Data Mesh</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/learning-domain-driven-design/">Contents</a><span class="ttl">Learning Domain Driven Design</span><span class="sp"></span><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-15-event-driven-architecture/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-17-closing-words/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="learning-ddd-16-data-mesh">Learning DDD 16: Data Mesh</h1>
+<p>Source: Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), ch. 16. Previous: <a href="/book-digest/learning-domain-driven-design/ldd-15-event-driven-architecture/">Learning DDD 15: Event-Driven Architecture</a>. Next: <a href="/book-digest/learning-domain-driven-design/ldd-17-closing-words/">Learning DDD 17: Closing Words</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Analytical (<strong>OLAP</strong>) models differ from operational (<strong>OLTP</strong>) ones: <strong>facts</strong> (append-only business activities) and <strong>dimensions</strong> (descriptions) in <strong>star</strong> or <strong>snowflake</strong> schemas, with <strong>unpredictable</strong> queries.</li>
+<li><strong>Data warehouses</strong> (ETL into one enterprise model) and <strong>data lakes</strong> (raw data, models later) both couple analytics to the operational <strong>implementation models</strong> and break at scale (thousands of ad hoc ETL scripts, the data swamp).</li>
+<li><strong>Data mesh</strong> is <strong>DDD for analytical data</strong>, built on four principles: <strong>decompose data around domains</strong> (bounded contexts), <strong>data as a product</strong>, <strong>enable autonomy</strong> (platform team) and <strong>build an ecosystem</strong> (federated governance).</li>
+<li>DDD supports it: <strong>ubiquitous language</strong>, <strong>open-host service</strong> (the analytical model as a published language), <strong>CQRS</strong> (several model versions) and the <strong>integration patterns</strong> between data products.</li>
+</ul>
+</div></div>
+<h2 id="oltp-and-olap">OLTP and OLAP</h2>
+<ul>
+<li>So far we modelled <strong>operational systems</strong>:
+<ul>
+<li>real-time transactions that manipulate data and orchestrate day-to-day interactions (<strong>OLTP</strong>)</li>
+<li>Another type needs modelling: <strong>online analytical processing (OLAP)</strong> data.</li>
+</ul>
+</li>
+<li>&quot;Knowledge is power&quot;: analytical data lets a company optimise the business, understand customers and make automated decisions by <strong>training ML models</strong>.</li>
+</ul>
+<h3 id="analytical-versus-transactional-model">Analytical versus transactional model</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Operational (OLTP)</th>
+<th>Analytical (OLAP)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Built around</td>
+<td><strong>Business entities</strong>: lifecycles and interactions (Figure 16-1)</td>
+<td><strong>Business activities</strong> (facts) described by dimensions</td>
+</tr>
+<tr>
+<td>Goal</td>
+<td>Support real-time transactions</td>
+<td>Provide <strong>insights</strong>: performance of activities and how to <strong>optimise</strong> them</td>
+</tr>
+<tr>
+<td>Granularity</td>
+<td>Most precise data</td>
+<td>Often <strong>aggregated</strong></td>
+</tr>
+<tr>
+<td>Queries</td>
+<td><strong>Predictable</strong></td>
+<td><strong>Unpredictable</strong>: analysts need flexible ways to view data</td>
+</tr>
+</tbody>
+</table>
+<h4 id="fact-table">Fact table</h4>
+<ul>
+<li><strong>Facts</strong>
+<ul>
+<li>are business activities that <strong>already happened</strong>, like domain events, but with no requirement to name them as past-tense verbs. <code>Fact_CustomerOnboardings</code> has a record per onboarded customer</li>
+<li><code>Fact_Sales</code> one per committed sale (Figure 16-2: cases solved by a support desk).</li>
+</ul>
+</li>
+<li>Like events, facts are <strong>never deleted or modified</strong>:
+<ul>
+<li>analytical data is <strong>append-only</strong></li>
+<li>to show current data is outdated, <strong>append a new record</strong>. <code>Fact_CaseStatus</code> (Figure 16-3) holds support case statuses over time, with snapshots every <strong>30 minutes</strong>.</li>
+</ul>
+</li>
+<li><strong>Granularity</strong> is chosen by analysts: a record for every change would be wasteful or technically impossible.</li>
+</ul>
+<h4 id="dimension-table">Dimension table</h4>
+<ul>
+<li>If a fact is a <strong>verb</strong> (process or action), a <strong>dimension</strong> is an <strong>adjective</strong> describing it
+<ul>
+<li>Dimensions describe the fact's attributes, are referenced by <strong>foreign keys</strong> from the fact, and hold data <strong>repeated across facts</strong> that does not fit one column (Figure 16-4: the <code>SolvedCases</code> fact surrounded by its dimensions).</li>
+</ul>
+</li>
+<li>They are <strong>highly normalised</strong> to support <strong>flexible querying</strong>: filtering and grouping facts across dimensions when future queries are unpredictable.</li>
+</ul>
+<h3 id="analytical-models">Analytical models</h3>
+<table>
+<thead>
+<tr>
+<th>Schema</th>
+<th>Structure</th>
+<th>Trade-off</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Star schema</strong> (Figure 16-5)</td>
+<td>Facts with <strong>many-to-one</strong> relationships to dimensions: each dimension record serves many facts, each fact points to one dimension record</td>
+<td>Simple, fast joins</td>
+</tr>
+<tr>
+<td><strong>Snowflake schema</strong> (Figure 16-6)</td>
+<td>Same blocks but <strong>multilevel dimensions</strong>, each further normalised into finer dimensions</td>
+<td><strong>Less space</strong>, easier to maintain; but <strong>more joins</strong> and more computing to query</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Both let analysts study performance and build <strong>BI reports</strong>.</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-16-star-schema.svg" alt="Star schema: a fact with its dimensions" loading="lazy" /></p>
+<h2 id="analytical-data-management-platforms">Analytical data management platforms</h2>
+<ul>
+<li>Two common architectures and their challenges, as the base for data mesh.</li>
+</ul>
+<h3 id="data-warehouse-dwh">Data warehouse (DWH)</h3>
+<ul>
+<li><strong>Extract</strong>
+<ul>
+<li>data from all operational systems (databases, streaming events, logs), <strong>transform</strong> it into an analytical model, <strong>load</strong> it into an analysis-oriented database: the warehouse</li>
+<li>Based on <strong>ETL scripts</strong></li>
+<li>Transformation may also remove sensitive data, deduplicate, reorder events, aggregate fine-grained events, sometimes using a <strong>staging area</strong> for temporary storage.</li>
+</ul>
+</li>
+<li>The warehouse covers <strong>all business processes</strong>, exposed in <strong>SQL</strong> to analysts and BI engineers (Figure 16-7).</li>
+<li><strong>Challenge 1: an enterprise-wide model</strong>
+<ul>
+<li>for all systems and all use cases (optimisation, cost reduction, decisions, reporting, ML training). As in chapter 3, that is <strong>impractical</strong> beyond the smallest organisations</li>
+<li>models should be designed <strong>for the task</strong>.</li>
+<li><strong>Data marts</strong>
+<ul>
+<li>partly help: a database with data for a well-defined need (such as one department)</li>
+<li>A mart can be fed from the warehouse (the enterprise model must still exist) or by <strong>its own ETL</strong> directly from operational systems (<strong>cross-mart queries</strong> then need cross-database queries and hurt performance) (Figure 16-8).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Challenge 2: coupling.</strong>
+<ul>
+<li>ETL couples OLAP to OLTP: scripts often read operational databases directly, though <strong>the schema is an internal detail, not a public interface</strong></li>
+<li>A small schema change <strong>breaks the ETL</strong></li>
+<li>Operational and analytical units are organisationally distant, so communication is hard and teams get friction (Figure 16-9).</li>
+</ul>
+</li>
+</ul>
+<h3 id="data-lake">Data lake</h3>
+<ul>
+<li>Also ingests operational data but <strong>stores it raw</strong>, in the original operational model, <strong>without transforming it first</strong>
+<ul>
+<li>Data and BI engineers later make sense of it and write ETL scripts to produce analytical models and feed a warehouse (Figure 16-10).</li>
+</ul>
+</li>
+<li>Advantages: <strong>several task-oriented models</strong> (reporting, ML training), and <strong>new models later</strong> from the existing raw data.</li>
+<li>Costs:
+<ul>
+<li><strong>delayed model generation raises complexity</strong>; engineers maintain <strong>multiple versions of the same ETL script</strong> for different versions of the operational model (Figure 16-11)</li>
+<li>Lakes are <strong>schema-less</strong> with <strong>no quality control</strong>, so at scale the data becomes chaotic: a <strong>data swamp</strong></li>
+<li>Ingestion is easy, use is hard.</li>
+</ul>
+</li>
+</ul>
+<h3 id="challenges-of-both">Challenges of both</h3>
+<ul>
+<li>Both assume <strong>more ingested data means more insight</strong>, and both break under &quot;big data&quot;: the transformation converges to <strong>thousands of unmaintainable ad hoc ETL scripts</strong>.</li>
+<li><strong>Modelling:</strong> both <strong>trespass the operational systems' boundaries</strong> and depend on their implementation details, so friction can <strong>prevent changing operational models</strong> to avoid breaking ETL jobs.</li>
+<li><strong>Knowledge:</strong> analysts and data engineers sit in a separate unit and lack the <strong>business domain knowledge</strong> of the operational teams; they specialise in <strong>big data tooling</strong>.</li>
+<li><strong>Worse in DDD projects</strong>, where operational models are continuously evolved: changes have <strong>unforeseen consequences</strong> for analytical models and cause R&amp;D versus data team friction.</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-16-warehouse-lake.svg" alt="Warehouse and lake couple analytics to operational internals" loading="lazy" /></p>
+<h2 id="data-mesh">Data mesh</h2>
+<ul>
+<li>Data mesh is, in a sense, <strong>DDD for analytical data</strong>:
+<ul>
+<li>as DDD patterns draw and protect boundaries, it defines and protects <strong>model and ownership boundaries for analytical data</strong></li>
+<li>Four principles:</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-16-data-mesh-principles.svg" alt="The four data mesh principles" loading="lazy" /></p>
+<h3 id="1-decompose-data-around-domains">1. Decompose data around domains</h3>
+<ul>
+<li>Warehouses and lakes unify everything into <strong>one big model</strong>, ineffective for the same reasons as an enterprise-wide operational model, and it <strong>blurs ownership</strong>
+<ul>
+<li>Data mesh applies chapter 3's solution: <strong>multiple analytical models aligned with the origin of the data</strong>, with <strong>ownership aligned to bounded contexts</strong> (Figure 16-12)</li>
+<li><strong>Product teams</strong> become responsible for generating the analytical data.</li>
+</ul>
+</li>
+<li>Each bounded context <strong>owns both its OLTP and OLAP models</strong>, and the <strong>same team</strong> transforms one into the other.</li>
+</ul>
+<h3 id="2-data-as-a-product">2. Data as a product</h3>
+<ul>
+<li>Classic architectures make quality analytical data hard to <strong>discover, understand and fetch</strong> (especially lakes)
+<ul>
+<li>Treat analytical data as a <strong>first-class citizen</strong>: instead of scraping internal databases or log files, bounded contexts serve analytical data through <strong>well-defined output ports</strong> (Figure 16-13: <strong>polyglot data endpoints</strong>).</li>
+</ul>
+</li>
+<li>Treat it like any <strong>public API</strong>:
+<ul>
+<li><strong>discoverable</strong> endpoints (output ports);</li>
+<li>a <strong>well-defined schema</strong>;</li>
+<li><strong>trustworthy</strong>, with <strong>monitored SLAs</strong>;</li>
+<li><strong>versioned</strong>, managing breaking changes.</li>
+</ul>
+</li>
+<li>It must meet <strong>consumers' needs</strong>; the context's team is accountable, and <strong>data quality is a top-level concern</strong> (unlike warehouses and lakes).</li>
+<li>Fine-grained models must be <strong>combinable</strong>: a BI report across several contexts fetches their analytical data, transforms locally and produces the report.</li>
+<li>Data products are <strong>polyglot</strong>: SQL for some, object storage for others.</li>
+<li>Teams need <strong>data specialists</strong> added: the missing piece in cross-functional teams (traditionally only operational specialists).</li>
+</ul>
+<h3 id="3-enable-autonomy">3. Enable autonomy</h3>
+<ul>
+<li>Teams must <strong>create</strong> their data products and <strong>consume</strong> others', and products must be <strong>interoperable</strong>
+<ul>
+<li>If each team built its own serving solution it would be wasteful and hard to integrate, so a <strong>platform</strong> abstracts building, running and maintaining interoperable data products</li>
+<li>It is a considerable undertaking needing a dedicated <strong>data infrastructure platform team</strong>, defining <strong>blueprints</strong>
+<ul>
+<li><strong>unified access patterns</strong></li>
+<li><strong>access control</strong> and <strong>polyglot storage</strong>, plus monitoring and meeting SLAs.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-build-an-ecosystem">4. Build an ecosystem</h3>
+<ul>
+<li>Appoint a <strong>federated governance body</strong> to ensure interoperability and ecosystem thinking: typically the bounded contexts' <strong>data and product owners</strong> plus representatives of the <strong>platform team</strong> (Figure 16-14)
+<ul>
+<li>It defines rules applying to <strong>all data products and interfaces</strong> and ensures adherence enterprise-wide.</li>
+</ul>
+</li>
+</ul>
+<h2 id="combining-data-mesh-and-ddd">Combining data mesh and DDD</h2>
+<ul>
+<li>Boundaries and encapsulation behind <strong>well-defined output ports</strong> show data mesh follows DDD's reasoning. DDD patterns support it:
+<ul>
+<li><strong>Ubiquitous language and domain knowledge</strong> are essential for designing analytical models; traditional architectures lack them.</li>
+<li>Exposing a context's data in a model <strong>different from its operational one</strong> is the <strong>open-host service</strong>: the analytical model is an additional <strong>published language</strong>.</li>
+<li><strong>CQRS</strong>
+<ul>
+<li>generates several models of the same data and can transform operational into analytical models</li>
+<li>its ability to build models <strong>from scratch</strong> lets you serve <strong>several schema versions at once</strong> (Figure 16-15).</li>
+</ul>
+</li>
+<li>The <strong>context integration patterns</strong> apply to analytical models too: teams can evolve models in a <strong>partnership</strong>, use an <strong>anticorruption layer</strong> against an ineffective model, or go <strong>separate ways</strong> and duplicate.</li>
+</ul>
+</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<ul>
+<li>Analytical models (star and snowflake), traditional management (warehouse, lake) and their challenges
+<ul>
+<li><strong>data mesh</strong> applies DDD's principles to analytical data: decompose the model into manageable units, reliably accessible through public interfaces</li>
+<li><strong>CQRS and context integration patterns</strong> support it.</li>
+</ul>
+</li>
+</ul>
+<h2 id="exercises">Exercises</h2>
+<ol>
+<li>Differences between OLTP and OLAP (select all): <strong>OLAP should expose more flexible querying</strong> / OLAP gets more updates and must optimise for writes / <strong>OLTP is optimised for real-time operations, waiting seconds or minutes for OLAP is acceptable</strong>.</li>
+<li>Integration pattern essential for data mesh: shared kernel / <strong>open-host service</strong> / anticorruption layer / partnership.</li>
+<li>Architectural pattern essential for data mesh: layered / ports and adapters / <strong>CQRS</strong> / none.</li>
+<li>DDD's term for data mesh &quot;domains&quot;: <strong>bounded contexts</strong> / business domains / subdomains / no synonym.</li>
+</ol>
+<details class="callout c-note"><summary>Answers (book appendix B)</summary><div class="callout-body">
+<ol>
+<li>A and C: OLAP is optimised for reading, OLTP for writing.</li>
+<li>C: open-host service (integration-specific models share analytical data).</li>
+<li>C: CQRS (multiple persistent models, convenient for analytical models).</li>
+<li>A: bounded contexts are the closest to data mesh domains.</li>
+</ol>
+</div></details>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li><strong>Facts</strong> (append-only verbs) and <strong>dimensions</strong> (adjectives); <strong>star</strong> and <strong>snowflake</strong> schemas.</li>
+<li>Warehouse and lake <strong>couple to operational internals</strong> and scale badly.</li>
+<li><strong>Data mesh</strong> = four principles, <strong>DDD for analytical data</strong>, with OHS and CQRS as the supporting patterns.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>OLTP / OLAP</strong>: operational versus analytical models.</li>
+<li><strong>Fact / dimension</strong>: activity record / its descriptive attributes.</li>
+<li><strong>Star / snowflake schema</strong>: single versus multilevel dimensions.</li>
+<li><strong>Data warehouse / data mart / data lake / data swamp</strong>.</li>
+<li><strong>Data product / output port</strong>: analytical data served as a product.</li>
+<li><strong>Federated governance</strong>: group that keeps the mesh interoperable.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), chapter 16, read on O'Reilly.</li>
+<li>No online source found beyond the book itself.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-15-event-driven-architecture/">Learning DDD 15: Event-Driven Architecture</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-17-closing-words/">Learning DDD 17: Closing Words</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/learning-domain-driven-design/ldd-15-event-driven-architecture/">&larr; Learning DDD 15: Event-Driven Architecture</a><a href="/book-digest/learning-domain-driven-design/">Contents</a><a href="/book-digest/learning-domain-driven-design/ldd-17-closing-words/">Learning DDD 17: Closing Words &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Learning DDD 7: Modeling the Dimension of Time</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/learning-domain-driven-design/">Contents</a><span class="ttl">Learning Domain Driven Design</span><span class="sp"></span><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-06-tackling-complex-business-logic/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-08-architectural-patterns/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="learning-ddd-7-modeling-the-dimension-of-time">Learning DDD 7: Modeling the Dimension of Time</h1>
+<p>Source: Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), ch. 7. Previous: <a href="/book-digest/learning-domain-driven-design/ldd-06-tackling-complex-business-logic/">Learning DDD 6: Tackling Complex Business Logic</a>. Next: <a href="/book-digest/learning-domain-driven-design/ldd-08-architectural-patterns/">Learning DDD 8: Architectural Patterns</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The <strong>event-sourced domain model</strong> is the domain model (complex logic, core subdomain, value objects, aggregates, events) with a different persistence: <strong>domain events are the source of truth</strong>, not the state.</li>
+<li>A state table shows <strong>current state</strong> but not <strong>how it got there</strong>; events add the <strong>dimension of time</strong>.</li>
+<li>State is <strong>projected</strong> by applying events in order, so you can <strong>time travel</strong> and build <strong>many projections</strong> (state, search, analysis) from the same events.</li>
+<li>The <strong>event store</strong> is <strong>append-only</strong>, supports fetch-by-instance and append with an <strong>expected version</strong> (optimistic concurrency).</li>
+<li>Gains: time travel, deep insight, <strong>audit log</strong>, smarter concurrency. Costs: <strong>learning curve</strong>, <strong>evolving event schemas</strong>, <strong>architectural complexity</strong>.</li>
+<li>FAQs: performance (snapshots), scale (shard by aggregate ID), deleting data (<strong>forgettable payload</strong>), and why logs, history tables or triggers are not equivalent.</li>
+</ul>
+</div></div>
+<h2 id="premise">Premise</h2>
+<ul>
+<li>Same premise as the domain model:
+<ul>
+<li>complex business logic in a <strong>core subdomain</strong>, same tactical patterns</li>
+<li>The difference is <strong>how aggregate state is persisted</strong>: instead of storing the state, the model <strong>generates domain events describing each change</strong> and uses them as the <strong>source of truth</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="event-sourcing">Event sourcing</h2>
+<blockquote>
+<p>&quot;Show me your flowchart and conceal your tables, and I shall continue to be mystified. Show me your tables, and I won't usually need your flowchart; it'll be obvious.&quot; Fred Brooks (<em>The Mythical Man-Month</em>, 1974).</p>
+</blockquote>
+<ul>
+<li><strong>State-based model</strong>
+<ul>
+<li>(Table 7-1): a table of telemarketing <strong>leads</strong> with columns lead-id, first-name, last-name, status, phone-number, followup-on, created-on, updated-on</li>
+<li>20 sample rows with statuses <code>NEW_LEAD</code>, <code>CLOSED</code>, <code>FOLLOWUP_SET</code>, <code>PENDING_PAYMENT</code>, <code>PAYMENT_FAILED</code>, <code>CONVERTED</code>.</li>
+</ul>
+</li>
+<li>You can infer the <strong>ubiquitous language</strong> and the <strong>processing cycle</strong>:
+<ul>
+<li>The sales flow starts at <code>NEW_LEAD</code>.</li>
+<li>A call can end with the person uninterested (<code>CLOSED</code>), a follow-up scheduled (<code>FOLLOWUP_SET</code>) or the offer accepted (<code>PENDING_PAYMENT</code>).</li>
+<li>A successful payment gives <code>CONVERTED</code>; a failed one <code>PAYMENT_FAILED</code>.</li>
+</ul>
+</li>
+<li><strong>What is missing:</strong>
+<ul>
+<li>the <strong>story</strong> of how each lead reached its state</li>
+<li>How many calls before conversion? Quick purchase or long journey? Is it worth contacting after many follow-ups, or better to close the lead? These are business questions needed to <strong>optimise the sales process</strong>.</li>
+</ul>
+</li>
+<li><strong>Event sourcing adds the dimension of time</strong>: instead of a schema of current state, the system persists <strong>events documenting every change in the aggregate's lifecycle</strong>.</li>
+<li>The converted customer in row 12 as events (lead 12):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Event id</th>
+<th>Type</th>
+<th>Story</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>lead-initialized</code></td>
+<td>Lead created (first name Casey, last name David, phone 555-2951)</td>
+</tr>
+<tr>
+<td>1</td>
+<td><code>contacted</code></td>
+<td>Contacted by a sales agent about two hours later</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>followup-set</code></td>
+<td>Callback agreed a week later (2020-05-27)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>contact-details-updated</code></td>
+<td>Different phone number (555-8101) and a typo fixed in the last name (Davis)</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>contacted</code></td>
+<td>Contacted on the agreed date</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>order-submitted</code></td>
+<td>Order submitted, payment due in three days</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>payment-confirmed</code></td>
+<td>Paid about half an hour later: converted</td>
+</tr>
+</tbody>
+</table>
+<pre class="hl"><code><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"lead-initialized"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"first-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Casey"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"last-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"David"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"phone-number"</span><span class="p">:</span><span class="w"> </span><span class="s2">"555-2951"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-20T09:52:55.95Z"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"contacted"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-20T12:32:08.24Z"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"followup-set"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"followup-on"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:00:00.00Z"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-20T12:32:08.24Z"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"contact-details-updated"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"first-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Casey"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"last-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Davis"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"phone-number"</span><span class="p">:</span><span class="w"> </span><span class="s2">"555-8101"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-20T12:32:08.24Z"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"contacted"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:02:12.51Z"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"order-submitted"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"payment-deadline"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-30T12:02:12.51Z"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:02:12.51Z"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"payment-confirmed"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"converted"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:38:44.12Z"</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">]</span>
+</code></pre>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-07-events-vs-state.svg" alt="Events tell the lead's story; state shows only the end" loading="lazy" /></p>
+<h3 id="projecting-state">Projecting state</h3>
+<ul>
+<li>The state is <strong>projected</strong> by applying a simple transformation sequentially to each event, one <code>Apply</code> overload per event type:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// LeadStateProjection.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">LeadStateProjection</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">LeadId</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">FirstName</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">LastName</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">LeadStatus</span><span class="w"> </span><span class="n">Status</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">PhoneNumber</span><span class="w"> </span><span class="n">PhoneNumber</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">DateTime</span><span class="o">?</span><span class="w"> </span><span class="n">FollowupOn</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">DateTime</span><span class="w"> </span><span class="n">CreatedOn</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">DateTime</span><span class="w"> </span><span class="n">UpdatedOn</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">Version</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">LeadInitialized</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">LeadId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">LeadId</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LeadStatus</span><span class="p">.</span><span class="n">NEW_LEAD</span><span class="p">;</span>
+<span class="w">        </span><span class="n">FirstName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">FirstName</span><span class="p">;</span>
+<span class="w">        </span><span class="n">LastName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">LastName</span><span class="p">;</span>
+<span class="w">        </span><span class="n">PhoneNumber</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">PhoneNumber</span><span class="p">;</span>
+<span class="w">        </span><span class="n">CreatedOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">Timestamp</span><span class="p">;</span>
+<span class="w">        </span><span class="n">UpdatedOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">Timestamp</span><span class="p">;</span>
+<span class="w">        </span><span class="n">FollowupOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">null</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">Contacted</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">UpdatedOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">Timestamp</span><span class="p">;</span>
+<span class="w">        </span><span class="n">FollowupOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">null</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">FollowupSet</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">UpdatedOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">Timestamp</span><span class="p">;</span>
+<span class="w">        </span><span class="n">FollowupOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">FollowupOn</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LeadStatus</span><span class="p">.</span><span class="n">FOLLOWUP_SET</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">ContactDetailsChanged</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">FirstName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">FirstName</span><span class="p">;</span>
+<span class="w">        </span><span class="n">LastName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">LastName</span><span class="p">;</span>
+<span class="w">        </span><span class="n">PhoneNumber</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">PhoneNumber</span><span class="p">;</span>
+<span class="w">        </span><span class="n">UpdatedOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">Timestamp</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">OrderSubmitted</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">UpdatedOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">Timestamp</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LeadStatus</span><span class="p">.</span><span class="n">PENDING_PAYMENT</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">PaymentConfirmed</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">UpdatedOn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">Timestamp</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LeadStatus</span><span class="p">.</span><span class="n">CONVERTED</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Feeding all events through the right <code>Apply</code> overloads reproduces exactly the table row
+<ul>
+<li><strong><code>Version</code></strong> counts the modifications</li>
+<li><strong>Time travel:</strong> apply only a subset (the first five events give the state at version 5).</li>
+</ul>
+</li>
+<li>You are <strong>not limited to one projection</strong>:</li>
+</ul>
+<h4 id="search">Search</h4>
+<ul>
+<li>Agents may not know a lead's contact data changed, and want to find leads by <strong>historical</strong> names and phone numbers. Project <strong>sets</strong> of every first name, last name and phone number seen:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// LeadSearchModelProjection.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">LeadSearchModelProjection</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">LeadId</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;</span><span class="kt">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">FirstNames</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;</span><span class="kt">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">LastNames</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;</span><span class="n">PhoneNumber</span><span class="o">&gt;</span><span class="w"> </span><span class="n">PhoneNumbers</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">Version</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">LeadInitialized</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">LeadId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">LeadId</span><span class="p">;</span>
+<span class="w">        </span><span class="n">FirstNames</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;</span><span class="kt">string</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">        </span><span class="n">LastNames</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;</span><span class="kt">string</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">        </span><span class="n">PhoneNumbers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;</span><span class="n">PhoneNumber</span><span class="o">&gt;</span><span class="p">();</span>
+
+<span class="w">        </span><span class="n">FirstNames</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">FirstName</span><span class="p">);</span>
+<span class="w">        </span><span class="n">LastNames</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">LastName</span><span class="p">);</span>
+<span class="w">        </span><span class="n">PhoneNumbers</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">PhoneNumber</span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">ContactDetailsChanged</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">FirstNames</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">FirstName</span><span class="p">);</span>
+<span class="w">        </span><span class="n">LastNames</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">LastName</span><span class="p">);</span>
+<span class="w">        </span><span class="n">PhoneNumbers</span><span class="p">.</span><span class="n">Add</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">PhoneNumber</span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// Contacted, FollowupSet, OrderSubmitted, PaymentConfirmed:</span>
+<span class="w">    </span><span class="c1">// each only does Version += 1</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>For Casey Davis it yields: <code>LeadId: 12</code>, <code>FirstNames: ['Casey']</code>, <code>LastNames: ['David', 'Davis']</code>, <code>PhoneNumbers: ['555-2951', '555-8101']</code>, <code>Version: 6</code>.</li>
+</ul>
+<h4 id="analysis">Analysis</h4>
+<ul>
+<li>Business intelligence wants the <strong>number of follow-up calls</strong> per lead, then filtering converted and closed leads to optimise sales:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// AnalysisModelProjection.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">AnalysisModelProjection</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">LeadId</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">Followups</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">LeadStatus</span><span class="w"> </span><span class="n">Status</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">Version</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">LeadInitialized</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">LeadId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">LeadId</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Followups</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LeadStatus</span><span class="p">.</span><span class="n">NEW_LEAD</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">FollowupSet</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LeadStatus</span><span class="p">.</span><span class="n">FOLLOWUP_SET</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Followups</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">OrderSubmitted</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LeadStatus</span><span class="p">.</span><span class="n">PENDING_PAYMENT</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">PaymentConfirmed</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LeadStatus</span><span class="p">.</span><span class="n">CONVERTED</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// Contacted and ContactDetailsChanged: Version += 1</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>For lead 12: <code>LeadId: 12</code>, <code>Followups: 1</code>, <code>Status: Converted</code>, <code>Version: 6</code>.</li>
+<li>These are in-memory projections; persisting them for real needs <strong>CQRS</strong> (chapter 8).</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-07-projections.svg" alt="One event stream, several projections" loading="lazy" /></p>
+<h3 id="source-of-truth">Source of truth</h3>
+<ul>
+<li>All state changes are represented <strong>and persisted as events</strong>:
+<ul>
+<li>the <strong>source of truth</strong> (Figure 7-1)</li>
+<li>The database holding them is the <strong>only strongly consistent storage</strong>: the <strong>event store</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="event-store">Event store</h3>
+<ul>
+<li><strong>Append-only:</strong> no modifying or deleting events (except exceptional cases such as data migration). Minimum functions: <strong>fetch all events of an entity</strong> and <strong>append events</strong>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// IEventStore.cs</span>
+<span class="k">interface</span><span class="w"> </span><span class="n">IEventStore</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">IEnumerable</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Fetch</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">instanceId</span><span class="p">);</span>
+<span class="w">    </span><span class="k">void</span><span class="w"> </span><span class="nf">Append</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">instanceId</span><span class="p">,</span><span class="w"> </span><span class="n">Event</span><span class="p">[]</span><span class="w"> </span><span class="n">newEvents</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">expectedVersion</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong><code>expectedVersion</code></strong>
+<ul>
+<li>gives <strong>optimistic concurrency</strong>: if new events were appended after that version, the store raises a <strong>concurrency exception</strong></li>
+<li>CQRS needs extra endpoints (next chapter).</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>[!note] Not new
+The financial industry has always used events: a <strong>ledger</strong> is an append-only log of transactions, and the balance is a <strong>projection</strong> of its records.</p>
+</blockquote>
+<h2 id="event-sourced-domain-model">Event-sourced domain model</h2>
+<ul>
+<li>The plain domain model keeps a <strong>state representation</strong> and emits selected events
+<ul>
+<li>The event-sourced model uses events <strong>exclusively</strong> to model the lifecycle: <strong>every state change is a domain event</strong>.</li>
+</ul>
+</li>
+<li>Each operation follows this script:
+<ol>
+<li><strong>Load</strong> the aggregate's events.</li>
+<li><strong>Reconstitute</strong> state by projecting them, to make business decisions.</li>
+<li><strong>Execute</strong> the command: business logic produces new events.</li>
+<li><strong>Commit</strong> the new events to the event store.</li>
+</ol>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-07-operation-script.svg" alt="The event-sourced operation script" loading="lazy" /></p>
+<ul>
+<li>Applied to the <code>Ticket</code> aggregate of chapter 6. The <strong>application service</strong> loads events, rehydrates, executes, commits with the original version:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// TicketAPI.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">TicketAPI</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">ITicketsRepository</span><span class="w"> </span><span class="n">_ticketsRepository</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">RequestEscalation</span><span class="p">(</span><span class="n">TicketId</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">EscalationReason</span><span class="w"> </span><span class="n">reason</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">events</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_ticketsRepository</span><span class="p">.</span><span class="n">LoadEvents</span><span class="p">(</span><span class="n">id</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">ticket</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Ticket</span><span class="p">(</span><span class="n">events</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">originalVersion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ticket</span><span class="p">.</span><span class="n">Version</span><span class="p">;</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">cmd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">RequestEscalation</span><span class="p">(</span><span class="n">reason</span><span class="p">);</span>
+<span class="w">        </span><span class="n">ticket</span><span class="p">.</span><span class="n">Execute</span><span class="p">(</span><span class="n">cmd</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_ticketsRepository</span><span class="p">.</span><span class="n">CommitChanges</span><span class="p">(</span><span class="n">ticket</span><span class="p">,</span><span class="w"> </span><span class="n">originalVersion</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The aggregate <strong>rehydrates in its constructor</strong> through a state projector (<code>TicketState</code>) and <code>AppendEvent</code>, which dispatches dynamically to the matching <code>Apply</code> overload:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Ticket.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Ticket</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">DomainEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_domainEvents</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">DomainEvent</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">TicketState</span><span class="w"> </span><span class="n">_state</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="nf">Ticket</span><span class="p">(</span><span class="n">IEnumerable</span><span class="o">&lt;</span><span class="n">IDomainEvents</span><span class="o">&gt;</span><span class="w"> </span><span class="n">events</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TicketState</span><span class="p">();</span>
+<span class="w">        </span><span class="k">foreach</span><span class="w"> </span><span class="p">(</span><span class="kt">var</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">events</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">AppendEvent</span><span class="p">(</span><span class="n">e</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">AppendEvent</span><span class="p">(</span><span class="n">IDomainEvent</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_domainEvents</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">@event</span><span class="p">);</span>
+<span class="w">        </span><span class="c1">// Dynamically call the correct overload of the "Apply" method.</span>
+<span class="w">        </span><span class="p">((</span><span class="kt">dynamic</span><span class="p">)</span><span class="n">_state</span><span class="p">).</span><span class="n">Apply</span><span class="p">((</span><span class="kt">dynamic</span><span class="p">)</span><span class="n">@event</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">RequestEscalation</span><span class="w"> </span><span class="n">cmd</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">_state</span><span class="p">.</span><span class="n">IsEscalated</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">_state</span><span class="p">.</span><span class="n">RemainingTimePercentage</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="kt">var</span><span class="w"> </span><span class="n">escalatedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TicketEscalated</span><span class="p">(</span><span class="n">_id</span><span class="p">,</span><span class="w"> </span><span class="n">cmd</span><span class="p">.</span><span class="n">Reason</span><span class="p">);</span>
+<span class="w">            </span><span class="n">AppendEvent</span><span class="p">(</span><span class="n">escalatedEvent</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Unlike chapter 6, <code>RequestEscalation</code> does <strong>not set <code>IsEscalated</code></strong>: it creates the event and passes it to <code>AppendEvent</code>. The projection mutates the state:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// TicketState.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">TicketState</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">TicketId</span><span class="w"> </span><span class="n">Id</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">Version</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">IsEscalated</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">TicketInitialized</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">@event</span><span class="p">.</span><span class="n">Id</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="n">IsEscalated</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">false</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Apply</span><span class="p">(</span><span class="n">TicketEscalated</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">IsEscalated</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+<span class="w">        </span><span class="n">Version</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<blockquote>
+<p>[!note] Book typo
+The printed <code>AppendEvent</code> calls <code>((dynamic)state)</code>, while the field is <code>_state</code>; the note shows the evident intent.</p>
+</blockquote>
+<blockquote>
+<p>[!note] Why &quot;event-sourced domain model&quot;?
+Event sourcing is possible with or without domain model building blocks. The longer term says explicitly that events express the lifecycle of the <strong>domain model's aggregates</strong>.</p>
+</blockquote>
+<h3 id="advantages">Advantages</h3>
+<ul>
+<li>More modelling effort than persisting state, but significant gains:
+<ul>
+<li><strong>Time travelling:</strong> restore <strong>all past states</strong> to analyse behaviour, inspect decisions, optimise logic, and <strong>debug retroactively</strong> (revert the aggregate to the state when a bug was seen).</li>
+<li><strong>Deep insight:</strong> core subdomain optimisation matters; you can always <strong>add new projections</strong> from existing events.</li>
+<li><strong>Audit log:</strong> a <strong>strongly consistent</strong> log of everything that happened; some domains require it by law. Ideal for <strong>money</strong> (trace decisions and flows between accounts).</li>
+<li><strong>Advanced optimistic concurrency:</strong>
+<ul>
+<li>classic OCC just raises an exception on stale data</li>
+<li>With events you can <strong>query exactly which events were appended meanwhile</strong> and make a <strong>domain-driven decision</strong> about whether they collide with the attempted operation or are irrelevant so it is safe to proceed.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="disadvantages">Disadvantages</h3>
+<ul>
+<li>Not the ultimate pattern: design must follow the domain's needs.
+<ul>
+<li><strong>Learning curve:</strong> a sharp break from traditional data management; training and a new way of thinking.</li>
+<li><strong>Evolving the model:</strong> events are immutable, so changing an event's <strong>schema</strong> is not like altering a table (a whole book covers it: <em>Versioning in an Event Sourced System</em>, Greg Young).</li>
+<li><strong>Architectural complexity:</strong> many <strong>moving parts</strong> (next chapter on CQRS).</li>
+</ul>
+</li>
+<li>Worse if the task does not justify the pattern. Chapter 10 gives rules of thumb.</li>
+</ul>
+<h2 id="frequently-asked-questions">Frequently asked questions</h2>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Performance:</strong> rebuilding from events slows as they grow?</td>
+<td>Benchmark with hundreds or thousands of events against the aggregate's expected lifespan. In most systems the hit shows only beyond <strong>10,000+ events per aggregate</strong>; in the vast majority a lifespan is <strong>under 100 events</strong>. If it does matter, use <strong>snapshots</strong>. Before that, re-check the aggregate's boundaries.</td>
+</tr>
+<tr>
+<td><strong>Scale:</strong> enormous data?</td>
+<td>Easy: operations touch a single aggregate, so <strong>shard the event store by aggregate ID</strong>; all events of one aggregate live in one shard (Figure 7-3).</td>
+</tr>
+<tr>
+<td><strong>Deleting data</strong> (for example GDPR)?</td>
+<td><strong>Forgettable payload pattern:</strong> put sensitive data in events <strong>encrypted</strong>; keep the key in an external key-value store (key = aggregate ID, value = encryption key). To delete, <strong>delete the key</strong>; the data becomes unreadable.</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Snapshot pattern</strong> (Figure 7-2):
+<ol>
+<li>A process continuously iterates new events in the store, generates projections and <strong>caches</strong> them.</li>
+<li>When an action needs an in-memory projection, it fetches the <strong>current snapshot</strong> from the cache, fetches the <strong>events after the snapshot version</strong>, and applies them in memory.</li>
+</ol>
+<ul>
+<li>It is an optimisation that must be justified; under 10,000 events per aggregate it is <strong>accidental complexity</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-07-snapshot-sharding.svg" alt="Snapshot plus newer events, and sharding by aggregate ID" loading="lazy" /></p>
+<h3 id="why-can-t-i-just">Why can't I just...?</h3>
+<ul>
+<li><strong>...write logs to a text file as an audit log?</strong>
+<ul>
+<li>Writing to a database and a file is a transaction across <strong>two stores</strong></li>
+<li>if the database fails nobody removes the log lines. Logs are <strong>eventually inconsistent</strong>.</li>
+</ul>
+</li>
+<li><strong>...keep state and append to a logs table in the same transaction?</strong>
+<ul>
+<li>Consistent, but <strong>error prone</strong>: a future engineer may forget the log record</li>
+<li>and the log table's schema <strong>degrades into chaos</strong> (no enforcement of required, correctly formatted data).</li>
+</ul>
+</li>
+<li><strong>...add a database trigger that copies the record into a history table?</strong>
+<ul>
+<li>No manual calls, but the history has only <strong>dry facts</strong> (which fields changed) and misses the business context: <strong>why</strong></li>
+<li>Without the why you cannot project additional models.</li>
+</ul>
+</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<ul>
+<li>All changes to an aggregate's state are a <strong>series of domain events</strong>, unlike updating a record
+<ul>
+<li>Events project the current state and <strong>many representation models</strong>, each optimised for a task.</li>
+</ul>
+</li>
+<li>It fits cases needing <strong>deep insight</strong> (analysis, optimisation) or a legally required <strong>audit log</strong>.</li>
+<li>This chapter completes the <strong>business logic implementation patterns</strong>; next, <strong>architectural patterns</strong>.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Business logic</th>
+<th>State persisted as</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transaction script</td>
+<td>Simple procedures</td>
+<td>Records, via direct DB access</td>
+</tr>
+<tr>
+<td>Active record</td>
+<td>Simple, complex data structures</td>
+<td>Records, via CRUD objects</td>
+</tr>
+<tr>
+<td>Domain model</td>
+<td>Complex</td>
+<td>Current state of aggregates</td>
+</tr>
+<tr>
+<td>Event-sourced domain model</td>
+<td>Complex, needing time and insight</td>
+<td>Domain events (source of truth)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="exercises">Exercises</h2>
+<ol>
+<li>Domain events and value objects: <strong>events use value objects to describe what happened</strong> / value objects must become event-sourced aggregates / value objects are replaced by events in the event-sourced model.</li>
+<li>Projecting state from events: a single representation / multiple, but events must be modelled for multiple projections / <strong>multiple, and you can always add more later</strong>.</li>
+<li>State-based versus event-sourced aggregates (select all): only event-sourced produce events / <strong>both produce events, but only event-sourced use them as the source of truth</strong> / <strong>event-sourced aggregates ensure events for every state transition</strong>.</li>
+<li>In the WolfDesk company (book's Preface), which functionality suits an event-sourced domain model? <strong>The ticket lifecycle algorithm</strong> / administration interface / management of agents' schedules.</li>
+</ol>
+<details class="callout c-note"><summary>Answers (book appendix B)</summary><div class="callout-body">
+<ol>
+<li>A: events use value objects to describe what happened.</li>
+<li>C: multiple projections, and you can add more later.</li>
+<li>B and C: both aggregates emit events, only event-sourced ones emit an event for every state transition.</li>
+<li>A: the ticket lifecycle algorithm (more convenient to project extra representations for fraud detection and support autopilot).</li>
+</ol>
+</div></details>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Persist <strong>events</strong>, derive <strong>state</strong>; keep the event store <strong>append-only</strong> with <strong>expected version</strong>.</li>
+<li>Many <strong>projections</strong> from one stream; <strong>time travel</strong>; <strong>audit log</strong> for free.</li>
+<li>Pay with <strong>learning curve</strong>, <strong>schema evolution</strong> and <strong>architectural complexity</strong>; use <strong>snapshots</strong>, <strong>sharding</strong> and <strong>forgettable payload</strong> when needed.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Event sourcing / event store</strong>: persist all changes as events in an append-only store.</li>
+<li><strong>Projection</strong>: state derived by applying events in order.</li>
+<li><strong>Rehydration</strong>: rebuilding an aggregate from its events.</li>
+<li><strong>Snapshot</strong>: cached projection plus newer events.</li>
+<li><strong>Forgettable payload</strong>: encrypted sensitive data whose key is deleted to forget.</li>
+<li><strong>Ledger</strong>: financial append-only log; balance is a projection.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), chapter 7, read on O'Reilly.</li>
+<li>Fred Brooks (1974), <em>The Mythical Man-Month</em> (Addison-Wesley); Greg Young, <em>Versioning in an Event Sourced System</em>; GDPR (Wikipedia, as cited).</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-06-tackling-complex-business-logic/">Learning DDD 6: Tackling Complex Business Logic</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-08-architectural-patterns/">Learning DDD 8: Architectural Patterns</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/learning-domain-driven-design/ldd-06-tackling-complex-business-logic/">&larr; Learning DDD 6: Tackling Complex Business Logic</a><a href="/book-digest/learning-domain-driven-design/">Contents</a><a href="/book-digest/learning-domain-driven-design/ldd-08-architectural-patterns/">Learning DDD 8: Architectural Patterns &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Learning DDD 11: Evolving Design Decisions</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/learning-domain-driven-design/">Contents</a><span class="ttl">Learning Domain Driven Design</span><span class="sp"></span><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-10-design-heuristics/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-12-eventstorming/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="learning-ddd-11-evolving-design-decisions">Learning DDD 11: Evolving Design Decisions</h1>
+<p>Source: Vlad Khononov, <em>Learning DDD</em> (O'Reilly, 2021), ch. 11. Previous: <a href="/book-digest/learning-domain-driven-design/ldd-10-design-heuristics/">Learning DDD 10: Design Heuristics</a>. Next: <a href="/book-digest/learning-domain-driven-design/ldd-12-eventstorming/">Learning DDD 12: EventStorming</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Design decisions must <strong>evolve</strong> with four vectors of change: <strong>business domain</strong>, <strong>organisational structure</strong>, <strong>domain knowledge</strong> and <strong>growth</strong>.</li>
+<li><strong>Subdomains morph</strong> (core to generic, generic to core, supporting to generic or core, and back); each change affects integration patterns, implementation strategy and tactical design.</li>
+<li>The signal is <strong>pain</strong>: the existing technical design cannot support current needs. Migrate <strong>transaction script to active record to domain model to event-sourced domain model</strong> step by step.</li>
+<li>Organisational change moves integration: partnership to customer-supplier to separate ways; more teams mean <strong>narrower contexts</strong>.</li>
+<li>Domain knowledge grows (and decays): start wide, narrow later. <strong>Growth</strong> creates a <strong>big ball of mud</strong> unless you remove <strong>accidental complexity</strong> in subdomains, contexts and aggregates.</li>
+</ul>
+</div></div>
+<h2 id="why-evolve">Why evolve</h2>
+<ul>
+<li>Companies must continually change, even reinvent themselves
+<ul>
+<li>Unmanaged change turns even a sophisticated design into a maintenance nightmare</li>
+<li>Four common vectors: <strong>business domain, organisational structure, domain knowledge, growth</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="changes-in-domains">Changes in domains</h2>
+<ul>
+<li>Recap:
+<ul>
+<li><strong>core</strong> (done differently from competitors for advantage), <strong>supporting</strong> (done differently but no edge), <strong>generic</strong> (all companies do it the same way)</li>
+<li>The type affects how to draw context boundaries, how to integrate contexts and which logic patterns to use</li>
+<li>Subdomains can <strong>morph</strong> as the organisation evolves.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-11-subdomain-changes.svg" alt="Subdomain type change factors" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Example (online retailer <strong>BuyIT</strong>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Core to generic</strong></td>
+<td>BuyIT built an innovative algorithm to optimise courier delivery routes and charged lower fees. <strong>DeliverIT</strong> then offers path optimisation as a service (&quot;solved&quot; the travelling salesman problem), more advanced and far cheaper. It is now off the shelf for all competitors: a commodity.</td>
+</tr>
+<tr>
+<td><strong>Generic to core</strong></td>
+<td>BuyIT used an off-the-shelf inventory system, but business intelligence showed poor demand predictions (stock-outs of popular products, warehouse space wasted on unpopular ones). It builds its own system with better predictions that competitors &quot;stuck&quot; with the generic one cannot match. Real-life textbook case: <strong>Amazon</strong> reinvented its physical infrastructure management and turned it into <strong>AWS</strong>.</td>
+</tr>
+<tr>
+<td><strong>Supporting to generic</strong></td>
+<td>A marketing vendor and contract management system, simple CRUD. Years later an <strong>open source</strong> contract management tool arrives with more features (OCR, full-text search) that were always low priority on the backlog. BuyIT drops its own and integrates the open source one.</td>
+</tr>
+<tr>
+<td><strong>Supporting to core</strong></td>
+<td>The company finds a way to optimise the supporting logic to cut costs or earn more. Symptom: <strong>increasing complexity of the business logic</strong>. If extra complexity does not affect profit it is <strong>accidental business complexity</strong>; if it enhances profitability, the subdomain is becoming core.</td>
+</tr>
+<tr>
+<td><strong>Core to supporting</strong></td>
+<td>The complexity is <strong>not justified</strong> (not profitable); the organisation cuts it to the minimum logic that supports other subdomains.</td>
+</tr>
+<tr>
+<td><strong>Generic to supporting</strong></td>
+<td>The integration cost of the open source solution does not justify the benefits, so BuyIT goes back to its in-house system: generic became supporting.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="strategic-design-concerns">Strategic design concerns</h3>
+<ul>
+<li>A subdomain type change <strong>directly affects its bounded context and strategic decisions</strong> (chapter 4): cores protect their models with <strong>anticorruption layers</strong> and protect consumers with <strong>published languages (OHS)</strong>.</li>
+<li><strong>Separate ways</strong>
+<ul>
+<li>is acceptable for supporting and generic subdomains</li>
+<li>If the subdomain becomes <strong>core</strong>, duplicating it across teams is unacceptable: teams must <strong>integrate</strong>, and a <strong>customer-supplier</strong> relationship fits since only one team implements a core.</li>
+</ul>
+</li>
+<li><strong>Implementation strategy:</strong>
+<ul>
+<li>supporting can be <strong>outsourced</strong> or used as &quot;training wheels&quot; for new hires</li>
+<li>core must be <strong>in-house, close to the sources of domain knowledge</strong>. When supporting turns core, <strong>bring it in-house</strong></li>
+<li>when core turns supporting, you can <strong>outsource</strong> to free R&amp;D for the cores.</li>
+</ul>
+</li>
+</ul>
+<h3 id="tactical-design-concerns">Tactical design concerns</h3>
+<ul>
+<li>The main indicator is <strong>the inability of the existing technical design to support current business needs</strong>
+<ul>
+<li>Supporting subdomains use transaction script or active record, which fit complex rules and invariants badly</li>
+<li>As rules accumulate, adding features gets <strong>painful</strong>: <strong>use the pain as a call to reassess the domain and design</strong>.</li>
+</ul>
+</li>
+<li>Changing the implementation strategy is <strong>normal</strong>:
+<ul>
+<li>you cannot foresee how a business evolves, and applying the most elaborate patterns everywhere is wasteful</li>
+<li>If decisions were conscious, <strong>migrating between patterns is not that troublesome</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-11-pattern-migration.svg" alt="Migration path between logic patterns" loading="lazy" /></p>
+<h4 id="transaction-script-to-active-record">Transaction script to active record</h4>
+<ul>
+<li>Both are procedural scripts
+<ul>
+<li>active record adds structures that encapsulate <strong>mapping to storage</strong>. When data handling gets hard, <strong>find complicated data structures and encapsulate them as active records</strong> instead of direct database access.</li>
+</ul>
+</li>
+</ul>
+<h4 id="active-record-to-domain-model">Active record to domain model</h4>
+<ul>
+<li>When logic over active records gets complex and you see <strong>inconsistencies and duplication</strong>:
+<ol>
+<li>Identify <strong>value objects</strong> (immutable structures), and move their related logic into them.</li>
+<li>Look for <strong>transactional boundaries</strong>. Make <strong>setters private</strong> so only the object modifies its state; the <strong>compilation errors</strong> reveal where external components control state. Refactor that logic inside.</li>
+<li>Look at hierarchies needing <strong>strongly consistent</strong> rule checks: candidate <strong>aggregates</strong>. Find the <strong>smallest transaction boundaries</strong> (smallest data to keep consistent), decompose along them, reference external aggregates <strong>by ID only</strong>.</li>
+<li>For each aggregate identify the <strong>root</strong> and make the other internal methods private.</li>
+</ol>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Before: Player and ApplyBonus (external logic changes the state)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Player</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">Guid</span><span class="w"> </span><span class="n">Id</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">Points</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">ApplyBonus</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Execute</span><span class="p">(</span><span class="n">Guid</span><span class="w"> </span><span class="n">playerId</span><span class="p">,</span><span class="w"> </span><span class="kt">byte</span><span class="w"> </span><span class="n">percentage</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">player</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_repository</span><span class="p">.</span><span class="n">Load</span><span class="p">(</span><span class="n">playerId</span><span class="p">);</span>
+<span class="w">        </span><span class="n">player</span><span class="p">.</span><span class="n">Points</span><span class="w"> </span><span class="o">*=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">percentage</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">100.0</span><span class="p">;</span>
+<span class="w">        </span><span class="n">_repository</span><span class="p">.</span><span class="n">Save</span><span class="p">(</span><span class="n">player</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Step 1: private setters (this will not compile; the errors show who mutates state)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Player</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">Guid</span><span class="w"> </span><span class="n">Id</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">Points</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Step 2: the logic moves inside the object</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Player</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">Guid</span><span class="w"> </span><span class="n">Id</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">Points</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">get</span><span class="p">;</span><span class="w"> </span><span class="k">private</span><span class="w"> </span><span class="k">set</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">ApplyBonus</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">percentage</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="n">Points</span><span class="w"> </span><span class="o">*=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">percentage</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">100.0</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<h4 id="domain-model-to-event-sourced-domain-model">Domain model to event-sourced domain model</h4>
+<ul>
+<li>With sound aggregate boundaries, model the <strong>domain events</strong> that represent each aggregate's lifecycle
+<ul>
+<li>The hard part: the <strong>history of existing aggregates</strong>: migrating &quot;timeless&quot; state</li>
+<li>The fine-grained history is gone, so either <strong>generate past events on a best-effort basis</strong> or <strong>model migration events</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Generating past transitions</strong></p>
+<ul>
+<li>Build an <strong>approximate event stream</strong> per aggregate that projects to the same state
+<ul>
+<li>Table 11-1: lead 12 (Shauna Mercia, phone 555-4753, status converted, last contacted, order placed and converted on 2020-05-27, follow-up null)</li>
+<li>From the business logic: initialised, contacted, order placed, payment confirmed:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"lead-initialized"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"first-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Shauna"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"last-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Mercia"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"phone-number"</span><span class="p">:</span><span class="w"> </span><span class="s2">"555-4753"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"contacted"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:02:12.51Z"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"order-submitted"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"payment-deadline"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-30T12:02:12.51Z"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:02:12.51Z"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"payment-confirmed"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"converted"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:38:44.12Z"</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">]</span>
+</code></pre>
+<ul>
+<li>Easy to <strong>test</strong>:
+<ul>
+<li>project and compare to the original data</li>
+<li>Disadvantage: the <strong>complete history cannot be recovered</strong> (how many times the agent contacted the person is unknown), which undermines the reliable history that event sourcing promises.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Modelling migration events</strong></p>
+<ul>
+<li>Acknowledge the missing knowledge <strong>explicitly</strong> with a <strong>migration event</strong> that initialises each stream:</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"lead-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"event-id"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"event-type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"migrated-from-legacy"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"first-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Shauna"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"last-name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Mercia"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"phone-number"</span><span class="p">:</span><span class="w"> </span><span class="s2">"555-4753"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"converted"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"last-contacted-on"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:02:12.51Z"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"order-placed-on"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:02:12.51Z"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"converted-on"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2020-05-27T12:38:44.12Z"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"followup-on"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Advantage: <strong>no one can assume</strong> the stream holds every past event. Disadvantage: <strong>legacy traces remain forever</strong>; with CQRS projections must always handle migration events.</li>
+</ul>
+<h2 id="organisational-changes">Organisational changes</h2>
+<ul>
+<li>Team structure changes communication and thus integration
+<ul>
+<li>A growing development centre (Figure 11-2): since <strong>one team owns a context</strong>, new teams can force a wide context to <strong>split</strong> into narrower ones.</li>
+</ul>
+</li>
+<li>Development centres in different places: shifting work may hurt collaboration, so integration evolves:
+<ul>
+<li><strong>Partnership to customer-supplier:</strong> partnership assumes strong communication; moving a context to a distant centre erodes it.</li>
+<li><strong>Customer-supplier to separate ways:</strong> with severe communication problems (distance or politics) integration issues multiply, and at some point <strong>duplicating</strong> functionality is cheaper than &quot;chasing one another's tails&quot;.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-11-organisation-changes.svg" alt="Organisational change moves the integration pattern" loading="lazy" /></p>
+<h2 id="domain-knowledge">Domain knowledge</h2>
+<ul>
+<li>DDD's core tenet: domain knowledge is essential, and hardest to get for <strong>core</strong> subdomains (complex, changing). <strong>Modelling is ongoing</strong>; models improve with knowledge.</li>
+<li>Complexity is often <strong>implicit</strong>:
+<ul>
+<li>initial simplicity is deceptive</li>
+<li>edge cases, invariants and rules appear, sometimes forcing a rebuild from the ground up, including context boundaries and aggregates.</li>
+</ul>
+</li>
+<li>Strategic heuristic:
+<ul>
+<li>design boundaries <strong>according to the level of domain knowledge</strong>. Where logic is unclear and changing, use <strong>broader</strong> boundaries</li>
+<li>as knowledge stabilises, <strong>decompose into narrower contexts or microservices</strong> (chapter 14).</li>
+</ul>
+</li>
+<li>Use new knowledge to make the design more resilient
+<ul>
+<li>But knowledge can be <strong>lost</strong>: stale documentation, departing designers, ad hoc additions until the codebase is a <strong>legacy system</strong></li>
+<li>Prevent it proactively; an effective recovery tool is the <strong>EventStorming</strong> workshop (next chapter).</li>
+</ul>
+</li>
+</ul>
+<h2 id="growth">Growth</h2>
+<ul>
+<li>Growth shows a healthy system, but its dark side is the <strong>big ball of mud</strong>:</li>
+</ul>
+<blockquote>
+<p>&quot;A big ball of mud is a haphazardly structured, sprawling, sloppy, duct-tape-and-baling-wire, spaghetti-code jungle. These systems show unmistakable signs of unregulated growth, and repeated, expedient repair.&quot; Brian Foote and Joseph Yoder (PLoP '97).</p>
+</blockquote>
+<ul>
+<li>It results from extending functionality <strong>without re-evaluating design decisions</strong>
+<ul>
+<li>Growth blows up boundaries, and many DDD tools are about boundaries: subdomains (business building blocks), bounded contexts (models), value objects (immutability), aggregates (consistency).</li>
+</ul>
+</li>
+<li>Principle:
+<ul>
+<li><strong>identify and eliminate accidental complexity</strong> (from outdated design decisions) and manage <strong>essential complexity</strong> (inherent in the domain) with DDD</li>
+<li>Follow the DDD order: subdomains, then contexts, then aggregates.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-11-growth-checks.svg" alt="Growth: check subdomains, contexts and aggregates" loading="lazy" /></p>
+<h3 id="subdomains">Subdomains</h3>
+<ul>
+<li>Aim for <strong>useful</strong> boundaries, not perfect ones
+<ul>
+<li>Growth blurs them, so revisit using the <strong>coherent use cases</strong> heuristic (use cases working on the same data) to see where to <strong>split</strong> a subdomain (Figure 11-3).</li>
+</ul>
+</li>
+<li>Finding finer subdomains <strong>of different types</strong> is an important insight for managing essential complexity
+<ul>
+<li>Especially for <strong>core</strong> subdomains: distil them as much as possible so effort goes where strategy matters.</li>
+</ul>
+</li>
+</ul>
+<h3 id="bounded-contexts">Bounded contexts</h3>
+<ul>
+<li>Over time contexts <strong>lose focus</strong> and accumulate logic for different problems (accidental complexity). Revisit boundaries and look to <strong>extract laser-focused contexts</strong>.</li>
+<li>Growth can expose design problems: contexts becoming <strong>&quot;chatty&quot;</strong>, unable to finish an operation without calling another, signal an <strong>ineffective model</strong>: redesign boundaries to give contexts <strong>more autonomy</strong>.</li>
+</ul>
+<h3 id="aggregates">Aggregates</h3>
+<ul>
+<li>Principle:
+<ul>
+<li><strong>keep aggregates as small as possible</strong>, with only what the business requires to be strongly consistent. It is &quot;convenient&quot; to distribute new features among existing aggregates</li>
+<li>data that need not be strongly consistent for all the logic is <strong>accidental complexity</strong>.</li>
+</ul>
+</li>
+<li>Extracting functionality into a dedicated aggregate simplifies the original and perhaps the whole context, and often reveals a <strong>hidden model</strong> that should become its own bounded context.</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<ul>
+<li>&quot;The only constant in life is change&quot; (Heraclitus). Treat change as <strong>first-class</strong> in design.</li>
+<li>Keep decisions aligned with the <strong>current</strong> domain and subdomains; act on organisational change in integration; keep using new domain knowledge; manage growth:
+<ul>
+<li>expand a subdomain: look for <strong>finer-grained subdomains</strong>;</li>
+<li>do not let a context become a <strong>&quot;jack of all trades&quot;</strong>;</li>
+<li>keep <strong>aggregates as small as possible</strong> (use strongly consistent data as the test).</li>
+</ul>
+</li>
+<li>Continuously check boundaries for <strong>growth-driven complexity</strong>; remove accidental complexity and use DDD for the essential.</li>
+</ul>
+<h2 id="exercises">Exercises</h2>
+<ol>
+<li>Organisational growth often causes which integration change? <strong>Partnership to customer-supplier</strong> / anticorruption layer to open-host service / conformist to shared kernel / open-host service to shared kernel.</li>
+<li>Integration moves from conformist to separate ways; what can you deduce (select all)? <strong>The teams struggled to cooperate</strong> / <strong>the duplicated functionality is supporting or generic</strong> / it is a core subdomain.</li>
+<li>Indicators that a supporting subdomain should become core (select all): easier to evolve the model / <strong>painful to evolve the model</strong> / <strong>changes at a higher frequency</strong>.</li>
+<li>A new business opportunity causes (select all): <strong>supporting to core</strong> / supporting to generic / <strong>generic to core</strong> / generic to supporting.</li>
+<li>What strategy change could turn one of WolfDesk's generic subdomains into core? Managed fraud service / <strong>building its own compute platform, like Amazon</strong> / outsourced agents.</li>
+</ol>
+<details class="callout c-note"><summary>Answers (book appendix B)</summary><div class="callout-body">
+<ol>
+<li>A: partnership to customer-supplier (teams find ad hoc integration harder as the organisation grows).</li>
+<li>A and B: teams struggled to cooperate (duplication is cheaper than collaboration), and separate ways suits supporting and generic subdomains.</li>
+<li>B and C: a supporting subdomain turning core makes new requirements harder and more frequent.</li>
+<li>A and C: supporting or generic turning core implies increased advantage: a new business opportunity.</li>
+<li>B: new data centres around the world would take considerable effort and give an advantage over rivals.</li>
+</ol>
+</div></details>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Re-check <strong>subdomain types</strong>, <strong>team structure</strong>, <strong>domain knowledge</strong> and <strong>growth</strong> regularly.</li>
+<li><strong>Pain</strong> in the design is the signal to migrate patterns step by step.</li>
+<li>For events from legacy state: <strong>generate past events</strong> (testable, lossy) or <strong>migration event</strong> (honest, permanent).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Subdomain morphing</strong>: change of type over time.</li>
+<li><strong>Accidental versus essential complexity</strong>: from outdated design versus inherent to the domain.</li>
+<li><strong>Migration event</strong>: single event initialising a stream from legacy state.</li>
+<li><strong>Chatty contexts</strong>: sign of ineffective boundaries.</li>
+<li><strong>Big ball of mud</strong>: unregulated growth.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), chapter 11, read on O'Reilly.</li>
+<li>Brian Foote and Joseph Yoder, &quot;Big Ball of Mud&quot;, Fourth Conference on Pattern Languages of Programs (PLoP '97/EuroPLoP '97), Monticello, Illinois, September 1997.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-10-design-heuristics/">Learning DDD 10: Design Heuristics</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-12-eventstorming/">Learning DDD 12: EventStorming</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/learning-domain-driven-design/ldd-10-design-heuristics/">&larr; Learning DDD 10: Design Heuristics</a><a href="/book-digest/learning-domain-driven-design/">Contents</a><a href="/book-digest/learning-domain-driven-design/ldd-12-eventstorming/">Learning DDD 12: EventStorming &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

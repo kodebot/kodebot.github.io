@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Learning DDD 9: Communication Patterns</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/learning-domain-driven-design/">Contents</a><span class="ttl">Learning Domain Driven Design</span><span class="sp"></span><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-08-architectural-patterns/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/learning-domain-driven-design/ldd-10-design-heuristics/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="learning-ddd-9-communication-patterns">Learning DDD 9: Communication Patterns</h1>
+<p>Source: Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), ch. 9. Previous: <a href="/book-digest/learning-domain-driven-design/ldd-08-architectural-patterns/">Learning DDD 8: Architectural Patterns</a>. Next: <a href="/book-digest/learning-domain-driven-design/ldd-10-design-heuristics/">Learning DDD 10: Design Heuristics</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>These patterns organise <strong>communication across components</strong>: cross-context <strong>model translation</strong>, publishing aggregate events reliably, and processes spanning aggregates.</li>
+<li><strong>Model translation</strong> (for an anticorruption layer or open-host service) is <strong>stateless</strong> (proxy, API gateway, message proxy) or <strong>stateful</strong> (aggregating or unifying data, with its own storage).</li>
+<li>Publishing an event from the aggregate or after the commit is unsafe; the <strong>outbox</strong> commits state and events atomically and a <strong>relay</strong> publishes them (<strong>at-least-once</strong>).</li>
+<li>A <strong>saga</strong> is a long-running process matching events to commands with compensations; a <strong>process manager</strong> holds state and decides next steps (if-else means process manager).</li>
+<li>Only data inside an aggregate is <strong>strongly consistent</strong>; do not use sagas to patch bad boundaries.</li>
+</ul>
+</div></div>
+<h2 id="scope-of-the-chapter">Scope of the chapter</h2>
+<ul>
+<li>Beyond one component: patterns that <strong>facilitate cross-bounded-context communication</strong>, <strong>work around aggregate limitations</strong> and <strong>orchestrate business processes</strong> across components.</li>
+</ul>
+<h2 id="model-translation">Model translation</h2>
+<ul>
+<li>Recap (chapter 4): with cooperating teams, <strong>partnership</strong> coordinates protocols ad hoc, and <strong>shared kernel</strong> co-evolves a limited model, for example integration contracts in a <strong>co-owned repository</strong>.</li>
+<li>In customer-supplier, if downstream cannot conform, models must be <strong>translated</strong>:
+<ul>
+<li>downstream adapts the upstream model with an <strong>anticorruption layer (ACL)</strong>;</li>
+<li>upstream protects consumers with an <strong>open-host service (OHS)</strong> and an integration-specific <strong>published language</strong>.</li>
+</ul>
+</li>
+<li>The logic is similar, so the chapter does not distinguish them
+<ul>
+<li>Translation is <strong>stateless</strong> (on the fly for incoming OHS or outgoing ACL requests) or <strong>stateful</strong> (complex, needs a database).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-09-translation-placement.svg" alt="Where model translation sits" loading="lazy" /></p>
+<h3 id="stateless-model-translation">Stateless model translation</h3>
+<ul>
+<li>The owner of the translation (OHS upstream, ACL downstream) implements a <strong>proxy</strong> that intercepts incoming and outgoing requests and maps the source model to the target model (Figure 9-1)
+<ul>
+<li>The form depends on sync or async communication.</li>
+</ul>
+</li>
+</ul>
+<h4 id="synchronous">Synchronous</h4>
+<ul>
+<li>Typically <strong>embed the transformation in the context's codebase</strong> (Figure 9-2): an OHS translates to the public language when processing incoming requests; an ACL when calling upstream.</li>
+<li>Or offload to an <strong>API gateway</strong>: open source (<strong>Kong</strong>, <strong>KrakenD</strong>) or managed (<strong>AWS API Gateway</strong>, <strong>Google Apigee</strong>, <strong>Azure API Management</strong>).
+<ul>
+<li>For an OHS the gateway converts the internal model into the published language and eases serving <strong>multiple API versions</strong> (Figure 9-3).</li>
+<li>An ACL built on a gateway can serve <strong>several downstream contexts</strong>, acting as an integration-specific context (Figure 9-4)
+<ul>
+<li>Such contexts, mainly transforming models for others, are <strong>interchange contexts</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h4 id="asynchronous">Asynchronous</h4>
+<ul>
+<li>A <strong>message proxy</strong>:
+<ul>
+<li>an intermediary subscribing to the source context's messages, transforming them and forwarding them to the target (Figure 9-5)</li>
+<li>It can also <strong>filter out irrelevant messages</strong> to reduce noise.</li>
+</ul>
+</li>
+<li>Essential for an <strong>open-host service</strong>:
+<ul>
+<li>a common mistake is exposing domain events as they are, which leaks the <strong>implementation model</strong></li>
+<li>Intercept and convert them into the published language (Figure 9-6)</li>
+<li>This also separates <strong>private events</strong> (internal) from <strong>public events</strong> (integration); chapter 15 expands.</li>
+</ul>
+</li>
+</ul>
+<h3 id="stateful-model-translation">Stateful model translation</h3>
+<ul>
+<li>For bigger transformations: aggregating source data or unifying several sources.</li>
+</ul>
+<h4 id="aggregating-incoming-data">Aggregating incoming data</h4>
+<ul>
+<li><strong>Batching</strong> requests (sync or async) for performance (Figure 9-7), or <strong>combining several fine-grained messages into one</strong> (Figure 9-8).</li>
+<li>This cannot be done by an API gateway: it needs tracking, so the translation needs <strong>its own persistent storage</strong> (Figure 9-9).</li>
+<li>Off-the-shelf options: <strong>stream-processing platforms</strong> (Kafka, AWS Kinesis) or <strong>batching tools</strong> (Apache NiFi, AWS Glue, Spark).</li>
+</ul>
+<h4 id="unifying-multiple-sources">Unifying multiple sources</h4>
+<ul>
+<li>A context may process data from several sources, including other contexts. Typical: <strong>backend for frontend</strong> (Richardson), where the UI combines data from several services.</li>
+<li>Or a context with complex logic over data from many contexts: <strong>front it with an anticorruption layer that aggregates all sources</strong>, decoupling integration complexity from business logic (Figure 9-10).</li>
+</ul>
+<h2 id="integrating-aggregates">Integrating aggregates</h2>
+<ul>
+<li>Aggregates communicate by publishing <strong>domain events</strong> (chapter 6). How to publish to a message bus? First, two mistakes.</li>
+</ul>
+<h3 id="mistake-1-publishing-from-the-aggregate">Mistake 1: publishing from the aggregate</h3>
+<pre class="hl"><code><span class="c1">// Campaign.cs (wrong)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Campaign</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">List</span><span class="o">&lt;</span><span class="n">DomainEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_events</span><span class="p">;</span>
+<span class="w">    </span><span class="n">IMessageBus</span><span class="w"> </span><span class="n">_messageBus</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Deactivate</span><span class="p">(</span><span class="kt">string</span><span class="w"> </span><span class="n">reason</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">foreach</span><span class="w"> </span><span class="p">(</span><span class="kt">var</span><span class="w"> </span><span class="n">l</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">_locations</span><span class="p">.</span><span class="n">Values</span><span class="p">())</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">l</span><span class="p">.</span><span class="n">Deactivate</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="n">IsActive</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">false</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">newEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CampaignDeactivated</span><span class="p">(</span><span class="n">_id</span><span class="p">,</span><span class="w"> </span><span class="n">reason</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">newEvent</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_messageBus</span><span class="p">.</span><span class="n">Publish</span><span class="p">(</span><span class="n">newEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Two problems: the event is <strong>dispatched before the new state is committed</strong> (a subscriber may be told of a deactivation the state contradicts), and if the <strong>transaction fails</strong> (race condition, later logic making it invalid, database problem) the event is <strong>already published and cannot be retracted</strong>.</li>
+</ul>
+<h3 id="mistake-2-publishing-from-the-application-layer-after-commit">Mistake 2: publishing from the application layer after commit</h3>
+<pre class="hl"><code><span class="c1">// ManagementAPI.cs (still wrong)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">ManagementAPI</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">IMessageBus</span><span class="w"> </span><span class="n">_messageBus</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">ICampaignRepository</span><span class="w"> </span><span class="n">_repository</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">ExecutionResult</span><span class="w"> </span><span class="nf">DeactivateCampaign</span><span class="p">(</span><span class="n">CampaignId</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="n">reason</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">try</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="kt">var</span><span class="w"> </span><span class="n">campaign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_repository</span><span class="p">.</span><span class="n">Load</span><span class="p">(</span><span class="n">id</span><span class="p">);</span>
+<span class="w">            </span><span class="n">campaign</span><span class="p">.</span><span class="n">Deactivate</span><span class="p">(</span><span class="n">reason</span><span class="p">);</span>
+<span class="w">            </span><span class="n">_repository</span><span class="p">.</span><span class="n">CommitChanges</span><span class="p">(</span><span class="n">campaign</span><span class="p">);</span>
+
+<span class="w">            </span><span class="kt">var</span><span class="w"> </span><span class="n">events</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">campaign</span><span class="p">.</span><span class="n">GetUnpublishedEvents</span><span class="p">();</span>
+<span class="w">            </span><span class="k">foreach</span><span class="w"> </span><span class="p">(</span><span class="n">IDomainEvent</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">events</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">_messageBus</span><span class="p">.</span><span class="n">Publish</span><span class="p">(</span><span class="n">e</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">campaign</span><span class="p">.</span><span class="n">ClearUnpublishedEvents</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">Exception</span><span class="w"> </span><span class="n">ex</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// handle</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Events go out only after a successful commit, <strong>but</strong> the bus may be down, or the server may crash <strong>after commit and before publishing</strong>: the database is committed and the events <strong>are never published</strong>.</li>
+</ul>
+<h3 id="outbox">Outbox</h3>
+<ol>
+<li>Commit the <strong>updated aggregate state and the new domain events in the same atomic transaction</strong>.</li>
+<li>A <strong>message relay</strong> fetches newly committed events.</li>
+<li>The relay <strong>publishes</strong> them to the bus.</li>
+<li>On success it <strong>marks them published</strong> or <strong>deletes</strong> them.</li>
+</ol>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-09-outbox.svg" alt="The outbox pattern" loading="lazy" /></p>
+<ul>
+<li><strong>Relational database:</strong> use a dedicated <strong>outbox table</strong> and commit both tables atomically (Figure 9-12).</li>
+<li><strong>NoSQL without multi-document transactions:</strong> <strong>embed</strong> outgoing events in the aggregate's record:</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"campaign-id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"364b33c3-2171-446d-b652-8e5a7b2be1af"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Autumn 2017"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"publishing-state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"DEACTIVATED"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"ad-locations"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"outbox"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"campaign-id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"364b33c3-2171-446d-b652-8e5a7b2be1af"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"campaign-deactivated"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Goals met"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"published"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Fetching unpublished events:</strong>
+<ul>
+<li><strong>Pull, polling publisher:</strong> the relay queries continuously; use <strong>proper indexes</strong> to limit load.</li>
+<li><strong>Push, transaction log tailing:</strong> the database notifies the relay (some relational databases expose record changes by tailing the log; some NoSQL stores expose <strong>streams</strong>, for example <strong>AWS DynamoDB Streams</strong>).</li>
+</ul>
+</li>
+<li>Guarantee: <strong>at-least-once</strong> delivery. If the relay fails after publishing but before marking, the message is published <strong>again</strong> next time (so consumers must handle duplicates).</li>
+</ul>
+<h3 id="saga">Saga</h3>
+<ul>
+<li>Aggregates limit each transaction to <strong>one instance</strong>, but some business processes <strong>span aggregates</strong>.</li>
+<li>Example:
+<ul>
+<li>when an advertising <strong>campaign is activated</strong>, submit its materials to the <strong>publisher</strong></li>
+<li>on confirmation set the publishing state to <strong>Published</strong>, on rejection mark it <strong>Rejected</strong>. Two different entities, possibly different bounded contexts: merging them into one aggregate would be overkill, so use a <strong>saga</strong>.</li>
+</ul>
+</li>
+<li>A saga is a <strong>long-running business process</strong>:
+<ul>
+<li>long in terms of <strong>transactions</strong> (may run from seconds to years), not necessarily time</li>
+<li>It spans several transactions handled by <strong>any component emitting events and responding to commands</strong></li>
+<li>It listens to events, <strong>issues commands</strong>, and when a step fails it issues <strong>compensating actions</strong> to keep the state consistent.</li>
+</ul>
+</li>
+<li>It listens to <code>CampaignActivated</code> (Campaign) and <code>PublishingConfirmed</code>, <code>PublishingRejected</code> (AdPublishing context)
+<ul>
+<li>it runs <code>SubmitAdvertisement</code> on AdPublishing and <code>TrackPublishingConfirmation</code>, <code>TrackPublishingRejection</code> on Campaign. <strong><code>TrackPublishingRejection</code> is the compensating action</strong> that makes sure the campaign is not listed as active (Figure 9-13).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// CampaignPublishingSaga.cs (simple, stateless)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">CampaignPublishingSaga</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">ICampaignRepository</span><span class="w"> </span><span class="n">_repository</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">IPublishingServiceClient</span><span class="w"> </span><span class="n">_publishingService</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">CampaignActivated</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">campaign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_repository</span><span class="p">.</span><span class="n">Load</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">CampaignId</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">advertisingMaterials</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">campaign</span><span class="p">.</span><span class="n">GenerateAdvertisingMaterials</span><span class="p">();</span>
+<span class="w">        </span><span class="n">_publishingService</span><span class="p">.</span><span class="n">SubmitAdvertisement</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">CampaignId</span><span class="p">,</span>
+<span class="w">            </span><span class="n">advertisingMaterials</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">PublishingConfirmed</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">campaign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_repository</span><span class="p">.</span><span class="n">Load</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">CampaignId</span><span class="p">);</span>
+<span class="w">        </span><span class="n">campaign</span><span class="p">.</span><span class="n">TrackPublishingConfirmation</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">ConfirmationId</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_repository</span><span class="p">.</span><span class="n">CommitChanges</span><span class="p">(</span><span class="n">campaign</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">PublishingRejected</span><span class="w"> </span><span class="n">@event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">campaign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_repository</span><span class="p">.</span><span class="n">Load</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">CampaignId</span><span class="p">);</span>
+<span class="w">        </span><span class="n">campaign</span><span class="p">.</span><span class="n">TrackPublishingRejection</span><span class="p">(</span><span class="n">@event</span><span class="p">.</span><span class="n">RejectionReason</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_repository</span><span class="p">.</span><span class="n">CommitChanges</span><span class="p">(</span><span class="n">campaign</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-09-saga.svg" alt="A saga reacting to events with commands and a compensation" loading="lazy" /></p>
+<ul>
+<li>This saga is <strong>stateless</strong> and relies on the messaging infrastructure
+<ul>
+<li>Stateful sagas (for example tracking executed operations to issue compensations) can be <strong>event-sourced aggregates</strong> persisting the full history of received events and issued commands, with command execution <strong>moved out of the saga</strong> and run <strong>asynchronously</strong> like outbox event dispatching:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// CampaignPublishingSaga.cs (stateful, commands as events)</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">CampaignPublishingSaga</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">ICampaignRepository</span><span class="w"> </span><span class="n">_repository</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">IList</span><span class="o">&lt;</span><span class="n">IDomainEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_events</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">CampaignActivated</span><span class="w"> </span><span class="n">activated</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">campaign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_repository</span><span class="p">.</span><span class="n">Load</span><span class="p">(</span><span class="n">activated</span><span class="p">.</span><span class="n">CampaignId</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">advertisingMaterials</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">campaign</span><span class="p">.</span><span class="n">GenerateAdvertisingMaterials</span><span class="p">();</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">commandIssuedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommandIssuedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">target</span><span class="p">:</span><span class="w"> </span><span class="n">Target</span><span class="p">.</span><span class="n">PublishingService</span><span class="p">,</span>
+<span class="w">            </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">SubmitAdvertisementCommand</span><span class="p">(</span><span class="n">activated</span><span class="p">.</span><span class="n">CampaignId</span><span class="p">,</span>
+<span class="w">                </span><span class="n">advertisingMaterials</span><span class="p">));</span>
+
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">activated</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">commandIssuedEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">PublishingConfirmed</span><span class="w"> </span><span class="n">confirmed</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">commandIssuedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommandIssuedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">target</span><span class="p">:</span><span class="w"> </span><span class="n">Target</span><span class="p">.</span><span class="n">CampaignAggregate</span><span class="p">,</span>
+<span class="w">            </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TrackConfirmation</span><span class="p">(</span><span class="n">confirmed</span><span class="p">.</span><span class="n">CampaignId</span><span class="p">,</span>
+<span class="w">                </span><span class="n">confirmed</span><span class="p">.</span><span class="n">ConfirmationId</span><span class="p">));</span>
+
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">confirmed</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">commandIssuedEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">PublishingRejected</span><span class="w"> </span><span class="n">rejected</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">commandIssuedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommandIssuedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">target</span><span class="p">:</span><span class="w"> </span><span class="n">Target</span><span class="p">.</span><span class="n">CampaignAggregate</span><span class="p">,</span>
+<span class="w">            </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TrackRejection</span><span class="p">(</span><span class="n">rejected</span><span class="p">.</span><span class="n">CampaignId</span><span class="p">,</span>
+<span class="w">                </span><span class="n">rejected</span><span class="p">.</span><span class="n">RejectionReason</span><span class="p">));</span>
+
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">rejected</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">commandIssuedEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The <strong>outbox relay</strong> executes the commands on the relevant endpoints for each <code>CommandIssuedEvent</code>
+<ul>
+<li>Separating the <strong>state transition</strong> from <strong>command execution</strong> makes commands run reliably even if the process fails at any stage.</li>
+</ul>
+</li>
+</ul>
+<h4 id="consistency">Consistency</h4>
+<ul>
+<li>A saga orchestrates a multi-component transaction, but components are <strong>eventually consistent</strong>
+<ul>
+<li>no two transactions are atomic. Principle: **only data within an aggregate's boundary is strongly consistent</li>
+<li>everything outside is eventually consistent.** Do not abuse sagas to <strong>compensate for wrong aggregate boundaries</strong>: operations that must be strongly consistent belong in one aggregate.</li>
+</ul>
+</li>
+<li>Sagas are often confused with the <strong>process manager</strong>.</li>
+</ul>
+<h3 id="process-manager">Process manager</h3>
+<ul>
+<li>A saga manages a <strong>simple linear flow</strong>, strictly matching <strong>events to commands</strong>: <code>CampaignActivated</code> to <code>PublishingService.SubmitAdvertisement</code>, <code>PublishingConfirmed</code> to <code>Campaign.TrackConfirmation</code>, <code>PublishingRejected</code> to <code>Campaign.TrackRejection</code>.</li>
+<li>A <strong>process manager</strong> (Hohpe and Woolf, <em>Enterprise Integration Patterns</em>, 2003) implements a <strong>business-logic-based process</strong>: a <strong>central processing unit that maintains the state of the sequence and decides the next steps</strong> (Figure 9-14).</li>
+<li><strong>Rule of thumb:</strong> a saga with <strong>if-else</strong> branches is probably a process manager.</li>
+<li><strong>Instantiation:</strong>
+<ul>
+<li>a saga starts <strong>implicitly</strong> when an event (such as <code>CampaignActivated</code>) is observed</li>
+<li>A process manager is bound to no single event, being a coherent multi-step process, so it must be <strong>instantiated explicitly</strong>.</li>
+</ul>
+</li>
+<li><strong>Business trip booking:</strong>
+<ul>
+<li>the routing algorithm picks the most cost-effective flight route and asks the employee to approve</li>
+<li>if the employee prefers another route the <strong>manager</strong> must approve</li>
+<li>after the flight is booked, book one of the <strong>preapproved hotels</strong></li>
+<li>if no hotel is available, <strong>cancel the flight tickets</strong>. No central entity triggers it: the booking <strong>is</strong> the process (Figure 9-15).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/learning-domain-driven-design/img/ldd-09-saga-vs-process-manager.svg" alt="Saga versus process manager" loading="lazy" /></p>
+<ul>
+<li>Process managers are often <strong>aggregates</strong> (state-based or event-sourced), with explicit <strong>ID and persistent state</strong>, subscribed to workflow events and emitting <code>CommandIssuedEvent</code> for the outbox relay to execute:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// BookingProcessManager.cs</span>
+<span class="k">public</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">BookingProcessManager</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="k">readonly</span><span class="w"> </span><span class="n">IList</span><span class="o">&lt;</span><span class="n">IDomainEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_events</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">BookingId</span><span class="w"> </span><span class="n">_id</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">Destination</span><span class="w"> </span><span class="n">_destination</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">TripDefinition</span><span class="w"> </span><span class="n">_parameters</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">EmployeeId</span><span class="w"> </span><span class="n">_traveler</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">Route</span><span class="w"> </span><span class="n">_route</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">IList</span><span class="o">&lt;</span><span class="n">Route</span><span class="o">&gt;</span><span class="w"> </span><span class="n">_rejectedRoutes</span><span class="p">;</span>
+<span class="w">    </span><span class="k">private</span><span class="w"> </span><span class="n">IRoutingService</span><span class="w"> </span><span class="n">_routing</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Initialize</span><span class="p">(</span><span class="n">Destination</span><span class="w"> </span><span class="n">destination</span><span class="p">,</span>
+<span class="w">        </span><span class="n">TripDefinition</span><span class="w"> </span><span class="n">parameters</span><span class="p">,</span>
+<span class="w">        </span><span class="n">EmployeeId</span><span class="w"> </span><span class="n">traveler</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_destination</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">destination</span><span class="p">;</span>
+<span class="w">        </span><span class="n">_parameters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parameters</span><span class="p">;</span>
+<span class="w">        </span><span class="n">_traveler</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">traveler</span><span class="p">;</span>
+<span class="w">        </span><span class="n">_route</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_routing</span><span class="p">.</span><span class="n">Calculate</span><span class="p">(</span><span class="n">destination</span><span class="p">,</span><span class="w"> </span><span class="n">parameters</span><span class="p">);</span>
+
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">routeGenerated</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">RouteGeneratedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">BookingId</span><span class="p">:</span><span class="w"> </span><span class="n">_id</span><span class="p">,</span>
+<span class="w">            </span><span class="n">Route</span><span class="p">:</span><span class="w"> </span><span class="n">_route</span><span class="p">);</span>
+
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">commandIssuedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommandIssuedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">RequestEmployeeApproval</span><span class="p">(</span><span class="n">_traveler</span><span class="p">,</span><span class="w"> </span><span class="n">_route</span><span class="p">));</span>
+
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">routeGenerated</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">commandIssuedEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">RouteConfirmed</span><span class="w"> </span><span class="n">confirmed</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">commandIssuedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommandIssuedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BookFlights</span><span class="p">(</span><span class="n">_route</span><span class="p">,</span><span class="w"> </span><span class="n">_parameters</span><span class="p">));</span>
+
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">confirmed</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">commandIssuedEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">RouteRejected</span><span class="w"> </span><span class="n">rejected</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">commandIssuedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommandIssuedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">RequestRerouting</span><span class="p">(</span><span class="n">_traveler</span><span class="p">,</span><span class="w"> </span><span class="n">_route</span><span class="p">));</span>
+
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">rejected</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">commandIssuedEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">ReroutingConfirmed</span><span class="w"> </span><span class="n">confirmed</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">_rejectedRoutes</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">_route</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_route</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_routing</span><span class="p">.</span><span class="n">CalculateAltRoute</span><span class="p">(</span><span class="n">_destination</span><span class="p">,</span>
+<span class="w">            </span><span class="n">_parameters</span><span class="p">,</span><span class="w"> </span><span class="n">_rejectedRoutes</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">routeGenerated</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">RouteGeneratedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">BookingId</span><span class="p">:</span><span class="w"> </span><span class="n">_id</span><span class="p">,</span>
+<span class="w">            </span><span class="n">Route</span><span class="p">:</span><span class="w"> </span><span class="n">_route</span><span class="p">);</span>
+
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">commandIssuedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommandIssuedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">RequestEmployeeApproval</span><span class="p">(</span><span class="n">_traveler</span><span class="p">,</span><span class="w"> </span><span class="n">_route</span><span class="p">));</span>
+
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">confirmed</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">routeGenerated</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">commandIssuedEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="nf">Process</span><span class="p">(</span><span class="n">FlightBooked</span><span class="w"> </span><span class="n">booked</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">var</span><span class="w"> </span><span class="n">commandIssuedEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CommandIssuedEvent</span><span class="p">(</span>
+<span class="w">            </span><span class="n">command</span><span class="p">:</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BookHotel</span><span class="p">(</span><span class="n">_destination</span><span class="p">,</span><span class="w"> </span><span class="n">_parameters</span><span class="p">));</span>
+
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">booked</span><span class="p">);</span>
+<span class="w">        </span><span class="n">_events</span><span class="p">.</span><span class="n">Append</span><span class="p">(</span><span class="n">commandIssuedEvent</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<blockquote>
+<p>[!note] Book typos
+The printed <code>Campaign</code> loop uses <code>for (l in ...)</code>, <code>ManagementAPI</code> uses <code>repository.Load</code> without the underscore and <code>messageBus.publish</code>, and <code>ReroutingConfirmed</code> uses bare <code>route</code>, <code>destination</code>, <code>parameters</code>; the notes show the evident intent.</p>
+</blockquote>
+<h2 id="conclusion">Conclusion</h2>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stateless model translation</td>
+<td>Proxy, API gateway or message proxy for ACL and OHS, on the fly</td>
+</tr>
+<tr>
+<td>Stateful model translation</td>
+<td>Aggregate or unify data, needs its own storage</td>
+</tr>
+<tr>
+<td>Outbox</td>
+<td><strong>Reliably publish</strong> an aggregate's domain events (never lost despite failures)</td>
+</tr>
+<tr>
+<td>Saga</td>
+<td>Simple cross-component process matching events to commands, with compensations</td>
+</tr>
+<tr>
+<td>Process manager</td>
+<td>Complex business process with state and decisions</td>
+</tr>
+</tbody>
+</table>
+<h2 id="exercises">Exercises</h2>
+<ol>
+<li>Which integration pattern requires <strong>model transformation logic</strong> (select all)? Conformist / <strong>anticorruption layer</strong> / <strong>open-host service</strong>.</li>
+<li>Goal of the outbox: decouple messaging infrastructure from business logic / <strong>reliably publish messages</strong> / support event-sourced domain models.</li>
+<li>Other use cases for the outbox besides publishing to a bus? <strong>Yes</strong> / No.</li>
+<li>Saga versus process manager (select all): <strong>a process manager needs explicit instantiation while a saga runs when a relevant event is published</strong> / a process manager never persists state / a saga needs its components to be event-sourced / <strong>a process manager suits complex workflows</strong>.</li>
+</ol>
+<details class="callout c-note"><summary>Answers (book appendix B)</summary><div class="callout-body">
+<ol>
+<li>B and C: the ACL transforms the upstream model for the downstream; the OHS transforms the internal model for consumers.</li>
+<li>B: reliably publish messages.</li>
+<li>A (yes): the outbox can drive asynchronous execution, for example sending email.</li>
+<li>A and D: a process manager needs explicit instantiation and suits complex workflows; a saga runs on a relevant event and suits simpler processes.</li>
+</ol>
+</div></details>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li><strong>Translate</strong> models in a proxy, gateway or message proxy; use state only when aggregating or unifying.</li>
+<li><strong>Outbox</strong> for reliable publishing; remember <strong>at-least-once</strong> delivery.</li>
+<li><strong>Saga</strong> for linear event-to-command flows; <strong>process manager</strong> for stateful, branching processes.</li>
+<li>Respect <strong>strong consistency inside aggregates, eventual outside</strong>.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Interchange context</strong>: context that mainly translates models.</li>
+<li><strong>API gateway / message proxy</strong>: translation components for sync and async.</li>
+<li><strong>Outbox / message relay</strong>: atomic commit of state and events, plus publisher.</li>
+<li><strong>Polling publisher / log tailing</strong>: pull and push ways to fetch unpublished events.</li>
+<li><strong>Saga / compensating action</strong>: event-to-command process, undo step.</li>
+<li><strong>Process manager</strong>: stateful, explicitly instantiated, decides next steps.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Vlad Khononov, <em>Learning Domain-Driven Design</em> (O'Reilly, 2021), chapter 9, read on O'Reilly.</li>
+<li>Cited: Chris Richardson (2019), <em>Microservice Patterns</em> (Manning); Gregor Hohpe and Bobby Woolf (2003), <em>Enterprise Integration Patterns</em> (Addison-Wesley).</li>
+<li>Products named: Kong, KrakenD, AWS API Gateway, Google Apigee, Azure API Management, Kafka, AWS Kinesis, Apache NiFi, AWS Glue, Spark, AWS DynamoDB Streams.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-08-architectural-patterns/">Learning DDD 8: Architectural Patterns</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/ldd-10-design-heuristics/">Learning DDD 10: Design Heuristics</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/learning-domain-driven-design/ldd-08-architectural-patterns/">&larr; Learning DDD 8: Architectural Patterns</a><a href="/book-digest/learning-domain-driven-design/">Contents</a><a href="/book-digest/learning-domain-driven-design/ldd-10-design-heuristics/">Learning DDD 10: Design Heuristics &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

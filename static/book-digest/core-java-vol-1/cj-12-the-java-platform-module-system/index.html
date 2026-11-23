@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Core Java 12: The Java Platform Module System</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/core-java-vol-1/">Core Java Vol 1</a></div>
+<main>
+<h1 id="core-java-12-the-java-platform-module-system">Core Java 12: The Java Platform Module System</h1>
+<p>Source: Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed. (Pearson, 2025), ch. 12. Previous: <a href="/book-digest/core-java-vol-1/cj-11-annotations/">Core Java 11: Annotations</a>. Next: <a href="/book-digest/core-java-vol-1/cj-13-appendix-java-keywords/">Core Java 13: Appendix, Java Keywords</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>module</strong> is a set of packages plus a descriptor (<code>module-info.java</code>) that lists what it <strong>exports</strong> and what it <strong>requires</strong>. The compiler and the VM enforce both.</li>
+<li>Two gains: <strong>strong encapsulation</strong> (unexported packages are unreachable) and <strong>reliable configuration</strong> (no duplicate or missing classes). <strong>No versioning</strong> support.</li>
+<li><strong>Reflection is restricted</strong> too: use <code>opens</code> for libraries that need private access (JPA, JSON-B).</li>
+<li><strong>Migration:</strong> a JAR on the module path becomes an <strong>automatic module</strong>; code on the class path lives in the <strong>unnamed module</strong>. Migrate <strong>bottom-up</strong>.</li>
+<li>Services use <strong><code>provides ... with</code></strong> and <strong><code>uses</code></strong>. The JDK tools <strong><code>jdeps</code></strong>, <strong><code>jlink</code></strong> and <strong><code>jmod</code></strong> analyse, trim and package modules.</li>
+</ul>
+</div></div>
+<h2 id="12-1-the-module-concept">12.1 The module concept</h2>
+<ul>
+<li>Classes give encapsulation through <code>private</code>
+<ul>
+<li><strong>packages</strong> give the next level (package access). In large systems that is <strong>not enough</strong>: any <code>public</code> feature is accessible everywhere, so you cannot reason about the impact of changing it.</li>
+</ul>
+</li>
+<li>The JDK faced this over twenty years
+<ul>
+<li>CORBA (<code>org.omg.corba</code>) shipped until <strong>Java 10</strong>; from Java 11 you add the JARs yourself</li>
+<li>And <code>java.awt.DataFlavor</code> is used in the implementation of SOAP, so even AWT cannot simply be dropped.</li>
+</ul>
+</li>
+<li>OSGi and similar systems were judged unsuitable. The <strong>Java Platform Module System</strong> (Java 9) is part of the language and VM, modularised the Java API, and can be used for your own code.</li>
+<li>A module consists of:
+<ul>
+<li>a collection of <strong>packages</strong>;</li>
+<li>optional <strong>resources</strong> and other files such as native libraries;</li>
+<li>a list of <strong>accessible packages</strong>;</li>
+<li>a list of <strong>modules it depends on</strong>.</li>
+</ul>
+</li>
+<li>The platform enforces both <strong>at compile time and in the VM</strong>.</li>
+<li>Advantages over JARs on the class path:
+<ul>
+<li><strong>Strong encapsulation</strong>: you control which packages are accessible.</li>
+<li><strong>Reliable configuration</strong>: no duplicate or missing classes.</li>
+</ul>
+</li>
+<li><strong>Not addressed:</strong> versions. You cannot say which version is required or use several versions of a module in one program; use other mechanisms.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-12-encapsulation-levels.svg" alt="Class, package and module as levels of encapsulation" loading="lazy" /></p>
+<h2 id="12-2-naming-modules">12.2 Naming modules</h2>
+<ul>
+<li>A module is a collection of packages whose names <strong>need not be related</strong> (<code>java.sql</code> holds <code>java.sql</code> and <code>javax.sql</code>). A module name may equal a package name.</li>
+<li>Names use letters, digits, underscores and periods. There is <strong>no hierarchy</strong>: <code>com.horstmann</code> and <code>com.horstmann.corejava</code> are unrelated.</li>
+<li>For shared modules use globally unique <strong>reverse domain</strong> names
+<ul>
+<li>Easiest: <strong>name it after the top-level package</strong> (SLF4J: module <code>org.slf4j</code> with packages <code>org.slf4j</code>, <code>org.slf4j.spi</code>, <code>org.slf4j.event</code>, <code>org.slf4j.helpers</code>).</li>
+</ul>
+</li>
+<li>A package can belong to <strong>only one module</strong>; unique module names with matching package prefixes make package names unique.</li>
+<li>Application modules may use short names. The book uses library-style names such as <code>com.horstmann.util</code> and program names such as <code>v1ch12.hellomod</code>.</li>
+<li>When referring to a package you <strong>do not</strong> give the module name.</li>
+</ul>
+<h2 id="12-3-the-modular-hello-world-program">12.3 The modular &quot;Hello, World!&quot; program</h2>
+<ul>
+<li>The class must be in a <strong>named package</strong> (the unnamed package cannot be in a module).</li>
+</ul>
+<pre class="hl"><code><span class="c1">// com/horstmann/hello/HelloWorld.java</span>
+<span class="kn">package</span><span class="w"> </span><span class="nn">com.horstmann.hello</span><span class="p">;</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">HelloWorld</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="n">String</span><span class="o">[]</span><span class="w"> </span><span class="n">args</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Hello, Modular World!"</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Add a <strong>module declaration</strong> in <code>module-info.java</code> in the base directory (named after the module by convention):</li>
+</ul>
+<pre class="hl"><code>v1ch12.hellomod/
+├ module-info.java
+└ com/horstmann/hello/HelloWorld.java
+</code></pre>
+<pre class="hl"><code><span class="c1">// module-info.java</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">hellomod</span>
+<span class="p">{</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>It is empty: the module offers nothing and needs nothing.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>v1ch12.hellomod/module-info.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch12.hellomod/com/horstmann/hello/HelloWorld.java
+<span class="gp">$ </span>java<span class="w"> </span>--module-path<span class="w"> </span>v1ch12.hellomod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--module<span class="w"> </span>v1ch12.hellomod/com.horstmann.hello.HelloWorld
+<span class="gp">$ </span>java<span class="w"> </span>-p<span class="w"> </span>v1ch12.hellomod<span class="w"> </span>-m<span class="w"> </span>v1ch12.hellomod/com.horstmann.hello.HelloWorld
+</code></pre>
+<ul>
+<li><code>module</code>, <code>requires</code>, <code>exports</code> and the rest are <strong>restricted keywords</strong>, meaningful only in module declarations
+<ul>
+<li><code>module-info</code> compiles to <strong><code>module-info.class</code></strong></li>
+<li>It cannot be a class name (hyphen).</li>
+</ul>
+</li>
+<li>The <strong>module path</strong> is like the class path but holds modules. The main class is given as <code>modulename/classname</code>. <code>-p</code> and <code>-m</code> are the short options.</li>
+<li>You get the warning <em>module name component v1ch12 should avoid terminal digits</em> (to discourage version numbers in names)
+<ul>
+<li>Ignore it or annotate the module (the annotation needs target <code>ElementType.MODULE</code>):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java</span>
+<span class="nd">@SuppressWarnings</span><span class="p">(</span><span class="s">"module"</span><span class="p">)</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">hellomod</span>
+<span class="p">{</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="12-4-requiring-modules">12.4 Requiring modules</h2>
+<ul>
+<li>A program using <code>JOptionPane</code> fails to compile: <em>package javax.swing is not visible (declared in module java.desktop, but module v1ch12.requiremod does not read it)</em>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">requiremod</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">java</span><span class="p">.</span><span class="na">desktop</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Modules must be <strong>explicit about requirements</strong>, so the VM can verify them before starting
+<ul>
+<li>The earlier example needed none because <code>java.lang</code> and <code>java.io</code> are in <strong><code>java.base</code>, required by default</strong>.</li>
+</ul>
+</li>
+<li><code>java.desktop</code> itself requires <code>java.datatransfer</code>, <code>java.prefs</code> and <code>java.xml</code>
+<ul>
+<li>The <strong>module graph</strong> has modules as nodes and <code>requires</code> (or the implied <code>java.base</code>) as edges</li>
+<li><strong>No cycles</strong> are allowed.</li>
+</ul>
+</li>
+<li><code>requires</code> is <strong>not transitive</strong> by default: <code>java.desktop</code> requires <code>java.prefs</code>, which requires <code>java.xml</code>, but that gives <code>java.desktop</code> no right to use <code>java.xml</code> unless it declares it
+<ul>
+<li>(See 12.11 for relaxing this.)</li>
+</ul>
+</li>
+<li>Module M <strong>reads</strong> N if:
+<ul>
+<li>M requires N;</li>
+<li>M requires a module that <strong>transitively</strong> requires N;</li>
+<li>N is M itself or <code>java.base</code>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-12-module-graph.svg" alt="The module graph of the Swing hello application" loading="lazy" /></p>
+<h2 id="12-5-exporting-packages">12.5 Exporting packages</h2>
+<ul>
+<li>Requiring a module does not make all its packages available. A module lists accessible packages with <strong><code>exports</code></strong>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java of java.xml (extract)</span>
+<span class="kd">module</span> <span class="nc">java</span><span class="p">.</span><span class="na">xml</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">exports</span><span class="w"> </span><span class="n">javax</span><span class="p">.</span><span class="na">xml</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">exports</span><span class="w"> </span><span class="n">javax</span><span class="p">.</span><span class="na">xml</span><span class="p">.</span><span class="na">catalog</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">exports</span><span class="w"> </span><span class="n">javax</span><span class="p">.</span><span class="na">xml</span><span class="p">.</span><span class="na">datatype</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">exports</span><span class="w"> </span><span class="n">javax</span><span class="p">.</span><span class="na">xml</span><span class="p">.</span><span class="na">namespace</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">exports</span><span class="w"> </span><span class="n">javax</span><span class="p">.</span><span class="na">xml</span><span class="p">.</span><span class="na">parsers</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Hidden packages (such as <code>jdk.xml.internal</code>) are simply <strong>not exported</strong>.</li>
+<li>For an exported package, its <strong>public and protected</strong> types and their public and protected members are accessible outside (protected, as always, only to subclasses and the same package).</li>
+<li>An unexported package is <strong>inaccessible outside its module</strong>, unlike before modules, when <code>sun.misc.BASE64Encoder</code> or <code>com.sun.rowset.CachedRowSetImpl</code> could be used although they were not public API. Some programs stop running under Java 9
+<ul>
+<li>nobody ever promised those APIs.</li>
+</ul>
+</li>
+<li><strong>Example:</strong> module <code>com.horstmann.greet</code> exports package <code>com.horstmann.greet</code> but not <code>com.horstmann.greet.internal</code>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Greeter.java</span>
+<span class="kn">package</span><span class="w"> </span><span class="nn">com.horstmann.greet</span><span class="p">;</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Greeter</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="n">Greeter</span><span class="w"> </span><span class="nf">newInstance</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greet</span><span class="p">.</span><span class="na">internal</span><span class="p">.</span><span class="na">GreeterImpl</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">subject</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// GreeterImpl.java</span>
+<span class="kn">package</span><span class="w"> </span><span class="nn">com.horstmann.greet.internal</span><span class="p">;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">com.horstmann.greet.Greeter</span><span class="p">;</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">GreeterImpl</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Greeter</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">subject</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"Hello, "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">subject</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">"!"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// module-info.java of com.horstmann.greet</span>
+<span class="kd">module</span> <span class="nc">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greet</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">exports</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greet</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// module-info.java of v1ch12.exportedpkg</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">exportedpkg</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greet</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>exports</code> takes a <strong>package</strong> name, <code>requires</code> takes a <strong>module</strong> name.</li>
+<li>The application calls <code>Greeter.newInstance()</code> and prints <code>greeter.greet(&quot;Modular World&quot;)</code>.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>com.horstmann.greet/module-info.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>com.horstmann.greet/com/horstmann/greet/Greeter.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>com.horstmann.greet/com/horstmann/greet/internal/GreeterImpl.java
+<span class="gp">$ </span>javac<span class="w"> </span>-p<span class="w"> </span>com.horstmann.greet<span class="w"> </span>v1ch12.exportedpkg/module-info.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch12.exportedpkg/com/horstmann/hello/HelloWorld.java
+<span class="gp">$ </span>java<span class="w"> </span>-p<span class="w"> </span>v1ch12.exportedpkg:com.horstmann.greet<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-m<span class="w"> </span>v1ch12.exportedpkg/com.horstmann.hello.HelloWorld
+</code></pre>
+<ul>
+<li>The implementation is hidden; clients use <strong>an interface and a factory method</strong>.</li>
+<li><strong>Windows cmd:</strong> quote <code>v1ch12.exportedpkg:com.horstmann.greet</code> (the colon is special) and use <code>^</code> instead of <code>\</code> for continued lines.</li>
+<li><strong>Eclipse:</strong> one project per module; in the dependent project's properties (Projects tab) add the required module to the module path (Figure 12.2).</li>
+<li>A module is <strong>not a scope</strong>: two packages of the same name cannot exist in different modules, even hidden ones.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-12-exports-hidden.svg" alt="Exported and hidden packages" loading="lazy" /></p>
+<h2 id="12-6-modular-jars">12.6 Modular JARs</h2>
+<ul>
+<li>Deploy a module as a JAR with <strong><code>module-info.class</code> in the root</strong>: a <strong>modular JAR</strong>. Compile with <code>-d</code> to a separate directory and use <code>jar -C</code> to change into it:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>-d<span class="w"> </span>modules/com.horstmann.greet<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>com.horstmann.greet/module-info.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>com.horstmann.greet/com/horstmann/greet/internal/GreeterImpl.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>com.horstmann.greet/com/horstmann/greet/Greeter.java
+<span class="gp">$ </span>jar<span class="w"> </span>-c<span class="w"> </span>-v<span class="w"> </span>-f<span class="w"> </span>com.horstmann.greet.jar<span class="w"> </span>-C<span class="w"> </span>modules/com.horstmann.greet<span class="w"> </span>.
+</code></pre>
+<ul>
+<li>With Maven, Ant or Gradle, keep building as usual: a JAR containing <code>module-info.class</code> is a modular JAR. Put it on the module path to load it.</li>
+<li><strong>Split packages</strong> (one package across several JARs) are <strong>not possible</strong> with modules (probably never a good idea).</li>
+<li>A main class can be set as in regular JARs, and the launcher names only the module:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>-p<span class="w"> </span>com.horstmann.greet.jar<span class="w"> </span>-d<span class="w"> </span>modules/v1ch12.exportedpkg<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch12.exportedpkg/module-info.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch12.exportedpkg/com/horstmann/hello/HelloWorld.java
+<span class="gp">$ </span>jar<span class="w"> </span>-c<span class="w"> </span>-v<span class="w"> </span>-f<span class="w"> </span>v1ch12.exportedpkg.jar<span class="w"> </span>-e<span class="w"> </span>com.horstmann.hello.HelloWorld<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-C<span class="w"> </span>modules/v1ch12.exportedpkg<span class="w"> </span>.
+<span class="gp">$ </span>java<span class="w"> </span>-p<span class="w"> </span>com.horstmann.greet.jar:v1ch12.exportedpkg.jar<span class="w"> </span>-m<span class="w"> </span>v1ch12.exportedpkg
+</code></pre>
+<ul>
+<li><strong>Versions:</strong> <code>--module-version 1.0</code> (and put it in the file name). The system does <strong>not</strong> use it to resolve modules, but tools can query it:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Version.java</span>
+<span class="n">Optional</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Greeter</span><span class="p">.</span><span class="na">class</span><span class="p">.</span><span class="na">getModule</span><span class="p">().</span><span class="na">getDescriptor</span><span class="p">().</span><span class="na">rawVersion</span><span class="p">();</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>jar<span class="w"> </span>-c<span class="w"> </span>-v<span class="w"> </span>-f<span class="w"> </span>com.horstmann.greet-1.0.jar<span class="w"> </span>--module-version<span class="w"> </span><span class="m">1</span>.0<span class="w"> </span>-C<span class="w"> </span>com.horstmann.greet<span class="w"> </span>.
+</code></pre>
+<ul>
+<li>The module analogue of a class loader is a <strong>layer</strong>
+<ul>
+<li>JDK and application modules go in the <strong>boot layer</strong></li>
+<li>Other modules can be loaded through the layer API (not covered), which can consider versions; application server developers are expected to use it.</li>
+</ul>
+</li>
+<li>JShell: put the JAR on the module path and add <code>--add-modules</code>:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>jshell<span class="w"> </span>--module-path<span class="w"> </span>com.horstmann.greet-1.0.jar<span class="w"> </span>--add-modules<span class="w"> </span>com.horstmann.greet
+</code></pre>
+<h2 id="12-7-modules-and-reflective-access">12.7 Modules and reflective access</h2>
+<ul>
+<li>Encapsulation also binds <strong>reflection</strong>:
+<ul>
+<li>reflective access to <strong>non-public members</strong> of a class in a module <strong>fails</strong></li>
+<li>Libraries that rely on it include JPA-style object-relational mappers and XML/JSON binders such as JAXB and JSON-B.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>the chapter 5 <code>ObjectAnalyzer</code> goes into module <code>com.horstmann.util</code></li>
+<li>a module <code>v1ch12.openpkg</code> has a <code>Country</code> class with private <code>name</code> and <code>area</code> and a <code>Demo</code> that analyses <code>new Country(&quot;Belgium&quot;, 30510)</code>.</li>
+</ul>
+</li>
+<li>Running it fails with <code>InaccessibleObjectException</code>: <em>Unable to make field private java.lang.String <a href="http://com.horstmann.places.Country.name" target="_blank" rel="noopener noreferrer">com.horstmann.places.Country.name</a> accessible: module v1ch12.openpkg does not &quot;opens com.horstmann.places&quot; to module com.horstmann.util</em>.</li>
+<li>Fix with <strong><code>opens</code></strong>, which allows reflective access to all instances of classes in the package:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">openpkg</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">util</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">opens</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">places</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>An <strong>open module</strong> grants runtime access to all packages (as if each were both exported and opened), while <strong>compile-time access is only to exported</strong> packages: compile-time safety with classic permissive runtime behaviour.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java</span>
+<span class="kd">open</span><span class="w"> </span><span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">openpkg</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">util</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Resources</strong>
+<ul>
+<li>(loaded with <code>Class.getResourceAsStream</code> or <code>Module.getResourceAsStream</code>): if a resource sits in a directory matching a package in a module, the package <strong>must be opened</strong> to the caller</li>
+<li>Resources in other directories, class files and the manifest can be read by anyone.</li>
+</ul>
+</li>
+<li>JSON-B example:
+<ul>
+<li>download <code>jakarta.json-api-2.1.2.jar</code>, <code>jakarta.json.bind-api-3.0.0.jar</code>, <code>parsson-1.1.4.jar</code> and <code>yasson-3.0.3.jar</code> from Maven Central, put them on the module path and run <code>com.horstmann.places.Demo</code> in <code>v1ch12.openpkg2</code></li>
+<li>Once the package is opened, conversion to JSON succeeds.</li>
+</ul>
+</li>
+<li>Future libraries may use <strong><code>VarHandle</code></strong> instead of reflection
+<ul>
+<li>The library needs a <strong><code>Lookup</code></strong> created in the module allowed to access the field (any method there calls <code>MethodHandles.lookup()</code>), which lets one module give another access to private members</li>
+<li>The open question is how to grant that with minimal hassle.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// FieldReader.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="nf">getFieldValue</span><span class="p">(</span><span class="n">Object</span><span class="w"> </span><span class="n">obj</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">fieldName</span><span class="p">,</span><span class="w"> </span><span class="n">Lookup</span><span class="w"> </span><span class="n">lookup</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">throws</span><span class="w"> </span><span class="n">NoSuchFieldException</span><span class="p">,</span><span class="w"> </span><span class="n">IllegalAccessException</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">Class</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">cl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">obj</span><span class="p">.</span><span class="na">getClass</span><span class="p">();</span>
+<span class="w">    </span><span class="n">Field</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cl</span><span class="p">.</span><span class="na">getDeclaredField</span><span class="p">(</span><span class="n">fieldName</span><span class="p">);</span>
+<span class="w">    </span><span class="n">VarHandle</span><span class="w"> </span><span class="n">handle</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MethodHandles</span><span class="p">.</span><span class="na">privateLookupIn</span><span class="p">(</span><span class="n">cl</span><span class="p">,</span><span class="w"> </span><span class="n">lookup</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">unreflectVarHandle</span><span class="p">(</span><span class="n">field</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">handle</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">obj</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-12-opens-reflection.svg" alt="opens allows reflection into private members" loading="lazy" /></p>
+<h2 id="12-8-automatic-modules">12.8 Automatic modules</h2>
+<ul>
+<li>Real projects use third-party libraries, and you may not wait for everyone to modularise. Two mechanisms bridge the gap: <strong>automatic modules</strong> and the <strong>unnamed module</strong>.</li>
+<li>A JAR <strong>without <code>module-info.class</code> placed on the module path</strong> is an <strong>automatic module</strong>:
+<ul>
+<li>it implicitly <strong>requires all other modules</strong>;</li>
+<li><strong>all its packages are exported and opened</strong>;</li>
+<li>if its manifest <code>META-INF/MANIFEST.MF</code> has <strong><code>Automatic-Module-Name</code></strong>, that is the module name;</li>
+<li>otherwise the name comes from the <strong>JAR file name</strong>, dropping a trailing version and replacing runs of non-alphanumeric characters with a dot.</li>
+</ul>
+</li>
+<li>So its packages behave as if on the class path; the module path is used so <strong>other modules can declare a dependency</strong> on it.</li>
+<li>Example:
+<ul>
+<li>Apache Commons CSV (<code>https://commons.apache.org/proper/commons-csv</code>)</li>
+<li><code>commons-csv-1.9.0.jar</code> becomes <code>commons.csv</code> (version dropped, <code>-</code> becomes <code>.</code>)</li>
+<li>Version 1.10.0 sets <code>Automatic-Module-Name: org.apache.commons.csv</code>, a name the maintainers control; eventually the JAR should get a real <code>module-info</code>, and dependants keep working.</li>
+</ul>
+</li>
+<li>The migration is &quot;a great social experiment&quot;: check whether a JAR is modular or at least names its module, and be ready to update the name later.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// CSVDemo.java</span>
+<span class="kn">package</span><span class="w"> </span><span class="nn">com.horstmann.places</span><span class="p">;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">java.io.*</span><span class="p">;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">org.apache.commons.csv.*</span><span class="p">;</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CSVDemo</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="n">String</span><span class="o">[]</span><span class="w"> </span><span class="n">args</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">IOException</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">FileReader</span><span class="p">(</span><span class="s">"countries.csv"</span><span class="p">);</span>
+<span class="w">        </span><span class="n">Iterable</span><span class="o">&lt;</span><span class="n">CSVRecord</span><span class="o">&gt;</span><span class="w"> </span><span class="n">records</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CSVFormat</span><span class="p">.</span><span class="na">EXCEL</span><span class="p">.</span><span class="na">withDelimiter</span><span class="p">(</span><span class="sc">';'</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="na">withHeader</span><span class="p">().</span><span class="na">parse</span><span class="p">(</span><span class="n">in</span><span class="p">);</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">CSVRecord</span><span class="w"> </span><span class="n">record</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">records</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">record</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="s">"Name"</span><span class="p">);</span>
+<span class="w">            </span><span class="kt">double</span><span class="w"> </span><span class="n">area</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Double</span><span class="p">.</span><span class="na">parseDouble</span><span class="p">(</span><span class="n">record</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="s">"Area"</span><span class="p">));</span>
+<span class="w">            </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">name</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">" has area "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">area</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// module-info.java (1.9.0, name from file name)</span>
+<span class="nd">@SuppressWarnings</span><span class="p">(</span><span class="s">"module"</span><span class="p">)</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">automod</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">commons</span><span class="p">.</span><span class="na">csv</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// module-info.java (1.10.0, name from the manifest)</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">automod</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">org</span><span class="p">.</span><span class="na">apache</span><span class="p">.</span><span class="na">commons</span><span class="p">.</span><span class="na">csv</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>-p<span class="w"> </span>v1ch12.automod:jars/commons-csv-1.10.0.jar<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch12.automod/com/horstmann/places/CSVDemo.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch12.automod/module-info.java
+<span class="gp">$ </span>java<span class="w"> </span>-p<span class="w"> </span>v1ch12.automod:jars/commons-csv-1.10.0.jar<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-m<span class="w"> </span>v1ch12.automod/com.horstmann.places.CSVDemo
+</code></pre>
+<ul>
+<li>The book's companion module is referred to as <code>v2ch9.automod</code> in the text (the listing uses <code>v1ch12.automod</code>).</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-12-automatic-module-name.svg" alt="Automatic module name rules" loading="lazy" /></p>
+<h2 id="12-9-the-unnamed-module">12.9 The unnamed module</h2>
+<ul>
+<li>Any class <strong>not on the module path</strong> is in the <strong>unnamed module</strong> (technically several, acting as one)
+<ul>
+<li>Like an automatic module it <strong>can access all other modules</strong> and <strong>all its packages are exported and opened</strong>.</li>
+</ul>
+</li>
+<li>But <strong>no explicit module can access it</strong> (an explicit module has a <code>module-info.class</code> on the module path): explicit modules stay free of &quot;class path hell&quot;.</li>
+<li>Put <code>commons-csv</code> on the <strong>class path</strong> and the program above will not start: <em>Error occurred during initialization of boot layer: java.lang.module.FindException: Module commons.csv not found, required by v1ch12.automod</em>.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>java<span class="w"> </span>--module-path<span class="w"> </span>v1ch12.automod<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--class-path<span class="w"> </span>jars/commons-csv-1.10.0.jar<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-m<span class="w"> </span>v1ch12.automod/com.horstmann.places.CSVDemo
+</code></pre>
+<ul>
+<li>Migration is <strong>bottom-up</strong>:
+<ol>
+<li>The Java platform itself is modularised.</li>
+<li>Libraries are modularised (automatic or explicit modules).</li>
+<li>Once all libraries are modular, turn your application into a module.</li>
+</ol>
+</li>
+<li>Automatic modules <strong>can read the unnamed module</strong>, so their own dependencies can stay on the class path.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-12-module-kinds.svg" alt="Explicit, automatic and unnamed modules" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Where</th>
+<th>Reads</th>
+<th>Exports and opens</th>
+<th>Reachable by explicit modules</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Explicit</td>
+<td>Module path, with <code>module-info.class</code></td>
+<td>What it requires</td>
+<td>What it declares</td>
+<td>Yes, if required</td>
+</tr>
+<tr>
+<td>Automatic</td>
+<td>Module path, plain JAR</td>
+<td>All modules (and the unnamed module)</td>
+<td>All packages</td>
+<td>Yes, by its name</td>
+</tr>
+<tr>
+<td>Unnamed</td>
+<td>Class path</td>
+<td>All modules</td>
+<td>All packages</td>
+<td><strong>No</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="12-10-command-line-flags-for-migration">12.10 Command-line flags for migration</h2>
+<ul>
+<li>Even without modules of your own, you meet the <strong>modularised platform</strong>: your class-path code is in the unnamed module but talks to the JDK.</li>
+<li><strong>Compile-time encapsulation</strong>
+<ul>
+<li>is strict from Java 11</li>
+<li><strong>runtime access</strong> was allowed (with a console warning for the first offence) until Java 16, when <strong>reflective access at runtime is also enforced</strong>. Java 9 to 16 had <code>--illegal-access</code>:</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--illegal-access=permit</code></td>
+<td>Java 9 default: message for the first illegal access</td>
+</tr>
+<tr>
+<td><code>--illegal-access=warn</code></td>
+<td>Message for each illegal access</td>
+</tr>
+<tr>
+<td><code>--illegal-access=debug</code></td>
+<td>Message and stack trace for each</td>
+</tr>
+<tr>
+<td><code>--illegal-access=deny</code></td>
+<td>Java 16 default: deny all</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The flag is <strong>unusable from Java 17</strong>.</li>
+<li><strong><code>--add-exports</code></strong>
+<ul>
+<li>and <strong><code>--add-opens</code></strong> adjust legacy apps</li>
+<li>Best remedy is to change the code (for <code>com.sun.rowset.CachedRowSetImpl</code>, use a <code>RowSetProvider</code> since Java 7), but without the source:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>java<span class="w"> </span>--add-exports<span class="w"> </span>java.sql.rowset/com.sun.rowset<span class="o">=</span>ALL_UNNAMED<span class="w"> </span>-jar<span class="w"> </span>MyApp.jar
+<span class="gp">$ </span>java<span class="w"> </span>--add-opens<span class="w"> </span>java.base/java.lang<span class="o">=</span>ALL-UNNAMED<span class="w"> </span>-jar<span class="w"> </span>MyApp.jar
+</code></pre>
+<ul>
+<li>The second is for libraries that call the protected <code>ClassLoader.defineClass</code> through reflection. Reflection <strong>inside</strong> the unnamed module is fine
+<ul>
+<li><strong>non-public members of platform classes</strong> are not reachable.</li>
+</ul>
+</li>
+<li>Too many flags make a &quot;command line from hell&quot;. Put them in <strong>option files</strong> with <code>@</code>: <code>java @options1 @options2 -jar MyProg.java</code>.</li>
+<li>Option file syntax:
+<ul>
+<li>separate options with <strong>spaces, tabs or newlines</strong>;</li>
+<li>double-quote arguments containing spaces (<code>&quot;Program Files&quot;</code>);</li>
+<li>a line ending in <code>\</code> merges with the next;</li>
+<li>backslashes must be escaped (<code>C:\\Users\\Fred</code>);</li>
+<li>comment lines start with <code>#</code>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-11-transitive-and-static-requirements">12.11 Transitive and static requirements</h2>
+<ul>
+<li><strong><code>requires transitive</code></strong>:
+<ul>
+<li>tedious if every user must declare indirect needs</li>
+<li><code>java.desktop</code> requires <code>java.prefs</code> (internal only), and <strong><code>transitive</code></strong> for <code>java.datatransfer</code> and <code>java.xml</code>, whose classes appear in its <strong>public API</strong> (<code>Toolkit.getSystemClipboard()</code>, <code>XMLDecoder(InputSource)</code>).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java of java.desktop (extract)</span>
+<span class="kd">module</span> <span class="nc">java</span><span class="p">.</span><span class="na">desktop</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">java</span><span class="p">.</span><span class="na">prefs</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="kd">transitive</span><span class="w"> </span><span class="n">java</span><span class="p">.</span><span class="na">datatransfer</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="kd">transitive</span><span class="w"> </span><span class="n">java</span><span class="p">.</span><span class="na">xml</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Any module requiring <code>java.desktop</code> now automatically requires those two.</li>
+<li>Some say always use <code>requires transitive</code> when a package appears in the public API, but the <strong>language does not require it</strong>. <code>java.sql</code> has <code>requires transitive java.logging</code> for <strong>one</strong> method (<code>Driver.parentLogger</code> returns a <code>java.util.logging.Logger</code>)
+<ul>
+<li>non-transitive would have been fine, and only users of that method would need <code>java.logging</code>.</li>
+</ul>
+</li>
+<li>A strong use is an <strong>aggregator module</strong>:
+<ul>
+<li>no packages, only transitive requirements</li>
+<li><strong><code>java.se</code></strong> is one: <code>requires transitive java.compiler</code>, <code>java.datatransfer</code>, <code>java.desktop</code>, ..., <code>java.sql</code>, <code>java.sql.rowset</code>, <code>java.xml</code>, <code>java.xml.crypto</code></li>
+<li>Requiring <code>java.se</code> gives all Java SE modules.</li>
+</ul>
+</li>
+<li><strong><code>requires static</code></strong> (uncommon): the module must be present <strong>at compile time</strong> but is <strong>optional at runtime</strong>. Two uses:
+<ul>
+<li>an <strong>annotation processed at compile time</strong> from another module;</li>
+<li>using a class <strong>if available</strong>, else falling back:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Optional dependency</span>
+<span class="k">try</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">new</span><span class="w"> </span><span class="n">oracle</span><span class="p">.</span><span class="na">jdbc</span><span class="p">.</span><span class="na">driver</span><span class="p">.</span><span class="na">OracleDriver</span><span class="p">();</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">NoClassDefFoundError</span><span class="w"> </span><span class="n">er</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// do something else</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="12-12-importing-modules">12.12 Importing modules</h2>
+<ul>
+<li>From chapter 4: <code>import module java.desktop;</code> imports <strong>all packages</strong> of the module (more than fifty, including <code>java.awt</code> and <code>javax.swing</code>).</li>
+<li>In a <strong>compact compilation unit</strong>, <code>java.base</code> is <strong>imported automatically</strong>. Before Java 25 JShell imported an ad hoc set; now it imports <code>java.base</code>.</li>
+<li>Many imports make <strong>name clashes</strong> likelier. Several examples import <code>java.base</code> and <code>java.desktop</code>, each with a <code>List</code> class; add <code>import java.util.List;</code> to settle it.</li>
+<li><code>import module java.se;</code> imports the <strong>whole Java API</strong>, but only in a <strong>modular</strong> program whose module requires <code>java.se</code>. It does <strong>not</strong> work in a compact compilation unit.</li>
+</ul>
+<h2 id="12-13-qualified-exporting-and-opening">12.13 Qualified exporting and opening</h2>
+<ul>
+<li>A <strong>qualified export</strong> limits an export to named modules. <code>java.base</code> contains:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java of java.base (extract)</span>
+<span class="kd">exports</span><span class="w"> </span><span class="n">sun</span><span class="p">.</span><span class="na">net</span><span class="w"> </span><span class="kd">to</span>
+<span class="w">    </span><span class="n">java</span><span class="p">.</span><span class="na">net</span><span class="p">.</span><span class="na">http</span><span class="p">,</span>
+<span class="w">    </span><span class="n">jdk</span><span class="p">.</span><span class="na">naming</span><span class="p">.</span><span class="na">dns</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>Others cannot use the package
+<ul>
+<li><strong>Excessive qualified exports signal a poor structure</strong>, but arise when modularising existing code (<code>sun.net</code> sits in <code>java.base</code> because that is where it is mostly needed, and the designers did not want <code>java.base</code> bigger or the internal package public)</li>
+<li>A new project can design a better API.</li>
+</ul>
+</li>
+<li><code>opens</code> can be qualified too, so the places package opens only to the util module:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">openpkg</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">util</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">opens</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">places</span><span class="w"> </span><span class="kd">to</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">util</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="12-14-service-loading">12.14 Service loading</h2>
+<ul>
+<li><code>ServiceLoader</code> (chapter 6) matches <strong>service interfaces</strong> with implementations, and modules make it easier.</li>
+<li>A service interface and an implementation:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// GreeterService.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">GreeterService</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">subject</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">Locale</span><span class="w"> </span><span class="nf">getLocale</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// FrenchGreeter.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">FrenchGreeter</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">GreeterService</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">subject</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"Bonjour "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">subject</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Locale</span><span class="w"> </span><span class="nf">getLocale</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">Locale</span><span class="p">.</span><span class="na">FRENCH</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The <strong>consumer</strong> picks among all offered implementations using its own criteria:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Chooser.java</span>
+<span class="n">ServiceLoader</span><span class="o">&lt;</span><span class="n">GreeterService</span><span class="o">&gt;</span><span class="w"> </span><span class="n">greeterLoader</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ServiceLoader</span><span class="p">.</span><span class="na">load</span><span class="p">(</span><span class="n">GreeterService</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">GreeterService</span><span class="w"> </span><span class="n">chosenGreeter</span><span class="p">;</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">GreeterService</span><span class="w"> </span><span class="n">greeter</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">greeterLoader</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">matches</span><span class="p">(</span><span class="n">greeter</span><span class="p">))</span>
+<span class="w">        </span><span class="n">chosenGreeter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">greeter</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Before, implementations were advertised in text files under <strong><code>META-INF/services</code></strong>. Now use the descriptors:
+<ul>
+<li>A provider module adds <strong><code>provides ... with ...</code></strong>, listing the interface (defined in any module) and implementation classes (in this module).</li>
+<li>A consumer module adds <strong><code>uses</code></strong>.</li>
+<li><code>ServiceLoader.load</code> then loads the providers <strong>even from inaccessible packages</strong>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java of jdk.security.auth (extract)</span>
+<span class="kd">module</span> <span class="nc">jdk</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">provides</span><span class="w"> </span><span class="n">javax</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span><span class="p">.</span><span class="na">spi</span><span class="p">.</span><span class="na">LoginModule</span><span class="w"> </span><span class="kd">with</span>
+<span class="w">        </span><span class="n">com</span><span class="p">.</span><span class="na">sun</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span><span class="p">.</span><span class="na">module</span><span class="p">.</span><span class="na">Krb5LoginModule</span><span class="p">,</span>
+<span class="w">        </span><span class="n">com</span><span class="p">.</span><span class="na">sun</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span><span class="p">.</span><span class="na">module</span><span class="p">.</span><span class="na">UnixLoginModule</span><span class="p">,</span>
+<span class="w">        </span><span class="n">com</span><span class="p">.</span><span class="na">sun</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span><span class="p">.</span><span class="na">module</span><span class="p">.</span><span class="na">JndiLoginModule</span><span class="p">,</span>
+<span class="w">        </span><span class="n">com</span><span class="p">.</span><span class="na">sun</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span><span class="p">.</span><span class="na">module</span><span class="p">.</span><span class="na">KeyStoreLoginModule</span><span class="p">,</span>
+<span class="w">        </span><span class="n">com</span><span class="p">.</span><span class="na">sun</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span><span class="p">.</span><span class="na">module</span><span class="p">.</span><span class="na">LdapLoginModule</span><span class="p">,</span>
+<span class="w">        </span><span class="n">com</span><span class="p">.</span><span class="na">sun</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span><span class="p">.</span><span class="na">module</span><span class="p">.</span><span class="na">NTLoginModule</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// module-info.java of java.base (extract)</span>
+<span class="kd">module</span> <span class="nc">java</span><span class="p">.</span><span class="na">base</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">uses</span><span class="w"> </span><span class="n">javax</span><span class="p">.</span><span class="na">security</span><span class="p">.</span><span class="na">auth</span><span class="p">.</span><span class="na">spi</span><span class="p">.</span><span class="na">LoginModule</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The book's example:
+<ul>
+<li>module <code>com.horstmann.greetsvc</code> exports <code>com.horstmann.greetsvc</code> but <strong>not</strong> the package <code>com.horstmann.greetsvc.internal</code> that holds the French and German greeters</li>
+<li><code>provides</code> names classes in the unexported package (<code>FrenchGreeter</code> and <code>GermanGreeterFactory</code>):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// module-info.java of com.horstmann.greetsvc</span>
+<span class="kd">module</span> <span class="nc">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greetsvc</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">exports</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greetsvc</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">provides</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greetsvc</span><span class="p">.</span><span class="na">GreeterService</span><span class="w"> </span><span class="kd">with</span>
+<span class="w">        </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greetsvc</span><span class="p">.</span><span class="na">internal</span><span class="p">.</span><span class="na">FrenchGreeter</span><span class="p">,</span>
+<span class="w">        </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greetsvc</span><span class="p">.</span><span class="na">internal</span><span class="p">.</span><span class="na">GermanGreeterFactory</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// module-info.java of v1ch12.useservice</span>
+<span class="kd">module</span> <span class="nc">v1ch12</span><span class="p">.</span><span class="na">useservice</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">requires</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greetsvc</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">uses</span><span class="w"> </span><span class="n">com</span><span class="p">.</span><span class="na">horstmann</span><span class="p">.</span><span class="na">greetsvc</span><span class="p">.</span><span class="na">GreeterService</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>HelloWorld</code> loads the service, takes the desired language from the first argument (default <code>&quot;de&quot;</code>), keeps the greeter whose <code>getLocale().getLanguage()</code> matches, and prints either <code>No suitable greeter.</code> or its greeting for &quot;Modular World&quot;.</li>
+<li>With <code>provides</code> and <code>uses</code>, the consumer can use the <strong>module-private implementation classes</strong>.</li>
+<li>The <code>GermanGreeterFactory</code> name hints that a <strong>provider factory</strong> (a <code>provider()</code> method) may stand in for a class (chapter 6) (unverified for this listing).</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>com.horstmann.greetsvc/module-info.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>com.horstmann.greetsvc/com/horstmann/greetsvc/GreeterService.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>com.horstmann.greetsvc/com/horstmann/greetsvc/internal/*.java
+<span class="gp">$ </span>javac<span class="w"> </span>-p<span class="w"> </span>com.horstmann.greetsvc<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch12.useservice/com/horstmann/hello/HelloWorld.java<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch12.useservice/module-info.java
+<span class="gp">$ </span>java<span class="w"> </span>-p<span class="w"> </span>com.horstmann.greetsvc:v1ch12.useservice<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-m<span class="w"> </span>v1ch12.useservice/com.horstmann.hello.HelloWorld
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-12-service-loading.svg" alt="Service provider and consumer connected by the module system" loading="lazy" /></p>
+<h2 id="12-15-tools-for-working-with-modules">12.15 Tools for working with modules</h2>
+<ul>
+<li><strong><code>jdeps</code></strong> analyses the dependencies of JARs. To modularise JUnit 4: <code>jdeps -s junit-4.12.jar hamcrest-core-1.3.jar</code> (<code>-s</code> = summary):</li>
+</ul>
+<pre class="hl"><code>hamcrest-core-1.3.jar -&gt; java.base
+junit-4.12.jar -&gt; hamcrest-core-1.3.jar
+junit-4.12.jar -&gt; java.base
+junit-4.12.jar -&gt; java.management
+</code></pre>
+<ul>
+<li>Without <code>-s</code> you get the summary plus a package-to-package/module mapping; with <strong><code>-v</code></strong> a class-level mapping.</li>
+<li><strong><code>--generate-module-info</code></strong> writes <code>module-info</code> files for the analysed modules. <strong><code>-dotoutput</code></strong> produces a graph in the <code>dot</code> language, rendered with <code>dot -Tpng</code>:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>jdeps<span class="w"> </span>--generate-module-info<span class="w"> </span>/tmp/junit<span class="w"> </span>junit-4.12.jar<span class="w"> </span>hamcrest-core-1.3.jar
+<span class="gp">$ </span>jdeps<span class="w"> </span>-s<span class="w"> </span>-dotoutput<span class="w"> </span>/tmp/junit<span class="w"> </span>junit-4.12.jar<span class="w"> </span>hamcrest-core-1.3.jar
+<span class="gp">$ </span>dot<span class="w"> </span>-Tpng<span class="w"> </span>/tmp/junit/summary.dot<span class="w"> </span>&gt;<span class="w"> </span>/tmp/junit/summary.png
+</code></pre>
+<ul>
+<li><strong><code>jlink</code></strong> builds an application that <strong>runs without a separate Java runtime</strong>, far smaller than the whole JDK. Name the modules and an output directory:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>jlink<span class="w"> </span>--module-path<span class="w"> </span>com.horstmann.greet.jar:v1ch12.exportedpkg.jar:<span class="nv">$JAVA_HOME</span>/jmods<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--add-modules<span class="w"> </span>v1ch12.exportedpkg<span class="w"> </span>--output<span class="w"> </span>/tmp/hello
+<span class="gp">$ </span>bin/java<span class="w"> </span>-m<span class="w"> </span>v1ch12.exportedpkg
+<span class="gp">$ </span>bin/java<span class="w"> </span>--list-modules
+</code></pre>
+<pre class="hl"><code>v1ch12.exportedpkg
+com.horstmann.greet
+java.base@25
+</code></pre>
+<ul>
+<li>The <code>bin</code> directory has a <code>java</code> executable
+<ul>
+<li><code>jlink</code> bundles the <strong>minimal set of modules</strong>, in a runtime image file <code>lib/modules</code>: <strong>29 MB</strong> here against <strong>133 MB</strong> for all JDK modules, and <strong>55 MB</strong> for the whole application</li>
+<li>You still need file sets per platform and launch scripts.</li>
+</ul>
+</li>
+<li>Inspect the image with <code>jimage</code>; the format is <strong>internal to the JVM</strong> and not meant for other tools.</li>
+<li><strong><code>jmod</code></strong>
+<ul>
+<li>builds and inspects the <strong><code>.jmod</code></strong> files in the JDK's <code>jmods</code> directory (one per module; there is <strong>no <code>rt.jar</code></strong>)</li>
+<li>They are ZIP files with classes, native libraries, commands, headers, configuration and legal notices, <strong>useful only for linking</strong> (building runtime images)</li>
+<li>You only need to produce them to bundle binary files with your modules.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-12-jlink-image.svg" alt="jlink builds a small runtime image" loading="lazy" /></p>
+<ul>
+<li>The end of Volume I:
+<ul>
+<li>fundamentals and the standard library parts needed for most projects</li>
+<li><strong>Volume II</strong> covers streams, file I/O, networking, security, internationalisation, user interfaces and graphics.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>A module = packages + <code>module-info</code> with <strong><code>requires</code></strong>, <strong><code>exports</code></strong>, <strong><code>opens</code></strong>, <strong><code>provides</code></strong>, <strong><code>uses</code></strong>; the compiler and VM enforce it.</li>
+<li><strong>Strong encapsulation</strong> hides internals; <strong>reliable configuration</strong> replaces class-path guesswork. <strong>No version management.</strong></li>
+<li><strong>Migrate bottom-up</strong> with automatic modules and the unnamed module; use <code>--add-exports</code> and <code>--add-opens</code> for legacy code.</li>
+<li>Use <strong><code>jdeps</code></strong>, <strong><code>jlink</code></strong>, <strong><code>jmod</code></strong> for analysis and minimal runtime images.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Module / <code>module-info.java</code></strong>: packages plus descriptor of requirements and exports.</li>
+<li><strong><code>requires</code> / <code>requires transitive</code> / <code>requires static</code></strong>: dependency, implied dependency, compile-time only.</li>
+<li><strong><code>exports</code> / <code>opens</code></strong>: compile-time visibility versus reflective access; both can be qualified with <code>to</code>.</li>
+<li><strong>Modular JAR</strong>: JAR with <code>module-info.class</code> in its root.</li>
+<li><strong>Automatic module / unnamed module</strong>: plain JAR on the module path, and anything on the class path.</li>
+<li><strong>Layer</strong>: module-level class loader analogue; the <strong>boot layer</strong> holds JDK and app modules.</li>
+<li><strong><code>provides ... with</code> / <code>uses</code></strong>: module-level service loading.</li>
+<li><strong>Aggregator module</strong>: only transitive requirements (<code>java.se</code>).</li>
+<li><strong><code>jdeps</code> / <code>jlink</code> / <code>jmod</code></strong>: analyse dependencies, build a runtime image, build JMOD files.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed. (Pearson, 2025), chapter 12, read on O'Reilly.</li>
+<li>Apache Commons CSV: <a href="https://commons.apache.org/proper/commons-csv" target="_blank" rel="noopener noreferrer">https://commons.apache.org/proper/commons-csv</a>.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/core-java-vol-1/cj-11-annotations/">Core Java 11: Annotations</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/core-java-vol-1/cj-11-annotations/">&larr; Core Java 11: Annotations</a><a href="/book-digest/core-java-vol-1/">Contents</a><a href="/book-digest/core-java-vol-1/cj-13-appendix-java-keywords/">Core Java 13: Appendix, Java Keywords &rarr;</a></nav></main></body></html>

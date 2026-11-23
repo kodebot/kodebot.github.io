@@ -1,0 +1,1527 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Core Java 6: Interfaces, Lambda Expressions and Inner Classes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/core-java-vol-1/">Core Java Vol 1</a></div>
+<main>
+<h1 id="core-java-6-interfaces-lambda-expressions-and-inner-classes">Core Java 6: Interfaces, Lambda Expressions and Inner Classes</h1>
+<p>Source: Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed. (Pearson, 2025), ch. 6. Previous: <a href="/book-digest/core-java-vol-1/cj-05-inheritance/">Core Java 5: Inheritance</a>. Next: <a href="/book-digest/core-java-vol-1/cj-07-exceptions-assertions-and-logging/">Core Java 7: Exceptions, Assertions and Logging</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>An <strong>interface</strong> is a set of requirements, not a class: abstract methods, constants, plus (since Java 8) <strong>static, default and private methods</strong>. A class can implement <strong>many</strong> interfaces, which is how Java gets most of the benefit of multiple inheritance.</li>
+<li><strong>Default method conflicts</strong> follow simple rules: <strong>a superclass method wins</strong>; if two interfaces clash you must override and pick with <code>Interface.super.method()</code>.</li>
+<li>The <strong>callback pattern</strong> passes an object whose method is called later (<code>Timer</code> with <code>ActionListener</code>); <code>Comparator</code> supplies orderings other than a type's natural <code>Comparable</code> one.</li>
+<li><code>clone</code> is <strong>shallow</strong> by default: implement <code>Cloneable</code>, make <code>clone</code> public and deep-copy mutable fields. It is awkward and uncommon.</li>
+<li>A <strong>lambda expression</strong> is a block of code passed around for later execution, replacing small implementation classes.</li>
+</ul>
+</div></div>
+<h2 id="6-1-interfaces">6.1 Interfaces</h2>
+<h3 id="6-1-1-the-interface-concept">6.1.1 The interface concept</h3>
+<ul>
+<li>An interface <strong>is not a class</strong>:
+<ul>
+<li>it is a set of <strong>requirements</strong> for classes that conform to it</li>
+<li>A service supplier says: &quot;if your class conforms to this interface, I will perform the service&quot;</li>
+<li><code>Arrays.sort</code> sorts objects <strong>only if they implement <code>Comparable</code></strong>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Comparable</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="nf">compareTo</span><span class="p">(</span><span class="n">T</span><span class="w"> </span><span class="n">other</span><span class="p">);</span><span class="w"> </span><span class="c1">// parameter has type T</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>compareTo</code> is abstract
+<ul>
+<li>A class implementing it must supply it (or itself be abstract)</li>
+<li>Since Java 5 <code>Comparable</code> is generic; a class implements <code>Comparable&lt;Employee&gt;</code> and supplies <code>int compareTo(Employee other)</code></li>
+<li>The raw <code>Comparable</code> takes an <code>Object</code> and needs a manual cast.</li>
+</ul>
+</li>
+<li><strong>Interface methods are automatically public</strong>, so <code>public</code> is not written in the interface, but <strong>you must declare the implementing method <code>public</code></strong>, otherwise the compiler complains of a more restrictive access (package access).</li>
+<li>Contract beyond syntax: <code>x.compareTo(y)</code> returns <strong>negative if x is smaller, zero if equal, positive otherwise</strong>.</li>
+<li>Interfaces <strong>never have instance fields</strong>. Before Java 8 all methods were abstract; the new kinds (6.1.4, 6.1.5) cannot touch instance fields, since there are none.</li>
+<li>To implement an interface: <strong>declare <code>implements</code></strong>, then <strong>define all its methods</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">Employee</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Comparable</span><span class="o">&lt;</span><span class="n">Employee</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">salary</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">compareTo</span><span class="p">(</span><span class="n">Employee</span><span class="w"> </span><span class="n">other</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">Double</span><span class="p">.</span><span class="na">compare</span><span class="p">(</span><span class="n">salary</span><span class="p">,</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="na">salary</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Returning a difference</strong>
+<ul>
+<li>is fine when the sign is all that matters: <code>id - other.id</code> works if the IDs cannot overflow the subtraction (non-negative IDs, or absolute value at most <code>(Integer.MAX_VALUE - 1) / 2</code>)</li>
+<li>otherwise call <strong><code>Integer.compare</code></strong>. For floating point, <code>salary - other.salary</code> can round to 0 for close values, so use <strong><code>Double.compare</code></strong>.</li>
+</ul>
+</li>
+<li><strong>Be consistent with <code>equals</code></strong>: <code>x.compareTo(y)</code> should be zero exactly when <code>x.equals(y)</code>. Exceptions:
+<ul>
+<li><strong><code>BigDecimal</code></strong>: <code>new BigDecimal(&quot;1.0&quot;)</code> and <code>new BigDecimal(&quot;1.00&quot;)</code> are not <code>equals</code> (different precision) but <code>compareTo</code> returns 0.</li>
+<li><strong><code>StringBuilder</code></strong> implements <code>Comparable</code> but does not override <code>equals</code>: two builders holding &quot;Hello&quot; give <code>equals</code> false and <code>compareTo</code> 0.</li>
+</ul>
+</li>
+<li><strong><code>Double.compare</code> versus the operators:</strong>
+<ul>
+<li><code>0.0 &lt; -0.0</code> and <code>-0.0 &lt; 0.0</code> are both false, but <code>Double.compare(-0.0, 0.0)</code> is -1.</li>
+<li>Any relational comparison with <code>NaN</code> is false, but <code>Double.compare(Double.NaN, Double.NaN)</code> is 0, and <code>NaN</code> is deemed <strong>larger than positive infinity</strong>.</li>
+<li><code>compare</code> is a <strong>total ordering</strong>; <code>&lt;</code> is not.</li>
+</ul>
+</li>
+<li><strong>Why an interface at all?</strong>
+<ul>
+<li>Java is strongly typed: the compiler must be sure <code>a[i].compareTo(a[j])</code> exists</li>
+<li>Sadly, the library's <code>Arrays.sort</code> takes an <code>Object[]</code> and casts (<code>((Comparable) a[i]).compareTo(a[j]) &gt; 0</code>), so a non-comparable element fails at run time with an exception: an approach the book says is not recommended.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-comparable-contract.svg" alt="Comparable as a contract that sort relies on" loading="lazy" /></p>
+<pre class="hl"><code><span class="c1">// v1ch06/interfaces/InterfacesDemo.java (Listing 6.1)</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">staff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Employee</span><span class="o">[</span><span class="mi">3</span><span class="o">]</span><span class="p">;</span>
+
+<span class="w">    </span><span class="n">staff</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Employee</span><span class="p">(</span><span class="s">"Harry Hacker"</span><span class="p">,</span><span class="w"> </span><span class="mi">35000</span><span class="p">);</span>
+<span class="w">    </span><span class="n">staff</span><span class="o">[</span><span class="mi">1</span><span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Employee</span><span class="p">(</span><span class="s">"Carl Cracker"</span><span class="p">,</span><span class="w"> </span><span class="mi">75000</span><span class="p">);</span>
+<span class="w">    </span><span class="n">staff</span><span class="o">[</span><span class="mi">2</span><span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Employee</span><span class="p">(</span><span class="s">"Tony Tester"</span><span class="p">,</span><span class="w"> </span><span class="mi">38000</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">Arrays</span><span class="p">.</span><span class="na">sort</span><span class="p">(</span><span class="n">staff</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// print out information about all Employee objects</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Employee</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">staff</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"name="</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">getName</span><span class="p">()</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">",salary="</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">getSalary</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Listing 6.2's <code>Employee</code> implements <code>Comparable&lt;Employee&gt;</code> and compares by salary (<code>Double.compare(salary, other.salary)</code>); sorting prints Harry (35000), Tony (38000), Carl (75000).</li>
+</ul>
+<p>API notes: <code>Comparable&lt;T&gt;</code> (1.0): <code>int compareTo(T other)</code>. <code>Arrays</code> (1.2): <code>static void sort(Object[] a)</code> (elements must be mutually comparable). <code>Integer.compare(int, int)</code> (7), <code>Double.compare(double, double)</code> (1.4).</p>
+<ul>
+<li><strong>Antisymmetry rule</strong>
+<ul>
+<li>from the standard: <code>sgn(x.compareTo(y)) = -sgn(y.compareTo(x))</code> for all <code>x</code> and <code>y</code> (so if one throws, so must the other)</li>
+<li>Flip the arguments and the <strong>sign</strong> must flip.</li>
+</ul>
+</li>
+<li><strong>Inheritance problem</strong>
+<ul>
+<li>(as with <code>equals</code>): <code>Manager</code> implements <code>Comparable&lt;Employee&gt;</code>, so it must handle comparing with employees</li>
+<li><code>Manager otherManager = (Manager) other;</code> violates antisymmetry: <code>employee.compareTo(manager)</code> works but <code>manager.compareTo(employee)</code> throws <code>ClassCastException</code>.</li>
+<li>If subclasses have different notions of comparison, <strong>outlaw cross-class comparison</strong>: start with <code>if (getClass() != other.getClass()) throw new ClassCastException();</code>.</li>
+<li>If there is a common algorithm, provide one <strong>final</strong> <code>compareTo</code> in the superclass
+<ul>
+<li>For a pecking order (managers above employees regardless of salary), add a <code>rank</code> method, override it in subclasses, and compare ranks in the single <code>compareTo</code>.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-1-2-properties-of-interfaces">6.1.2 Properties of interfaces</h3>
+<ul>
+<li>You can <strong>never <code>new</code> an interface</strong> (<code>new Comparable(...)</code> is an error), but <strong>you can declare interface variables</strong>, which must refer to an object of an implementing class:</li>
+</ul>
+<pre class="hl"><code><span class="n">Comparable</span><span class="w"> </span><span class="n">x</span><span class="p">;</span><span class="w">               </span><span class="c1">// OK</span>
+<span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Employee</span><span class="p">(</span><span class="cm">/* ... */</span><span class="p">);</span><span class="w"> </span><span class="c1">// OK provided Employee implements Comparable</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">anObject</span><span class="w"> </span><span class="k">instanceof</span><span class="w"> </span><span class="n">Comparable</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>instanceof</code> works with interfaces. <strong>Interfaces can extend interfaces</strong>, building hierarchies from general to specialised:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Moveable</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">move</span><span class="p">(</span><span class="kt">double</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">y</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Powered</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Moveable</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">double</span><span class="w"> </span><span class="nf">milesPerGallon</span><span class="p">();</span>
+<span class="w">    </span><span class="kt">double</span><span class="w"> </span><span class="n">SPEED_LIMIT</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">95</span><span class="p">;</span><span class="w"> </span><span class="c1">// a public static final constant</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Interface <strong>fields are always <code>public static final</code></strong> constants, and methods are public; writing the redundant keywords is legal but <strong>the JLS recommends omitting them</strong>.</li>
+<li>A class has <strong>one superclass but may implement several interfaces</strong>, separated by commas: <code>class Employee implements Cloneable, Comparable</code>
+<ul>
+<li><strong>Records and enums cannot extend classes but can implement interfaces.</strong></li>
+</ul>
+</li>
+<li><strong>Interfaces can be sealed</strong>: direct subtypes (classes or interfaces) must be in a <code>permits</code> clause or in the same file.</li>
+</ul>
+<h3 id="6-1-3-interfaces-and-abstract-classes">6.1.3 Interfaces and abstract classes</h3>
+<ul>
+<li>Why not make <code>Comparable</code> an abstract class? Because a class can extend only <strong>one</strong> class: an <code>Employee</code> that already extends <code>Person</code> cannot also extend a <code>Comparable</code> class (<code>class Employee extends Person, Comparable</code> is an error), but <code>class Employee extends Person implements Comparable</code> is fine.</li>
+<li><strong>Multiple inheritance</strong>
+<ul>
+<li>(C++) either makes a language <strong>complex</strong> (C++: virtual base classes, dominance rules, transverse pointer casts) or <strong>less efficient</strong> (Eiffel)</li>
+<li>Java chose interfaces, which give most of the benefits without those costs</li>
+<li>Few C++ programmers use multiple inheritance, some say never, others only for the <strong>mix-in</strong> style (a primary superclass plus auxiliary ones), which resembles a Java class with one superclass plus interfaces.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-single-class-many-interfaces.svg" alt="One superclass, many interfaces" loading="lazy" /></p>
+<ul>
+<li><strong><code>CharSequence</code></strong>
+<ul>
+<li>(chapter 3) is a shared interface of <code>String</code>, <code>StringBuilder</code> and a few others: length, code unit or code point iteration, subsequences, lexicographic comparison, plus <code>isEmpty</code> (Java 17)</li>
+<li>It is &quot;rather paltry&quot;, but if those operations suffice, <strong>accept <code>CharSequence</code> instead of <code>String</code></strong> in your methods.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-1-4-static-and-private-methods">6.1.4 Static and private methods</h3>
+<ul>
+<li><strong>Since Java 8</strong>
+<ul>
+<li>interfaces may have <strong>static methods</strong></li>
+<li>There was never a technical reason to forbid them; it just seemed against the spirit of abstract specifications</li>
+<li>Previously utilities went in <strong>companion classes</strong> (<code>Collection</code> and <code>Collections</code>)</li>
+<li>Now <code>Path</code> holds <code>Path.of(URI)</code> and <code>Path.of(String first, String... more)</code>, with no need for the old <code>Paths</code> class.</li>
+</ul>
+</li>
+<li>Interface methods can be <strong>private</strong> (static or instance): helper methods for the interface's other methods only.</li>
+</ul>
+<h3 id="6-1-5-default-methods">6.1.5 Default methods</h3>
+<ul>
+<li>Give an interface method an implementation with the <strong><code>default</code></strong> modifier:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Comparable</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">default</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">compareTo</span><span class="p">(</span><span class="n">T</span><span class="w"> </span><span class="n">other</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">   </span><span class="c1">// by default, all elements are the same</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>That one is not useful (every real class overrides it), but others are
+<ul>
+<li><code>Iterator.remove</code> defaults to throwing <code>UnsupportedOperationException(&quot;remove&quot;)</code>, so a <strong>read-only iterator</strong> only implements <code>hasNext</code> and <code>next</code> (chapter 9).</li>
+</ul>
+</li>
+<li>A default method can call other methods of the interface:
+<ul>
+<li>a <code>Collection</code> could define <code>default boolean isEmpty() { return size() == 0; }</code></li>
+<li>(The real API puts this in <code>AbstractCollection</code>; that technique is <strong>obsolete</strong>, just implement the methods.)</li>
+</ul>
+</li>
+<li><strong>Interface evolution</strong> is the key use. Suppose old code has <code>class Bag implements Collection</code>, and Java 8 adds <code>stream</code> to <code>Collection</code>:
+<ul>
+<li>If <code>stream</code> were <strong>not</strong> default, <code>Bag</code> would <strong>no longer compile</strong> (not source compatible).</li>
+<li>If an old JAR is used without recompiling, it still loads (<strong>binary compatible</strong>), but calling <code>stream</code> on a <code>Bag</code> throws <strong><code>AbstractMethodError</code></strong>.</li>
+<li>A default method fixes both: <code>Bag</code> compiles, and <code>Collection.stream</code> runs for an old <code>Bag</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-1-6-resolving-default-method-conflicts">6.1.6 Resolving default method conflicts</h3>
+<ol>
+<li><strong>Superclasses win.</strong> If a superclass provides a concrete method, interface default methods with the same name and parameter types are <strong>ignored</strong> (the &quot;class wins&quot; rule; it keeps old code working when defaults are added).</li>
+<li><strong>Interfaces clash.</strong> If one interface has a default method and another has a method with the same name and parameters (default or not), you <strong>must override</strong> to resolve it.</li>
+</ol>
+<pre class="hl"><code><span class="kd">interface</span> <span class="nc">Person</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">default</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">getName</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">""</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">interface</span> <span class="nc">Named</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">default</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">getName</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">getClass</span><span class="p">().</span><span class="na">getName</span><span class="p">()</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">"_"</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">hashCode</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">class</span> <span class="nc">Student</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Person</span><span class="p">,</span><span class="w"> </span><span class="n">Named</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">getName</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">Person</span><span class="p">.</span><span class="na">super</span><span class="p">.</span><span class="na">getName</span><span class="p">();</span><span class="w"> </span><span class="c1">// choose one of the conflicting methods</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>It <strong>does not matter how they conflict</strong>:
+<ul>
+<li>even if <code>Named.getName</code> is abstract (no default), the compiler still reports an error when <code>Person</code> has a default</li>
+<li>the designers chose uniformity.</li>
+</ul>
+</li>
+<li>If <strong>neither</strong> interface has a default, there is no conflict: implement it, or leave it unimplemented and the class stays abstract.</li>
+<li>With <code>class Student extends Person implements Named</code> (where <code>Person</code> is now a <strong>class</strong>), only the superclass method matters, whether or not <code>Named</code> has a default.</li>
+<li><strong>You can never write a default method that redefines an <code>Object</code> method</strong> (<code>toString</code>, <code>equals</code>), because &quot;class wins&quot; means it could never win against <code>Object</code>'s version.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-default-method-rules.svg" alt="Default method resolution rules" loading="lazy" /></p>
+<h3 id="6-1-7-interfaces-and-callbacks">6.1.7 Interfaces and callbacks</h3>
+<ul>
+<li>In the <strong>callback pattern</strong> you specify an action to occur when an event happens
+<ul>
+<li>Java passes <strong>an object</strong> rather than a function name, which is more flexible since the object can carry extra information.</li>
+</ul>
+</li>
+<li><code>javax.swing.Timer</code> notifies you each time an interval elapses; it needs an object implementing <strong><code>ActionListener</code></strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">ActionListener</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">actionPerformed</span><span class="p">(</span><span class="n">ActionEvent</span><span class="w"> </span><span class="n">event</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kd">class</span> <span class="nc">TimePrinter</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">ActionListener</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">actionPerformed</span><span class="p">(</span><span class="n">ActionEvent</span><span class="w"> </span><span class="n">event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"At the tone, the time is "</span>
+<span class="w">            </span><span class="o">+</span><span class="w"> </span><span class="n">Instant</span><span class="p">.</span><span class="na">ofEpochMilli</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getWhen</span><span class="p">()));</span>
+<span class="w">        </span><span class="n">Toolkit</span><span class="p">.</span><span class="na">getDefaultToolkit</span><span class="p">().</span><span class="na">beep</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>event.getWhen()</code> gives milliseconds since the epoch (1 January 1970); <code>Instant.ofEpochMilli</code> makes it readable.</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TimePrinter</span><span class="p">();</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="mi">1000</span><span class="p">,</span><span class="w"> </span><span class="n">listener</span><span class="p">);</span><span class="w"> </span><span class="c1">// interval in milliseconds, then the listener</span>
+<span class="n">timer</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+</code></pre>
+<ul>
+<li>Prints a line like <code>At the tone, the time is 2025-12-16T05:01:49.550Z</code> followed by a beep every second. <strong>Import <code>javax.swing.Timer</code></strong> (there is also a different <code>java.util.Timer</code>).</li>
+<li>Listing 6.3 (<code>TimerDemo.java</code>) starts the timer, then shows a <code>JOptionPane</code> dialog &quot;Quit program?&quot; so the program keeps running (without it <code>main</code> would exit at once), and calls <code>System.exit(0)</code> when OK is clicked.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-timer-callback.svg" alt="The callback pattern with a Timer" loading="lazy" /></p>
+<p>API notes: <code>JOptionPane.showMessageDialog(Component parent, Object message)</code> (1.2; a <code>null</code> parent centres on the screen). <code>javax.swing.Timer</code> (1.2): <code>Timer(int interval, ActionListener listener)</code>, <code>start()</code>, <code>stop()</code>. <code>Toolkit</code> (1.0): <code>static Toolkit getDefaultToolkit()</code>, <code>void beep()</code>.</p>
+<h3 id="6-1-8-the-comparator-interface">6.1.8 The <code>Comparator</code> interface</h3>
+<ul>
+<li><code>String</code> implements <code>Comparable&lt;String&gt;</code> (dictionary order), but to sort <strong>by length</strong> you cannot change <code>String</code> or give it a second <code>compareTo</code>
+<ul>
+<li>Use the second <code>Arrays.sort</code> overload taking a <strong><code>Comparator</code></strong>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Comparator</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="nf">compare</span><span class="p">(</span><span class="n">T</span><span class="w"> </span><span class="n">first</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="n">second</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kd">class</span> <span class="nc">LengthComparator</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Comparator</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">compare</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">first</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">second</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">first</span><span class="p">.</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">second</span><span class="p">.</span><span class="na">length</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">String</span><span class="o">[]</span><span class="w"> </span><span class="n">friends</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">"Peter"</span><span class="p">,</span><span class="w"> </span><span class="s">"Paul"</span><span class="p">,</span><span class="w"> </span><span class="s">"Mary"</span><span class="w"> </span><span class="p">};</span>
+<span class="n">Arrays</span><span class="p">.</span><span class="na">sort</span><span class="p">(</span><span class="n">friends</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">LengthComparator</span><span class="p">());</span>
+</code></pre>
+<ul>
+<li>Result:
+<ul>
+<li>either <code>[&quot;Paul&quot;, &quot;Mary&quot;, &quot;Peter&quot;]</code> or <code>[&quot;Mary&quot;, &quot;Paul&quot;, &quot;Peter&quot;]</code> (equal lengths are not ordered further)</li>
+<li><code>compare</code> is called <strong>on the comparator object</strong>, not on a string, and you need an instance even though it has no state (it is not static)</li>
+<li>Section 6.2 shows a lambda that does the same far more easily.</li>
+</ul>
+</li>
+<li>Case-insensitive order is built in: <code>Arrays.sort(friends, String.CASE_INSENSITIVE_ORDER);</code>.</li>
+<li><strong>Comparator rules:</strong> reflexivity (equal means 0), <strong>antisymmetry</strong> (swapping arguments flips the sign), <strong>transitivity</strong> (x before y and y before z means x before z).
+<ul>
+<li><strong>Never shuffle by sorting with a random comparator.</strong>
+<ul>
+<li>The sort (<strong>Timsort</strong>) does not check all elements but sometimes detects violations cheaply and throws &quot;Comparison method violates its general contract!&quot;</li>
+<li>with 1,000 elements a random comparator triggers this over 10% of the time.</li>
+</ul>
+</li>
+<li>Use <code>Collections.shuffle</code> on a list (turn an array into a list first).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-comparable-vs-comparator.svg" alt="Comparable versus Comparator" loading="lazy" /></p>
+<h3 id="6-1-9-object-cloning">6.1.9 Object cloning</h3>
+<ul>
+<li>The <code>Cloneable</code> interface says a class has provided a <strong>safe <code>clone</code></strong>. Cloning is uncommon and technical; skim until needed.</li>
+<li>Copying a variable copies the <strong>reference</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">original</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Employee</span><span class="p">(</span><span class="s">"John Public"</span><span class="p">,</span><span class="w"> </span><span class="mi">50000</span><span class="p">);</span>
+<span class="n">Employee</span><span class="w"> </span><span class="n">copy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">original</span><span class="p">;</span>
+<span class="n">copy</span><span class="p">.</span><span class="na">raiseSalary</span><span class="p">(</span><span class="mi">10</span><span class="p">);</span><span class="w"> </span><span class="c1">// oops: also changed original</span>
+</code></pre>
+<ul>
+<li><code>Employee copy = original.clone(); copy.raiseSalary(10);</code> leaves the original unchanged.</li>
+<li><strong><code>Object.clone</code> is <code>protected</code></strong>,
+<ul>
+<li>so only <code>Employee</code> code can clone <code>Employee</code>s</li>
+<li><code>Object</code> knows nothing about the object, so it can only copy <strong>field by field</strong>: a <strong>shallow copy</strong></li>
+<li>Number fields are fine, but references are copied, so original and clone <strong>share the subobjects</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-shallow-vs-deep-clone.svg" alt="Shallow versus deep copy" loading="lazy" /></p>
+<ul>
+<li>Sharing is safe if the subobject is <strong>immutable</strong> (<code>String</code>) or never changes and is never exposed
+<ul>
+<li>Often it is mutable, so you override <code>clone</code> to <strong>deep-copy</strong> (clone the subobjects too)</li>
+<li>The book uses a <code>Date</code> hire day to demonstrate; an immutable <code>LocalDate</code> would need nothing extra.</li>
+</ul>
+</li>
+<li>For each class decide:
+<ul>
+<li>the default clone is good enough,</li>
+<li>patch it by cloning mutable subobjects, or</li>
+<li><strong>do not attempt cloning</strong> (the default). For 1 or 2 a class must <strong>implement <code>Cloneable</code></strong> and <strong>redefine <code>clone</code> as <code>public</code></strong></li>
+</ul>
+</li>
+<li>A subclass can call protected <code>clone</code> only to clone <strong>its own</strong> objects (the subtle protected rules from chapter 5), hence the public redefinition.</li>
+<li><strong><code>Cloneable</code> is a tagging (marker) interface</strong>:
+<ul>
+<li>it has no methods (<code>clone</code> comes from <code>Object</code>); it only enables <code>instanceof Cloneable</code></li>
+<li>Cloning is &quot;paranoid&quot;: it throws a <strong>checked</strong> exception if the object requests it without implementing the interface</li>
+<li>The author recommends <strong>not using tagging interfaces</strong> in your own programs.</li>
+</ul>
+</li>
+<li>Shallow clone:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">Employee</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Cloneable</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// public access, change return type (covariant)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Employee</span><span class="w"> </span><span class="nf">clone</span><span class="p">()</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">CloneNotSupportedException</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="p">(</span><span class="n">Employee</span><span class="p">)</span><span class="w"> </span><span class="kd">super</span><span class="p">.</span><span class="na">clone</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Deep clone:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">Employee</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Cloneable</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Employee</span><span class="w"> </span><span class="nf">clone</span><span class="p">()</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">CloneNotSupportedException</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// call Object.clone()</span>
+<span class="w">        </span><span class="n">Employee</span><span class="w"> </span><span class="n">cloned</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">Employee</span><span class="p">)</span><span class="w"> </span><span class="kd">super</span><span class="p">.</span><span class="na">clone</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// clone mutable fields</span>
+<span class="w">        </span><span class="n">cloned</span><span class="p">.</span><span class="na">hireDay</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">Date</span><span class="p">)</span><span class="w"> </span><span class="n">hireDay</span><span class="p">.</span><span class="na">clone</span><span class="p">();</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">cloned</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>Object.clone</code> throws <code>CloneNotSupportedException</code> when the class is not <code>Cloneable</code>
+<ul>
+<li>the compiler does not know that <code>Employee</code> is, so declare it. Catching and returning <code>null</code> is fine for <strong>final</strong> classes, but otherwise <strong>leave <code>throws</code></strong> so subclasses may refuse cloning.</li>
+</ul>
+</li>
+<li><strong>Subclass caution:</strong>
+<ul>
+<li>once <code>Employee.clone</code> exists, anyone can clone a <code>Manager</code></li>
+<li>That works if the manager's extra fields are primitive (like <code>bonus</code>), but a subclass may add fields needing deep copies; nobody guarantees the author fixed <code>clone</code></li>
+<li>That is why <code>Object.clone</code> is protected, a luxury you do not have if users should call yours.</li>
+</ul>
+</li>
+<li>Should you implement <code>clone</code>? If clients need deep copies, probably
+<ul>
+<li>Some authors avoid it and use another method, but the same issues return</li>
+<li><strong>Fewer than 5% of library classes implement <code>clone</code>.</strong></li>
+</ul>
+</li>
+<li>Listing 6.4 (<code>CloneDemo.java</code>): clones an <code>Employee</code>, calls <code>raiseSalary(10)</code> and <code>setHireDay(2002, 12, 31)</code> on the copy; neither mutation affects the original because the clone is deep.</li>
+<li><strong>All array types have a public <code>clone</code></strong>: <code>int[] cloned = luckyNumbers.clone(); cloned[5] = 12;</code> leaves <code>luckyNumbers[5]</code> alone.</li>
+</ul>
+<h2 id="6-2-lambda-expressions">6.2 Lambda expressions</h2>
+<h3 id="6-2-1-why-lambdas">6.2.1 Why lambdas?</h3>
+<ul>
+<li>A <strong>lambda expression</strong> is a <strong>block of code you can pass around</strong> to run later, once or many times. Both earlier examples pass code to someone else:
+<ul>
+<li><code>actionPerformed</code> holds work for a timer to run repeatedly.</li>
+<li><code>compare</code> is called again and again by <code>sort</code>, rearranging elements until sorted; you supply the comparison and reuse the sorting logic.</li>
+</ul>
+</li>
+<li>Java is object-oriented, so we built an object of a class with a method holding the code
+<ul>
+<li>Other languages work with code blocks directly
+<ul>
+<li>the designers <strong>resisted</strong> the feature for a long time to protect Java's simplicity and consistency, but other languages gained simpler, more consistent, more powerful APIs</li>
+</ul>
+</li>
+<li>APIs taking interface objects are &quot;unpleasant to use&quot;</li>
+<li>After years of experimentation a fitting design emerged.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-2-2-the-syntax-of-lambda-expressions">6.2.2 The syntax of lambda expressions</h3>
+<ul>
+<li>To sort by length the code is <code>first.length() - second.length()</code>; Java is strongly typed, so we name the parameter types:</li>
+</ul>
+<pre class="hl"><code><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">first</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">second</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="w">    </span><span class="n">first</span><span class="p">.</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">second</span><span class="p">.</span><span class="na">length</span><span class="p">()</span>
+</code></pre>
+<ul>
+<li>
+<p>A lambda is <strong>a block of code plus the specification of the variables passed in</strong>.</p>
+</li>
+<li>
+<p><strong>The name:</strong></p>
+<ul>
+<li>the logician <strong>Alonzo Church</strong> used the Greek letter λ to mark parameters when formalising which mathematical functions are effectively computable</li>
+<li>He would have written <code>λfirst.λsecond.first.length() - second.length()</code></li>
+<li>Why λ? <em>Principia Mathematica</em> used a <code>^</code> accent for free variables, which inspired him to use an uppercase lambda for parameters, then lowercase</li>
+<li>Hence &quot;lambda expression&quot;.</li>
+</ul>
+</li>
+<li>
+<p>A lambda in its simplest form is <strong>parameters, the <code>-&gt;</code> arrow, and an expression</strong>. If the code does not fit one expression, write a <strong>block</strong> with explicit <code>return</code>s:</p>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">first</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">second</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">first</span><span class="p">.</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">second</span><span class="p">.</span><span class="na">length</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">first</span><span class="p">.</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">second</span><span class="p">.</span><span class="na">length</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>No parameters:</strong> keep empty parentheses, <code>() -&gt; { return 1 + (int) (Math.random() * 6); }</code>.</li>
+<li><strong>Inferred parameter types can be omitted</strong>: <code>Comparator&lt;String&gt; comp = (first, second) -&gt; first.length() - second.length();</code> (the compiler knows they are strings from the target type).</li>
+<li><strong>A single inferred parameter</strong> needs no parentheses: <code>ActionListener listener = event -&gt; IO.println(&quot;The time is &quot; + Instant.ofEpochMilli(event.getWhen()));</code>.</li>
+<li><strong>Unused parameters</strong> can be written <code>_</code>: <code>ActionListener listener = _ -&gt; IO.println(&quot;The action occurred at &quot; + Instant.now());</code> and <code>Comparator&lt;String&gt; comp = (_, _) -&gt; 0;</code>.</li>
+<li><strong><code>var</code> for parameter types</strong> is allowed but uncommon; it was invented for <strong>annotations</strong>: <code>(@NonNull var first, @NonNull var second) -&gt; ...</code> (chapter 11).</li>
+<li><strong>You never specify the result type</strong>: it is inferred from context. The same lambda works wherever an <code>int</code> result is expected.</li>
+<li>A lambda <strong>may not return a value in some branches only</strong>: <code>(int x) -&gt; { if (x &gt;= 0) return 1; }</code> is invalid.</li>
+<li>Listing 6.6 (<code>LambdaDemo.java</code>): sorts the eight planets in dictionary order with <code>Arrays.sort(planets)</code>, then by length with <code>Arrays.sort(planets, (first, second) -&gt; first.length() - second.length())</code>, then runs a <code>Timer</code> whose listener is <code>_ -&gt; IO.println(&quot;The time is &quot; + Instant.now())</code>.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-lambda-anatomy.svg" alt="Anatomy of a lambda expression" loading="lazy" /></p>
+<h3 id="6-2-3-functional-interfaces">6.2.3 Functional interfaces</h3>
+<ul>
+<li>You can supply a lambda wherever an object of an interface with <strong>a single abstract method</strong> is expected: a <strong>functional interface</strong> (<code>ActionListener</code>, <code>Comparator</code>).</li>
+<li>&quot;Single abstract method&quot; because an interface may <strong>redeclare <code>Object</code> methods</strong> (<code>toString</code>, <code>clone</code>; <code>Comparator</code> does so for javadoc) without making them abstract, and may have default methods.</li>
+<li><code>Arrays.sort(words, (first, second) -&gt; first.length() - second.length());</code> works because the lambda converts to a <code>Comparator&lt;String&gt;</code>; invoking <code>compare</code> runs the lambda body
+<ul>
+<li>How the objects and classes are managed is <strong>implementation-dependent and can be more efficient than inner classes</strong></li>
+<li>Think of a lambda as <strong>a function, not an object</strong>, convertible to a functional interface.</li>
+</ul>
+</li>
+<li>The timer becomes short:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="mi">1000</span><span class="p">,</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"At the tone, the time is "</span>
+<span class="w">        </span><span class="o">+</span><span class="w"> </span><span class="n">Instant</span><span class="p">.</span><span class="na">ofEpochMilli</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getWhen</span><span class="p">()));</span>
+<span class="w">    </span><span class="n">Toolkit</span><span class="p">.</span><span class="na">getDefaultToolkit</span><span class="p">().</span><span class="na">beep</span><span class="p">();</span>
+<span class="p">});</span>
+</code></pre>
+<ul>
+<li><strong>Conversion to a functional interface is the only thing you can do with a lambda in Java.</strong> Other languages have function types like <code>(String, String) -&gt; int</code>
+<ul>
+<li>Java kept interfaces. You cannot even assign a lambda to an <code>Object</code> variable (it is not a functional interface).</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-2-4-function-types">6.2.4 Function types</h3>
+<ul>
+<li><code>java.util.function</code> has generic functional interfaces such as <code>BiFunction&lt;T, U, R&gt;</code>: <code>BiFunction&lt;String, String, Integer&gt; comp = (first, second) -&gt; first.length() - second.length();</code>
+<ul>
+<li>It does <strong>not</strong> help sorting: no <code>sort</code> takes a <code>BiFunction</code></li>
+<li>A <code>Comparator</code> has a <strong>purpose</strong>, not just a shape.</li>
+</ul>
+</li>
+<li><strong><code>Predicate&lt;T&gt;</code></strong> (<code>boolean test(T t)</code>): <code>ArrayList.removeIf(Predicate)</code> is designed for lambdas: <code>list.removeIf(e -&gt; e == null);</code> removes all nulls.</li>
+<li><strong><code>Supplier&lt;T&gt;</code></strong> (<code>T get()</code>) is for <strong>lazy evaluation</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="n">Supplier</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">die</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="n">Math</span><span class="p">.</span><span class="na">random</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="kt">int</span><span class="w"> </span><span class="n">outcome</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">die</span><span class="p">.</span><span class="na">get</span><span class="p">();</span>
+
+<span class="c1">// build the default only when needed</span>
+<span class="n">LocalDate</span><span class="w"> </span><span class="n">hireDay</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Objects</span><span class="p">.</span><span class="na">requireNonNullElseGet</span><span class="p">(</span><span class="n">day</span><span class="p">,</span>
+<span class="w">    </span><span class="p">()</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">LocalDate</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="mi">1970</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">));</span>
+</code></pre>
+<ul>
+<li><strong>Primitive specialisations avoid boxing</strong>:
+<ul>
+<li><code>IntFunction&lt;T&gt;</code> (int in, object out), <code>ToIntFunction&lt;T&gt;</code> (object in, int out), <code>IntUnaryOperator</code> (int in and out). For example <code>Arrays.setAll(values, i -&gt; i * i);</code> sets each element to the square of its index (<code>[0, 1, 4, 9, 16, ..., 9801]</code>)</li>
+<li>the <code>int[]</code> overload takes an <code>IntUnaryOperator</code>, but as a user you just write the lambda.</li>
+</ul>
+</li>
+<li>A lambda can match primitive and wrapper interfaces, but <strong>ambiguity is an error</strong>: with <code>fill(int n, IntUnaryOperator op)</code> and <code>fill(int n, IntFunction&lt;Object&gt; op)</code>, the call <code>fill(n, i -&gt; i * i)</code> does not compile
+<ul>
+<li>Catch such API problems with <strong><code>-Xlint:overloads</code></strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-2-5-method-references">6.2.5 Method references</h3>
+<ul>
+<li>When a lambda only calls one method, pass the method itself:
+<ul>
+<li><code>var timer = new Timer(1000, IO::println);</code></li>
+<li>A <strong>method reference</strong> makes the compiler produce an instance of a functional interface whose single method calls the named method (here <code>actionPerformed(ActionEvent e)</code> calls <code>IO.println(e)</code>)</li>
+<li>Like a lambda it is <strong>not an object</strong> until assigned to a functional interface type.</li>
+</ul>
+</li>
+<li><strong>Overload choice depends on context</strong>:
+<ul>
+<li><code>IO::println</code> as an <code>ActionListener</code> picks <code>println(Object)</code></li>
+<li>as a <code>Runnable</code> (<code>void run()</code>) it picks the no-argument <code>println()</code>, printing a blank line.</li>
+</ul>
+</li>
+<li>Three variants: <strong><code>Class::staticMethod</code></strong>, <strong><code>Class::instanceMethod</code></strong>, <strong><code>object::instanceMethod</code></strong>.</li>
+</ul>
+<p>Table 6.1:</p>
+<table>
+<thead>
+<tr>
+<th>Method reference</th>
+<th>Equivalent lambda</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>separator::equals</code></td>
+<td><code>x -&gt; separator.equals(x)</code></td>
+<td>object and instance method; the lambda parameter is the explicit parameter</td>
+</tr>
+<tr>
+<td><code>String::strip</code></td>
+<td><code>x -&gt; x.strip()</code></td>
+<td>class and instance method; the parameter becomes the <strong>implicit</strong> parameter</td>
+</tr>
+<tr>
+<td><code>String::concat</code></td>
+<td><code>(x, y) -&gt; x.concat(y)</code></td>
+<td>first parameter is implicit, the rest passed on</td>
+</tr>
+<tr>
+<td><code>Integer::valueOf</code></td>
+<td><code>x -&gt; Integer.valueOf(x)</code></td>
+<td>static method; the parameter is passed to it</td>
+</tr>
+<tr>
+<td><code>Integer::sum</code></td>
+<td><code>(x, y) -&gt; Integer.sum(x, y)</code></td>
+<td>static with two parameters (created for method references; a lambda could be <code>x + y</code>)</td>
+</tr>
+<tr>
+<td><code>String::new</code></td>
+<td><code>x -&gt; new String(x)</code></td>
+<td>constructor reference (6.2.6)</td>
+</tr>
+<tr>
+<td><code>String[]::new</code></td>
+<td><code>n -&gt; new String[n]</code></td>
+<td>array constructor reference; the parameter is the length</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>A lambda becomes a method reference <strong>only if its body is a single method call and nothing else</strong>: <code>s -&gt; s.length() == 0</code> has a comparison, so no.</li>
+<li>With overloads (<code>Math.max</code> for ints or doubles), the <strong>target functional interface</strong> decides
+<ul>
+<li>Some APIs exist for method references: <code>list.removeIf(Objects::isNull);</code> reads a bit better than <code>e -&gt; e == null</code>.</li>
+</ul>
+</li>
+<li><strong>Tiny difference:</strong> <code>separator::equals</code> throws <code>NullPointerException</code> <strong>immediately</strong> if <code>separator</code> is null; the lambda <code>x -&gt; separator.equals(x)</code> only throws when <strong>invoked</strong>.</li>
+<li>You can capture <code>this</code> (<code>this::equals</code> is <code>x -&gt; this.equals(x)</code>) and <strong><code>super::instanceMethod</code></strong>, which calls the superclass version:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">Greeter</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">ActionEvent</span><span class="w"> </span><span class="n">event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Hello, the time is "</span>
+<span class="w">            </span><span class="o">+</span><span class="w"> </span><span class="n">Instant</span><span class="p">.</span><span class="na">ofEpochMilli</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getWhen</span><span class="p">()));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">class</span> <span class="nc">RepeatedGreeter</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Greeter</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">ActionEvent</span><span class="w"> </span><span class="n">event</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="mi">1000</span><span class="p">,</span><span class="w"> </span><span class="kd">super</span><span class="p">::</span><span class="n">greet</span><span class="p">);</span>
+<span class="w">        </span><span class="n">timer</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-method-reference-forms.svg" alt="Method reference forms and their lambdas" loading="lazy" /></p>
+<h3 id="6-2-6-constructor-references">6.2.6 Constructor references</h3>
+<ul>
+<li>Like method references with the name <code>new</code>: <code>Person::new</code>. The context picks the constructor:</li>
+</ul>
+<pre class="hl"><code><span class="n">ArrayList</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span><span class="w"> </span><span class="c1">// ...</span>
+<span class="n">Stream</span><span class="o">&lt;</span><span class="n">Person</span><span class="o">&gt;</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">names</span><span class="p">.</span><span class="na">stream</span><span class="p">().</span><span class="na">map</span><span class="p">(</span><span class="n">Person</span><span class="p">::</span><span class="k">new</span><span class="p">);</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">Person</span><span class="o">&gt;</span><span class="w"> </span><span class="n">people</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">stream</span><span class="p">.</span><span class="na">toList</span><span class="p">();</span>
+</code></pre>
+<ul>
+<li><code>map</code> calls the <code>Person(String)</code> constructor for each element (streams are in Volume II, chapter 1).</li>
+<li><strong>Array constructor references</strong>:
+<ul>
+<li><code>int[]::new</code> is <code>n -&gt; new int[n]</code></li>
+<li>Useful because <strong>generics cannot create arrays</strong>: <code>new T[n]</code> is an error (type erasure, chapter 8)</li>
+<li><code>stream.toArray()</code> returns <code>Object[]</code>; pass the constructor to get the right type: <strong><code>Person[] people = stream.toArray(Person[]::new);</code></strong>.</li>
+</ul>
+</li>
+<li><strong>Surprise:</strong>
+<ul>
+<li><code>Arrays.setAll(dates, Date::new)</code> on a <code>Date[100]</code> does <strong>not</strong> call <code>new Date()</code> 100 times</li>
+<li>The second parameter is an <code>IntFunction</code> receiving the index, so it calls <strong><code>new Date(i)</code></strong> (milliseconds since the epoch), for <code>i</code> from 0 to 99.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-2-7-variable-scope">6.2.7 Variable scope</h3>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">repeatMessage</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">text</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">delay</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">ActionListener</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">text</span><span class="p">);</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="n">delay</span><span class="p">,</span><span class="w"> </span><span class="n">listener</span><span class="p">).</span><span class="na">start</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The lambda runs long after <code>repeatMessage</code> returned, yet <code>text</code> survives
+<ul>
+<li>A lambda has <strong>three ingredients</strong>: a block of code, parameters, and <strong>values for the free variables</strong> (neither parameters nor defined inside)</li>
+<li>The lambda <strong>captures</strong> those values</li>
+<li>The block of code plus captured values is a <strong>closure</strong>: Java lambdas are closures.</li>
+</ul>
+</li>
+<li><strong>Restriction: captured variables must be effectively final</strong>,
+<ul>
+<li>i.e</li>
+<li>never assigned a new value after initialisation</li>
+<li>Mutating captured variables is unsafe when actions run concurrently (chapter 10)</li>
+<li>Illegal examples:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">countDown</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">start</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">delay</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">ActionListener</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">start</span><span class="o">--</span><span class="p">;</span><span class="w"> </span><span class="c1">// ERROR: can't mutate a captured variable</span>
+<span class="w">        </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">start</span><span class="p">);</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="n">delay</span><span class="p">,</span><span class="w"> </span><span class="n">listener</span><span class="p">).</span><span class="na">start</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">multiMessage</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">text</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">count</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">count</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ActionListener</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">": "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">text</span><span class="p">);</span>
+<span class="w">        </span><span class="c1">// ERROR: cannot refer to a changing i</span>
+<span class="w">        </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="mi">1000</span><span class="p">,</span><span class="w"> </span><span class="n">listener</span><span class="p">).</span><span class="na">start</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-closure-capture.svg" alt="A lambda captures effectively final values" loading="lazy" /></p>
+<ul>
+<li>The lambda body has the <strong>same scope as a nested block</strong>: you cannot declare a parameter or local with the same name as an existing local (<code>(first, second) -&gt; ...</code> when <code>Path first</code> already exists is an error).</li>
+</ul>
+<h3 id="6-2-8-lambda-expressions-and-this">6.2.8 Lambda expressions and <code>this</code></h3>
+<ul>
+<li><strong>A lambda has no <code>this</code> of its own</strong>:
+<ul>
+<li><code>this</code> means the <code>this</code> of the enclosing method</li>
+<li>In <code>Greeter.greet(String text)</code>, <code>IO.println(this)</code> inside the lambda prints the <code>Greeter</code>, not the <code>ActionListener</code>.</li>
+</ul>
+</li>
+<li>Lambdas may read <strong>fields</strong> of the enclosing class even if not final:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">Greeter</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">text</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">delayMessage</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">delay</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ActionListener</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">text</span><span class="p">);</span><span class="w"> </span><span class="c1">// OK to access the field</span>
+<span class="w">        </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="n">delay</span><span class="p">,</span><span class="w"> </span><span class="n">listener</span><span class="p">).</span><span class="na">start</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">greet</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">text</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Hello"</span><span class="p">;</span>
+<span class="w">        </span><span class="n">delayMessage</span><span class="p">(</span><span class="mi">1000</span><span class="p">);</span>
+<span class="w">        </span><span class="n">text</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Goodbye"</span><span class="p">;</span>
+<span class="w">        </span><span class="n">delayMessage</span><span class="p">(</span><span class="mi">2000</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>There is only one rule: <code>text</code> in the lambda means <code>this.text</code>, and the lambda captures the <strong>final <code>this</code></strong>.</li>
+</ul>
+<h3 id="6-2-9-processing-lambda-expressions">6.2.9 Processing lambda expressions</h3>
+<ul>
+<li>The point of lambdas is <strong>deferred execution</strong>: run code in another thread, multiple times, at the right point in an algorithm (a sort's comparison), when something happens (a click, data arrives), or only when necessary.</li>
+<li>To accept a lambda, pick a functional interface. A repeat helper with <code>Runnable</code>, then with <code>IntConsumer</code> to pass the iteration number:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">repeat</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">Runnable</span><span class="w"> </span><span class="n">action</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">action</span><span class="p">.</span><span class="na">run</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">repeat</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">IntConsumer</span><span class="w"> </span><span class="n">action</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">action</span><span class="p">.</span><span class="na">accept</span><span class="p">(</span><span class="n">i</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">repeat</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Hello, World!"</span><span class="p">));</span>
+<span class="n">repeat</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Countdown: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">(</span><span class="mi">9</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">i</span><span class="p">)));</span>
+</code></pre>
+<p>Table 6.2, common functional interfaces:</p>
+<table>
+<thead>
+<tr>
+<th>Interface</th>
+<th>Parameters</th>
+<th>Returns</th>
+<th>Method</th>
+<th>Other methods</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Runnable</code></td>
+<td>none</td>
+<td>void</td>
+<td><code>run</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>Supplier&lt;T&gt;</code></td>
+<td>none</td>
+<td>T</td>
+<td><code>get</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>Consumer&lt;T&gt;</code></td>
+<td>T</td>
+<td>void</td>
+<td><code>accept</code></td>
+<td><code>andThen</code></td>
+</tr>
+<tr>
+<td><code>BiConsumer&lt;T, U&gt;</code></td>
+<td>T, U</td>
+<td>void</td>
+<td><code>accept</code></td>
+<td><code>andThen</code></td>
+</tr>
+<tr>
+<td><code>Function&lt;T, R&gt;</code></td>
+<td>T</td>
+<td>R</td>
+<td><code>apply</code></td>
+<td><code>compose</code>, <code>andThen</code>, <code>identity</code></td>
+</tr>
+<tr>
+<td><code>BiFunction&lt;T, U, R&gt;</code></td>
+<td>T, U</td>
+<td>R</td>
+<td><code>apply</code></td>
+<td><code>andThen</code></td>
+</tr>
+<tr>
+<td><code>UnaryOperator&lt;T&gt;</code></td>
+<td>T</td>
+<td>T</td>
+<td><code>apply</code></td>
+<td><code>compose</code>, <code>andThen</code>, <code>identity</code></td>
+</tr>
+<tr>
+<td><code>BinaryOperator&lt;T&gt;</code></td>
+<td>T, T</td>
+<td>T</td>
+<td><code>apply</code></td>
+<td><code>andThen</code>, <code>maxBy</code>, <code>minBy</code></td>
+</tr>
+<tr>
+<td><code>Predicate&lt;T&gt;</code></td>
+<td>T</td>
+<td>boolean</td>
+<td><code>test</code></td>
+<td><code>and</code>, <code>or</code>, <code>negate</code>, <code>isEqual</code>, <code>not</code></td>
+</tr>
+<tr>
+<td><code>BiPredicate&lt;T, U&gt;</code></td>
+<td>T, U</td>
+<td>boolean</td>
+<td><code>test</code></td>
+<td><code>and</code>, <code>or</code>, <code>negate</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Table 6.3 lists <strong>34 primitive specialisations</strong> for <code>int</code>, <code>long</code>, <code>double</code> (with <code>p</code>, <code>q</code> standing for them): <code>BooleanSupplier</code> (<code>getAsBoolean</code>), <code>PSupplier</code> (<code>getAsP</code>), <code>PConsumer</code> (<code>accept</code>), <code>ObjPConsumer&lt;T&gt;</code>, <code>PFunction&lt;T&gt;</code> (<code>apply</code>), <code>PToQFunction</code> (<code>applyAsQ</code>), <code>ToPFunction&lt;T&gt;</code>, <code>ToPBiFunction&lt;T, U&gt;</code>, <code>PUnaryOperator</code>, <code>PBinaryOperator</code>, <code>PPredicate</code> (<code>test</code>)
+<ul>
+<li>They are more efficient than boxing generics (chapter 8).</li>
+</ul>
+</li>
+<li><strong>Use the standard interfaces whenever you can.</strong>
+<ul>
+<li><code>Predicate&lt;File&gt;</code> beats the legacy <code>FileFilter</code> because you can create, adapt and combine predicates. Examples: <code>Predicate.isEqual(a)</code> is <code>a::equals</code> but null-safe</li>
+<li><code>and</code>, <code>or</code>, <code>negate</code> combine</li>
+<li><code>Predicate.isEqual(a).or(Predicate.isEqual(b))</code> is <code>x -&gt; a.equals(x) || b.equals(x)</code>.</li>
+</ul>
+</li>
+<li>For your own single-method interface add <strong><code>@FunctionalInterface</code></strong>: the compiler errors if you add a second abstract method, and javadoc says it is functional
+<ul>
+<li>Not required, but a good idea.</li>
+</ul>
+</li>
+<li><strong>A chain example and a Java history lesson:</strong> <code>String.transform</code> (Java 12) applies a <code>Function</code> to a string, enabling a left-to-right chain:</li>
+</ul>
+<pre class="hl"><code><span class="n">String</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">" 618970019642690137449562111 "</span><span class="p">;</span>
+<span class="kt">boolean</span><span class="w"> </span><span class="n">isPrime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input</span><span class="p">.</span><span class="na">strip</span><span class="p">().</span><span class="na">transform</span><span class="p">(</span><span class="n">BigInteger</span><span class="p">::</span><span class="k">new</span><span class="p">).</span><span class="na">isProbablePrime</span><span class="p">(</span><span class="mi">20</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>It exists only on strings
+<ul>
+<li>Why not <code>Object.transform(Function)</code>? The designers had <strong>one chance</strong>, in Java 8 when <code>Function</code> arrived</li>
+<li>By Java 12 someone might already have defined <code>transform(java.util.function.Function)</code> with a different meaning, and <strong>Java takes its compatibility commitments seriously</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-functional-interface-conversion.svg" alt="Functional interface conversion" loading="lazy" /></p>
+<h3 id="6-2-10-creating-comparators">6.2.10 Creating comparators</h3>
+<ul>
+<li><code>Comparator</code> has static factory methods meant for lambdas and method references:
+<ul>
+<li><strong><code>Comparator.comparing(keyExtractor)</code></strong>: compare by a key, e.g. <code>Arrays.sort(people, Comparator.comparing(Person::getName));</code>.</li>
+<li><strong><code>thenComparing</code></strong> breaks ties:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="n">Arrays</span><span class="p">.</span><span class="na">sort</span><span class="p">(</span><span class="n">people</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Comparator</span><span class="p">.</span><span class="na">comparing</span><span class="p">(</span><span class="n">Person</span><span class="p">::</span><span class="n">getLastName</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">thenComparing</span><span class="p">(</span><span class="n">Person</span><span class="p">::</span><span class="n">getFirstName</span><span class="p">));</span>
+</code></pre>
+<ul>
+<li><strong>A key comparator</strong> as a second argument: <code>Comparator.comparing(Person::getName, (s, t) -&gt; Integer.compare(s.length(), t.length()))</code>.</li>
+<li><strong>Primitive variants</strong> avoid boxing: <code>Comparator.comparing(Person::getName, Comparator.comparingInt(String::length))</code>, or <code>Comparator.comparingInt(p -&gt; p.getName().length())</code>.</li>
+<li><strong><code>nullsFirst</code> and <code>nullsLast</code></strong>
+<ul>
+<li>adapt a comparator so nulls rank low or high instead of throwing: <code>comparing(Person::getMiddleName, nullsFirst(naturalOrder()))</code></li>
+<li><strong><code>naturalOrder()</code></strong> works for any <code>Comparable</code> (a type witness <code>Comparator.&lt;String&gt;naturalOrder()</code> explained in chapter 8; the type is usually inferred).</li>
+</ul>
+</li>
+<li><strong><code>reverseOrder()</code></strong> is the reverse of natural order; any comparator has a <strong><code>reversed()</code></strong> instance method (<code>naturalOrder().reversed()</code> is <code>reverseOrder()</code>).</li>
+</ul>
+<h2 id="6-3-inner-classes">6.3 Inner classes</h2>
+<ul>
+<li>An <strong>inner class</strong> is defined inside another class. Reasons:
+<ol>
+<li>It can be <strong>hidden</strong> from other classes in the same package.</li>
+<li>Its methods can <strong>access data of the scope they are defined in</strong>, including private data.</li>
+</ol>
+</li>
+<li>Inner classes were once vital for callbacks; <strong>lambdas now do that better</strong>, but inner classes still structure code well.</li>
+<li><strong>C++ comparison:</strong>
+<ul>
+<li>C++ <strong>nested classes</strong> (a linked list's <code>Node</code>) are like Java <strong>static nested classes</strong></li>
+<li>A Java inner object also holds an <strong>implicit reference to the outer object</strong> that created it, so, for example, an iterator needs no explicit pointer to its list.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-3-1-using-an-inner-class-to-access-object-state">6.3.1 Using an inner class to access object state</h3>
+<ul>
+<li>Refactor the timer into a <code>TalkingClock</code> with an inner class:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">TalkingClock</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">interval</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="n">beep</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">TalkingClock</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">interval</span><span class="p">,</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="n">beep</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">start</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">TimePrinter</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">ActionListener</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// an inner class</span>
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">actionPerformed</span><span class="p">(</span><span class="n">ActionEvent</span><span class="w"> </span><span class="n">event</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"At the tone, the time is "</span>
+<span class="w">                </span><span class="o">+</span><span class="w"> </span><span class="n">Instant</span><span class="p">.</span><span class="na">ofEpochMilli</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getWhen</span><span class="p">()));</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">beep</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">Toolkit</span><span class="p">.</span><span class="na">getDefaultToolkit</span><span class="p">().</span><span class="na">beep</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>TimePrinter</code> is inside <code>TalkingClock</code>, which does <strong>not</strong> mean each clock has a <code>TimePrinter</code> field; clock methods construct them.</li>
+<li>Surprise:
+<ul>
+<li><code>TimePrinter</code> has no <code>beep</code> field, but <code>beep</code> refers to the <strong><code>TalkingClock</code> object that created it</strong></li>
+<li>Every inner-class object gets an <strong>implicit reference to its creating outer object</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-inner-class-outer-ref.svg" alt="An inner class object holds a reference to its outer object" loading="lazy" /></p>
+<ul>
+<li>Calling that reference <code>outer</code> (not a keyword) the method is equivalent to using <code>outer.beep</code>. <strong>The compiler adds an outer parameter to every inner class constructor</strong>
+<ul>
+<li>for a class with no constructors it synthesises <code>public TimePrinter(TalkingClock clock) { outer = clock; }</code>, and in <code>start</code> the call <code>new TimePrinter(this)</code> has the parameter added automatically.</li>
+</ul>
+</li>
+<li>Without an inner class you would need public accessors only one other class cares about
+<ul>
+<li><code>TimePrinter</code> could even be <strong><code>private</code></strong> so only <code>TalkingClock</code> methods can build it</li>
+<li><strong>Only inner classes can be private</strong>; regular classes are package or public.</li>
+</ul>
+</li>
+<li>Listing 6.7 and 6.8: <code>InnerClassDemo</code> creates <code>new TalkingClock(1000, true)</code>, starts it and shows a dialog to keep running
+<ul>
+<li><code>TalkingClock.start()</code> builds a <code>TimePrinter</code> listener and a <code>Timer(interval, listener)</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-3-2-special-syntax-rules">6.3.2 Special syntax rules</h3>
+<ul>
+<li>The proper outer reference is <strong><code>OuterClass.this</code></strong>: <code>if (TalkingClock.this.beep) ...</code>.</li>
+<li>The explicit constructor syntax is <strong><code>outerObject.new InnerClass(args)</code></strong>: <code>ActionListener listener = this.new TimePrinter();</code> (the <code>this.</code> is redundant, the common case)
+<ul>
+<li>Since <code>TimePrinter</code> is public you can attach it to another clock:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">jabberer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TalkingClock</span><span class="p">(</span><span class="mi">1000</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">);</span>
+<span class="n">TalkingClock</span><span class="p">.</span><span class="na">TimePrinter</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jabberer</span><span class="p">.</span><span class="na">new</span><span class="w"> </span><span class="nf">TimePrinter</span><span class="p">();</span>
+</code></pre>
+<ul>
+<li>Outside the outer class refer to it as <strong><code>OuterClass.InnerClass</code></strong>.</li>
+<li><strong>Since Java 16 inner classes can have static members.</strong>
+<ul>
+<li>Before, static methods were disallowed and static fields had to be final constants</li>
+<li>Static methods of an inner class can use static fields and methods of the inner and enclosing classes.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-3-3-are-inner-classes-useful-necessary-secure">6.3.3 Are inner classes useful? Necessary? Secure?</h3>
+<ul>
+<li>When added in <strong>Java 1.1</strong> many saw them as out of character with Java's simplicity; the syntax is complex (more so with anonymous classes).</li>
+<li>They compile to <strong>regular class files</strong> with <code>$</code> separators:
+<ul>
+<li><code>innerClass.TalkingClock$TimePrinter.class</code></li>
+<li>See it with the chapter 5 <code>ReflectionDemo</code> or <code>javap -private ClassName</code> (escape the <code>$</code> on Unix):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>java<span class="w"> </span>v1ch05/ReflectionDemo.java<span class="w"> </span>v1ch06.innerClass.TalkingClock<span class="se">\$</span>TimePrinter
+<span class="gp">$ </span>javap<span class="w"> </span>-private<span class="w"> </span>v1ch06.innerClass.TalkingClock<span class="se">\$</span>TimePrinter
+</code></pre>
+<ul>
+<li>Output shows <code>public class v1ch06.innerClass.TalkingClock$TimePrinter implements java.awt.event.ActionListener</code>, a compiler-added field <strong><code>final v1ch06.innerClass.TalkingClock this$0;</code></strong> (name synthesised; you cannot use it), a constructor taking the <code>TalkingClock</code>, and <code>actionPerformed</code>
+<ul>
+<li><strong>Since Java 18 <code>this$0</code> is only generated when needed.</strong></li>
+</ul>
+</li>
+<li>Could you hand-code it as a regular class holding <code>outer</code>? You hit <code>outer.beep // ERROR</code>: a regular class cannot read the outer's private data
+<ul>
+<li><strong>Inner classes are genuinely more powerful: they have more access privileges.</strong></li>
+</ul>
+</li>
+<li>In <strong>Java 11</strong> the VM spec added direct <strong>nest mate</strong> access (JEP 181, <code>https://openjdk.org/jeps/181</code>); earlier compilers generated helper methods.</li>
+</ul>
+<h3 id="6-3-4-local-inner-classes">6.3.4 Local inner classes</h3>
+<ul>
+<li>If you need the type name only once (in <code>start</code>), define the class <strong>inside the method</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">start</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">class</span> <span class="nc">TimePrinter</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">ActionListener</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">actionPerformed</span><span class="p">(</span><span class="n">ActionEvent</span><span class="w"> </span><span class="n">event</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"At the tone, the time is "</span>
+<span class="w">                </span><span class="o">+</span><span class="w"> </span><span class="n">Instant</span><span class="p">.</span><span class="na">ofEpochMilli</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getWhen</span><span class="p">()));</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">beep</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">Toolkit</span><span class="p">.</span><span class="na">getDefaultToolkit</span><span class="p">().</span><span class="na">beep</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TimePrinter</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="n">interval</span><span class="p">,</span><span class="w"> </span><span class="n">listener</span><span class="p">);</span>
+<span class="w">    </span><span class="n">timer</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>No <code>public</code> or <code>private</code></strong> on local classes; their scope is the enclosing block. They are <strong>completely hidden</strong>, even from other methods of <code>TalkingClock</code>.</li>
+</ul>
+<h3 id="6-3-5-accessing-variables-from-outer-methods">6.3.5 Accessing variables from outer methods</h3>
+<ul>
+<li>Local classes can also access <strong>local variables and parameters</strong>, which must be <strong>effectively final</strong>
+<ul>
+<li>Moving <code>interval</code> and <code>beep</code> into <code>start(int interval, boolean beep)</code> means <code>TalkingClock</code> needs no <code>beep</code> field.</li>
+</ul>
+</li>
+<li>The subtlety:
+<ul>
+<li><code>start</code> exits before <code>actionPerformed</code> runs a second later, so <code>beep</code> no longer exists</li>
+<li>The compiler <strong>copies</strong> the value into a synthesised field of the local class</li>
+<li>For <code>localInnerClass.TalkingClock$1TimePrinter</code> the reflection output shows a constructor taking the clock <strong>and a <code>boolean</code></strong>, and <code>final boolean val$beep;</code></li>
+<li>The value is stored when the object is created and persists after the variable is gone</li>
+<li>(<code>javap -private -c</code> shows it set in the constructor before the <code>Object</code> constructor call and read in <code>actionPerformed</code>.)</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-local-class-captured-copy.svg" alt="A local class copies the captured variable" loading="lazy" /></p>
+<h3 id="6-3-6-anonymous-inner-classes">6.3.6 Anonymous inner classes</h3>
+<ul>
+<li>If you create <strong>a single object</strong> of a local class, drop the name: an <strong>anonymous inner class</strong>.</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">start</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">interval</span><span class="p">,</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="n">beep</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">listener</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ActionListener</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">actionPerformed</span><span class="p">(</span><span class="n">ActionEvent</span><span class="w"> </span><span class="n">event</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"At the tone, the time is "</span>
+<span class="w">                </span><span class="o">+</span><span class="w"> </span><span class="n">Instant</span><span class="p">.</span><span class="na">ofEpochMilli</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getWhen</span><span class="p">()));</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">beep</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">Toolkit</span><span class="p">.</span><span class="na">getDefaultToolkit</span><span class="p">().</span><span class="na">beep</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="n">interval</span><span class="p">,</span><span class="w"> </span><span class="n">listener</span><span class="p">);</span>
+<span class="w">    </span><span class="n">timer</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Meaning:
+<ul>
+<li>create an object of a class implementing <code>ActionListener</code> whose <code>actionPerformed</code> is defined in the braces</li>
+<li>General form: <strong><code>new SuperType(construction arguments) { methods and data }</code></strong>, where <code>SuperType</code> is an interface (the class implements it) or a class (the class extends it).</li>
+</ul>
+</li>
+<li><strong>No constructors</strong>
+<ul>
+<li>(the class has no name). Construction arguments go to the <strong>superclass constructor</strong></li>
+<li>when implementing an interface there are none, but you must still write the parentheses: <code>new InterfaceType() { ... }</code>.</li>
+</ul>
+</li>
+<li>Spot the difference between a plain object and an anonymous subclass object:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">queen</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">(</span><span class="s">"Mary"</span><span class="p">);</span><span class="w">                </span><span class="c1">// a Person object</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">(</span><span class="s">"Dracula"</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">};</span><span class="w"> </span><span class="c1">// an object of an inner class extending Person</span>
+</code></pre>
+<ul>
+<li>If the closing parenthesis of the construction arguments is followed by <code>{</code>, an anonymous class is being defined. It has no constructors but <strong>may have an object initialisation block</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Person</span><span class="p">(</span><span class="s">"Dracula"</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// initialisation</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">};</span>
+</code></pre>
+<ul>
+<li>Listings 6.9 and 6.10 give the talking clock with an anonymous class, shorter than the inner-class version of Listing 6.7. Anonymous classes were the routine way to write listeners and callbacks for years
+<ul>
+<li><strong>today use a lambda</strong>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">start</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">interval</span><span class="p">,</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="n">beep</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">timer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Timer</span><span class="p">(</span><span class="n">interval</span><span class="p">,</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"At the tone, the time is "</span>
+<span class="w">            </span><span class="o">+</span><span class="w"> </span><span class="n">Instant</span><span class="p">.</span><span class="na">ofEpochMilli</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">getWhen</span><span class="p">()));</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">beep</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">Toolkit</span><span class="p">.</span><span class="na">getDefaultToolkit</span><span class="p">().</span><span class="na">beep</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">});</span>
+<span class="w">    </span><span class="n">timer</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>A <code>var</code> keeps the anonymous type</strong>,
+<ul>
+<li>including added members: <code>var bob = new Object() { String name = &quot;Bob&quot;; };</code> then <code>IO.println(bob.name);</code> works. This is a <strong>non-denotable type</strong> (not expressible in Java syntax) the compiler still understands</li>
+<li>declare <code>bob</code> as <code>Object</code> and <code>bob.name</code> fails.</li>
+</ul>
+</li>
+<li><strong>Double-brace initialisation:</strong> outer braces make an anonymous subclass of <code>ArrayList</code>, inner braces are an initialisation block:</li>
+</ul>
+<pre class="hl"><code><span class="n">invite</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{{</span><span class="w"> </span><span class="n">add</span><span class="p">(</span><span class="s">"Harry"</span><span class="p">);</span><span class="w"> </span><span class="n">add</span><span class="p">(</span><span class="s">"Tony"</span><span class="p">);</span><span class="w"> </span><span class="p">}});</span>
+</code></pre>
+<ul>
+<li>Rarely useful: <code>List.of(&quot;Harry&quot;, &quot;Tony&quot;)</code> is usually better.</li>
+<li><strong>Careful with <code>equals</code>:</strong> an anonymous subclass fails the <code>getClass() != other.getClass()</code> test recommended in chapter 5.</li>
+<li><strong>Class name in a static method:</strong>
+<ul>
+<li><code>getClass()</code> is <code>this.getClass()</code> and fails in a static method</li>
+<li>Use <strong><code>new Object(){}.getClass().getEnclosingClass()</code></strong>, an anonymous <code>Object</code> subclass whose enclosing class is the one containing the static method.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-nested-class-kinds.svg" alt="Four ways to write a class inside another scope" loading="lazy" /></p>
+<h3 id="6-3-7-static-classes">6.3.7 Static classes</h3>
+<ul>
+<li>To nest a class <strong>without</strong> a reference to an outer object, declare it <strong><code>static</code></strong>. The JLS terms: <strong>nested class</strong> (any class declared inside a class or interface)
+<ul>
+<li><strong>static class</strong> (a static nested class)</li>
+<li><strong>inner class</strong> (a nested class that is not static).</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li><code>ArrayAlg.longestRun</code> returns a <strong>range</strong> of indices</li>
+<li><code>Range</code> is a common name, so nest it as <code>public static class Range</code> inside <code>ArrayAlg</code>, known as <strong><code>ArrayAlg.Range</code></strong>, with no outer reference.</li>
+</ul>
+</li>
+<li>It <strong>must</strong> be static here because it is constructed inside a <strong>static method</strong> (no <code>ArrayAlg</code> object exists to attach)
+<ul>
+<li><strong>Use a static class whenever the nested class does not need an outer object.</strong></li>
+</ul>
+</li>
+<li><strong>Classes declared inside an interface are automatically static</strong>
+<ul>
+<li>(an outer reference type would be unknowable). <strong>Before Java 16</strong> you could not declare a static class inside an inner class</li>
+<li>that restriction is gone.</li>
+</ul>
+</li>
+<li>Listing 6.11 (<code>StaticInnerClassDemo.java</code>): <code>ArrayAlg.longestRun(double[] values)</code> scans for the longest run of equal adjacent elements
+<ul>
+<li>for <code>{ 1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6 }</code> it reports the run of 5s, <code>from = 10</code>, <code>to = 15</code>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">ArrayAlg</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Range</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">from</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="kd">to</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="nf">Range</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">from</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">this</span><span class="p">.</span><span class="na">from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">from</span><span class="p">;</span>
+<span class="w">            </span><span class="k">this</span><span class="p">.</span><span class="na">to</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">extend</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">this</span><span class="p">.</span><span class="na">to</span><span class="o">++</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">getFrom</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">from</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">getTo</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kd">to</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">length</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kd">to</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">from</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">Range</span><span class="w"> </span><span class="nf">longestRun</span><span class="p">(</span><span class="kt">double</span><span class="o">[]</span><span class="w"> </span><span class="n">values</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Range</span><span class="w"> </span><span class="n">longest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Range</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">Range</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Range</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">values</span><span class="p">.</span><span class="na">length</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">values</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">values</span><span class="o">[</span><span class="n">i</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="o">]</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">current</span><span class="p">.</span><span class="na">extend</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">longest</span><span class="p">.</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">current</span><span class="p">.</span><span class="na">length</span><span class="p">())</span>
+<span class="w">                </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">longest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">current</span><span class="p">;</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="n">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Range</span><span class="p">(</span><span class="n">i</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">longest</span><span class="p">.</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">current</span><span class="p">.</span><span class="na">length</span><span class="p">())</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">longest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">current</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">longest</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<h3 id="6-3-8-nested-records">6.3.8 Nested records</h3>
+<ul>
+<li><code>Range</code> is mutable on purpose above; better as an immutable record: <code>record Range(int from, int to) {}</code>. <strong>A nested record is automatically static</strong>, with no outer reference.</li>
+<li><strong>Compact compilation units trap:</strong> a record nested in the implicit class cannot read the &quot;global&quot; instance variable:</li>
+</ul>
+<pre class="hl"><code><span class="kt">int</span><span class="o">[]</span><span class="w"> </span><span class="n">values</span><span class="p">;</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+
+<span class="kd">record</span> <span class="nc">Range</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">from</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="kd">to</span><span class="p">)</span><span class="w"> </span><span class="c1">// nested in the implicitly declared class</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="nf">sum</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">from</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="kd">to</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">result</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">values</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="c1">// ERROR: values is an instance variable of the enclosing class</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Nested enumerations are automatically static</strong>, as are <strong>nested interfaces</strong> (interfaces have no data).</li>
+</ul>
+<h2 id="6-4-service-loaders">6.4 Service loaders</h2>
+<ul>
+<li>For applications with a service architecture (OSGi at <code>https://osgi.org</code> goes well beyond this book), the JDK has a simple mechanism, well supported by the module system (chapter 12)
+<ul>
+<li><strong><code>ServiceLoader</code></strong> loads implementations of a common interface, leaving the service designer freedom and allowing multiple implementations.</li>
+</ul>
+</li>
+<li><strong>1. Define the interface:</strong></li>
+</ul>
+<pre class="hl"><code><span class="kn">package</span><span class="w"> </span><span class="nn">serviceLoader</span><span class="p">;</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Cipher</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="nf">encrypt</span><span class="p">(</span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">key</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="nf">decrypt</span><span class="p">(</span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">key</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="nf">strength</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>2. A provider implements it</strong> (any package; <strong>each needs a no-argument constructor</strong>):</li>
+</ul>
+<pre class="hl"><code><span class="kn">package</span><span class="w"> </span><span class="nn">serviceLoader.impl</span><span class="p">;</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">CaesarCipher</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Cipher</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="nf">encrypt</span><span class="p">(</span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">key</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="kt">byte</span><span class="o">[</span><span class="n">source</span><span class="p">.</span><span class="na">length</span><span class="o">]</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">source</span><span class="p">.</span><span class="na">length</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">result</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="n">source</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">key</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="nf">decrypt</span><span class="p">(</span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">key</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">encrypt</span><span class="p">(</span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="n">key</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="w"> </span><span class="p">});</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">strength</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>3. Register it:</strong> a UTF-8 text file in <code>META-INF/services</code> named after the <strong>qualified interface name</strong>, here <code>META-INF/services/serviceLoader.Cipher</code>, containing the line <code>serviceLoader.impl.CaesarCipher</code> (one line per implementation).</li>
+<li><strong>4. Load once:</strong> <code>public static ServiceLoader&lt;Cipher&gt; cipherLoader = ServiceLoader.load(Cipher.class);</code></li>
+<li><strong>5. Use it.</strong> The loader is iterable (lazily loading classes as the iterator advances):</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">Cipher</span><span class="w"> </span><span class="nf">getCipher</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">minStrength</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Cipher</span><span class="w"> </span><span class="n">cipher</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">cipherLoader</span><span class="p">)</span><span class="w"> </span><span class="c1">// implicitly calls cipherLoader.iterator()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">cipher</span><span class="p">.</span><span class="na">strength</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">minStrength</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">cipher</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>With streams (Volume II, chapter 1):
+<ul>
+<li><code>cipherLoader.stream()</code> yields <code>ServiceLoader.Provider</code> objects with <code>type()</code> and <code>get()</code></li>
+<li>choosing by <code>type()</code> avoids instantiating unneeded services:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">Optional</span><span class="o">&lt;</span><span class="n">Cipher</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">getCipher2</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">minStrength</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">cipherLoader</span><span class="p">.</span><span class="na">stream</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">filter</span><span class="p">(</span><span class="n">descr</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">descr</span><span class="p">.</span><span class="na">type</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">serviceLoader</span><span class="p">.</span><span class="na">impl</span><span class="p">.</span><span class="na">CaesarCipher</span><span class="p">.</span><span class="na">class</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">findFirst</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">ServiceLoader</span><span class="p">.</span><span class="na">Provider</span><span class="p">::</span><span class="n">get</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>To take any instance: <code>Optional&lt;Cipher&gt; cipher = cipherLoader.findFirst();</code> (<code>Optional</code> is in Volume II, chapter 1).</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-service-loader.svg" alt="How a service loader finds implementations" loading="lazy" /></p>
+<p><code>java.util.ServiceLoader&lt;S&gt;</code> (1.6): <code>static &lt;S&gt; ServiceLoader&lt;S&gt; load(Class&lt;S&gt; service)</code>, <code>Iterator&lt;S&gt; iterator()</code> (lazy), <code>Stream&lt;ServiceLoader.Provider&lt;S&gt;&gt; stream()</code> (9), <code>Optional&lt;S&gt; findFirst()</code> (9). <code>ServiceLoader.Provider&lt;S&gt;</code> (9): <code>Class&lt;? extends S&gt; type()</code>, <code>S get()</code>.</p>
+<h2 id="6-5-proxies">6.5 Proxies</h2>
+<ul>
+<li>A <strong>proxy</strong> creates, at run time, <strong>new classes implementing a given set of interfaces</strong>. Needed only when you do not know the interfaces at compile time
+<ul>
+<li>advanced and mainly for systems programming.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-5-1-when-to-use-proxies">6.5.1 When to use proxies</h3>
+<ul>
+<li>You cannot instantiate an interface, and <code>newInstance</code> or constructors only help with real classes
+<ul>
+<li>Some programs generate source, invoke the compiler and load the class file: slow and requires shipping the compiler</li>
+<li>The proxy mechanism is better</li>
+<li>A proxy class has:</li>
+<li>all methods required by the specified interfaces</li>
+<li>all methods of <code>Object</code> (<code>toString</code>, <code>equals</code>, ...)</li>
+</ul>
+</li>
+<li>You cannot define new code for them at run time
+<ul>
+<li>supply an <strong>invocation handler</strong>, an object implementing <code>InvocationHandler</code> with one method: <strong><code>Object invoke(Object proxy, Method method, Object[] args)</code></strong>. Every call on the proxy calls <code>invoke</code> with the <code>Method</code> object and arguments, and the handler decides what to do.</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-5-2-creating-proxy-objects">6.5.2 Creating proxy objects</h3>
+<ul>
+<li>Use <strong><code>Proxy.newProxyInstance(loader, interfaces, handler)</code></strong>:
+<ol>
+<li>a <strong>class loader</strong> (here the system class loader; class loaders are in Volume II, chapter 9)</li>
+<li>an array of <strong><code>Class</code> objects</strong>, one per interface</li>
+<li>an <strong>invocation handler</strong></li>
+</ol>
+</li>
+<li>Uses: routing calls to <strong>remote servers</strong>, linking <strong>UI events</strong> to actions, <strong>tracing</strong> method calls for debugging.</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">TraceHandler</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">InvocationHandler</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="n">target</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">TraceHandler</span><span class="p">(</span><span class="n">Object</span><span class="w"> </span><span class="n">t</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">target</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="nf">invoke</span><span class="p">(</span><span class="n">Object</span><span class="w"> </span><span class="n">proxy</span><span class="p">,</span><span class="w"> </span><span class="n">Method</span><span class="w"> </span><span class="n">m</span><span class="p">,</span><span class="w"> </span><span class="n">Object</span><span class="o">[]</span><span class="w"> </span><span class="n">args</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">Throwable</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// print method name and arguments</span>
+<span class="w">        </span><span class="c1">// ...</span>
+<span class="w">        </span><span class="c1">// invoke the actual method</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">m</span><span class="p">.</span><span class="na">invoke</span><span class="p">(</span><span class="n">target</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">Object</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">42</span><span class="p">;</span><span class="w"> </span><span class="c1">// any object that implements Comparable</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">handler</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TraceHandler</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+<span class="n">Object</span><span class="w"> </span><span class="n">proxy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Proxy</span><span class="p">.</span><span class="na">newProxyInstance</span><span class="p">(</span>
+<span class="w">    </span><span class="n">ClassLoader</span><span class="p">.</span><span class="na">getSystemClassLoader</span><span class="p">(),</span>
+<span class="w">    </span><span class="k">new</span><span class="w"> </span><span class="n">Class</span><span class="o">[]</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Comparable</span><span class="p">.</span><span class="na">class</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="n">handler</span><span class="p">);</span>
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-06-proxy-flow.svg" alt="A proxy forwards each call through its handler" loading="lazy" /></p>
+<ul>
+<li>Listing 6.12 (<code>ProxyDemo.java</code>) fills an array with proxies for the integers 1 to 1000, then calls <code>Arrays.binarySearch(elements, key)</code> for a random key, so every <code>compareTo</code> is traced, and finally prints the match
+<ul>
+<li>The proxy class (named like <code>$Proxy0</code>) implements <code>Comparable</code> and its <code>compareTo</code> calls the handler's <code>invoke</code>.</li>
+</ul>
+</li>
+<li>At run time <strong>generics are erased</strong>, so the proxy is built for the raw <code>Comparable</code> even though <code>Integer</code> implements <code>Comparable&lt;Integer&gt;</code>.</li>
+<li>Trace of one run:
+<ul>
+<li><code>500.compareTo(288)</code>, <code>250.compareTo(288)</code>, <code>375.compareTo(288)</code>, <code>312.compareTo(288)</code>, <code>281.compareTo(288)</code>, <code>296.compareTo(288)</code>, <code>288.compareTo(288)</code>, <code>288.toString()</code></li>
+<li>You can see the search halving the interval each step</li>
+<li><code>toString</code> is proxied although it is not in <code>Comparable</code>: <strong>certain <code>Object</code> methods are always proxied</strong> (next section).</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-5-3-properties-of-proxy-classes">6.5.3 Properties of proxy classes</h3>
+<ul>
+<li>Once created, proxy classes are <strong>regular classes</strong> in the VM.</li>
+<li><strong>All proxy classes extend <code>Proxy</code></strong> and have <strong>one instance field</strong>, the handler (defined in <code>Proxy</code>). Any extra data lives in the handler (the <code>TraceHandler</code> wrapped the real objects).</li>
+<li>Proxy classes override <code>toString</code>, <code>equals</code> and <code>hashCode</code>; each just calls <code>invoke</code>. Other <code>Object</code> methods (<code>clone</code>, <code>getClass</code>) are <strong>not</strong> redefined.</li>
+<li>Names are undefined (Oracle's VM uses names starting with <strong><code>$Proxy</code></strong>).</li>
+<li><strong>One proxy class per class loader and ordered interface set</strong>: two <code>newProxyInstance</code> calls with the same loader and interfaces give objects of the same class (<code>Proxy.getProxyClass(null, interfaces)</code> returns it).</li>
+<li>A proxy class is always <strong>public and final</strong>
+<ul>
+<li>if all interfaces are public it belongs to no package, otherwise all non-public interfaces must share one package and the proxy joins it. <code>Proxy.isProxyClass(cl)</code> tests for one.</li>
+</ul>
+</li>
+<li><strong>Calling a default method on a proxy triggers the handler</strong>; to run the real default, use the static <strong><code>InvocationHandler.invokeDefault</code></strong> (Java 16):</li>
+</ul>
+<pre class="hl"><code><span class="n">InvocationHandler</span><span class="w"> </span><span class="n">handler</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">proxy</span><span class="p">,</span><span class="w"> </span><span class="n">method</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">method</span><span class="p">.</span><span class="na">isDefault</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">InvocationHandler</span><span class="p">.</span><span class="na">invokeDefault</span><span class="p">(</span><span class="n">proxy</span><span class="p">,</span><span class="w"> </span><span class="n">method</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">method</span><span class="p">.</span><span class="na">invoke</span><span class="p">(</span><span class="n">target</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">};</span>
+</code></pre>
+<p><code>java.lang.reflect.InvocationHandler</code> (1.3): <code>Object invoke(Object proxy, Method method, Object[] args)</code>, <code>static Object invokeDefault(Object proxy, Method method, Object... args)</code> (16, bypasses the handler).</p>
+<p><code>java.lang.reflect.Proxy</code> (1.3): <code>static Class&lt;?&gt; getProxyClass(ClassLoader loader, Class&lt;?&gt;... interfaces)</code>, <code>static Object newProxyInstance(ClassLoader loader, Class&lt;?&gt;[] interfaces, InvocationHandler handler)</code>, <code>static boolean isProxyClass(Class&lt;?&gt; cl)</code>.</p>
+<ul>
+<li>This ends the object-oriented chapters:
+<ul>
+<li>interfaces, lambdas and inner classes are met often</li>
+<li><strong>cloning, service loaders and proxies are advanced techniques for library designers and tool builders</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Interfaces specify requirements; static, default and private methods extend them; default conflicts follow &quot;class wins&quot; and explicit resolution.</li>
+<li><code>Comparable</code> is the natural order, <code>Comparator</code> any other; <code>Comparator.comparing(...).thenComparing(...)</code> builds them.</li>
+<li>Lambdas convert to functional interfaces; method and constructor references shorten them; captured variables must be effectively final; <code>this</code> is the enclosing object.</li>
+<li>Inner classes hold an outer reference; local and anonymous classes can capture effectively final locals; static nested classes, records and enums have no outer reference.</li>
+<li>Cloning is shallow unless you deep copy; <code>ServiceLoader</code> discovers implementations; proxies create interface implementations at run time.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Interface, default method, static interface method, functional interface:</strong> contracts and single-method types.</li>
+<li><strong>Callback:</strong> an object whose method is called later.</li>
+<li><strong>Lambda, closure, effectively final, free variable:</strong> deferred code and captured values.</li>
+<li><strong>Method reference, constructor reference:</strong> shorthand for a one-call lambda.</li>
+<li><strong><code>Comparable</code>, <code>Comparator</code>:</strong> natural versus custom ordering.</li>
+<li><strong>Shallow clone, deep clone, <code>Cloneable</code>:</strong> object copying.</li>
+<li><strong>Inner class, local class, anonymous class, static nested class:</strong> classes within other scopes.</li>
+<li><strong><code>OuterClass.this</code>, <code>outer.new Inner()</code>:</strong> explicit outer reference syntax.</li>
+<li><strong>Service provider, <code>ServiceLoader</code>:</strong> discovering implementations.</li>
+<li><strong>Proxy, invocation handler:</strong> run-time interface implementations.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed., Pearson, 2025, ch. 6. Read through O'Reilly's learning platform for personal use.</li>
+<li>JEP 181, Nest-Based Access Control: <a href="https://openjdk.org/jeps/181" target="_blank" rel="noopener noreferrer">https://openjdk.org/jeps/181</a></li>
+<li>OSGi: <a href="https://osgi.org" target="_blank" rel="noopener noreferrer">https://osgi.org</a></li>
+<li>Java Language Specification: <a href="https://docs.oracle.com/javase/specs" target="_blank" rel="noopener noreferrer">https://docs.oracle.com/javase/specs</a></li>
+<li>Streams, <code>Optional</code>, class loaders, internationalisation: Volume II of the same book (no online link given).</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li>java-concurrency</li>
+<li><a href="/book-digest/core-java-vol-1/cj-05-inheritance/">Core Java 5: Inheritance</a></li>
+<li><a href="/book-digest/core-java-vol-1/cj-07-exceptions-assertions-and-logging/">Core Java 7: Exceptions, Assertions and Logging</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/core-java-vol-1/cj-05-inheritance/">&larr; Core Java 5: Inheritance</a><a href="/book-digest/core-java-vol-1/">Contents</a><a href="/book-digest/core-java-vol-1/cj-07-exceptions-assertions-and-logging/">Core Java 7: Exceptions, Assertions and Logging &rarr;</a></nav></main></body></html>

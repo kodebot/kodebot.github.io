@@ -1,0 +1,1245 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Core Java 9: Collections</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/core-java-vol-1/">Core Java Vol 1</a></div>
+<main>
+<h1 id="core-java-9-collections">Core Java 9: Collections</h1>
+<p>Source: Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed. (Pearson, 2025), ch. 9. Previous: <a href="/book-digest/core-java-vol-1/cj-08-generic-programming/">Core Java 8: Generic Programming</a>. Next: <a href="/book-digest/core-java-vol-1/cj-10-concurrency/">Core Java 10: Concurrency</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The <strong>Java Collections Framework</strong> separates <strong>interfaces</strong> from <strong>implementations</strong>: hold the reference in an interface type (<code>Queue</code>, <code>List</code>, <code>Set</code>, <code>Map</code>) and name the concrete class only at construction.</li>
+<li>Two roots: <strong><code>Collection</code></strong> (<code>add</code>, <code>iterator</code>) and <strong><code>Map</code></strong> (<code>put</code>, <code>get</code>). A <code>List</code> is ordered with index access, a <code>Set</code> rejects duplicates, a <code>Queue</code> or <code>Deque</code> is for first-in first-out or both ends.</li>
+<li><strong>Iterators sit between elements</strong>; <code>next</code> returns and passes over an element; <code>remove</code> removes the <strong>last returned</strong> element and cannot be called twice in a row.</li>
+<li>Pick the structure by cost: <strong><code>ArrayList</code></strong> (fast index access), <strong><code>LinkedList</code></strong> (cheap insert and remove through an iterator, never use indexes), <strong><code>HashSet</code>/<code>HashMap</code></strong> (fast lookup, no order), <strong><code>TreeSet</code>/<code>TreeMap</code></strong> (sorted), <strong><code>ArrayDeque</code></strong>, <strong><code>PriorityQueue</code></strong>.</li>
+<li>Changing a collection while another iterator reads it throws <strong><code>ConcurrentModificationException</code></strong>.</li>
+</ul>
+</div></div>
+<h2 id="9-1-the-java-collections-framework">9.1 The Java Collections Framework</h2>
+<ul>
+<li>The original Java shipped only <code>Vector</code>, <code>Stack</code>, <code>Hashtable</code>, <code>BitSet</code> and the <code>Enumeration</code> interface: wise, because a comprehensive library takes time and skill
+<ul>
+<li><strong>Java 1.2</strong> added a full framework, balancing: <strong>small and easy to learn</strong>, without the complexity of C++'s STL yet with the benefit of <strong>generic algorithms</strong>, and fitting the legacy classes</li>
+<li>It has some idiosyncratic decisions.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-1-1-separating-collection-interfaces-and-implementation">9.1.1 Separating collection interfaces and implementation</h3>
+<ul>
+<li>A <strong>queue</strong> interface lets you add at the tail, remove at the head and ask the size (&quot;first in, first out&quot;):</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Queue</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="c1">// a simplified form of the interface in the Java API</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">E</span><span class="w"> </span><span class="n">e</span><span class="p">);</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="nf">remove</span><span class="p">();</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="nf">size</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Two common implementations: a <strong>circular array</strong> (<code>ArrayDeque</code>) and a <strong>linked list</strong> (<code>LinkedList</code>), each a class implementing <code>Queue</code>.</li>
+<li><strong>Use the concrete class only when constructing; hold the reference as the interface type:</strong></li>
+</ul>
+<pre class="hl"><code><span class="n">Queue</span><span class="o">&lt;</span><span class="n">Customer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">expressLane</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayDeque</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">);</span>
+<span class="n">expressLane</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">Customer</span><span class="p">(</span><span class="s">"Harry"</span><span class="p">));</span>
+
+<span class="c1">// change your mind in one place</span>
+<span class="n">Queue</span><span class="o">&lt;</span><span class="n">Customer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">expressLane2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">LinkedList</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+</code></pre>
+<ul>
+<li>Another reason: both classes have non-queue methods, and using one by accident is a <strong>compile error</strong> through a <code>Queue</code> variable.</li>
+<li>The interface says nothing about efficiency
+<ul>
+<li>A circular array is more memory-efficient but has finite capacity and reallocates; <strong>measurements show <code>ArrayDeque</code> generally beats <code>LinkedList</code></strong> (less impact on the garbage collector)</li>
+<li>When <code>ArrayDeque</code> appeared in Java 6, code using <code>Queue</code> swapped by changing one line.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-interface-vs-implementation.svg" alt="One interface, several implementations" loading="lazy" /></p>
+<h3 id="9-1-2-the-collection-interface">9.1.2 The <code>Collection</code> interface</h3>
+<ul>
+<li>The root interface has two fundamental methods:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Collection</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">E</span><span class="w"> </span><span class="n">element</span><span class="p">);</span>
+<span class="w">    </span><span class="n">Iterator</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">iterator</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>add</code> returns <strong>true if the collection changed</strong>, false otherwise (adding a duplicate to a set has no effect). <code>iterator</code> returns an object to visit the elements.</li>
+</ul>
+<h3 id="9-1-3-iterators">9.1.3 Iterators</h3>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Iterator</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">hasNext</span><span class="p">();</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="nf">next</span><span class="p">();</span>
+<span class="w">    </span><span class="k">default</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">remove</span><span class="p">();</span>
+<span class="w">    </span><span class="k">default</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">forEachRemaining</span><span class="p">(</span><span class="n">Consumer</span><span class="o">&lt;?</span><span class="w"> </span><span class="kd">super</span><span class="w"> </span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="n">action</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Call <code>hasNext</code> before <code>next</code>; at the end <code>next</code> throws <strong><code>NoSuchElementException</code></strong>.</li>
+</ul>
+<pre class="hl"><code><span class="n">Collection</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">coll</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span><span class="w"> </span><span class="c1">// ...</span>
+<span class="n">Iterator</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">coll</span><span class="p">.</span><span class="na">iterator</span><span class="p">();</span>
+<span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">iter</span><span class="p">.</span><span class="na">hasNext</span><span class="p">())</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">iter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// do something with element</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The <strong>&quot;for each&quot; loop</strong> is the compiler's translation into this iterator loop and works for any <strong><code>Iterable</code></strong> (an interface with <code>Iterator&lt;E&gt; iterator()</code>)
+<ul>
+<li><code>Collection</code> extends <code>Iterable</code>.</li>
+</ul>
+</li>
+<li>Instead of a loop: <code>coll.forEach(element -&gt; ...)</code> or <code>iter.forEachRemaining(element -&gt; ...)</code>.</li>
+<li><strong>Order depends on the collection</strong>:
+<ul>
+<li><code>ArrayList</code> goes from index 0</li>
+<li>a <code>HashSet</code> gives an essentially random order. All elements are visited, but assume nothing about order (fine for totals or counting).</li>
+</ul>
+</li>
+<li>The designers did not reuse <code>Enumeration</code> (<code>nextElement</code>, <code>hasMoreElements</code>) because they disliked the <strong>cumbersome names</strong>.</li>
+<li><strong>Conceptual difference from C++ STL:</strong>
+<ul>
+<li>STL iterators are modelled on array indexes (look up and advance separately)</li>
+<li><strong>Java iterators sit between elements</strong>: <code>next</code> jumps over the next element and returns it; lookup and advance are coupled</li>
+<li>Analogy: <code>Iterator.next</code> is like <code>InputStream.read</code>, consuming what it returns.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-iterator-between-elements.svg" alt="An iterator sits between elements" loading="lazy" /></p>
+<ul>
+<li><strong><code>remove</code> removes the element last returned by <code>next</code>.</strong>
+<ul>
+<li>To remove the first element: <code>iter.next(); iter.remove();</code></li>
+<li><strong>Calling <code>remove</code> without a preceding <code>next</code> throws <code>IllegalStateException</code></strong>, so two adjacent removals need a <code>next</code> between them:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="n">iter</span><span class="p">.</span><span class="na">remove</span><span class="p">();</span>
+<span class="n">iter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span>
+<span class="n">iter</span><span class="p">.</span><span class="na">remove</span><span class="p">();</span><span class="w"> </span><span class="c1">// OK</span>
+<span class="c1">// iter.remove(); iter.remove();  // ERROR</span>
+</code></pre>
+<h3 id="9-1-4-generic-utility-methods">9.1.4 Generic utility methods</h3>
+<ul>
+<li>Interfaces are generic, so you can write methods for any collection:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">contains</span><span class="p">(</span><span class="n">Collection</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="n">c</span><span class="p">,</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="n">obj</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">E</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">c</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">element</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="n">obj</span><span class="p">))</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>Collection&lt;E&gt;</code> already declares: <code>int size()</code>, <code>boolean isEmpty()</code>, <code>boolean contains(Object)</code>, <code>boolean containsAll(Collection&lt;?&gt;)</code>, <code>boolean add(E)</code>, <code>boolean addAll(Collection&lt;? extends E&gt;)</code>, <code>boolean remove(Object)</code>, <code>boolean removeAll(Collection&lt;?&gt;)</code>, <code>boolean retainAll(Collection&lt;?&gt;)</code>, <code>void clear()</code>, <code>Object[] toArray()</code>, <code>T[] toArray(T[] a)</code>.</li>
+<li>It redeclares <code>equals</code> and <code>hashCode</code> only as a place for documentation. <code>Set</code> and <code>List</code> mandate specific <code>equals</code> behaviour
+<ul>
+<li>others inherit <code>Object.equals</code> or compare elements (then <code>hashCode</code> must be overridden too).</li>
+</ul>
+</li>
+<li><strong>Pre-generics compatibility:</strong> <code>contains</code> and <code>remove</code> take an <strong><code>Object</code></strong>, and <code>containsAll</code>, <code>removeAll</code>, <code>retainAll</code> take <code>Collection&lt;?&gt;</code>, so <strong>type errors may go undetected</strong>: <code>Collection&lt;Path&gt; paths = ...; paths.remove(&quot;/tmp&quot;);</code> compiles but can have no effect.</li>
+<li><strong><code>AbstractCollection</code></strong>
+<ul>
+<li>leaves <code>size</code> and <code>iterator</code> abstract and implements the routine methods in terms of them (<code>isEmpty</code> is <code>size() == 0</code>, <code>contains</code> loops through the iterator)</li>
+<li>concrete classes extend it and may override for speed. <strong>A bit outdated</strong>, since default methods did not exist then</li>
+<li>some were added: three for streams (Volume II), <code>toArray</code> (section 9.6.6) and <strong><code>default boolean removeIf(Predicate&lt;? super E&gt; filter)</code></strong>.</li>
+</ul>
+</li>
+</ul>
+<p><code>java.util.Collection&lt;E&gt;</code> (1.2): <code>iterator()</code>, <code>size()</code>, <code>isEmpty()</code>, <code>contains(Object)</code>, <code>containsAll(Collection&lt;?&gt;)</code>, <code>add(E)</code> (true if changed), <code>addAll(Collection&lt;? extends E&gt;)</code>, <code>remove(Object)</code>, <code>removeAll(Collection&lt;?&gt;)</code>, <code>removeIf(Predicate&lt;? super E&gt;)</code> (8), <code>clear()</code>, <code>retainAll(Collection&lt;?&gt;)</code>, <code>Object[] toArray()</code>, <code>&lt;T&gt; T[] toArray(IntFunction&lt;T[]&gt; generator)</code> (11; typically <code>T[]::new</code>).</p>
+<p><code>java.util.Iterator&lt;E&gt;</code> (1.2): <code>hasNext()</code>, <code>next()</code>, <code>remove()</code> (must follow a visit; throws <code>IllegalStateException</code> if the collection was modified since; may throw <code>UnsupportedOperationException</code> by default), <code>forEachRemaining(Consumer&lt;? super E&gt;)</code> (8).</p>
+<h2 id="9-2-interfaces-in-the-collections-framework">9.2 Interfaces in the Collections Framework</h2>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-collection-interfaces.svg" alt="The interfaces of the Collections Framework" loading="lazy" /></p>
+<ul>
+<li>Two fundamental interfaces: <strong><code>Collection</code></strong> (insert with <code>boolean add(E element)</code>, read with an iterator) and <strong><code>Map</code></strong> (key/value pairs: <code>V put(K key, V value)</code> and <code>V get(Object key)</code>).</li>
+<li>A <strong><code>List</code></strong> is <strong>ordered</strong>: elements are added at a position and reached by an iterator (sequential) or an <strong>integer index</strong> (<strong>random access</strong>):</li>
+</ul>
+<pre class="hl"><code><span class="kt">void</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="n">element</span><span class="p">)</span>
+<span class="n">E</span><span class="w"> </span><span class="nf">remove</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">index</span><span class="p">)</span>
+<span class="n">E</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">index</span><span class="p">)</span>
+<span class="n">E</span><span class="w"> </span><span class="nf">set</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="n">element</span><span class="p">)</span>
+</code></pre>
+<ul>
+<li><strong>Trap with <code>List&lt;Integer&gt;</code>:</strong> two <code>remove</code> methods, <code>remove(int index)</code> and <code>remove(Integer o)</code>. A parameter of type <code>int</code> picks the index version with <strong>no boxing and no warning</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="n">List</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">ids</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+<span class="kt">int</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">ids</span><span class="p">.</span><span class="na">remove</span><span class="p">(</span><span class="n">id</span><span class="p">);</span><span class="w"> </span><span class="c1">// removes index 0, not the element with value 0</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>List.equals</code>: the other object must be a list of the same size with equal corresponding elements.</li>
+<li><strong>A design flaw:</strong>
+<ul>
+<li>two ordered collections with different trade-offs (array-backed has fast random access; linked has slow), so ideally two interfaces</li>
+<li>Java 1.4 added the <strong>tagging interface <code>RandomAccess</code></strong> (no methods) to test: <code>if (c instanceof RandomAccess) { /* random traversal */ } else { /* sequential traversal */ }</code>.</li>
+</ul>
+</li>
+<li><strong><code>Set</code></strong>
+<ul>
+<li>has the same methods as <code>Collection</code> but tighter behaviour: <code>add</code> <strong>rejects duplicates</strong></li>
+<li><code>equals</code> means the same elements <strong>in any order</strong></li>
+<li><code>hashCode</code> matches
+<ul>
+<li>A separate interface lets methods accept only sets and means <code>equals</code> can check the argument is a <code>Set</code>, not just any <code>Collection</code></li>
+<li>Lists are equal with the same elements <strong>in the same order</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><code>SortedSet</code> and <code>SortedMap</code></strong>
+<ul>
+<li>expose the comparator and subset <strong>views</strong> (section 9.5.3). <strong><code>NavigableSet</code> and <code>NavigableMap</code></strong> add finding the next or previous element</li>
+<li><code>TreeSet</code> and <code>TreeMap</code> implement them (efficient in trees).</li>
+</ul>
+</li>
+<li><strong>Java 21 <code>SequencedCollection&lt;E&gt;</code></strong>
+<ul>
+<li>gives uniform access to first and last elements and reverse traversal: <code>getFirst()</code>, <code>getLast()</code>, <code>addFirst(e)</code>, <code>addLast(e)</code>, <code>removeFirst()</code>, <code>removeLast()</code>, <code>reversed()</code></li>
+<li>Before, lists, sets and deques each had different methods</li>
+<li><code>SequencedSet</code> returns <code>SequencedSet</code> from <code>reversed</code>; <code>SequencedMap</code> has analogous methods.</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-3-concrete-collections">9.3 Concrete collections</h2>
+<p>Table 9.1 (all implement <code>Collection</code> except the <code>...Map</code> classes, which implement <code>Map</code>; thread-safe ones are in chapter 10):</p>
+<table>
+<thead>
+<tr>
+<th>Collection</th>
+<th>Description</th>
+<th>Section</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ArrayList</code></td>
+<td>indexed sequence that grows and shrinks dynamically</td>
+<td>9.3.2</td>
+</tr>
+<tr>
+<td><code>LinkedList</code></td>
+<td>ordered sequence with efficient insertion and removal anywhere</td>
+<td>9.3.1</td>
+</tr>
+<tr>
+<td><code>ArrayDeque</code></td>
+<td>double-ended queue implemented as a circular array</td>
+<td>9.3.5</td>
+</tr>
+<tr>
+<td><code>HashSet</code></td>
+<td>unordered collection that rejects duplicates</td>
+<td>9.3.3</td>
+</tr>
+<tr>
+<td><code>TreeSet</code></td>
+<td>sorted set</td>
+<td>9.4.5</td>
+</tr>
+<tr>
+<td><code>EnumSet</code></td>
+<td>set of enumerated type values</td>
+<td>9.4.6</td>
+</tr>
+<tr>
+<td><code>LinkedHashSet</code></td>
+<td>set that remembers insertion order</td>
+<td>9.4.5</td>
+</tr>
+<tr>
+<td><code>PriorityQueue</code></td>
+<td>efficient removal of the smallest element</td>
+<td>9.3.6</td>
+</tr>
+<tr>
+<td><code>HashMap</code></td>
+<td>key/value associations</td>
+<td>9.4.1</td>
+</tr>
+<tr>
+<td><code>TreeMap</code></td>
+<td>map with sorted keys</td>
+<td>9.4.1</td>
+</tr>
+<tr>
+<td><code>EnumMap</code></td>
+<td>map with enumerated-type keys</td>
+<td>9.4.6</td>
+</tr>
+<tr>
+<td><code>LinkedHashMap</code></td>
+<td>map that remembers the order entries were added</td>
+<td>9.4.5</td>
+</tr>
+<tr>
+<td><code>WeakHashMap</code></td>
+<td>values the garbage collector may reclaim if unused elsewhere</td>
+<td>9.4.4</td>
+</tr>
+<tr>
+<td><code>IdentityHashMap</code></td>
+<td>keys compared by <code>==</code>, not <code>equals</code></td>
+<td>9.4.7</td>
+</tr>
+</tbody>
+</table>
+<h3 id="9-3-1-linked-lists">9.3.1 Linked lists</h3>
+<ul>
+<li>Removing or inserting in the <strong>middle of an array</strong> is expensive (everything beyond moves)
+<ul>
+<li>A <strong>linked list</strong> stores each object in a separate <strong>link</strong> holding a reference to the next; in Java all linked lists are <strong>doubly linked</strong> (each link also points to its predecessor)</li>
+<li>Removing in the middle updates only the neighbouring links.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-array-vs-linked-removal.svg" alt="Removing from an array versus a linked list" loading="lazy" /></p>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">staff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">LinkedList</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="n">staff</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="s">"Amy"</span><span class="p">);</span>
+<span class="n">staff</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="s">"Bob"</span><span class="p">);</span>
+<span class="n">staff</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="s">"Carl"</span><span class="p">);</span>
+<span class="n">Iterator</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">staff</span><span class="p">.</span><span class="na">iterator</span><span class="p">();</span>
+<span class="n">String</span><span class="w"> </span><span class="n">first</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">iter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span><span class="w">  </span><span class="c1">// Amy</span>
+<span class="n">String</span><span class="w"> </span><span class="n">second</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">iter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span><span class="w"> </span><span class="c1">// Bob</span>
+<span class="n">iter</span><span class="p">.</span><span class="na">remove</span><span class="p">();</span><span class="w">               </span><span class="c1">// removes the last visited element (Bob)</span>
+</code></pre>
+<ul>
+<li>A linked list is <strong>ordered by position</strong>, but <code>add</code> appends to the end
+<ul>
+<li>Position-dependent <code>add</code> is the job of an <strong>iterator</strong> (it describes positions), only meaningful for ordered collections, so <code>Iterator</code> has no <code>add</code></li>
+<li>The subinterface <strong><code>ListIterator</code></strong> adds it:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">interface</span> <span class="nc">ListIterator</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Iterator</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">E</span><span class="w"> </span><span class="n">element</span><span class="p">);</span><span class="w"> </span><span class="c1">// no boolean: it always modifies the list</span>
+<span class="w">    </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">hasPrevious</span><span class="p">();</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="nf">previous</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>previous</code> returns the object it skipped, like <code>next</code>
+<ul>
+<li>Get one with <code>staff.listIterator()</code></li>
+<li><strong><code>add</code> inserts before the iterator position</strong>: skipping the first element and adding &quot;Juliet&quot; puts her before Bob.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="n">ListIterator</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">staff</span><span class="p">.</span><span class="na">listIterator</span><span class="p">();</span>
+<span class="n">iter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span><span class="w"> </span><span class="c1">// skip past first element</span>
+<span class="n">iter</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="s">"Juliet"</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>Several <code>add</code> calls go in order before the iterator position
+<ul>
+<li>A fresh iterator makes the new element the <strong>first</strong>; past the last element it becomes the <strong>tail</strong></li>
+<li>With <em>n</em> elements there are <strong>n + 1 insertion spots</strong>, for three elements: <code>|ABC</code>, <code>A|BC</code>, <code>AB|C</code>, <code>ABC|</code>.</li>
+</ul>
+</li>
+<li><strong><code>remove</code> is not the Backspace key:</strong>
+<ul>
+<li>right after <code>next</code> it removes the element on the <strong>left</strong>, but right after <code>previous</code> it removes the one on the <strong>right</strong>, and you cannot call it twice in a row. <code>add</code> depends only on position</li>
+<li><strong><code>remove</code> depends on iterator state</strong>.</li>
+</ul>
+</li>
+<li><strong><code>set</code></strong> replaces the last element returned by <code>next</code> or <code>previous</code>: <code>String oldValue = iter.next(); iter.set(newValue);</code>.</li>
+<li><strong><code>ConcurrentModificationException</code>:</strong> an iterator detects when its collection was modified by another iterator or a collection method:</li>
+</ul>
+<pre class="hl"><code><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">LinkedList</span><span class="o">&lt;&gt;</span><span class="p">();</span><span class="w"> </span><span class="c1">// ...</span>
+<span class="n">ListIterator</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">iter1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">list</span><span class="p">.</span><span class="na">listIterator</span><span class="p">();</span>
+<span class="n">ListIterator</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">iter2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">list</span><span class="p">.</span><span class="na">listIterator</span><span class="p">();</span>
+<span class="n">iter1</span><span class="p">.</span><span class="na">next</span><span class="p">();</span>
+<span class="n">iter1</span><span class="p">.</span><span class="na">remove</span><span class="p">();</span>
+<span class="n">iter2</span><span class="p">.</span><span class="na">next</span><span class="p">();</span><span class="w"> </span><span class="c1">// throws ConcurrentModificationException</span>
+</code></pre>
+<ul>
+<li><strong>Rule:</strong> attach as many iterators as you like if all are <strong>readers</strong>, or <strong>one</strong> that both reads and writes.</li>
+<li>How:
+<ul>
+<li>the collection counts <strong>mutating (structural) operations</strong></li>
+<li>each iterator keeps its own count and compares at the start of each method. <strong>Exception:</strong> <code>set</code> is <strong>not</strong> a structural modification, so several iterators may call <code>set</code> (needed by algorithms in <code>Collections</code>).</li>
+</ul>
+</li>
+<li>Other <code>Collection</code> methods come from <code>AbstractCollection</code>: <code>toString</code> gives <code>[A, B, C]</code> (handy for debugging), <code>contains(&quot;Harry&quot;)</code> checks presence.</li>
+<li><strong>Linked lists do not support fast random access</strong>,
+<ul>
+<li>yet <code>LinkedList.get(n)</code> exists (starting from the end if <code>n &gt;= size() / 2</code>)</li>
+<li><strong>Never step through a linked list with <code>get(i)</code></strong>: <code>for (int i = 0; i &lt; list.size(); i++) ... list.get(i)</code> is &quot;staggeringly inefficient&quot; (each lookup restarts, nothing is cached)</li>
+<li>If you use <code>get</code>, you probably chose the wrong structure.</li>
+</ul>
+</li>
+<li><code>nextIndex()</code> and <code>previousIndex()</code> (one less) are efficient for <code>LinkedList</code> iterators; <code>list.listIterator(n)</code> returns an iterator just before index <code>n</code> but is inefficient.</li>
+<li>The <strong>only reason to use a linked list is cheap insertion and removal in the middle</strong>
+<ul>
+<li>For a handful of elements just use an <code>ArrayList</code></li>
+<li><strong>Stay away from all index-based methods on linked lists; for random access use an array or <code>ArrayList</code>.</strong></li>
+</ul>
+</li>
+<li>Listing 9.1 (<code>LinkedListDemo.java</code>) merges two lists with iterators, removes every second element of one, and tests <code>removeAll</code>
+<ul>
+<li>tracing it with iterator-position diagrams like <code>|ACE |BDFG</code> helps. It prints the merged list <code>[Amy, Bob, Carl, Doug, Erica, Frances, Gloria]</code>, then the second list after removals <code>[Bob, Frances]</code>, then <code>a.removeAll(b)</code> leaves <code>[Amy, Carl, Doug, Erica, Gloria]</code>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// merge the elements from b into a</span>
+<span class="n">ListIterator</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">aIter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">listIterator</span><span class="p">();</span>
+<span class="n">Iterator</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">bIter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">b</span><span class="p">.</span><span class="na">iterator</span><span class="p">();</span>
+
+<span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">bIter</span><span class="p">.</span><span class="na">hasNext</span><span class="p">())</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">aIter</span><span class="p">.</span><span class="na">hasNext</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">aIter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">aIter</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">bIter</span><span class="p">.</span><span class="na">next</span><span class="p">());</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-listiterator-positions.svg" alt="ListIterator positions and where add inserts" loading="lazy" /></p>
+<p><code>java.util.List&lt;E&gt;</code> (1.2): <code>listIterator()</code>, <code>listIterator(int index)</code> (first <code>next</code> returns that index), <code>add(int i, E)</code>, <code>addAll(int i, Collection&lt;? extends E&gt;)</code>, <code>E remove(int i)</code>, <code>E get(int i)</code>, <code>E set(int i, E)</code> (returns the old value), <code>int indexOf(Object)</code> and <code>lastIndexOf(Object)</code> (-1 if absent).</p>
+<p><code>java.util.ListIterator&lt;E&gt;</code> (1.2): <code>add(E)</code> (before the current position), <code>set(E)</code> (throws <code>IllegalStateException</code> if the structure changed since the last <code>next</code> or <code>previous</code>), <code>hasPrevious()</code>, <code>previous()</code> (<code>NoSuchElementException</code> at the start), <code>nextIndex()</code>, <code>previousIndex()</code>.</p>
+<p><code>java.util.LinkedList&lt;E&gt;</code> (1.2): <code>LinkedList()</code>, <code>LinkedList(Collection&lt;? extends E&gt;)</code>, <code>addFirst</code>, <code>addLast</code>, <code>getFirst</code>, <code>getLast</code>, <code>removeFirst</code>, <code>removeLast</code>.</p>
+<h3 id="9-3-2-array-lists">9.3.2 Array lists</h3>
+<ul>
+<li><code>List</code> offers sequential (iterator) and <strong>random access</strong> (<code>get</code>, <code>set</code>); the latter suits <strong>arrays</strong>, not linked lists. <strong><code>ArrayList</code></strong> wraps a dynamically reallocated array.</li>
+<li><strong><code>Vector</code></strong>
+<ul>
+<li>(Java 1.0) is similar but <strong>all its methods are synchronised</strong>, wasteful when used from one thread (the common case)</li>
+<li><code>ArrayList</code> methods are not synchronised, and chapter 10 has better thread-safe choices. <strong>No reason to use <code>Vector</code></strong> except for ancient APIs.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-3-3-hash-sets">9.3.3 Hash sets</h3>
+<ul>
+<li>With a list you must visit elements to find one. If you do not care about order, a <strong>hash table</strong> finds elements fast, but you give up control of order.</li>
+<li>A hash table computes an integer <strong>hash code</strong> for each object from its instance fields, ideally differing for different data
+<ul>
+<li>Examples (Table 9.2): <code>&quot;Lee&quot;</code> is 76268, <code>&quot;lee&quot;</code> is 107020, <code>&quot;eel&quot;</code> is 100300</li>
+<li>For your own classes you implement <code>hashCode</code> (chapter 5) <strong>compatible with <code>equals</code></strong></li>
+<li>It must be fast and depend only on the object's own state.</li>
+</ul>
+</li>
+<li>In Java a hash table is an <strong>array of linked lists called buckets</strong>
+<ul>
+<li>The bucket index is the <strong>hash code modulo the number of buckets</strong>: hash code 76268 with 128 buckets goes to bucket 108 (<code>76268 % 128</code>)</li>
+<li>An occupied bucket is a <strong>hash collision</strong>: compare the new object with those already in the bucket</li>
+<li>With a random spread and enough buckets few comparisons are needed.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-hash-table-buckets.svg" alt="A hash table of buckets" loading="lazy" /></p>
+<ul>
+<li>In <code>HashMap</code>, a bucket <strong>turns into a balanced binary tree</strong> when it exceeds a threshold, protecting performance against poor hash functions or <strong>malicious inputs flooding with identical hash codes</strong>
+<ul>
+<li><strong>Prefer keys that implement <code>Comparable</code></strong> so poorly distributed hash codes cannot hurt.</li>
+</ul>
+</li>
+<li><strong>Rehashing:</strong> when too full, a bigger table is built and all elements reinserted. The <strong>load factor</strong> (default <strong>0.75</strong>) decides: above 75% full, double the buckets. Usually leave it.</li>
+<li>Set the initial bucket count to <strong>expected elements divided by the load factor</strong>, or since Java 19 use <code>HashSet&lt;String&gt; strings = HashSet.newHashSet(expectedElementCount);</code>
+<ul>
+<li>Bucket counts are <strong>powers of 2</strong> (default 16; supplied values round up), though some researchers favour primes.</li>
+</ul>
+</li>
+<li>A <strong>set</strong> is a collection without duplicates; <code>HashSet.add</code> first looks for the object and adds only if absent, and <code>contains</code> checks <strong>one bucket only</strong>
+<ul>
+<li>Its iterator visits buckets in turn, so order <strong>looks random</strong></li>
+<li>Use it only when order does not matter.</li>
+</ul>
+</li>
+<li>Listing 9.2 (<code>SetDemo.java</code>) reads words and compares <code>HashSet</code> with <code>TreeSet</code>: e.g
+<ul>
+<li><code>java v1ch09.set.SetDemo gutenberg/alice30.txt</code></li>
+<li><em>Alice in Wonderland</em> has <strong>28,195 words, 5,909 unique</strong>, appearing in random order in the hash set.</li>
+</ul>
+</li>
+<li><strong>Do not mutate set elements in a way that changes their hash code</strong>: the element ends up in the wrong bucket.</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">rects</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;</span><span class="n">Rectangle</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">rect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Rectangle</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="p">);</span>
+<span class="n">rects</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">rect</span><span class="p">);</span>
+<span class="n">rect</span><span class="p">.</span><span class="na">setLocation</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="c1">// rects is now [java.awt.Rectangle[x=0,y=0,width=20,height=30]]</span>
+<span class="n">rects</span><span class="p">.</span><span class="na">remove</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">Rectangle</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="p">));</span><span class="w"> </span><span class="c1">// returns false: not found, not removed</span>
+</code></pre>
+<p><code>java.util.HashSet&lt;E&gt;</code> (1.2): <code>HashSet()</code>, <code>HashSet(Collection&lt;? extends E&gt;)</code>, <code>HashSet(int initialCapacity)</code>, <code>HashSet(int initialCapacity, float loadFactor)</code> (rehashed when size/capacity exceeds the load factor), <code>static &lt;E&gt; HashSet&lt;E&gt; newHashSet(int numMappings)</code> (19). <code>Object.hashCode</code> (1.0): equal objects must return identical hash codes.</p>
+<h3 id="9-3-4-tree-sets">9.3.4 Tree sets</h3>
+<ul>
+<li>A <strong><code>TreeSet</code></strong> is a <strong>sorted</strong> collection:
+<ul>
+<li>insert in any order, iterate in sorted order</li>
+<li>Sorting is by a tree (<strong>red-black tree</strong> in the current implementation; see Cormen, Leiserson, Rivest and Stein, <em>Introduction to Algorithms</em>, MIT Press, 2022)</li>
+<li>Every added element lands in its sorted position, so the iterator always visits in order.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">sorter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TreeSet</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="n">sorter</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="s">"Bob"</span><span class="p">);</span>
+<span class="n">sorter</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="s">"Amy"</span><span class="p">);</span>
+<span class="n">sorter</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="s">"Carl"</span><span class="p">);</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">sorter</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">s</span><span class="p">);</span><span class="w"> </span><span class="c1">// Amy, Bob, Carl</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Adding to a tree is <strong>slower than to a hash table</strong> but much faster than checking duplicates in an array or list: about <strong>log2 n comparisons</strong> (about 10 for 1,000 elements).</li>
+<li>Elements must be <strong>comparable</strong>: implement <code>Comparable</code> or supply a <code>Comparator</code> at construction.</li>
+<li><strong>Cost:</strong>
+<ul>
+<li>running <code>SetDemo</code> on <em>The Count of Monte Cristo</em> (466,300 words, each inserted 100 times), the <code>TreeSet</code> was <strong>almost 4 times slower</strong></li>
+<li>Without a need for sorting, do not pay for it</li>
+<li>Also a comparison function must tell objects apart <strong>with complete precision</strong>, whereas a hash function only needs to scramble reasonably.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>a set of rectangles with a <code>Comparator&lt;Rectangle&gt;</code></li>
+<li>Comparing by <strong>area fails</strong> (different rectangles can share an area and you want both)</li>
+<li>The comparator must be <strong>compatible with <code>equals</code></strong>: zero only for equal elements</li>
+<li>A valid order exists (lexicographic on coordinates) but is cumbersome; the hash function is already defined.</li>
+</ul>
+</li>
+<li><strong>Incompatible comparators break set equality.</strong>
+<ul>
+<li><code>var commands = new TreeSet&lt;String&gt;(String.CASE_INSENSITIVE_ORDER);</code> then <code>commands.add(&quot;QUIT&quot;); commands.add(&quot;quit&quot;); // not added</code>, but now <code>equals</code> is <strong>not symmetric</strong>: <code>commands.equals(Set.of(&quot;quit&quot;))</code> is true while <code>Set.of(&quot;quit&quot;).equals(commands)</code> is false (the tree set uses the comparator, the other uses <code>String.equals</code>)</li>
+<li>Better: use the natural order and only insert lowercase strings.</li>
+</ul>
+</li>
+<li><code>TreeSet</code> implements <strong><code>NavigableSet</code></strong> (adjacent-element methods).</li>
+<li>Listing 9.3 (<code>TreeSetDemo.java</code>): <code>Item</code> is a record implementing <code>Comparable&lt;Item&gt;</code> by <code>partNumber</code>. One tree set sorts by part number (Toaster 1234, Widget 4562, Router 9912)
+<ul>
+<li>a second uses <code>new TreeSet&lt;Item&gt;(Comparator.comparing(Item::description))</code>, giving Router, Toaster, Widget.</li>
+</ul>
+</li>
+</ul>
+<p><code>java.util.TreeSet&lt;E&gt;</code> (1.2): <code>TreeSet()</code>, <code>TreeSet(Comparator&lt;? super E&gt;)</code>, <code>TreeSet(Collection&lt;? extends E&gt;)</code>, <code>TreeSet(SortedSet&lt;E&gt;)</code> (same ordering). <code>java.util.SortedSet&lt;E&gt;</code> (1.2): <code>Comparator&lt;? super E&gt; comparator()</code> (null if natural order), <code>first()</code>, <code>last()</code>.</p>
+<p><code>java.util.NavigableSet&lt;E&gt;</code> (6): <code>higher(value)</code> and <code>lower(value)</code> (strictly greater or less, or null), <code>ceiling(value)</code> and <code>floor(value)</code> (greater or equal, less or equal), <code>pollFirst()</code> and <code>pollLast()</code> (remove and return smallest or largest, null if empty).</p>
+<h3 id="9-3-5-queues-and-deques">9.3.5 Queues and deques</h3>
+<ul>
+<li>A <strong>queue</strong> adds at the tail and removes from the head efficiently
+<ul>
+<li>A <strong>deque</strong> (double-ended queue) adds and removes at <strong>both ends</strong>, not in the middle</li>
+<li><code>Deque</code> is implemented by <strong><code>ArrayDeque</code> and <code>LinkedList</code></strong>, both growing as needed (bounded queues are in chapter 10).</li>
+</ul>
+</li>
+<li>In <strong>Java 21</strong> <code>getFirst</code>, <code>getLast</code>, <code>addFirst</code>, <code>addLast</code>, <code>removeFirst</code>, <code>removeLast</code> moved from <code>Deque</code> to <strong><code>SequencedCollection</code></strong>, which <code>List</code> and <code>Set</code> also extend.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Throws on failure</th>
+<th>Returns special value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>add at tail</td>
+<td><code>add</code> (<code>IllegalStateException</code> if full)</td>
+<td><code>offer</code> (false if full)</td>
+</tr>
+<tr>
+<td>remove head</td>
+<td><code>remove</code> (<code>NoSuchElementException</code> if empty)</td>
+<td><code>poll</code> (null if empty)</td>
+</tr>
+<tr>
+<td>look at head</td>
+<td><code>element</code> (<code>NoSuchElementException</code>)</td>
+<td><code>peek</code> (null)</td>
+</tr>
+</tbody>
+</table>
+<p><code>Queue&lt;E&gt;</code> (5.0) has <code>add</code>, <code>offer</code>, <code>remove</code>, <code>poll</code>, <code>element</code>, <code>peek</code> as in the table. <code>SequencedCollection&lt;E&gt;</code> (21): <code>addFirst</code>, <code>addLast</code> (<code>IllegalStateException</code> if full), <code>removeFirst</code>, <code>removeLast</code>, <code>getFirst</code>, <code>getLast</code> (all <code>NoSuchElementException</code> if empty).</p>
+<p><code>Deque&lt;E&gt;</code> (6): <code>offerFirst</code>, <code>offerLast</code> (false if full), <code>pollFirst</code>, <code>pollLast</code>, <code>peekFirst</code>, <code>peekLast</code> (null if empty). <code>ArrayDeque&lt;E&gt;</code> (6): <code>ArrayDeque()</code>, <code>ArrayDeque(int initialCapacity)</code> (unbounded, default capacity 16).</p>
+<h3 id="9-3-6-priority-queues">9.3.6 Priority queues</h3>
+<ul>
+<li>A <strong>priority queue</strong> retrieves elements <strong>in sorted order after arbitrary insertion</strong>: <code>remove</code> returns the <strong>smallest</strong> current element
+<ul>
+<li>It does <strong>not</strong> keep everything sorted, so <strong>iteration is not in sorted order</strong>.</li>
+</ul>
+</li>
+<li>It uses a <strong>heap</strong>:
+<ul>
+<li>a self-organising binary tree where add and remove make the smallest element gravitate to the root without sorting everything</li>
+<li>Like <code>TreeSet</code>, elements are <code>Comparable</code> or you pass a <code>Comparator</code>.</li>
+</ul>
+</li>
+<li>Typical use: <strong>job scheduling</strong> (priority 1 is &quot;highest&quot;, so <code>remove</code> yields the minimum).</li>
+<li>Listing 9.4 (<code>PriorityQueueDemo.java</code>): adds four birthdays (Hopper 1906, Lovelace 1815, von Neumann 1903, Zuse 1910)
+<ul>
+<li>iterating shows an unsorted heap order, while repeated <code>remove</code> yields 1815-12-10, 1903-12-03, 1906-12-09, 1910-06-22.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-priority-queue.svg" alt="A priority queue always removes the smallest, but is not sorted" loading="lazy" /></p>
+<p><code>java.util.PriorityQueue</code> (5.0): <code>PriorityQueue()</code>, <code>PriorityQueue(int initialCapacity)</code>, <code>PriorityQueue(int initialCapacity, Comparator&lt;? super E&gt; c)</code>.</p>
+<h2 id="9-4-maps">9.4 Maps</h2>
+<ul>
+<li>A set finds an element only if you already have an exact copy
+<ul>
+<li>Usually you have <strong>key information</strong> and want the associated element: a <strong>map</strong> stores key/value pairs (employee ID to <code>Employee</code>).</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-4-1-basic-map-operations">9.4.1 Basic map operations</h3>
+<ul>
+<li>Two general-purpose implementations, <code>HashMap</code> and <code>TreeMap</code>. <strong>Hashing and comparison apply to keys only</strong>, not values. Hashing is usually a bit faster
+<ul>
+<li>prefer it unless you need keys sorted.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">staff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashMap</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Employee</span><span class="o">&gt;</span><span class="p">();</span><span class="w"> </span><span class="c1">// HashMap implements Map</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">harry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Employee</span><span class="p">(</span><span class="s">"Harry Hacker"</span><span class="p">);</span>
+<span class="n">staff</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="s">"987-98-9996"</span><span class="p">,</span><span class="w"> </span><span class="n">harry</span><span class="p">);</span>
+
+<span class="kd">var</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"987-98-9996"</span><span class="p">;</span>
+<span class="n">Employee</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">staff</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">id</span><span class="p">);</span><span class="w"> </span><span class="c1">// gets harry</span>
+</code></pre>
+<ul>
+<li><strong><code>get</code> takes an <code>Object</code></strong>
+<ul>
+<li>for historical reasons: <code>long numericId = ...; staff.get(numericId);</code> compiles but <strong>never finds anything</strong>. Missing key returns <code>null</code></li>
+<li>use <strong><code>getOrDefault</code></strong>: <code>int score = scores.getOrDefault(id, 0);</code>.</li>
+</ul>
+</li>
+<li><strong>Keys are unique</strong>: a second <code>put</code> with the same key replaces the value and <strong>returns the old value</strong>. <code>remove</code> removes by key; <code>size</code> counts entries.</li>
+<li>Easiest iteration: <strong><code>forEach</code></strong> with a lambda over key and value: <code>scores.forEach((k, v) -&gt; IO.println(&quot;key=&quot; + k + &quot;, value=&quot; + v));</code>.</li>
+<li>Listing 9.5 (<code>MapDemo.java</code>): a <code>HashMap&lt;String, LocalDate&gt;</code> of birthdays: print all, remove Konrad Zuse, replace Ada Lovelace's date (1815-12-10), look up, iterate with <code>forEach</code>
+<ul>
+<li>(The book's first <code>put</code> of Ada Lovelace uses 1915, later corrected to 1815.)</li>
+</ul>
+</li>
+</ul>
+<p><code>java.util.Map&lt;K, V&gt;</code> (1.2): <code>V get(Object key)</code> (null if absent; may forbid null keys), <code>default V getOrDefault(Object key, V defaultValue)</code>, <code>V put(K, V)</code> (returns the old value or null), <code>void putAll(Map&lt;? extends K, ? extends V&gt;)</code>, <code>boolean containsKey(Object)</code>, <code>containsValue(Object)</code>, <code>default void forEach(BiConsumer&lt;? super K, ? super V&gt;)</code> (8).</p>
+<p><code>HashMap</code> (1.2): <code>HashMap()</code>, <code>HashMap(int initialCapacity)</code>, <code>HashMap(int, float loadFactor)</code> (default 0.75), <code>static &lt;K, V&gt; HashMap&lt;K, V&gt; newHashMap(int numMappings)</code> (19).</p>
+<p><code>TreeMap</code> (1.2): <code>TreeMap()</code>, <code>TreeMap(Comparator&lt;? super K&gt;)</code>, <code>TreeMap(Map&lt;...&gt;)</code>, <code>TreeMap(SortedMap&lt;...&gt;)</code> (same comparator). <code>SortedMap</code> (1.2): <code>comparator()</code>, <code>firstKey()</code>, <code>lastKey()</code>.</p>
+<h3 id="9-4-2-updating-map-entries">9.4.2 Updating map entries</h3>
+<ul>
+<li>The tricky part is the <strong>first occurrence of a key</strong>. <code>counts.put(word, counts.get(word) + 1);</code> throws <code>NullPointerException</code> the first time. Remedies:
+<ul>
+<li><code>counts.put(word, counts.getOrDefault(word, 0) + 1);</code></li>
+<li><code>counts.putIfAbsent(word, 0); counts.put(word, counts.get(word) + 1);</code></li>
+<li>best, <strong><code>merge</code></strong>: <strong><code>counts.merge(word, 1, Integer::sum);</code></strong> (associates the word with 1 if absent, else combines the old value and 1)</li>
+</ul>
+</li>
+<li><strong>A set per key</strong> (a book index): <strong><code>computeIfAbsent</code></strong> builds the <code>TreeSet</code> only when missing and <strong>returns the value so you can chain</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TreeMap</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">TreeSet</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;&gt;</span><span class="p">();</span>
+<span class="n">index</span><span class="p">.</span><span class="na">computeIfAbsent</span><span class="p">(</span><span class="n">term</span><span class="p">,</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TreeSet</span><span class="o">&lt;&gt;</span><span class="p">()).</span><span class="na">add</span><span class="p">(</span><span class="n">pageNumber</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li><code>putIfAbsent</code> returns the previous value or <code>null</code>, not useful for chaining.</li>
+<li><strong>Do not use <code>TreeSet::new</code></strong>
+<ul>
+<li>here: the function gets the key <code>k</code> as an argument</li>
+<li>with <code>Map&lt;Integer, ArrayList&lt;String&gt;&gt;</code>, <strong><code>map.computeIfAbsent(n, ArrayList::new)</code></strong> calls <code>ArrayList(int capacity)</code>, allocating <strong>huge lists for large <code>n</code></strong>.</li>
+</ul>
+</li>
+<li><strong>Null handling is inconsistent</strong>: <code>getOrDefault</code> treats a <code>null</code> value as a real value (<code>counts.put(&quot;C++&quot;, null); counts.getOrDefault(&quot;C++&quot;, -1)</code> yields <code>null</code>), but <code>putIfAbsent</code> treats <code>null</code> as absent (<code>counts.putIfAbsent(&quot;C++&quot;, 1)</code> puts 1).</li>
+</ul>
+<p><code>java.util.Map&lt;K, V&gt;</code> update methods (8): <code>merge(key, value, remappingFunction)</code> (non-null old value: apply function to old and <code>value</code>; a null result removes the key; otherwise associate <code>value</code>), <code>compute(key, remappingFunction)</code>, <code>computeIfPresent(key, remappingFunction)</code>, <code>computeIfAbsent(key, mappingFunction)</code>, <code>replaceAll(function)</code> (a null result removes the key), <code>putIfAbsent(key, value)</code> (returns null if it was absent or null).</p>
+<h3 id="9-4-3-map-views">9.4.3 Map views</h3>
+<ul>
+<li>A map is <strong>not a collection</strong> in Java, but it gives <strong>views</strong> (objects implementing <code>Collection</code> or a subinterface): <strong><code>Set&lt;K&gt; keySet()</code></strong>
+<ul>
+<li><strong><code>Collection&lt;V&gt; values()</code></strong> (not a set)</li>
+<li><strong><code>Set&lt;Map.Entry&lt;K, V&gt;&gt; entrySet()</code></strong>. They are backed by the map; <code>keySet</code> is not a <code>HashSet</code> or <code>TreeSet</code>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">Entry</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">entry</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">counts</span><span class="p">.</span><span class="na">entrySet</span><span class="p">())</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="na">getKey</span><span class="p">();</span>
+<span class="w">    </span><span class="n">Integer</span><span class="w"> </span><span class="n">v</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">entry</span><span class="p">.</span><span class="na">getValue</span><span class="p">();</span>
+<span class="w">    </span><span class="n">entry</span><span class="p">.</span><span class="na">setValue</span><span class="p">(</span><span class="n">v</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w"> </span><span class="c1">// same as counts.put(k, v + 1)</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>Map.Entry</code> objects are <strong>live</strong>: <code>setValue</code> updates the map, and map changes are reflected
+<ul>
+<li>To detach, use <strong><code>Map.Entry.copyOf(entry)</code></strong>; create standalone pairs with <strong><code>Map.entry(key, value)</code></strong> (Java has no <code>Pair</code> class)</li>
+<li>Shorten with <code>var</code> (<code>for (var entry : map.entrySet())</code>) or <code>map.forEach((k, v) -&gt; { ... })</code>.</li>
+</ul>
+</li>
+<li>Removing through the <strong>key-set iterator removes the key and its value</strong>
+<ul>
+<li>you <strong>cannot add</strong> to the key set or entry set view (<code>UnsupportedOperationException</code>): adding a key without a value makes no sense.</li>
+</ul>
+</li>
+</ul>
+<p><code>java.util.Map</code> (1.2): <code>Set&lt;Map.Entry&lt;K, V&gt;&gt; entrySet()</code>, <code>Set&lt;K&gt; keySet()</code>, <code>Collection&lt;V&gt; values()</code> (elements may be removed, not added). <code>Map.Entry&lt;K, V&gt;</code> (1.2): <code>getKey()</code>, <code>getValue()</code>, <code>V setValue(V)</code> (returns old), <code>static copyOf(entry)</code> (17; not live).</p>
+<h3 id="9-4-4-weak-hash-maps">9.4.4 Weak hash maps</h3>
+<ul>
+<li>If the last reference to a key vanishes, the value is unreachable, yet the pair stays because <strong>the map keeps its buckets alive</strong>
+<ul>
+<li>The garbage collector cannot remove it</li>
+<li>Remove unused values yourself from long-lived maps, or use <strong><code>WeakHashMap</code></strong>, which removes entries when the <strong>only reference to the key is the map's own</strong>.</li>
+</ul>
+</li>
+<li><strong>How:</strong>
+<ul>
+<li>it holds keys by <strong><code>WeakReference</code></strong>. The GC reclaims an object reachable only through weak references but puts the weak reference into a <strong>queue</strong></li>
+<li>the map checks that queue periodically and removes the matching entries.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-4-5-linked-hash-sets-and-maps">9.4.5 Linked hash sets and maps</h3>
+<ul>
+<li><strong><code>LinkedHashSet</code></strong> and <strong><code>LinkedHashMap</code></strong> remember <strong>insertion order</strong> by joining entries in a doubly linked list (avoiding a hash table's random order): with four <code>put</code>s, <code>keySet().iterator()</code> and <code>values().iterator()</code> list them in insertion order (the book's example: Amy Lee, Harry Hacker, Gary Cooper, Francesca Cruz).</li>
+<li><strong>Access order:</strong>
+<ul>
+<li>construct <code>LinkedHashMap&lt;K, V&gt;(initialCapacity, loadFactor, true)</code></li>
+<li>Each <code>get</code> or <code>put</code> moves the entry to the <strong>end</strong> of the list (the bucket does not change), so the first entries are <strong>least recently used</strong>: the basis of an <strong>LRU cache</strong>.</li>
+</ul>
+</li>
+<li>Automate eviction by overriding <strong><code>protected boolean removeEldestEntry(Map.Entry&lt;K, V&gt; eldest)</code></strong> (called after adding; return <code>true</code> to remove the eldest):</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">cache</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">LinkedHashMap</span><span class="o">&lt;</span><span class="n">K</span><span class="p">,</span><span class="w"> </span><span class="n">V</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">128</span><span class="p">,</span><span class="w"> </span><span class="mf">0.75F</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">protected</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">removeEldestEntry</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">Entry</span><span class="o">&lt;</span><span class="n">K</span><span class="p">,</span><span class="w"> </span><span class="n">V</span><span class="o">&gt;</span><span class="w"> </span><span class="n">eldest</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="c1">// keep at most 100 elements</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">};</span>
+</code></pre>
+<ul>
+<li>You can inspect <code>eldest</code> (for example a timestamp). It runs only <strong>once per new entry</strong>, so it does not clear all old ones
+<ul>
+<li>you may modify the map inside it, but then <strong>return <code>false</code></strong>. For an LRU <strong>set</strong>, see 9.5.4.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-linked-hash-lru-cache.svg" alt="An LRU cache with a LinkedHashMap" loading="lazy" /></p>
+<h3 id="9-4-6-enumeration-sets-and-maps">9.4.6 Enumeration sets and maps</h3>
+<ul>
+<li><strong><code>EnumSet</code></strong> is a set of enum values stored as <strong>a sequence of bits</strong>. It has <strong>no public constructors</strong>; use factories:</li>
+</ul>
+<pre class="hl"><code><span class="kd">enum</span><span class="w"> </span><span class="n">Weekday</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">MONDAY</span><span class="p">,</span><span class="w"> </span><span class="n">TUESDAY</span><span class="p">,</span><span class="w"> </span><span class="n">WEDNESDAY</span><span class="p">,</span><span class="w"> </span><span class="n">THURSDAY</span><span class="p">,</span><span class="w"> </span><span class="n">FRIDAY</span><span class="p">,</span><span class="w"> </span><span class="n">SATURDAY</span><span class="p">,</span><span class="w"> </span><span class="n">SUNDAY</span><span class="w"> </span><span class="p">};</span>
+<span class="n">EnumSet</span><span class="o">&lt;</span><span class="n">Weekday</span><span class="o">&gt;</span><span class="w"> </span><span class="n">always</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EnumSet</span><span class="p">.</span><span class="na">allOf</span><span class="p">(</span><span class="n">Weekday</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">EnumSet</span><span class="o">&lt;</span><span class="n">Weekday</span><span class="o">&gt;</span><span class="w"> </span><span class="n">never</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EnumSet</span><span class="p">.</span><span class="na">noneOf</span><span class="p">(</span><span class="n">Weekday</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="n">EnumSet</span><span class="o">&lt;</span><span class="n">Weekday</span><span class="o">&gt;</span><span class="w"> </span><span class="n">workday</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EnumSet</span><span class="p">.</span><span class="na">range</span><span class="p">(</span><span class="n">Weekday</span><span class="p">.</span><span class="na">MONDAY</span><span class="p">,</span><span class="w"> </span><span class="n">Weekday</span><span class="p">.</span><span class="na">FRIDAY</span><span class="p">);</span>
+<span class="n">EnumSet</span><span class="o">&lt;</span><span class="n">Weekday</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mwf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">EnumSet</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">Weekday</span><span class="p">.</span><span class="na">MONDAY</span><span class="p">,</span><span class="w"> </span><span class="n">Weekday</span><span class="p">.</span><span class="na">WEDNESDAY</span><span class="p">,</span><span class="w"> </span><span class="n">Weekday</span><span class="p">.</span><span class="na">FRIDAY</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li><strong><code>EnumMap</code></strong> has enum keys, implemented as an <strong>array of values</strong>: <code>var personInCharge = new EnumMap&lt;Weekday, Employee&gt;(Weekday.class);</code>.</li>
+<li>The odd type parameter <code>E extends Enum&lt;E&gt;</code> just means &quot;E is an enumerated type&quot; (<code>Weekday</code> extends <code>Enum&lt;Weekday&gt;</code>).</li>
+<li>Neither is a <code>SequencedSet</code> or <code>SequencedMap</code>, nor <code>NavigableSet</code>: not for any fundamental reason, but the Java team saw <strong>no use case worth the effort</strong>.</li>
+</ul>
+<h3 id="9-4-7-identity-hash-maps">9.4.7 Identity hash maps</h3>
+<ul>
+<li><strong><code>IdentityHashMap</code></strong>
+<ul>
+<li>hashes keys with <strong><code>System.identityHashCode</code></strong> (the address-based code <code>Object.hashCode</code> uses) and compares with <strong><code>==</code></strong>, so equal-content objects are distinct</li>
+<li>Useful for <strong>object traversal</strong> algorithms such as serialisation, tracking which objects were visited.</li>
+</ul>
+</li>
+<li><strong>Java 20 fixed a subtle bug</strong>
+<ul>
+<li>(<code>https://bugs.openjdk.org/browse/JDK-8284901</code>) introduced in Java 8: <code>remove(Object key, Object value)</code> and <code>replace(K key, V oldValue, V newValue)</code> wrongly used <code>equals</code> instead of <code>==</code></li>
+<li>These are used in concurrent algorithms</li>
+<li>Lesson: <strong>update to the latest Java version</strong>.</li>
+</ul>
+</li>
+</ul>
+<p>API notes: <code>WeakHashMap</code> (1.2): constructors with capacity and load factor.</p>
+<p><code>LinkedHashSet</code> (1.4) and <code>LinkedHashMap</code> (1.4): <code>()</code>, <code>(int initialCapacity)</code>, <code>(int, float loadFactor)</code>, and for the map <code>(int, float, boolean accessOrder)</code> (true = access order); <code>protected boolean removeEldestEntry(Map.Entry&lt;K, V&gt; eldest)</code> (default false).</p>
+<p><code>EnumSet&lt;E extends Enum&lt;E&gt;&gt;</code> (5.0): <code>allOf</code>, <code>noneOf</code>, <code>range(from, to)</code>, <code>of(...)</code> (non-null), <code>copyOf(EnumSet)</code> and <code>copyOf(Collection)</code> (the collection must be an <code>EnumSet</code> or nonempty). <code>EnumMap&lt;K extends Enum&lt;K&gt;, V&gt;</code> (5.0): <code>EnumMap(Class&lt;K&gt; keyType)</code>.</p>
+<p><code>IdentityHashMap</code> (1.4): <code>()</code>, <code>(int expectedMaxSize)</code> (capacity the smallest power of 2 above 1.5 times that; default expected size 21). <code>System.identityHashCode(Object)</code> (1.1).</p>
+<h2 id="9-5-copies-and-views">9.5 Copies and views</h2>
+<ul>
+<li>The many interfaces and abstract classes do not tell the whole story: <strong>views</strong> give other objects implementing <code>Collection</code> or <code>Map</code>. <code>keySet</code> does not create a set filled with the keys
+<ul>
+<li>it returns a <strong>set object whose methods operate on the original map</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-5-1-small-collections">9.5.1 Small collections</h3>
+<ul>
+<li>Static factories create <strong>unmodifiable</strong> collections:</li>
+</ul>
+<pre class="hl"><code><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"Peter"</span><span class="p">,</span><span class="w"> </span><span class="s">"Paul"</span><span class="p">,</span><span class="w"> </span><span class="s">"Mary"</span><span class="p">);</span>
+<span class="n">Set</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">numbers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Set</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">);</span>
+<span class="n">Map</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">scores</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"Peter"</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="s">"Paul"</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="s">"Mary"</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>An <strong>array</strong> of objects works too:
+<ul>
+<li><code>List.of(namesArray)</code></li>
+<li>A <strong>primitive array</strong> gives a list with <strong>one element, the array</strong>: <code>List&lt;int[]&gt; arrays = List.of(numbersArray);</code> (no convenience method for a list of wrapped elements).</li>
+</ul>
+</li>
+<li><strong>No <code>null</code> elements, keys or values</strong>, and no duplicate set elements or map keys: <code>Set.of(13, null)</code> and <code>Map.of(&quot;Peter&quot;, 4, &quot;Peter&quot;, 2)</code> are errors.</li>
+<li><strong>Iteration order is deliberately scrambled</strong>
+<ul>
+<li>with a seed randomised at each VM start: two jshell runs show <code>[Peter, Mary, Paul]</code> then <code>[Paul, Mary, Peter]</code>. <strong>Do not write programs that assume any order</strong></li>
+<li>assuming implementation details never change makes useful changes hard for the framework implementors.</li>
+</ul>
+</li>
+<li><code>List</code> and <code>Set</code> have eleven <code>of</code> overloads (zero to ten arguments) plus a varargs one (specialisations for efficiency)
+<ul>
+<li><strong><code>Map</code> cannot use varargs</strong> (alternating key and value types): use <strong><code>ofEntries</code></strong> with <code>entry(...)</code> (<code>import static java.util.Map.*;</code>): <code>Map&lt;String, Integer&gt; scores = ofEntries(entry(&quot;Peter&quot;, 2), entry(&quot;Paul&quot;, 3), entry(&quot;Mary&quot;, 5));</code>.</li>
+</ul>
+</li>
+<li>These objects are <strong>unmodifiable</strong>: mutators throw <code>UnsupportedOperationException</code>. For a mutable copy: <code>var names = new ArrayList&lt;&gt;(List.of(&quot;Peter&quot;, &quot;Paul&quot;, &quot;Mary&quot;));</code>.</li>
+<li><strong><code>Collections.nCopies(n, anObject)</code></strong> gives an immutable list that appears to hold <code>n</code> copies, stored once: <code>List&lt;String&gt; settings = Collections.nCopies(100, &quot;DEFAULT&quot;);</code>.</li>
+<li><code>Collections</code> (utility class) is not <code>Collection</code> (interface). Java has no <code>Pair</code> class, and some use <code>Map.Entry</code> as a &quot;poor man's pair&quot;.</li>
+</ul>
+<h3 id="9-5-2-unmodifiable-copies-and-views">9.5.2 Unmodifiable copies and views</h3>
+<ul>
+<li><strong>Copies:</strong>
+<ul>
+<li><code>Set.copyOf(names)</code> and <code>List.copyOf(names)</code> make an unmodifiable <strong>copy</strong> (later changes to the original do not affect it)</li>
+<li>nulls give <code>NullPointerException</code>. If the original is already an unmodifiable collection of the right type, <code>copyOf</code> returns <strong>the same object</strong>.</li>
+</ul>
+</li>
+<li><strong>Views:</strong>
+<ul>
+<li><code>Collections.unmodifiableCollection</code>, <code>unmodifiableList</code>, <code>unmodifiableSet</code>, <code>unmodifiableSortedSet</code>, <code>unmodifiableNavigableSet</code>, <code>unmodifiableMap</code>, <code>unmodifiableSortedMap</code>, <code>unmodifiableNavigableMap</code></li>
+<li>They add a <strong>run-time check</strong> to an existing collection, and <strong>reflect changes</strong> to the original (the difference from a copy).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">staff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">LinkedList</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="c1">// ...</span>
+<span class="n">lookAt</span><span class="p">(</span><span class="n">Collections</span><span class="p">.</span><span class="na">unmodifiableList</span><span class="p">(</span><span class="n">staff</span><span class="p">));</span><span class="w"> </span><span class="c1">// lookAt may read but not change</span>
+</code></pre>
+<ul>
+<li>Mutators throw <code>UnsupportedOperationException</code>. The collection itself is <strong>not</strong> immutable (you can still change it through <code>staff</code>, and mutate the elements).</li>
+<li>Views wrap the <strong>interface</strong>, so interface-only methods are reachable (<code>addFirst</code> of <code>LinkedList</code> is not).</li>
+<li><strong><code>equals</code> and <code>hashCode</code> trap:</strong>
+<ul>
+<li><code>unmodifiableCollection</code> (and <code>synchronizedCollection</code>, <code>checkedCollection</code>) returns a collection with <strong><code>Object</code>'s identity <code>equals</code> and <code>hashCode</code></strong>, since equality is not well defined at the <code>Collection</code> level</li>
+<li>Prefer <code>unmodifiableSet</code> and <code>unmodifiableList</code>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Set</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"Peter"</span><span class="p">,</span><span class="w"> </span><span class="s">"Paul"</span><span class="p">,</span><span class="w"> </span><span class="s">"Mary"</span><span class="p">);</span>
+<span class="n">Collections</span><span class="p">.</span><span class="na">unmodifiableCollection</span><span class="p">(</span><span class="n">names</span><span class="p">).</span><span class="na">equals</span><span class="p">(</span><span class="n">names</span><span class="p">);</span><span class="w"> </span><span class="c1">// false</span>
+<span class="n">Collections</span><span class="p">.</span><span class="na">unmodifiableSet</span><span class="p">(</span><span class="n">names</span><span class="p">).</span><span class="na">equals</span><span class="p">(</span><span class="n">names</span><span class="p">);</span><span class="w">        </span><span class="c1">// true</span>
+</code></pre>
+<h3 id="9-5-3-subranges">9.5.3 Subranges</h3>
+<ul>
+<li><strong><code>subList(from, to)</code></strong> is a <strong>view</strong> (first index inclusive, second exclusive, like <code>substring</code>): <code>List&lt;Employee&gt; group2 = staff.subList(10, 20);</code> and <code>group2.clear();</code> removes those elements from <code>staff</code>.</li>
+<li>Sorted sets and maps use <strong>sort order</strong>: <code>SortedSet&lt;E&gt; subSet(E from, E to)</code>, <code>headSet(E to)</code>, <code>tailSet(E from)</code> (elements at least <code>from</code> and strictly less than <code>to</code>), and <code>SortedMap&lt;K, V&gt; subMap(from, to)</code>, <code>headMap(to)</code>, <code>tailMap(from)</code>.</li>
+<li><code>NavigableSet</code> lets you choose inclusivity: <code>subSet(from, fromInclusive, to, toInclusive)</code>, <code>headSet(to, toInclusive)</code>, <code>tailSet(from, fromInclusive)</code>.</li>
+</ul>
+<h3 id="9-5-4-sets-from-boolean-valued-maps">9.5.4 Sets from Boolean-valued maps</h3>
+<ul>
+<li>Want a set with a map's features (an LRU cache)? <code>LinkedHashSet</code> lacks it. Wrap a <code>LinkedHashMap&lt;String, Boolean&gt;</code> with <strong><code>Collections.newSetFromMap</code></strong>:</li>
+</ul>
+<pre class="hl"><code><span class="n">Set</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">cache</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Collections</span><span class="p">.</span><span class="na">newSetFromMap</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">LinkedHashMap</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Boolean</span><span class="o">&gt;</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">protected</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">removeEldestEntry</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">Entry</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Boolean</span><span class="o">&gt;</span><span class="w"> </span><span class="n">eldest</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">});</span>
+</code></pre>
+<ul>
+<li>Adding <code>e</code> puts key <code>e</code> with <code>Boolean.TRUE</code>
+<ul>
+<li>going over 100 drops the oldest. Pass an <strong>empty</strong> map and <strong>keep no reference to it</strong></li>
+<li>all changes should go through the set. Also useful with <code>WeakHashMap</code></li>
+<li>with a <code>ConcurrentHashMap</code> use <code>newKeySet</code> (chapter 10).</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-5-5-reversed-views">9.5.5 Reversed views</h3>
+<ul>
+<li><code>reversed()</code> on <code>SequencedCollection</code> and <code>SequencedSet</code> iterates in reverse: <code>for (String element : collection.reversed()) { ... }</code>
+<ul>
+<li>For a <code>SequencedMap</code> it views the map with keys in reverse.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-5-6-checked-views">9.5.6 Checked views</h3>
+<ul>
+<li>A debugging aid for heap pollution (chapter 8): through a raw reference you can smuggle a wrong type in, failing only later at a cast:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">strings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="n">ArrayList</span><span class="w"> </span><span class="n">rawList</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">strings</span><span class="p">;</span><span class="w"> </span><span class="c1">// warning only</span>
+<span class="n">rawList</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">Date</span><span class="p">());</span><span class="w">     </span><span class="c1">// now strings contains a Date</span>
+</code></pre>
+<ul>
+<li><code>List&lt;String&gt; safeStrings = Collections.checkedList(strings, String.class);</code> makes <code>add</code> check the class and throw <strong><code>ClassCastException</code> right at the faulty call</strong>
+<ul>
+<li>Limited by what the VM can check: an <code>ArrayList&lt;Pair&lt;String&gt;&gt;</code> cannot be protected from a <code>Pair&lt;Date&gt;</code> (one raw <code>Pair</code> class).</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-5-7-synchronized-views">9.5.7 Synchronized views</h3>
+<ul>
+<li>Collections used by several threads must not be damaged (adding while another thread rehashes would be disastrous)
+<ul>
+<li>Instead of thread-safe classes, the designers use <strong>views</strong>: <code>var map = Collections.synchronizedMap(new HashMap&lt;String, Employee&gt;());</code> makes <code>get</code>, <code>put</code> and the rest synchronised, each call completing before another thread's call starts (details in chapter 10).</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-5-8-a-note-on-optional-operations">9.5.8 A note on optional operations</h3>
+<ul>
+<li>
+<p>A view often has restrictions:</p>
+<ul>
+<li>read-only, fixed size, or removal without insertion (as with a key view)</li>
+<li>A restricted view throws <strong><code>UnsupportedOperationException</code></strong> for an inappropriate operation.</li>
+</ul>
+</li>
+<li>
+<p>Many methods in the collection and iterator interfaces are <strong>&quot;optional operations&quot;</strong>, which conflicts with the idea of an interface (a better design would be separate interfaces for read-only views and fixed-size views, but that <strong>would have tripled the number of interfaces</strong>, which the designers found unacceptable).</p>
+</li>
+<li>
+<p><strong>Should you use optional methods in your own designs? The author thinks not.</strong> Collection library designers face a &quot;particularly brutal&quot; set of conflicting requirements (easy to learn, convenient, completely generic, idiot-proof, and as efficient as hand-coded algorithms), which you rarely face.</p>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-view-vs-copy.svg" alt="Views, copies and unmodifiable views" loading="lazy" /></p>
+<p><code>java.util.List</code> (1.2): <code>of(...)</code> overloads from zero to ten elements plus <code>of(E... elements)</code> (9; unmodifiable, no nulls), <code>copyOf(Collection&lt;? extends E&gt;)</code> (10). <code>Set</code>: the same.</p>
+<p><code>Map</code>: <code>of(...)</code> with up to ten key/value pairs (9), <code>entry(k, v)</code> (9), <code>ofEntries(Map.Entry...)</code> (9), <code>copyOf(Map)</code> (10).</p>
+<p><code>Collections</code> (1.2): <code>newSetFromMap(Map&lt;E, Boolean&gt;)</code> (6), the unmodifiable views (<code>unmodifiableCollection</code>, <code>unmodifiableList</code>, <code>unmodifiableSet</code>, <code>unmodifiableSortedSet</code>, <code>unmodifiableNavigableSet</code> (8), <code>unmodifiableMap</code>, <code>unmodifiableSortedMap</code>, <code>unmodifiableNavigableMap</code> (8) and the Java 21 sequenced ones), the synchronised views (<code>synchronizedCollection</code>, <code>synchronizedList</code>, <code>synchronizedSet</code>, <code>synchronizedSortedSet</code>, <code>synchronizedNavigableSet</code>, <code>synchronizedMap</code>, <code>synchronizedSortedMap</code>, <code>synchronizedNavigableMap</code>), the checked views (<code>checkedCollection</code>, <code>checkedList</code>, <code>checkedSet</code>, <code>checkedSortedSet</code>, <code>checkedNavigableSet</code>, <code>checkedMap</code>, <code>checkedSortedMap</code>, <code>checkedNavigableMap</code>, <code>checkedQueue</code>), <code>nCopies(n, value)</code>, <code>singletonList</code>, <code>singleton</code>, and <code>emptyList</code>, <code>emptySet</code>, <code>emptySortedSet</code>, <code>emptyNavigableSet</code>, <code>emptyMap</code>, <code>emptySortedMap</code>, <code>emptyNavigableMap</code>, <code>emptyEnumeration</code>, <code>emptyIterator</code>, <code>emptyListIterator</code>.</p>
+<p><code>Arrays.asList(E... array)</code> (1.2): a list view of an array that is <strong>modifiable but not resizable</strong>.</p>
+<p>Subrange methods: <code>List.subList(firstIncluded, firstExcluded)</code>; <code>SortedSet.subSet/headSet/tailSet</code>; <code>NavigableSet</code> versions with inclusive flags; <code>SortedMap.subMap/headMap/tailMap</code>; <code>NavigableMap</code> versions with flags. <code>reversed()</code> on <code>SequencedCollection</code>, <code>SequencedSet</code>, <code>SequencedMap</code> (21).</p>
+<h2 id="9-6-algorithms">9.6 Algorithms</h2>
+<ul>
+<li>Beyond the classes, the framework provides <strong>algorithms</strong>, and shows how to write your own.</li>
+</ul>
+<h3 id="9-6-1-why-generic-algorithms">9.6.1 Why generic algorithms?</h3>
+<ul>
+<li>Finding the maximum differs by container:
+<ul>
+<li>an array loop with indexes, an <code>ArrayList</code> loop with <code>get(i)</code>, a <code>LinkedList</code> loop with an iterator</li>
+<li>They are tedious and a bit error-prone (off-by-one? empty or one-element containers?), and you do not want separate <code>max(ArrayList)</code> and <code>max(LinkedList)</code> methods.</li>
+</ul>
+</li>
+<li><strong>Find the minimal collection interface that can do the job efficiently.</strong> Computing a maximum needs only iteration, not random access, so accept a <strong><code>Collection</code></strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Comparable</span><span class="o">&gt;</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="nf">max</span><span class="p">(</span><span class="n">Collection</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">elements</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">elements</span><span class="p">.</span><span class="na">isEmpty</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">NoSuchElementException</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">Iterator</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">elements</span><span class="p">.</span><span class="na">iterator</span><span class="p">();</span>
+<span class="w">    </span><span class="n">T</span><span class="w"> </span><span class="n">largest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">iter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">iter</span><span class="p">.</span><span class="na">hasNext</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">T</span><span class="w"> </span><span class="n">next</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">iter</span><span class="p">.</span><span class="na">next</span><span class="p">();</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">largest</span><span class="p">.</span><span class="na">compareTo</span><span class="p">(</span><span class="n">next</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">largest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">next</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">largest</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Arrays are not collections, so they need a separate <code>static &lt;T extends Comparable&gt; T max(T[] a)</code>. The C++ library has dozens of algorithms
+<ul>
+<li>Java's <code>Collections</code> and <code>Arrays</code> classes give the basics (sorting, binary search, simple utilities)</li>
+<li>others are in the <strong>streams</strong> library (Volume II): <code>largest = coll.stream().max(Comparator.naturalOrder()).get();</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-6-2-sorting-and-shuffling">9.6.2 Sorting and shuffling</h3>
+<ul>
+<li><code>Collections.sort(staff)</code> sorts a <code>List</code> of <code>Comparable</code> elements
+<ul>
+<li>with another order, pass a comparator (or use <code>List.sort</code>): <code>Collections.sort(staff, Comparator.comparingDouble(Employee::getSalary));</code>.</li>
+</ul>
+</li>
+<li><strong>Descending:</strong>
+<ul>
+<li><code>Comparator.reverseOrder()</code> returns a comparator that returns <code>b.compareTo(a)</code></li>
+<li><code>Collections.sort(staff, Comparator.comparingDouble(Employee::getSalary).reversed());</code> sorts by descending salary.</li>
+</ul>
+</li>
+<li><strong>How it sorts:</strong> random access in a linked list is slow (a merge sort could sort links efficiently), but the implementation <strong>dumps the elements into an array, sorts it, and copies back</strong>.</li>
+<li>The algorithm is a bit slower than QuickSort but <strong>stable</strong>: it does not reorder equal elements. Sort by name then by salary and employees with equal salary <strong>keep their name order</strong>.</li>
+<li><strong>Which lists can you pass?</strong>
+<ul>
+<li>The documentation says <strong>modifiable</strong> (supports <code>set</code>) <strong>but need not be resizable</strong> (supports <code>add</code> and <code>remove</code>): an <code>unmodifiableList</code> cannot be sorted</li>
+<li><code>Arrays.sort(staff)</code> and <code>Arrays.sort(staff, comparator)</code> work for arrays.</li>
+</ul>
+</li>
+<li><strong><code>Collections.shuffle(cards, RandomGenerator.getDefault())</code></strong> randomly permutes a list (a list without <code>RandomAccess</code> is copied to an array, shuffled and copied back).</li>
+<li>Listing 9.6 (<code>ShuffleDemo.java</code>): a list of 1 to 49, shuffled, then <code>numbers.subList(0, 6)</code> sorted and printed (a lottery draw).</li>
+</ul>
+<p><code>Collections</code> (1.2): <code>static &lt;T extends Comparable&lt;? super T&gt;&gt; void sort(List&lt;T&gt;)</code> (stable, <strong>O(n log n)</strong>), <code>shuffle(List&lt;?&gt;)</code>, <code>shuffle(List&lt;?&gt;, Random)</code>, <code>shuffle(List&lt;?&gt;, RandomGenerator)</code> (21; <strong>O(n a(n))</strong> where <code>a(n)</code> is the average access time). <code>List&lt;E&gt;</code> (1.2): <code>default void sort(Comparator&lt;? super T&gt;)</code> (8). <code>Comparator&lt;T&gt;</code> (1.2): <code>static reverseOrder()</code> (8), <code>default reversed()</code> (8).</p>
+<h3 id="9-6-3-binary-search">9.6.3 Binary search</h3>
+<ul>
+<li>On a <strong>sorted</strong> array, look at the middle element and keep searching one half: for 1,024 elements about <strong>10 steps</strong>, versus an average of 512 (present) or 1,024 (absent) for a linear search.</li>
+<li><strong><code>Collections.binarySearch(elements, target)</code></strong> (or with a comparator) needs a <strong>sorted</strong> <code>List</code>, else the answer is wrong.</li>
+</ul>
+<pre class="hl"><code><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Collections</span><span class="p">.</span><span class="na">binarySearch</span><span class="p">(</span><span class="n">elements</span><span class="p">,</span><span class="w"> </span><span class="n">target</span><span class="p">);</span>
+<span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Collections</span><span class="p">.</span><span class="na">binarySearch</span><span class="p">(</span><span class="n">elements</span><span class="p">,</span><span class="w"> </span><span class="n">target</span><span class="p">,</span><span class="w"> </span><span class="n">comparator</span><span class="p">);</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">elements</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="o">-</span><span class="n">i</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">target</span><span class="p">);</span><span class="w"> </span><span class="c1">// keep the list sorted</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>A <strong>non-negative</strong> result is the matching index. A <strong>negative</strong> result means absent; the <strong>insertion point is <code>-i - 1</code></strong> (not <code>-i</code>, because 0 would be ambiguous).</li>
+<li>Binary search needs <strong>random access</strong>: without <code>RandomAccess</code> it falls back to a linear-cost iterative search. <code>Arrays</code> has binary search for primitive and object arrays.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-binary-search.svg" alt="Binary search and the insertion point" loading="lazy" /></p>
+<p><code>Collections</code> (1.2): <code>binarySearch(List&lt;T&gt;, T key)</code> and with a <code>Comparator</code> (<strong>O(a(n) log n)</strong>; negative <code>i</code> means insert at <code>-i - 1</code>). <code>Arrays</code> (1.2): <code>binarySearch(T[] a, T key)</code> and <code>binarySearch(T[] a, int start, int end, T key)</code> (6), also with a comparator; a negative result <code>r</code> means insert at <code>-r - 1</code>; component types <code>Object</code> or any primitive.</p>
+<h3 id="9-6-4-simple-algorithms">9.6.4 Simple algorithms</h3>
+<ul>
+<li><code>Collections</code> has simple algorithms (max, copy, fill, reverse). They help the <strong>reader</strong>: a loop must be deciphered, a call states intent.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// loop: what does it do?</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">words</span><span class="p">.</span><span class="na">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">words</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">i</span><span class="p">).</span><span class="na">equals</span><span class="p">(</span><span class="s">"C++"</span><span class="p">))</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">words</span><span class="p">.</span><span class="na">set</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="s">"Java"</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// call: obvious</span>
+<span class="n">Collections</span><span class="p">.</span><span class="na">replaceAll</span><span class="p">(</span><span class="n">words</span><span class="p">,</span><span class="w"> </span><span class="s">"C++"</span><span class="p">,</span><span class="w"> </span><span class="s">"Java"</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li><code>Collection.removeIf</code> and <code>List.replaceAll</code> take lambdas:</li>
+</ul>
+<pre class="hl"><code><span class="n">words</span><span class="p">.</span><span class="na">removeIf</span><span class="p">(</span><span class="n">w</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">w</span><span class="p">.</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
+<span class="n">words</span><span class="p">.</span><span class="na">replaceAll</span><span class="p">(</span><span class="n">String</span><span class="p">::</span><span class="n">toLowerCase</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li><strong>The <code>removeIf</code> predicate should look only at the element being decided</strong>,
+<ul>
+<li>not at the collection, or behaviour is <strong>implementation-dependent</strong>: <code>ArrayList.removeIf</code> makes <strong>two passes</strong> (find all, then remove), others remove as found</li>
+<li>For <code>new ArrayList&lt;&gt;(List.of(&quot;Ada&quot;, &quot;C++&quot;, &quot;Java&quot;))</code>, <code>words.removeIf(w -&gt; w.length() == words.size())</code> leaves <code>[&quot;Java&quot;]</code> (both 3-letter words marked first), but with a <code>LinkedList</code> or <code>HashSet</code> only <strong>one</strong> three-letter word is removed, because after the first removal the size is 2</li>
+<li>The developers did not think of an efficient one-pass algorithm for array lists in time and then kept the old behaviour for <strong>compatibility</strong> (<code>https://bugs.openjdk.org/browse/JDK-8143577</code>).</li>
+</ul>
+</li>
+</ul>
+<p><code>Collections</code> (1.2): <code>min</code>, <code>max</code> (with or without a comparator), <code>copy(List&lt;? super T&gt; to, List&lt;T&gt; from)</code> (target at least as long), <code>fill(List, value)</code>, <code>addAll(Collection&lt;? super T&gt;, T... values)</code> (5.0), <code>replaceAll(List&lt;T&gt;, oldValue, newValue)</code> (1.4), <code>indexOfSubList(l, s)</code> and <code>lastIndexOfSubList(l, s)</code> (1.4; for <code>[s, t, a, r]</code> and <code>[t, a, r]</code> both return 1), <code>swap(List, i, j)</code> (1.4), <code>reverse(List)</code> (<strong>O(n)</strong>; <code>[t, a, r]</code> becomes <code>[r, a, t]</code>), <code>rotate(List, d)</code> (1.4; index <code>i</code> moves to <code>(i + d) % size</code>, so <code>[t, a, r]</code> rotated by 2 is <code>[a, r, t]</code>), <code>frequency(Collection, Object)</code> (5.0), <code>disjoint(c1, c2)</code> (5.0).</p>
+<p><code>Collection.removeIf(Predicate&lt;? super E&gt;)</code> (8), <code>List.replaceAll(UnaryOperator&lt;E&gt;)</code> (8).</p>
+<h3 id="9-6-5-bulk-operations">9.6.5 Bulk operations</h3>
+<ul>
+<li><code>coll1.removeAll(coll2)</code> removes elements present in <code>coll2</code>; <strong><code>coll1.retainAll(coll2)</code></strong> keeps only those present in both. <strong>Intersection of two sets</strong> without a loop:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashSet</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">(</span><span class="n">firstSet</span><span class="p">);</span><span class="w"> </span><span class="c1">// every collection has a copy constructor</span>
+<span class="n">result</span><span class="p">.</span><span class="na">retainAll</span><span class="p">(</span><span class="n">secondSet</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>Apply bulk operations to <strong>views</strong>: terminate employees by ID with <code>staffMap.keySet().removeAll(terminatedIDs);</code> (the key set is a view, so the entries vanish from the map).</li>
+<li>With subrange views: <code>relocated.addAll(staff.subList(0, 10));</code> and <code>staff.subList(0, 10).clear();</code>.</li>
+</ul>
+<h3 id="9-6-6-converting-between-collections-and-arrays">9.6.6 Converting between collections and arrays</h3>
+<ul>
+<li>Array to collection: <code>List&lt;String&gt; staff = List.of(names);</code>.</li>
+<li>Collection to array:
+<ul>
+<li><code>Object[] names = staff.toArray();</code> returns an <strong><code>Object[]</code></strong>, and <code>(String[]) staff.toArray()</code> is an error</li>
+<li><strong>Pass an array constructor expression:</strong> <code>String[] values = staff.toArray(String[]::new);</code></li>
+<li>Before JDK 11: <code>staff.toArray(new String[0])</code> (a new array of the same type, or the passed one if long enough: <code>staff.toArray(new String[staff.size()])</code>).</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-6-7-writing-your-own-algorithms">9.6.7 Writing your own algorithms</h3>
+<ul>
+<li><strong>Work with interfaces, not concrete classes</strong>,
+<ul>
+<li>for parameters and results. <code>processItems(ArrayList&lt;Item&gt; items)</code> forces callers to repackage</li>
+<li>ask for <strong>the most general interface that does the job</strong>: a <code>List</code> if order matters, a <strong><code>Collection&lt;Item&gt;</code></strong> otherwise, or better an <strong><code>Iterable&lt;Item&gt;</code></strong> (one method <code>iterator</code>, used by the enhanced <code>for</code> behind the scenes; <code>Collection</code> extends it).</li>
+</ul>
+</li>
+<li>For <strong>return types</strong>, <code>public ArrayList&lt;Item&gt; lookupItems(...)</code> over-promises; return a <code>List</code>, so you can later return <code>List.of()</code> for empty or singleton results.</li>
+<li>Why does the API not follow this everywhere? Timing: <code>JComboBox(Object[] items)</code> and <code>JComboBox(Vector&lt;?&gt; items)</code> come from <strong>Swing, created before the Collections Framework</strong>.</li>
+</ul>
+<h2 id="9-7-legacy-collections">9.7 Legacy collections</h2>
+<ul>
+<li>Container classes from the first release, integrated into the framework later (Figure 9.12).</li>
+<li><strong><code>Hashtable</code></strong>: like <code>HashMap</code> but <strong>synchronised</strong> (as <code>Vector</code> is). Use <code>HashMap</code> unless you need legacy compatibility; for concurrency use <strong><code>ConcurrentHashMap</code></strong> (chapter 10).</li>
+<li><strong><code>Enumeration</code></strong>
+<ul>
+<li>(<code>hasMoreElements</code>, <code>nextElement</code>, and since 9 <code>asIterator()</code>): analogous to <code>Iterator</code></li>
+<li>To collect one: <code>ArrayList&lt;String&gt; loggerNames = Collections.list(LogManager.getLoggerNames());</code> or <code>LogManager.getLoggerNames().asIterator().forEachRemaining(n -&gt; { ... });</code></li>
+<li>For legacy methods that need an enumeration: <code>new SequenceInputStream(Collections.enumeration(streams))</code>.</li>
+<li>C++ often passes iterators as parameters; Java programmers rarely do. <strong>Pass the collection</strong>: recipients can get the iterator and have all the collection methods.</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-7-3-property-maps">9.7.3 Property maps</h3>
+<ul>
+<li><strong><code>Properties</code></strong>
+<ul>
+<li>is a map with three traits: <strong>keys and values are strings</strong>, it can easily <strong>load from and save to a file</strong>, and it has a <strong>secondary table of defaults</strong></li>
+<li>Good for configuration options.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">settings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Properties</span><span class="p">();</span>
+<span class="n">settings</span><span class="p">.</span><span class="na">setProperty</span><span class="p">(</span><span class="s">"width"</span><span class="p">,</span><span class="w"> </span><span class="s">"600.0"</span><span class="p">);</span>
+<span class="n">settings</span><span class="p">.</span><span class="na">setProperty</span><span class="p">(</span><span class="s">"filename"</span><span class="p">,</span><span class="w"> </span><span class="s">"/home/cay/books/corejava/code/v1ch09/raven.html"</span><span class="p">);</span>
+<span class="n">String</span><span class="w"> </span><span class="n">filename</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">settings</span><span class="p">.</span><span class="na">getProperty</span><span class="p">(</span><span class="s">"filename"</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>It implements <code>Map&lt;Object, Object&gt;</code> for historical reasons, so <code>get</code> and <code>put</code> accept any object: <strong>stick to <code>getProperty</code> and <code>setProperty</code></strong>.</li>
+<li><strong>Save and load:</strong></li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">FileWriter</span><span class="p">(</span><span class="s">"program.properties"</span><span class="p">);</span>
+<span class="n">settings</span><span class="p">.</span><span class="na">store</span><span class="p">(</span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="s">"Program Properties"</span><span class="p">);</span>
+
+<span class="kd">var</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">FileReader</span><span class="p">(</span><span class="s">"program.properties"</span><span class="p">);</span>
+<span class="n">settings</span><span class="p">.</span><span class="na">load</span><span class="p">(</span><span class="n">in</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>The saved file starts with <code>#Program Properties</code> and a timestamp comment, then lines like <code>top=227.0</code>, <code>width=423.0</code>.</li>
+<li>With <strong>streams</strong> the archaic <strong>ISO 8859-1</strong> encoding is used (characters above U+00FF become Unicode escapes)
+<ul>
+<li>use <strong>readers and writers</strong> for UTF-8. Before Java 18 set <code>StandardCharsets.UTF_8</code> explicitly.</li>
+</ul>
+</li>
+<li><strong>Defaults, two mechanisms:</strong> per call, <code>settings.getProperty(&quot;filename&quot;, &quot;&quot;)</code>; or a secondary map in the constructor:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">defaultSettings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Properties</span><span class="p">();</span>
+<span class="n">defaultSettings</span><span class="p">.</span><span class="na">setProperty</span><span class="p">(</span><span class="s">"width"</span><span class="p">,</span><span class="w"> </span><span class="s">"600"</span><span class="p">);</span>
+<span class="n">defaultSettings</span><span class="p">.</span><span class="na">setProperty</span><span class="p">(</span><span class="s">"height"</span><span class="p">,</span><span class="w"> </span><span class="s">"400"</span><span class="p">);</span>
+<span class="n">defaultSettings</span><span class="p">.</span><span class="na">setProperty</span><span class="p">(</span><span class="s">"filename"</span><span class="p">,</span><span class="w"> </span><span class="s">""</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">settings</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Properties</span><span class="p">(</span><span class="n">defaultSettings</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>The companion code stores and reloads the image viewer's frame position, size and last file in <code>~/.corejava/ImageViewer.properties</code>.</li>
+<li>Properties are <strong>flat</strong>. A fake hierarchy with keys like <code>window.main.color</code> has no support from the class; for complex configuration use <strong><code>Preferences</code></strong> (Volume II, chapter 10).</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-09-properties-defaults.svg" alt="Property map with a defaults table" loading="lazy" /></p>
+<p><code>java.util.Properties</code> (1.0): <code>Properties()</code>, <code>Properties(Properties defaults)</code>, <code>String getProperty(String key)</code> (falls back to defaults, else null), <code>getProperty(key, defaultValue)</code>, <code>Object setProperty(String, String)</code> (returns the old value), <code>Set&lt;String&gt; stringPropertyNames()</code> (6; includes defaults), <code>void load(Reader)</code> (6), <code>void store(Writer out, String header)</code> (6).</p>
+<h3 id="9-7-4-system-properties">9.7.4 System properties</h3>
+<ul>
+<li><code>System.getProperties()</code> describes system information
+<ul>
+<li><code>System.getProperty(&quot;user.home&quot;)</code> reads one. <code>java.version</code> gives a string like <code>&quot;21.0.1&quot;</code> (but <code>&quot;1.8.0&quot;</code> up to Java 8): <strong>the Java 9 numbering change broke tools</strong></li>
+<li>read <strong>JEP 322</strong> (<code>https://openjdk.org/jeps/322</code>) if you parse versions.</li>
+</ul>
+</li>
+<li>Print all:
+<ul>
+<li><code>java -XshowSettings:properties</code></li>
+<li>Set with <code>-D</code>: <code>java -Duser.language=fr -Duser.country=CA MyProgram</code> (never change <code>java.version</code>)</li>
+<li>In jshell use <code>-R</code>: <code>jshell -R-Duser.language=fr -R-Duser.country=CA</code></li>
+<li>Numeric or Boolean values: <code>Boolean.getBoolean</code>, <code>Integer.getInteger(&quot;java.specification.version&quot;)</code>, <code>Long.getLong</code>.</li>
+</ul>
+</li>
+<li>Always-present properties include <code>java.version</code>, <code>java.vendor</code>, <code>java.home</code>, <code>java.class.path</code>, <code>java.library.path</code>, <code>java.class.version</code>, the <code>java.specification.*</code> and <code>java.vm.*</code> families, <code>os.name</code>, <code>os.version</code>, <code>os.arch</code>, <code>file.separator</code>, <code>path.separator</code>, <code>line.separator</code>, <code>java.io.tmpdir</code>, <code>user.name</code>, <code>user.home</code>, <code>user.dir</code>, <code>native.encoding</code>, <code>stdout.encoding</code>, <code>stderr.encoding</code>.</li>
+</ul>
+<h3 id="9-7-5-stacks">9.7.5 Stacks</h3>
+<ul>
+<li>The <code>Stack</code> class (<code>push</code>, <code>pop</code>, <code>peek</code>; do not pop or peek an empty stack) <strong>extends <code>Vector</code></strong>, which is unsatisfactory: you can <code>insert</code> and <code>remove</code> anywhere, not just at the top
+<ul>
+<li>(Prefer a <code>Deque</code> such as <code>ArrayDeque</code> for stack use.)</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-7-6-bit-sets">9.7.6 Bit sets</h3>
+<ul>
+<li><strong><code>BitSet</code></strong>
+<ul>
+<li>stores bits packed into <code>long</code> words, far more efficient than a <code>boolean[]</code>, with <code>get(i)</code>, <code>set(i)</code>, <code>clear(i)</code> instead of masking</li>
+<li>It can model a <strong>set of nonnegative integers with an upper bound</strong> (bit <code>i</code> on means <code>i</code> is in the set), more efficient than <code>Set&lt;Integer&gt;</code> when the bound is modest and the set is dense.</li>
+</ul>
+</li>
+<li><code>BitSet</code> API (1.0): <code>BitSet(int initialCapacity)</code>, <code>cardinality()</code> (1.4; number of set bits), <code>length()</code> (1.2; highest set bit plus 1), <code>size()</code> (bits currently available, <strong>not</strong> the number of elements), <code>get</code>, <code>set</code>, <code>clear</code>, <code>and</code>, <code>or</code>, <code>xor</code>, <code>andNot</code>, <code>IntStream stream()</code> (8).</li>
+<li><strong>Sieve of Eratosthenes</strong>
+<ul>
+<li>(Listing 9.7, plus the C++ in Listing 9.8): count primes from 2 to 2,000,000 by turning all bits on, then clearing multiples of each prime
+<ul>
+<li><strong>148,933 primes.</strong> It is a poor prime finder and a poor benchmark (mostly bit operations), but a tradition</li>
+<li>Timings (Intel i7-1165G7, 32 GB, Ubuntu 24.04): **C++ (g++ 11.4.0) 70 ms</li>
+</ul>
+</li>
+<li>Java 25 20 ms**. Java beat C++ in the last ten editions</li>
+<li>with C++ optimisation raised, C++ reaches 16 ms, which Java would match only if the program ran long enough to trigger the HotSpot JIT.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kt">void</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2000000</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">bitSet</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BitSet</span><span class="p">(</span><span class="n">n</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">n</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">bitSet</span><span class="p">.</span><span class="na">set</span><span class="p">(</span><span class="n">i</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">bitSet</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">i</span><span class="p">))</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">i</span><span class="p">;</span>
+<span class="w">            </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">k</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">bitSet</span><span class="p">.</span><span class="na">clear</span><span class="p">(</span><span class="n">k</span><span class="p">);</span>
+<span class="w">                </span><span class="n">k</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">i</span><span class="p">;</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="n">i</span><span class="o">++</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">IO</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">bitSet</span><span class="p">.</span><span class="na">cardinality</span><span class="p">()</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">" primes"</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Hold collections through interfaces
+<ul>
+<li>pick <code>ArrayList</code>, <code>LinkedList</code>, <code>HashSet</code>, <code>TreeSet</code>, <code>ArrayDeque</code>, <code>PriorityQueue</code>, <code>HashMap</code>, <code>TreeMap</code>, <code>LinkedHashMap</code>, <code>EnumSet</code>, <code>EnumMap</code> by the cost profile you need.</li>
+</ul>
+</li>
+<li>Iterators sit between elements; avoid changing a collection while another iterator reads it.</li>
+<li>Hash collections need consistent <code>equals</code> and <code>hashCode</code>; sorted ones need a comparator compatible with <code>equals</code>.</li>
+<li><code>Map</code> has <code>merge</code>, <code>computeIfAbsent</code>, <code>getOrDefault</code>, views (<code>keySet</code>, <code>values</code>, <code>entrySet</code>).</li>
+<li>Views (unmodifiable, subrange, reversed, checked, synchronised) wrap rather than copy; <code>List.of</code>, <code>Set.of</code>, <code>Map.of</code> give unmodifiable, unordered-in-effect small collections.</li>
+<li>Use <code>Collections</code> and <code>Arrays</code> algorithms (<code>sort</code>, <code>binarySearch</code>, <code>shuffle</code>) and write your own against the most general interface.</li>
+<li>Avoid legacy <code>Vector</code>, <code>Hashtable</code>, <code>Stack</code>; <code>Properties</code> and <code>BitSet</code> still have uses.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong><code>Collection</code>, <code>List</code>, <code>Set</code>, <code>Queue</code>, <code>Deque</code>, <code>Map</code>:</strong> the core interfaces.</li>
+<li><strong>Iterator, <code>ListIterator</code>, fail-fast:</strong> traversal and <code>ConcurrentModificationException</code>.</li>
+<li><strong>Hash code, bucket, collision, load factor, rehash:</strong> hash table vocabulary.</li>
+<li><strong>Red-black tree, heap:</strong> <code>TreeSet</code> and <code>PriorityQueue</code> structures.</li>
+<li><strong>View, backed collection:</strong> a window onto another collection.</li>
+<li><strong>Unmodifiable, immutable, stable sort:</strong> change and ordering guarantees.</li>
+<li><strong>Weak reference:</strong> reference that does not keep an object alive.</li>
+<li><strong>Property map, bit set:</strong> <code>Properties</code> and <code>BitSet</code>.</li>
+<li><strong><code>RandomAccess</code>, <code>SequencedCollection</code>:</strong> efficiency tag and Java 21 first/last access.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed., Pearson, 2025, ch. 9. Read through O'Reilly's learning platform for personal use.</li>
+<li>Thomas Cormen, Charles Leiserson, Ronald Rivest and Clifford Stein, <em>Introduction to Algorithms</em>, MIT Press, 2022 (cited by the book; no link given).</li>
+<li><code>IdentityHashMap</code> bug: <a href="https://bugs.openjdk.org/browse/JDK-8284901" target="_blank" rel="noopener noreferrer">https://bugs.openjdk.org/browse/JDK-8284901</a></li>
+<li><code>removeIf</code> behaviour history: <a href="https://bugs.openjdk.org/browse/JDK-8143577" target="_blank" rel="noopener noreferrer">https://bugs.openjdk.org/browse/JDK-8143577</a></li>
+<li>JEP 322, time-based release versioning: <a href="https://openjdk.org/jeps/322" target="_blank" rel="noopener noreferrer">https://openjdk.org/jeps/322</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li>java-concurrency</li>
+<li><a href="/book-digest/core-java-vol-1/cj-08-generic-programming/">Core Java 8: Generic Programming</a></li>
+<li><a href="/book-digest/core-java-vol-1/cj-10-concurrency/">Core Java 10: Concurrency</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/core-java-vol-1/cj-08-generic-programming/">&larr; Core Java 8: Generic Programming</a><a href="/book-digest/core-java-vol-1/">Contents</a><a href="/book-digest/core-java-vol-1/cj-10-concurrency/">Core Java 10: Concurrency &rarr;</a></nav></main></body></html>

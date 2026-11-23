@@ -1,0 +1,1030 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Core Java 7: Exceptions, Assertions and Logging</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/core-java-vol-1/">Core Java Vol 1</a></div>
+<main>
+<h1 id="core-java-7-exceptions-assertions-and-logging">Core Java 7: Exceptions, Assertions and Logging</h1>
+<p>Source: Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed. (Pearson, 2025), ch. 7. Previous: <a href="/book-digest/core-java-vol-1/cj-06-interfaces-lambda-expressions-and-inner-classes/">Core Java 6: Interfaces, Lambda Expressions and Inner Classes</a>. Next: <a href="/book-digest/core-java-vol-1/cj-08-generic-programming/">Core Java 8: Generic Programming</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A method that cannot finish normally <strong>throws an exception object</strong> instead of returning an error code; control jumps to a handler, skipping everything in between.</li>
+<li>All exceptions descend from <strong><code>Throwable</code></strong>: <strong><code>Error</code></strong> (JVM trouble, do not throw) and <strong><code>Exception</code></strong>, which splits into <strong><code>RuntimeException</code></strong> (a programming mistake, <strong>unchecked</strong>) and the rest (<strong>checked</strong>, the compiler forces you to handle or declare them).</li>
+<li><strong><code>try-with-resources</code></strong> closes resources automatically and records secondary failures as <strong>suppressed</strong> exceptions; prefer it to <code>finally</code>.</li>
+<li>Good practice: <strong>throw early, catch late</strong>; wrap low-level exceptions as the <strong>cause</strong> of a higher-level one; never swallow exceptions; never show stack traces to end users.</li>
+<li><strong>Assertions</strong> (<code>assert</code>) are checks enabled only while testing (<code>-ea</code>); <strong>logging</strong> records problems for later analysis.</li>
+</ul>
+</div></div>
+<h2 id="7-1-dealing-with-errors">7.1 Dealing with errors</h2>
+<ul>
+<li>Users should never lose work to an error. When an operation fails, the program should at least:
+<ul>
+<li>notify the user</li>
+<li>save all work</li>
+<li>let the user exit gracefully, or return to a safe state and allow other commands</li>
+</ul>
+</li>
+<li>Difficulty:
+<ul>
+<li>the code detecting the error is usually <strong>far from</strong> the code that can restore a safe state</li>
+<li><strong>Exception handling transfers control from where the error occurred to a handler</strong> that can deal with it.</li>
+</ul>
+</li>
+<li>Kinds of problems:
+<ul>
+<li><strong>User input errors</strong>: typos, a syntactically wrong URL that the network layer finally rejects.</li>
+<li><strong>Device errors</strong>: printer off, a page unavailable, a printer out of paper mid-job.</li>
+<li><strong>Physical limitations</strong>: full disks, out of memory.</li>
+<li><strong>Code errors</strong>: wrong results, invalid array index, missing hash table entry, popping an empty stack.</li>
+</ul>
+</li>
+<li>The <strong>traditional reaction</strong> is an <strong>error code</strong> (a <code>-1</code> end-of-file marker, or <code>null</code>), but that fails when no value is reserved for errors (a method returning an <code>int</code> cannot use <code>-1</code> if <code>-1</code> is valid)
+<ul>
+<li><strong>Returning <code>null</code> is particularly bad</strong>: the legacy <code>File.listFiles</code> returns <code>null</code> on failure, and without a check a later <code>NullPointerException</code> <strong>masks the original problem</strong>.</li>
+</ul>
+</li>
+<li>In Java every method has an <strong>alternative exit path</strong>:
+<ul>
+<li>it <strong>throws an object</strong> encapsulating the error. The method exits immediately <strong>without returning any value</strong>, and the <strong>exception-handling mechanism starts searching for a handler</strong></li>
+<li>execution does not resume where the method was called.</li>
+</ul>
+</li>
+<li><strong>Favour exceptions over error codes</strong>:
+<ul>
+<li>codes are easy to forget, exceptions cannot be overlooked, and they carry more information. Legacy <code>File.delete</code> returns <code>false</code> on failure</li>
+<li><code>Files.delete</code> throws an exception of a type describing the problem.</li>
+</ul>
+</li>
+</ul>
+<h3 id="7-1-1-the-classification-of-exceptions">7.1.1 The classification of exceptions</h3>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-exception-hierarchy.svg" alt="The exception hierarchy" loading="lazy" /></p>
+<ul>
+<li>An exception object is always an instance of a class derived from <strong><code>Throwable</code></strong>. It splits at once into <strong><code>Error</code></strong> and <strong><code>Exception</code></strong>.
+<ul>
+<li><strong><code>Error</code></strong>: internal errors and resource exhaustion in the runtime. <strong>Do not throw these</strong>; there is little to do but tell the user and try to end gracefully. They are rare.</li>
+<li><strong><code>Exception</code></strong>
+<ul>
+<li>splits again into <strong><code>RuntimeException</code></strong> and everything else. Rule: **a <code>RuntimeException</code> means you made a programming error</li>
+<li>any other exception means something bad happened to your otherwise good program.**</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><code>RuntimeException</code> examples: a <strong>bad cast</strong>, an <strong>out-of-bounds array access</strong>, a <strong>null pointer access</strong>
+<ul>
+<li>Others: reading past the end of a file, opening a missing file, finding a <code>Class</code> for a nonexistent name.</li>
+</ul>
+</li>
+<li>&quot;If it is a <code>RuntimeException</code>, it was your fault&quot; works well: you could have tested the index or the null.</li>
+<li>Why not just check that a file exists first? It might be <strong>deleted right after the check</strong>: existence depends on the environment, not on your code.</li>
+<li>The JLS calls any exception derived from <strong><code>Error</code> or <code>RuntimeException</code> unchecked</strong>; all others are <strong>checked</strong>, and the compiler checks that you provide handlers for them.</li>
+<li>The name <code>RuntimeException</code> is confusing (all errors happen at run time)
+<ul>
+<li>It dates from <strong>prehistoric times</strong>: the &quot;runtime&quot; of <strong>Oak</strong> (Java's predecessor) generated out-of-bounds and null pointer exceptions, while presumably other components produced I/O exceptions.</li>
+</ul>
+</li>
+<li><strong>C++ comparison:</strong> C++ has <code>logic_error</code> (like Java's <code>RuntimeException</code>: logical program errors) and <code>runtime_error</code> (unpredictable problems: like Java's non-runtime exceptions).</li>
+</ul>
+<h3 id="7-1-2-declaring-checked-exceptions">7.1.2 Declaring checked exceptions</h3>
+<ul>
+<li>A method tells the compiler <strong>what can go wrong</strong>, in its header:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="nf">FileInputStream</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">FileNotFoundException</span>
+</code></pre>
+<ul>
+<li>If it happens, no object is initialised; the runtime searches for a handler for <code>FileNotFoundException</code>.</li>
+<li>An exception is thrown in <strong>four situations</strong>:
+<ol>
+<li>You call a method that throws a <strong>checked</strong> exception (the <code>FileInputStream</code> constructor).</li>
+<li>You detect an error and <strong>throw a checked exception</strong> with <code>throw</code>.</li>
+<li>You make a programming error, such as <code>a[-1] = 0</code> (an <strong>unchecked</strong> <code>ArrayIndexOutOfBoundsException</code>).</li>
+<li>An <strong>internal error</strong> occurs in the VM or runtime library.</li>
+</ol>
+</li>
+<li>For the first two you must tell users of your method. Any method that throws is a <strong>potential death trap</strong>: if no handler catches it, the thread terminates.</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">MyAnimation</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Image</span><span class="w"> </span><span class="nf">loadImage</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">IOException</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Image</span><span class="w"> </span><span class="nf">loadImage2</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">FileNotFoundException</span><span class="p">,</span><span class="w"> </span><span class="n">EOFException</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>List several checked exceptions separated by commas
+<ul>
+<li><strong>Do not advertise <code>Error</code> subclasses</strong> (beyond your control) <strong>or <code>RuntimeException</code>s</strong> (<code>void drawImage(int i) throws ArrayIndexOutOfBoundsException</code> is bad style: fix the bug instead)</li>
+<li>If you fail to declare a checked exception, the compiler gives an error.</li>
+</ul>
+</li>
+<li>Instead of declaring you may <strong>catch</strong> it, so no <code>throws</code> is needed.</li>
+<li><strong>Overriding rule:</strong>
+<ul>
+<li>the checked exceptions a subclass method declares <strong>cannot be more general</strong> than the superclass method's</li>
+<li>More specific, or none, is fine</li>
+<li>If the superclass method throws no checked exception, neither can the subclass: overriding <code>toString</code> must not throw checked exceptions.</li>
+</ul>
+</li>
+<li>A method declared <code>throws IOException</code> may throw any subclass (<code>FileNotFoundException</code>).</li>
+<li><strong>C++ difference:</strong>
+<ul>
+<li>C++ <code>throw</code> specifiers are enforced <strong>at run time</strong> (an unexpected function is called, the program ends by default), and a function with no specifier may throw anything</li>
+<li>In Java a method without <code>throws</code> may throw <strong>no checked exceptions</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="7-1-3-how-to-throw-an-exception">7.1.3 How to throw an exception</h3>
+<ul>
+<li>Scenario: a header promised <code>Content-length: 1024</code> but end of file came after 733 characters. <code>EOFException</code> (&quot;Signals that an EOF has been reached unexpectedly during input&quot;) fits:</li>
+</ul>
+<pre class="hl"><code><span class="n">String</span><span class="w"> </span><span class="nf">readData</span><span class="p">(</span><span class="n">Scanner</span><span class="w"> </span><span class="n">in</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">EOFException</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="cm">/* ... */</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">in</span><span class="p">.</span><span class="na">hasNextLine</span><span class="p">())</span><span class="w"> </span><span class="c1">// EOF encountered</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">n</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">len</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EOFException</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">s</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>A second constructor takes a message: <code>String gripe = &quot;Content-length: &quot; + len + &quot;, Received: &quot; + n; throw new EOFException(gripe);</code>.</li>
+<li>Steps: <strong>find an appropriate exception class, make an object, throw it.</strong> The method does not return, so you need <strong>no default return value or error code</strong>.</li>
+<li><strong>C++ difference:</strong> in Java you can throw only objects of subclasses of <strong><code>Throwable</code></strong>; C++ lets you throw any type.</li>
+</ul>
+<h3 id="7-1-4-creating-exception-classes">7.1.4 Creating exception classes</h3>
+<ul>
+<li>If no standard class fits, derive your own from <code>Exception</code> or a child such as <code>IOException</code>
+<ul>
+<li>By convention give <strong>both a default constructor and one with a detailed message</strong> (<code>Throwable.toString</code> includes it):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">FileFormatException</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">IOException</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">FileFormatException</span><span class="p">()</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">FileFormatException</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">gripe</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">super</span><span class="p">(</span><span class="n">gripe</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Then <code>throw new FileFormatException();</code> in <code>readData</code> (declared <code>throws FileFormatException</code>).</li>
+</ul>
+<p><code>java.lang.Throwable</code> (1.0): <code>Throwable()</code>, <code>Throwable(String message)</code>, <code>String getMessage()</code>.</p>
+<h2 id="7-2-catching-exceptions">7.2 Catching exceptions</h2>
+<h3 id="7-2-1-catching-an-exception">7.2.1 Catching an exception</h3>
+<ul>
+<li>An <strong>uncaught</strong> exception terminates the program and prints its type and a <strong>stack trace</strong>
+<ul>
+<li>GUI programs may catch exceptions, print the trace and return to the UI loop (keep the console visible when debugging).</li>
+</ul>
+</li>
+<li>A <code>try/catch</code> block:</li>
+</ul>
+<pre class="hl"><code><span class="k">try</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// code</span>
+<span class="w">    </span><span class="c1">// more code</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">ExceptionType</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// handler for this type</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>If the <code>try</code> code throws the named type <strong>or a subclass</strong>:
+<ul>
+<li>the rest of the <code>try</code> block is <strong>skipped</strong>, the handler runs</li>
+<li>If nothing is thrown, the <code>catch</code> is skipped</li>
+<li>If an exception of <strong>another type</strong> is thrown, the method <strong>exits immediately</strong> (hopefully a caller handles it).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">read</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">filename</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">try</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">FileInputStream</span><span class="p">(</span><span class="n">filename</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="w">        </span><span class="k">while</span><span class="w"> </span><span class="p">((</span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">in</span><span class="p">.</span><span class="na">read</span><span class="p">())</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// process input</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">IOException</span><span class="w"> </span><span class="n">exception</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">exception</span><span class="p">.</span><span class="na">printStackTrace</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Often the best choice is to <strong>pass the exception to the caller</strong>, adding a <code>throws</code> clause: <code>public void read(String filename) throws IOException</code>
+<ul>
+<li>The compiler enforces: <strong>handle it or pass it on</strong>.</li>
+</ul>
+</li>
+<li>Rule: <strong>catch what you know how to handle, propagate what you do not.</strong> There is nothing embarrassing about the latter: better to direct an exception to a competent handler than to squelch it.</li>
+<li>When <strong>overriding</strong>, you cannot add <code>throws</code> beyond the superclass method, so you must <strong>catch</strong> undeclared checked exceptions (overriding <code>compareTo</code>, which throws none, you must catch each).</li>
+<li><strong>Java 25:</strong> an unnamed variable when you do not need the exception: <code>catch (FileNotFoundException _) { System.exit(0); }</code>.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-exception-propagation.svg" alt="How an exception unwinds the call stack to a handler" loading="lazy" /></p>
+<h3 id="7-2-2-catching-multiple-exceptions">7.2.2 Catching multiple exceptions</h3>
+<ul>
+<li>Use a separate <code>catch</code> per type, <strong>more specific before more general</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="k">try</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// code that might throw exceptions</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">FileNotFoundException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// emergency action for missing files</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">UnknownHostException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// emergency action for unknown hosts</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">IOException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// emergency action for all other I/O problems</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Inspect with <code>e.getMessage()</code> (the detail message) or <code>e.getClass().getName()</code> (the actual type).</li>
+<li><strong>Combine types</strong> in one clause with <code>|</code> when the handling is the same (only for types that are <strong>not subclasses of each other</strong>):</li>
+</ul>
+<pre class="hl"><code><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">FileNotFoundException</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">UnknownHostException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// emergency action for missing files and unknown hosts</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">IOException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// emergency action for all other I/O problems</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>With a multi-catch the variable <code>e</code> is <strong>implicitly final</strong>
+<ul>
+<li>the generated bytecode contains a <strong>single block</strong> for the shared clause (more efficient). Its type is <strong>not a union type</strong> (Java has none) but the <strong>least upper bound</strong>, here <code>IOException</code>.</li>
+</ul>
+</li>
+<li>That matters for a <code>switch</code> on <code>e</code>: cases for just the two types are <strong>not exhaustive</strong> (error). Add a <code>default</code> or use separate catch clauses.</li>
+<li><strong>Catch clauses ignore sealed hierarchies:</strong> with <code>sealed abstract class DomainException extends Exception permits FatalDomainException, SurvivableDomainException {}</code>, catching only those two subtypes is <strong>not sufficient</strong> for the compiler, even though no other checked instance can exist.</li>
+</ul>
+<h3 id="7-2-3-rethrowing-and-chaining-exceptions">7.2.3 Rethrowing and chaining exceptions</h3>
+<ul>
+<li>Throw in a <code>catch</code> to <strong>change the exception type</strong>, typically to a subsystem-level type (like <code>ServletException</code>, since the servlet runner only needs to know the servlet failed).</li>
+</ul>
+<pre class="hl"><code><span class="k">try</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// access the database</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">SQLException</span><span class="w"> </span><span class="n">original</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ServletException</span><span class="p">(</span><span class="s">"database error"</span><span class="p">,</span><span class="w"> </span><span class="n">original</span><span class="p">);</span><span class="w"> </span><span class="c1">// original is the cause</span>
+<span class="w">    </span><span class="k">throw</span><span class="w"> </span><span class="n">e</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Setting the original as the cause is far better</strong>
+<ul>
+<li>than copying its message</li>
+<li>If the exception type has no cause constructor, call <code>e.initCause(original)</code></li>
+<li>Retrieve it later with <code>Throwable original = caughtException.getCause();</code></li>
+<li><strong>Highly recommended</strong>: high-level exceptions without losing the details.</li>
+</ul>
+</li>
+<li>Also useful to <strong>wrap a checked exception in a runtime exception</strong> when a method may not throw checked ones. The API offers <strong><code>UncheckedIOException</code></strong> for I/O.</li>
+<li>To <strong>log and rethrow unchanged</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="k">try</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// access the database</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">Exception</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">logger</span><span class="p">.</span><span class="na">log</span><span class="p">(</span><span class="n">level</span><span class="p">,</span><span class="w"> </span><span class="n">message</span><span class="p">,</span><span class="w"> </span><span class="n">e</span><span class="p">);</span>
+<span class="w">    </span><span class="k">throw</span><span class="w"> </span><span class="n">e</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The compiler tracks that <code>e</code> comes from the <code>try</code> block: if the only checked exceptions there are <code>SQLException</code>s and <code>e</code> is unchanged, the enclosing method may be declared <code>throws SQLException</code> even though <code>e</code> is typed <code>Exception</code>.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-exception-wrapping.svg" alt="Wrapping a low-level exception as the cause" loading="lazy" /></p>
+<h3 id="7-2-4-the-finally-clause">7.2.4 The <code>finally</code> clause</h3>
+<ul>
+<li>An exception exits the method, which is a problem if the method acquired a <strong>local resource that needs cleanup</strong>
+<ul>
+<li>Catching, cleaning up and rethrowing duplicates the cleanup</li>
+<li><strong><code>finally</code></strong> runs <strong>whether or not an exception was caught</strong></li>
+<li>(<code>try-with-resources</code> below is more elegant and far more common; <code>finally</code> is the conceptual foundation.)</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">FileInputStream</span><span class="p">(</span><span class="cm">/* ... */</span><span class="p">);</span>
+<span class="k">try</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// 1: code that might throw exceptions</span>
+<span class="w">    </span><span class="c1">// 2</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">IOException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// 3: show error message</span>
+<span class="w">    </span><span class="c1">// 4</span>
+<span class="p">}</span>
+<span class="k">finally</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// 5</span>
+<span class="w">    </span><span class="n">in</span><span class="p">.</span><span class="na">close</span><span class="p">();</span>
+<span class="p">}</span>
+<span class="c1">// 6</span>
+</code></pre>
+<ul>
+<li>Three situations:
+<ol>
+<li><strong>No exception:</strong> points 1, 2, 5, 6.</li>
+<li><strong>Exception caught by a <code>catch</code>:</strong> if the <code>catch</code> does not throw: 1, 3, 4, 5, 6. If the <code>catch</code> throws: 1, 3, 5, then the exception goes to the caller.</li>
+<li><strong>Exception not caught:</strong> 1, then 5, then the exception goes to the caller.</li>
+</ol>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-finally-paths.svg" alt="Paths through try, catch and finally" loading="lazy" /></p>
+<ul>
+<li><code>finally</code> can be used <strong>without <code>catch</code></strong>. For clarity use two nested <code>try</code> blocks: the inner one <strong>only ensures the stream is closed</strong>, the outer one <strong>only reports errors</strong>
+<ul>
+<li>errors in the <code>finally</code> code are then also reported:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="n">InputStream</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span><span class="w"> </span><span class="c1">// opened elsewhere</span>
+<span class="k">try</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">try</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// code that might throw exceptions</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">finally</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">in</span><span class="p">.</span><span class="na">close</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">IOException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// show error message</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Trap:</strong> a <code>return</code> in <code>finally</code> <strong>masks</strong> the original return value and even <strong>swallows exceptions</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">parseInt</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">s</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">try</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">Integer</span><span class="p">.</span><span class="na">parseInt</span><span class="p">(</span><span class="n">s</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">finally</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="c1">// ERROR: parseInt("42") returns 0; parseInt("zero") swallows the NumberFormatException</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Do not put control-flow statements (<code>return</code>, <code>throw</code>, <code>break</code>, <code>continue</code>) in <code>finally</code></strong>; it is for cleaning up resources.</li>
+</ul>
+<h3 id="7-2-5-the-try-with-resources-statement">7.2.5 The <code>try-with-resources</code> statement</h3>
+<ul>
+<li>For any resource whose class implements <strong><code>AutoCloseable</code></strong> (one method <code>void close() throws Exception</code>; the subinterface <strong><code>Closeable</code></strong> declares <code>close() throws IOException</code>):</li>
+</ul>
+<pre class="hl"><code><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">Resource</span><span class="w"> </span><span class="n">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="cm">/* ... */</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// work with res</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>res.close()</code> is called automatically on normal exit or exception:</li>
+</ul>
+<pre class="hl"><code><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Scanner</span><span class="p">(</span><span class="n">Path</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"in.txt"</span><span class="p">)))</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">in</span><span class="p">.</span><span class="na">hasNextLine</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">String</span><span class="w"> </span><span class="n">line</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">in</span><span class="p">.</span><span class="na">nextLine</span><span class="p">();</span>
+<span class="w">        </span><span class="c1">// process line</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Several resources</strong> (closed in reverse order of opening), without hand-nesting two try/finally blocks:</li>
+</ul>
+<pre class="hl"><code><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Scanner</span><span class="p">(</span><span class="n">Path</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"in.txt"</span><span class="p">));</span>
+<span class="w">     </span><span class="kd">var</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">PrintWriter</span><span class="p">(</span><span class="s">"out.txt"</span><span class="p">))</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">in</span><span class="p">.</span><span class="na">hasNextLine</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">String</span><span class="w"> </span><span class="n">line</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">in</span><span class="p">.</span><span class="na">nextLine</span><span class="p">();</span>
+<span class="w">        </span><span class="n">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">line</span><span class="p">.</span><span class="na">toUpperCase</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>You can use an existing <strong>effectively final</strong> variable: <code>try (out) { ... }</code> (uncommon; prefer closing where it was created).</li>
+<li><strong>If both the body and <code>close</code> throw</strong>,
+<ul>
+<li>the <strong>original exception is rethrown</strong> and exceptions from <code>close</code> become <strong>suppressed</strong>: added with <code>addSuppressed</code> and readable with <code>getSuppressed()</code></li>
+<li>You would not want to program that by hand.</li>
+</ul>
+</li>
+<li>A try-with-resources can have its own <strong><code>catch</code> and <code>finally</code></strong>, run <strong>after</strong> the resources are closed.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-try-with-resources.svg" alt="try-with-resources closes before catch and records suppressed errors" loading="lazy" /></p>
+<h3 id="7-2-6-analysing-stack-trace-elements">7.2.6 Analysing stack trace elements</h3>
+<ul>
+<li>A <strong>stack trace</strong> lists all pending method calls at a point in execution; it prints when a program ends with an uncaught exception. <code>printStackTrace</code> into a <code>StringWriter</code> gives the text:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Throwable</span><span class="p">();</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">StringWriter</span><span class="p">();</span>
+<span class="n">t</span><span class="p">.</span><span class="na">printStackTrace</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">PrintWriter</span><span class="p">(</span><span class="n">out</span><span class="p">));</span>
+<span class="n">String</span><span class="w"> </span><span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">out</span><span class="p">.</span><span class="na">toString</span><span class="p">();</span>
+</code></pre>
+<ul>
+<li>More flexible:
+<ul>
+<li><strong><code>StackWalker</code></strong> yields <code>StackWalker.StackFrame</code>s: <code>StackWalker.getInstance().forEach(frame -&gt; /* analyse */)</code>, or lazily <code>walker.walk(stream -&gt; /* process */)</code> (streams: Volume II, chapter 1). A frame gives the file name, line number, class object and method name</li>
+<li><code>toString</code> formats them.</li>
+</ul>
+</li>
+<li><code>Throwable.getStackTrace()</code> returns <code>StackTraceElement[]</code>, <strong>less efficient</strong> (captures the entire stack) and gives class <strong>names</strong>, not class objects.</li>
+<li>Listing 7.1 (<code>StackTraceDemo.java</code>) walks and prints the stack inside a recursive <code>factorial</code>. For `factorial</li>
+<li><code>the printout shows</code>factorial</li>
+<li>:<code>with one frame,</code>factorial</li>
+<li>:<code>with two,</code>factorial</li>
+<li>:<code>with three (each frame</code>stackTrace.StackTraceDemo.factorial(StackTraceDemo.java:20)<code>plus</code>...main(StackTraceDemo.java:36)<code>), then </code>return 1<code>, </code>return 2<code>, </code>return 6`</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-stack-trace.svg" alt="Frames pile up in recursive calls" loading="lazy" /></p>
+<p><code>Throwable</code> (1.4): <code>Throwable(Throwable cause)</code>, <code>Throwable(String message, Throwable cause)</code>, <code>Throwable initCause(Throwable)</code>, <code>Throwable getCause()</code>, <code>StackTraceElement[] getStackTrace()</code>, <code>void addSuppressed(Throwable)</code> (7), <code>Throwable[] getSuppressed()</code> (7).</p>
+<p><code>Exception(Throwable cause)</code> and <code>Exception(String, Throwable)</code>; the same for <code>RuntimeException</code> (1.4). <code>java.lang.StackWalker</code> (9): <code>getInstance()</code> (with an <code>Option</code> or a <code>Set&lt;Option&gt;</code>: <code>RETAIN_CLASS_REFERENCE</code>, <code>SHOW_HIDDEN_FRAMES</code>, <code>SHOW_REFLECT_FRAMES</code>), <code>forEach(Consumer)</code>, <code>walk(Function)</code>.</p>
+<p><code>StackWalker.StackFrame</code> (9) and <code>StackTraceElement</code> (1.4): <code>getFileName()</code>, <code>getLineNumber()</code> (-1 if unknown), <code>getClassName()</code>, <code>getMethodName()</code> (constructor <code>&lt;init&gt;</code>, static initialiser <code>&lt;clinit&gt;</code>; overloads not distinguished), <code>isNativeMethod()</code>, <code>toString()</code>; the frame also has <code>getDeclaringClass()</code> (needs <code>RETAIN_CLASS_REFERENCE</code>).</p>
+<h2 id="7-3-tips-for-using-exceptions">7.3 Tips for using exceptions</h2>
+<ol>
+<li><strong>Exception handling is not a replacement for a simple test.</strong> Popping an empty stack 10,000,000 times: with <code>if (!s.empty()) s.pop();</code> it took <strong>0.167 s</strong>, catching <code>EmptyStackException</code> took <strong>3.629 s</strong>. Use exceptions for <strong>exceptional circumstances only</strong>.</li>
+<li><strong>Do not micromanage.</strong> Wrapping every statement in its own <code>try</code> bloats the code. If the task is &quot;pop 100 numbers and write them to a file&quot; and nothing can fix a failure, wrap the <strong>whole task</strong> in one <code>try</code> with <code>catch (IOException e)</code> and <code>catch (EmptyStackException e)</code>, separating normal processing from error handling.</li>
+<li><strong>Make good use of the exception hierarchy.</strong>
+<ul>
+<li>Do not just throw <code>Exception</code> or <code>RuntimeException</code>: find a subclass or create your own.</li>
+<li><strong>Do not just catch <code>Exception</code></strong>, and <strong>never catch <code>Throwable</code></strong> (you might hide an <code>OutOfMemoryError</code>).</li>
+<li>Respect the checked/unchecked difference: checked exceptions are burdensome, so do not use them for logic errors (the reflection library gets this wrong).</li>
+<li>Convert to a more appropriate exception when sensible: catch <code>NumberFormatException</code> and set it as the cause of an <code>IOException</code> subclass or your subsystem exception.</li>
+</ul>
+</li>
+<li><strong>Do not squelch exceptions.</strong> An empty <code>catch (Exception e) { }</code> compiles happily and silently ignores the failure. Make an effort to handle exceptions properly.</li>
+<li><strong>&quot;Tough love&quot; beats indulgence.</strong> Throwing <code>EmptyStackException</code> at the point of failure is better than returning <code>null</code> and getting a <code>NullPointerException</code> later.</li>
+<li><strong>Propagating is not a sign of shame.</strong> <code>public void readStuff(String filename) throws IOException</code> is fine: higher-level methods are often better placed to inform the user or abandon the command.</li>
+<li><strong>Use standard methods for null and bounds checks:</strong> <code>Objects.requireNonNull</code>, <code>checkIndex</code>, <code>checkFromToIndex</code>, <code>checkFromIndexSize</code>:</li>
+</ol>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">putData</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">position</span><span class="p">,</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="n">newValue</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">Objects</span><span class="p">.</span><span class="na">checkIndex</span><span class="p">(</span><span class="n">position</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">.</span><span class="na">length</span><span class="p">);</span>
+<span class="w">    </span><span class="n">Objects</span><span class="p">.</span><span class="na">requireNonNull</span><span class="p">(</span><span class="n">newValue</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</code></pre>
+<ol start="8">
+<li><strong>Do not show stack traces to end users.</strong> They can reveal implementation details such as library versions to attackers. <strong>Log</strong> the trace and show a summary message.</li>
+</ol>
+<ul>
+<li>Tips 5 and 6 together: <strong>&quot;throw early, catch late&quot;</strong>.</li>
+</ul>
+<h2 id="7-4-using-assertions">7.4 Using assertions</h2>
+<ul>
+<li>Assertions are a common <strong>defensive programming</strong> idiom.</li>
+</ul>
+<h3 id="7-4-1-the-assertion-concept">7.4.1 The assertion concept</h3>
+<ul>
+<li>You rely on a property (for <code>double y = Math.sqrt(x);</code> you are sure <code>x</code> is not negative) but want to double-check so confusing <code>NaN</code> does not creep in
+<ul>
+<li>An explicit <code>if (x &lt; 0) throw new IllegalArgumentException(&quot;x &lt; 0&quot;);</code> stays in production and can slow the program if there are many.</li>
+</ul>
+</li>
+<li><strong>Assertions put checks in during testing and remove them in production.</strong> Two forms:</li>
+</ul>
+<pre class="hl"><code><span class="k">assert</span><span class="w"> </span><span class="n">condition</span><span class="p">;</span>
+<span class="k">assert</span><span class="w"> </span><span class="n">condition</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">expression</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>Both evaluate the condition and throw <strong><code>AssertionError</code></strong> if false. In the second form the <strong>expression is turned into the message string</strong>
+<ul>
+<li>the <code>AssertionError</code> does not store the value, so you cannot query it (the JDK docs say that &quot;would encourage programmers to attempt to recover from assertion failure, which defeats the purpose of the facility&quot;).</li>
+</ul>
+</li>
+<li>Examples:
+<ul>
+<li><code>assert x &gt;= 0;</code> or <code>assert x &gt;= 0 : x;</code>. <strong>Unlike C's <code>assert</code> macro</strong>, Java does not print the failing condition automatically</li>
+<li>to see it pass a string: <code>assert x &gt;= 0 : &quot;x &gt;= 0&quot;;</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="7-4-2-assertion-enabling-and-disabling">7.4.2 Assertion enabling and disabling</h3>
+<ul>
+<li>
+<p><strong>Assertions are disabled by default.</strong> Enable with <code>-enableassertions</code> or <code>-ea</code>: <code>java -enableassertions MyProgram</code>.</p>
+</li>
+<li>
+<p>You <strong>do not recompile</strong> to enable or disable assertions: it is a function of the <strong>class loader</strong>, which strips assertion code when disabled so it costs nothing.</p>
+</li>
+<li>
+<p>Enable per class or package:</p>
+<ul>
+<li><code>java -ea:MyClass -ea:com.mycompany.mypackage... MyProgram</code> (the <code>...</code> means the package and subpackages; <code>-ea:...</code> covers the unnamed package)</li>
+<li>Disable with <code>-disableassertions</code> or <code>-da</code>: <code>java -ea:... -da:MyClass MyProgram</code>.</li>
+</ul>
+</li>
+<li>
+<p><strong>System classes</strong> (loaded by the VM, no class loader) are not affected by <code>-ea</code> and <code>-da</code>; use <strong><code>-enablesystemassertions</code></strong> (<code>-esa</code>).</p>
+</li>
+<li>
+<p>You can also control it <strong>programmatically</strong> per class loader (API notes below).</p>
+</li>
+<li>
+<p><strong>Side-effect trap:</strong> when assertions are off the condition does <strong>not run</strong>:</p>
+</li>
+</ul>
+<pre class="hl"><code><span class="n">File</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">File</span><span class="p">(</span><span class="n">filename</span><span class="p">);</span>
+<span class="c1">// ...</span>
+<span class="k">assert</span><span class="w"> </span><span class="n">file</span><span class="p">.</span><span class="na">delete</span><span class="p">();</span><span class="w"> </span><span class="c1">// BAD: with assertions off the file is never deleted</span>
+
+<span class="kt">boolean</span><span class="w"> </span><span class="n">deletionSuccessful</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">file</span><span class="p">.</span><span class="na">delete</span><span class="p">();</span>
+<span class="k">assert</span><span class="w"> </span><span class="n">deletionSuccessful</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>The JDK source has <strong>over four hundred assertions that are commented out</strong> (some people comment them out after testing to save class file space)
+<ul>
+<li>To include them conditionally: <code>public static final boolean ASSERTS = true; // recompile with false for production</code> then <code>if (ASSERTS) assert x &gt;= 0;</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="7-4-3-using-assertions-for-parameter-checking">7.4.3 Using assertions for parameter checking</h3>
+<ul>
+<li>Three mechanisms for failures: <strong>throwing an exception, logging, assertions</strong>. Choosing assertions:
+<ul>
+<li>Failures are meant to be <strong>fatal and unrecoverable</strong>.</li>
+<li>Checks are on <strong>only during development and testing</strong>: &quot;wearing a life jacket when you are close to shore, and throwing it overboard once you are in the middle of the ocean.&quot;</li>
+<li>So <strong>never use assertions to signal recoverable conditions or to tell the user about a problem</strong>; only to find <strong>internal program errors</strong> during testing.</li>
+</ul>
+</li>
+<li><strong>Parameter checking depends on the documented contract.</strong> A documented <code>sort(int[] a, int fromIndex, int toIndex)</code> that &quot;throws <code>IllegalArgumentException</code> if fromIndex &gt; toIndex&quot; and &quot;<code>ArrayIndexOutOfBoundsException</code> if fromIndex &lt; 0 or toIndex &gt; a.length&quot; <strong>must really throw those exceptions</strong>, not assert.</li>
+<li>Asserting <code>a != null</code> is also <strong>not appropriate</strong> if the docs are silent about null: callers may assume normal return
+<ul>
+<li>If the documentation says &quot;(must not be null)&quot;, callers are on notice and the method <strong>may</strong> start with <code>assert a != null;</code>.</li>
+</ul>
+</li>
+<li>That is a <strong>precondition</strong>:
+<ul>
+<li>the original method had none</li>
+<li>the revised one has a single one. If the caller breaks it, <strong>all bets are off</strong>: with the assertion it sometimes throws an <code>AssertionError</code> and sometimes a <code>NullPointerException</code>, depending on class loader configuration.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-assert-exception-logging.svg" alt="Choosing between assert, an exception and a log message" loading="lazy" /></p>
+<h3 id="7-4-4-using-assertions-for-documenting-assumptions">7.4.4 Using assertions for documenting assumptions</h3>
+<ul>
+<li>Instead of a comment <code>else // (i % 3 == 2)</code>, write the assumption as code:</li>
+</ul>
+<pre class="hl"><code><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+<span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">assert</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Better still, think it through: for negative <code>i</code> the remainders can be -1 or -2, so the real assumption is that <code>i</code> is not negative: <code>assert i &gt;= 0;</code> before the <code>if</code>.</li>
+<li>Assertions are a <strong>tactical</strong> tool for testing and debugging; <strong>logging is strategic</strong>, for the whole lifecycle.</li>
+</ul>
+<p><code>java.lang.ClassLoader</code> (1.0): <code>void setDefaultAssertionStatus(boolean b)</code> (1.4, for classes without an explicit setting), <code>void setClassAssertionStatus(String className, boolean b)</code> (the class and its inner classes), <code>void setPackageAssertionStatus(String packageName, boolean b)</code> (package and subpackages), <code>void clearAssertionStatus()</code> (removes explicit settings and disables assertions).</p>
+<h2 id="7-5-logging">7.5 Logging</h2>
+<ul>
+<li>Print statements are inserted to understand troublesome code, removed, and put back for the next bug. <strong>Logging frameworks solve this.</strong></li>
+</ul>
+<h3 id="7-5-1-should-you-use-the-java-logging-framework">7.5.1 Should you use the Java logging framework?</h3>
+<ul>
+<li>Java's standard framework is <strong><code>java.util.logging</code></strong> (&quot;j.u.l.&quot;)
+<ul>
+<li>Other frameworks have more features and are common: <strong>Log4j</strong> (<code>https://logging.apache.org/log4j/2.x</code>) and <strong>Logback</strong> (<code>https://logback.qos.ch</code>).</li>
+</ul>
+</li>
+<li>To give users a choice, log through a <strong>façade</strong> that sends messages to the preferred framework: <strong>SLF4J</strong> (<code>https://www.slf4j.org</code>), or the JDK's basic <strong>platform logging API</strong> (<strong>JEP 264</strong>). The <strong>frontend</strong> is the API you log with
+<ul>
+<li>the <strong>backend</strong> filters, formats and stores messages and is configured by deployers (usually by files).</li>
+</ul>
+</li>
+<li>The book uses the <strong>platform logging API as frontend</strong> and <strong><code>java.util.logging</code> as backend</strong>: a reasonable choice, since you can swap the backend
+<ul>
+<li>j.u.l</li>
+<li>has fewer features but suffices for many uses, and <strong>its simplicity makes it less susceptible to attacks</strong>: obscure Log4j features let attackers craft inputs that caused <strong>malicious code execution when logged</strong>.</li>
+</ul>
+</li>
+<li>For JVM-level logging (such as garbage collection) use <code>-Xlog</code>: <code>java -Xlog:gc=trace:file=gc.log:uptime,tid MyProgram</code> (details in the JDK man page for <code>java</code>).</li>
+</ul>
+<h3 id="7-5-2-logging-101">7.5.2 Logging 101</h3>
+<ul>
+<li>Platform loggers implement <strong><code>System.Logger</code></strong>, each with a <strong>name</strong> (often the package of the logging class):</li>
+</ul>
+<pre class="hl"><code><span class="n">System</span><span class="p">.</span><span class="na">Logger</span><span class="w"> </span><span class="n">logger</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">System</span><span class="p">.</span><span class="na">getLogger</span><span class="p">(</span><span class="s">"com.mycompany.myapp"</span><span class="p">);</span>
+<span class="n">logger</span><span class="p">.</span><span class="na">log</span><span class="p">(</span><span class="n">System</span><span class="p">.</span><span class="na">Logger</span><span class="p">.</span><span class="na">Level</span><span class="p">.</span><span class="na">INFO</span><span class="p">,</span><span class="w"> </span><span class="s">"Opening file "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">filename</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>The first request for a name creates the logger; later requests return the <strong>same</strong> one. The record prints with time, class and method:</li>
+</ul>
+<pre class="hl"><code>Aug 04, 2025 09:53:34 AM com.mycompany.myapp.Main read
+INFO: Opening file data.txt
+</code></pre>
+<ul>
+<li>To silence info messages when deployed, configure the backend with a <code>logging.properties</code> file:</li>
+</ul>
+<pre class="hl"><code>handlers=java.util.logging.ConsoleHandler
+com.mycompany.myapp.level=WARNING
+</code></pre>
+<pre class="hl"><code><span class="gp">$ </span>java<span class="w"> </span>-Djava.util.logging.config.file<span class="o">=</span>logging.properties<span class="w"> </span>com.mycompany.myapp.Main
+</code></pre>
+<ul>
+<li>Since INFO is below WARNING, the message no longer shows. <strong>Getting the logger and logging belong to the frontend</strong>
+<ul>
+<li>destination, formatting, filtering and configuration belong to the <strong>backend</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="7-5-3-the-platform-logging-api">7.5.3 The platform logging API</h3>
+<ul>
+<li><strong>Levels</strong> of <code>System.Logger.Level</code>, in decreasing severity: <strong><code>ERROR</code>, <code>WARNING</code>, <code>INFO</code>, <code>DEBUG</code>, <code>TRACE</code></strong>. Shorten with <code>import static java.lang.System.Logger.Level.*;</code>.</li>
+<li>The message string is built even if suppressed; to avoid that cost, pass a <strong>supplier</strong> (lambda): <code>logger.log(INFO, () -&gt; &quot;Opening file &quot; + filename);</code> computed only when actually logged.</li>
+<li>Log an exception (the log includes the stack trace):</li>
+</ul>
+<pre class="hl"><code><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">IOException</span><span class="w"> </span><span class="n">ex</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">logger</span><span class="p">.</span><span class="na">log</span><span class="p">(</span><span class="n">WARNING</span><span class="p">,</span><span class="w"> </span><span class="s">"Cannot open file "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">filename</span><span class="p">,</span><span class="w"> </span><span class="n">ex</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Message patterns</strong>
+<ul>
+<li>use <code>MessageFormat</code>, <strong>not printf</strong>: <code>logger.log(WARNING, &quot;Cannot open file {0}&quot;, filename);</code> with placeholders <code>{0}</code>, <code>{1}</code></li>
+<li>Escape braces with single quotes (<code>'{'</code>, <code>'}'</code>) and use two single quotes <code>''</code> for a literal one.</li>
+</ul>
+</li>
+<li><strong>Localisation</strong>
+<ul>
+<li>via resource bundles (Volume II): <code>logger.log(WARNING, bundle, &quot;file.bad&quot;, filename);</code> or <code>System.getLogger(&quot;com.mycompany.myapp&quot;, bundle)</code></li>
+<li>then <code>String</code> parameters are keys into the bundle (<code>Object</code> and <code>Supplier&lt;String&gt;</code> ones are unaffected)
+<ul>
+<li><strong>Not every combination</strong> of deferred computation, throwable, formatting and bundle is supported</li>
+</ul>
+</li>
+<li>see the API notes.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-logging-frontend-backend.svg" alt="Platform logging API as frontend, java.util.logging as backend" loading="lazy" /></p>
+<h3 id="7-5-4-logging-configuration">7.5.4 Logging configuration</h3>
+<ul>
+<li>The default backend is <code>java.util.logging</code>
+<ul>
+<li>Its default file is <strong><code>conf/logging.properties</code></strong> in the JDK; use another with <strong><code>-Djava.util.logging.config.file=configFile MainClass</code></strong></li>
+<li>Calling <code>System.setProperty(&quot;java.util.logging.config.file&quot;, ...)</code> in <code>main</code> <strong>has no effect</strong>, because the log manager is initialised during VM startup, before <code>main</code>.</li>
+</ul>
+</li>
+<li>Per-logger levels: <code>com.mycompany.myapp.level=WARNING</code> (logger name plus <code>.level</code>). Root level: <code>.level=WARNING</code>.</li>
+<li><strong>These are not system properties</strong>: <code>-Dcom.mycompany.myapp.level=FINE</code> does nothing; they must be in the config file.</li>
+<li><strong>Level names differ</strong> between the platform API and <code>java.util.logging</code>; use the latter in the file (Table 7.1):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Platform logging</th>
+<th><code>java.util.logging</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ERROR</code></td>
+<td><code>SEVERE</code></td>
+</tr>
+<tr>
+<td><code>WARNING</code></td>
+<td><code>WARNING</code></td>
+</tr>
+<tr>
+<td><code>INFO</code></td>
+<td><code>INFO</code></td>
+</tr>
+<tr>
+<td><code>DEBUG</code></td>
+<td><code>FINE</code></td>
+</tr>
+<tr>
+<td><code>TRACE</code></td>
+<td><code>FINER</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Logger names are <strong>hierarchical</strong>, more than packages: turning off <code>&quot;com.mycompany&quot;</code> also deactivates its <strong>child loggers</strong>.</li>
+<li>Loggers do not print: <strong>handlers</strong> do, and <strong>handlers have levels too</strong>. To see DEBUG/FINE on the console set <code>java.util.logging.ConsoleHandler.level=FINE</code> as well.</li>
+<li>Levels can be changed in a running program with <strong><code>jconsole</code></strong> (<code>https://www.oracle.com/technical-resources/articles/java/jconsole.html#LoggingControl</code>).</li>
+<li><strong>Java 21:</strong>
+<ul>
+<li>the system logger <strong><code>java.lang.Runtime</code></strong> logs calls to <code>Runtime.exit</code> (which <code>System.exit</code> calls), with a stack trace showing who requested termination</li>
+<li>set <code>java.lang.Runtime.level=FINE</code> to receive it.</li>
+</ul>
+</li>
+</ul>
+<h3 id="7-5-5-log-handlers">7.5.5 Log handlers</h3>
+<ul>
+<li>The backend is built on <strong>handlers</strong>
+<ul>
+<li>The simplest, <strong><code>ConsoleHandler</code></strong>, prints to <code>System.err</code></li>
+<li>Each handler has a <strong>parent</strong> to which it sends records by default</li>
+<li>The standard configuration uses a <code>ConsoleHandler</code> with default level <strong>INFO</strong>.</li>
+</ul>
+</li>
+<li>Other handlers:
+<ul>
+<li><strong><code>FileHandler</code></strong> (collects records in a file) and <strong><code>SocketHandler</code></strong> (sends to a host and port)</li>
+<li>Add a file handler: <code>handlers=java.util.logging.ConsoleHandler,java.util.logging.FileHandler</code></li>
+<li>Records go to <code>javan.log</code> in the user's home directory (<code>n</code> makes it unique), <strong>formatted as XML by default</strong>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="nt">&lt;record&gt;</span>
+<span class="w">  </span><span class="nt">&lt;date&gt;</span>2025-12-04T09:53:34<span class="nt">&lt;/date&gt;</span>
+<span class="w">  </span><span class="nt">&lt;millis&gt;</span>1407146014072<span class="nt">&lt;/millis&gt;</span>
+<span class="w">  </span><span class="nt">&lt;sequence&gt;</span>1<span class="nt">&lt;/sequence&gt;</span>
+<span class="w">  </span><span class="nt">&lt;logger&gt;</span>com.mycompany.myapp<span class="nt">&lt;/logger&gt;</span>
+<span class="w">  </span><span class="nt">&lt;level&gt;</span>INFO<span class="nt">&lt;/level&gt;</span>
+<span class="w">  </span><span class="nt">&lt;class&gt;</span>com.horstmann.corejava.Employee<span class="nt">&lt;/class&gt;</span>
+<span class="w">  </span><span class="nt">&lt;method&gt;</span>read<span class="nt">&lt;/method&gt;</span>
+<span class="w">  </span><span class="nt">&lt;thread&gt;</span>10<span class="nt">&lt;/thread&gt;</span>
+<span class="w">  </span><span class="nt">&lt;message&gt;</span>Opening<span class="w"> </span>file<span class="w"> </span>staff.txt<span class="nt">&lt;/message&gt;</span>
+<span class="nt">&lt;/record&gt;</span>
+</code></pre>
+<ul>
+<li>Use a better file name pattern such as <code>%h/myapp%u.log</code>
+<ul>
+<li>the <code>%u</code> gives a unique log per run. For long-running programs turn on <strong>file rotation</strong> (<code>myapp.log.0</code>, <code>myapp.log.1</code>, ...): when a file exceeds the limit the oldest is deleted, others are renamed and a new generation 0 is created.</li>
+</ul>
+</li>
+</ul>
+<p>Table 7.2, file handler properties (all prefixed <code>java.util.logging.FileHandler.</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Meaning</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>level</code></td>
+<td>handler level</td>
+<td><code>Level.ALL</code></td>
+</tr>
+<tr>
+<td><code>append</code></td>
+<td>append to an existing file, otherwise open a new file each run</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>approximate maximum bytes before opening another file (0 = no limit)</td>
+<td>0 in the class, 50000 in the default log manager config</td>
+</tr>
+<tr>
+<td><code>pattern</code></td>
+<td>file name pattern</td>
+<td><code>%h/java%u.log</code></td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td>number of logs in a rotation sequence</td>
+<td>1 (no rotation)</td>
+</tr>
+<tr>
+<td><code>filter</code></td>
+<td>filter for records</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>encoding</code></td>
+<td>character encoding</td>
+<td>platform encoding</td>
+</tr>
+<tr>
+<td><code>formatter</code></td>
+<td>formatter for each record</td>
+<td><code>java.util.logging.XMLFormatter</code></td>
+</tr>
+</tbody>
+</table>
+<p>Table 7.3, pattern variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>%h</code></td>
+<td>user's home directory (<code>user.home</code>)</td>
+</tr>
+<tr>
+<td><code>%t</code></td>
+<td>system temporary directory</td>
+</tr>
+<tr>
+<td><code>%u</code></td>
+<td>a unique number</td>
+</tr>
+<tr>
+<td><code>%g</code></td>
+<td>generation number for rotated logs (a <code>.%g</code> suffix is used if rotation is on and the pattern lacks <code>%g</code>)</td>
+</tr>
+<tr>
+<td><code>%%</code></td>
+<td>the percent character</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>With <code>append</code> true and XML format, a <strong>new XML header is emitted when appending</strong> to an existing file, so the result is <strong>not valid XML</strong>.</li>
+</ul>
+<h3 id="7-5-6-filters-and-formatters">7.5.6 Filters and formatters</h3>
+<ul>
+<li>Besides levels, a handler can have a <strong><code>Filter</code></strong> (a functional interface): <code>boolean isLoggable(LogRecord record)</code>
+<ul>
+<li>install with <code>java.util.logging.ConsoleHandler.filter=com.mycompany.myapp.MyFilter</code>.</li>
+</ul>
+</li>
+<li>Console and file handlers emit text and XML; define your own by extending <strong><code>java.util.logging.Formatter</code></strong> and overriding <strong><code>String format(LogRecord record)</code></strong>
+<ul>
+<li>Inside, <code>formatMessage(record)</code> formats the message part (resource bundle lookup and parameter substitution)</li>
+<li>Formats that need a head and tail (like XML) override <strong><code>getHead(Handler h)</code></strong> and <strong><code>getTail(Handler h)</code></strong></li>
+<li>Set it with <code>java.util.logging.FileHandler.formatter=com.mycompany.myapp.MyFormatter</code>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-07-log-record-path.svg" alt="The path of a log record from logger to destination" loading="lazy" /></p>
+<h3 id="7-5-7-a-logging-recipe">7.5.7 A logging recipe</h3>
+<ol>
+<li>For a simple application use <strong>one logger named after your main package</strong>, e.g. <code>System.getLogger(&quot;com.mycompany.myprog&quot;)</code>, perhaps as a static field: <code>private static final System.Logger logger = System.getLogger(&quot;com.mycompany.myprog&quot;);</code>.</li>
+<li>The default backend logs <strong>INFO and above</strong> to the console. To customise, prepare <code>logging.properties</code>:</li>
+</ol>
+<pre class="hl"><code>handlers=java.util.logging.ConsoleHandler,java.util.logging.FileHandler
+com.mycompany.myapp.level=FINER
+java.util.logging.ConsoleHandler.level=FINE
+</code></pre>
+<p>and start with <code>java -Djava.util.logging.config.file=logging.properties com.mycompany.myapp.Main</code>.
+3. <strong>Whenever tempted to print to the console, use a logger</strong>: <code>logger.log(System.Logger.Level.TRACE, &quot;File open dialog canceled&quot;);</code>.
+4. <strong>Log unexpected exceptions</strong> with context: <code>logger.log(System.Logger.Level.WARNING, string describing context, e);</code>.</p>
+<ul>
+<li>Listing 7.2 (<code>LoggingImageViewer.java</code>) adds logging to the chapter 2 image viewer (<code>INFO</code> for showing the frame and exiting, <code>TRACE</code> for entering and leaving methods, <code>DEBUG</code> for file selection), and Listing 7.3 (<code>WindowHandler extends StreamHandler</code>) shows records in a window
+<ul>
+<li>Run with <code>java -Djava.util.logging.config.file=v1ch07/logging/logging.properties v1ch07.logging.LoggingImageViewer</code>.</li>
+</ul>
+</li>
+</ul>
+<p><code>java.lang.System.Logger</code> (9): <code>String getName()</code>, <code>boolean isLoggable(Level)</code>, and <code>log</code> overloads: <code>(level, msg)</code>, <code>(level, msg, thrown)</code>, <code>(level, obj)</code>, <code>(level, Supplier&lt;String&gt;)</code>, <code>(level, Supplier&lt;String&gt;, thrown)</code>, <code>(level, format, Object... params)</code>, <code>(level, ResourceBundle bundle, format, Object... params)</code> (null bundle uses the format directly), <code>(level, ResourceBundle bundle, msg, thrown)</code>.</p>
+<p><code>java.util.logging.Handler</code> (1.4): <code>publish(LogRecord)</code>, <code>flush()</code>, <code>close()</code>, <code>get/setFilter</code>, <code>get/setFormatter</code>, <code>get/setLevel</code>. <code>ConsoleHandler()</code>; <code>FileHandler(pattern[, append])</code>, <code>FileHandler(pattern, limit, count[, append])</code> (and a <code>long limit</code> overload in 9).</p>
+<p><code>LogRecord</code> (1.4): <code>getLevel</code>, <code>getLoggerName</code>, <code>getResourceBundle</code>, <code>getResourceBundleName</code>, <code>getMessage</code> (raw), <code>getParameters</code>, <code>getThrown</code>, <code>getSourceClassName</code>, <code>getSourceMethodName</code> (inferred from the stack, may be inaccurate if optimised), <code>getMillis</code>, <code>getInstant</code> (9), <code>getSequenceNumber</code>, <strong><code>getLongThreadID</code></strong> (16; <code>getThreadID</code> is deprecated because IDs can exceed <code>Integer.MAX_VALUE</code>).</p>
+<p><code>Filter</code> (1.4): <code>isLoggable(LogRecord)</code>. <code>Formatter</code> (1.4): <code>format</code>, <code>getHead</code>, <code>getTail</code>, <code>formatMessage</code>.</p>
+<h2 id="7-6-debugging-tips">7.6 Debugging tips</h2>
+<ul>
+<li>Best of all is a <strong>debugger</strong> (Eclipse, IntelliJ, NetBeans), but try these first:
+<ul>
+<li><strong>Print or log values</strong>:
+<ul>
+<li><code>IO.println(&quot;x=&quot; + x);</code> or <code>logger.log(DEBUG, &quot;x=&quot; + x);</code>. Also log <code>this</code>: <code>logger.log(DEBUG, &quot;this=&quot; + this);</code>. Library classes override <code>toString</code> helpfully</li>
+<li>do the same.</li>
+</ul>
+</li>
+<li><strong>A <code>main</code> per class</strong>
+<ul>
+<li>with demo code: make objects, call methods, show they behave</li>
+<li>For serious unit testing use <strong>JUnit</strong> (<code>https://junit.org</code>): run tests on every change and add a test for each bug found.</li>
+</ul>
+</li>
+<li><strong>A logging proxy</strong>: an object of a subclass that intercepts calls, logs and delegates; works only if the class is not final. For interfaces use the proxy from chapter 6.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">generator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Random</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="nf">nextDouble</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">double</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kd">super</span><span class="p">.</span><span class="na">nextDouble</span><span class="p">();</span>
+<span class="w">        </span><span class="n">logger</span><span class="p">.</span><span class="na">log</span><span class="p">(</span><span class="n">DEBUG</span><span class="p">,</span><span class="w"> </span><span class="s">"nextDouble: "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">result</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">};</span>
+</code></pre>
+<ul>
+<li><strong>Stack trace from any exception:</strong>
+<ul>
+<li><code>t.printStackTrace();</code></li>
+<li>To trace and rethrow: <code>catch (Throwable t) { t.printStackTrace(); throw t; }</code></li>
+<li>Without any exception, insert <strong><code>Thread.dumpStack();</code></strong></li>
+<li>To capture as a string: <code>new Throwable().printStackTrace(new PrintWriter(out))</code>.</li>
+</ul>
+</li>
+<li><strong>Capture the error stream:</strong>
+<ul>
+<li>errors go to <code>System.err</code>, so <code>java MyProgram &gt; errors.txt</code> misses them</li>
+<li>Use <code>java MyProgram 2&gt; errors.txt</code>, or both streams with <code>java MyProgram 1&gt; errors.txt 2&gt;&amp;1</code> (bash and the Windows shell).</li>
+</ul>
+</li>
+<li><strong>Log uncaught exceptions</strong> instead of printing them to <code>System.err</code> (confusing to users, unavailable later): <code>Thread.setDefaultUncaughtExceptionHandler((Thread t, Throwable e) -&gt; logger.log(TRACE, &quot;Uncaught exception in &quot; + t, e));</code>.</li>
+<li><strong>Watch class loading</strong> with <code>-verbose</code>: lines like <code>[0.034s][info][class,load] java.lang.Object source: jrt:/java.base</code>; occasionally useful for class path problems.</li>
+<li><strong><code>-Xlint</code></strong>
+<ul>
+<li>makes the compiler flag questionable code (the term &quot;lint&quot; comes from a C tool): <code>javac -Xlint sourceFiles</code> reports warnings like <code>warning: [fallthrough] possible fall-through into case</code>. Disable categories you do not want: <code>javac -Xlint:all,-fallthrough,-serial sourceFiles</code></li>
+<li>list them with <code>javac --help-lint</code>.</li>
+</ul>
+</li>
+<li><strong>Monitoring:</strong>
+<ul>
+<li><code>jconsole</code> shows VM statistics (memory, threads, class loading) for a running program (<code>https://www.oracle.com/technical-resources/articles/java/jconsole.html</code>). <strong>Java Flight Recorder</strong> collects diagnostic and profiling data</li>
+<li>view it with <strong>VisualVM</strong> (<code>https://visualvm.github.io</code>) or <strong>Java Mission Control</strong> (<code>https://adoptium.net/jmc</code>; tutorial at <code>https://github.com/thegreystone/jmc-tutorial</code>).</li>
+</ul>
+</li>
+<li><strong><code>jcmd</code></strong>
+<ul>
+<li>is the starting point among the command-line tools (<code>jcmd</code>, <code>jhsdb</code>, <code>jinfo</code>, <code>jmap</code>, <code>jps</code>, <code>jstat</code>): <code>jcmd</code> lists Java processes</li>
+<li>with a process ID or main class: <code>VM.system_properties</code>, <code>VM.flags</code>, <code>VM.log output=gc.log what=gc=trace decorators=uptime,tid</code>, <code>Thread.print</code>, <code>Thread.dump_to_file -overwrite -format=json dump.json</code>, <code>JFR.start filename=filename</code>, <code>JFR.stop name=1</code>, and <code>help commandName</code>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Throw exceptions instead of returning error codes; checked exceptions are declared or caught, unchecked ones signal bugs.</li>
+<li>Catch specific types, put specific before general, wrap with a cause, never squelch, <strong>throw early, catch late</strong>.</li>
+<li>Use try-with-resources for cleanup; <code>finally</code> must not change control flow.</li>
+<li>Assertions are test-time checks with no side effects, never for recoverable errors or public contracts.</li>
+<li>Use a logger (frontend <code>System.Logger</code>, backend <code>java.util.logging</code>), with levels, handlers, filters and formatters; log exceptions with context.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong><code>Throwable</code>, <code>Error</code>, <code>Exception</code>, <code>RuntimeException</code>:</strong> the exception hierarchy.</li>
+<li><strong>Checked and unchecked exception:</strong> compiler-enforced or not.</li>
+<li><strong><code>throws</code> clause, <code>throw</code> statement:</strong> declaring and raising.</li>
+<li><strong>Cause, suppressed exception:</strong> chained and secondary exceptions.</li>
+<li><strong><code>try-with-resources</code>, <code>AutoCloseable</code>:</strong> automatic cleanup.</li>
+<li><strong><code>finally</code>:</strong> cleanup that always runs.</li>
+<li><strong>Stack trace, <code>StackWalker</code>:</strong> the pending calls.</li>
+<li><strong>Assertion, precondition:</strong> test-time checks and caller obligations.</li>
+<li><strong>Logger, handler, filter, formatter, level:</strong> the logging pipeline.</li>
+<li><strong>Frontend, backend, façade:</strong> log API versus log implementation.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed., Pearson, 2025, ch. 7. Read through O'Reilly's learning platform for personal use.</li>
+<li>Log4j: <a href="https://logging.apache.org/log4j/2.x" target="_blank" rel="noopener noreferrer">https://logging.apache.org/log4j/2.x</a>, Logback: <a href="https://logback.qos.ch" target="_blank" rel="noopener noreferrer">https://logback.qos.ch</a>, SLF4J: <a href="https://www.slf4j.org" target="_blank" rel="noopener noreferrer">https://www.slf4j.org</a></li>
+<li>JVM unified logging: <a href="https://docs.oracle.com/en/java/javase/21/docs/specs/man/java.html#enable-logging-with-the-jvm-unified-logging-framework" target="_blank" rel="noopener noreferrer">https://docs.oracle.com/en/java/javase/21/docs/specs/man/java.html#enable-logging-with-the-jvm-unified-logging-framework</a></li>
+<li>jconsole logging control and monitoring: <a href="https://www.oracle.com/technical-resources/articles/java/jconsole.html" target="_blank" rel="noopener noreferrer">https://www.oracle.com/technical-resources/articles/java/jconsole.html</a></li>
+<li>JUnit: <a href="https://junit.org" target="_blank" rel="noopener noreferrer">https://junit.org</a>; VisualVM: <a href="https://visualvm.github.io" target="_blank" rel="noopener noreferrer">https://visualvm.github.io</a>; Java Mission Control: <a href="https://adoptium.net/jmc" target="_blank" rel="noopener noreferrer">https://adoptium.net/jmc</a>; tutorial: <a href="https://github.com/thegreystone/jmc-tutorial" target="_blank" rel="noopener noreferrer">https://github.com/thegreystone/jmc-tutorial</a></li>
+<li>Assertion guide cited by the book: <a href="https://docs.oracle.com/javase/8/docs/technotes/guides/language/assert.html" target="_blank" rel="noopener noreferrer">https://docs.oracle.com/javase/8/docs/technotes/guides/language/assert.html</a></li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li>java-concurrency</li>
+<li><a href="/book-digest/core-java-vol-1/cj-06-interfaces-lambda-expressions-and-inner-classes/">Core Java 6: Interfaces, Lambda Expressions and Inner Classes</a></li>
+<li><a href="/book-digest/core-java-vol-1/cj-08-generic-programming/">Core Java 8: Generic Programming</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/core-java-vol-1/cj-06-interfaces-lambda-expressions-and-inner-classes/">&larr; Core Java 6: Interfaces, Lambda Expressions and Inner Classes</a><a href="/book-digest/core-java-vol-1/">Contents</a><a href="/book-digest/core-java-vol-1/cj-08-generic-programming/">Core Java 8: Generic Programming &rarr;</a></nav></main></body></html>

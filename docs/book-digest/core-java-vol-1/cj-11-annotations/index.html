@@ -1,0 +1,902 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Core Java 11: Annotations</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/core-java-vol-1/">Core Java Vol 1</a></div>
+<main>
+<h1 id="core-java-11-annotations">Core Java 11: Annotations</h1>
+<p>Source: Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed. (Pearson, 2025), ch. 11. Previous: <a href="/book-digest/core-java-vol-1/cj-10-concurrency/">Core Java 10: Concurrency</a>. Next: <a href="/book-digest/core-java-vol-1/cj-12-the-java-platform-module-system/">Core Java 12: The Java Platform Module System</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>An <strong>annotation</strong> is a tag that a <strong>tool</strong> processes; it never changes how the compiler generates VM instructions.</li>
+<li>Annotations carry <strong>elements</strong> (compile-time constants, never <code>null</code>). They can mark <strong>declarations</strong> or <strong>type uses</strong>.</li>
+<li>You define one with <strong><code>@interface</code></strong>. <strong><code>@Target</code></strong> says where it may appear, <strong><code>@Retention</code></strong> (<code>SOURCE</code>, <code>CLASS</code>, <code>RUNTIME</code>) says how long it lives.</li>
+<li>Three processing styles: <strong>runtime reflection</strong>, <strong>source-level annotation processors</strong> (generate new files only), and <strong>bytecode engineering</strong> (class file API, load-time agents).</li>
+<li>Building annotation tools is complex; most developers only need to understand how the tools they use work.</li>
+</ul>
+</div></div>
+<h2 id="11-1-using-annotations">11.1 Using annotations</h2>
+<ul>
+<li>Annotations are tags inserted into source that a tool processes at <strong>source level</strong> or from <strong>class files</strong>
+<ul>
+<li>Examples: JUnit (<code>https://junit.org</code>) marks test methods, Jakarta Persistence (<code>https://jakarta.ee/specifications/persistence/</code>) maps classes to tables.</li>
+</ul>
+</li>
+<li>JCommander (<code>https://jcommander.org</code>) and picocli (<code>https://picocli.info</code>) use annotations to process command-line arguments.</li>
+<li>An annotation is used <strong>like a modifier</strong>, with a leading <code>@</code>. <code>@Test void checkRandomInsertions()</code> does nothing alone; JUnit finds and calls the annotated methods.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-11-annotation-pipeline.svg" alt="Where an annotation does its work" loading="lazy" /></p>
+<h3 id="11-1-1-annotation-elements">11.1.1 Annotation elements</h3>
+<ul>
+<li>Elements are <strong>key/value pairs</strong>: <code>@RepeatedTest(value=10, failureThreshold=3)</code>. Each annotation defines its element names and types.</li>
+<li>An element value is one of:
+<ul>
+<li>a primitive value, a <code>String</code>, a <code>Class</code> object, an <code>enum</code> instance;</li>
+<li>another annotation;</li>
+<li>an <strong>array</strong> of those (not an array of arrays).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// BugReport usage</span>
+<span class="nd">@BugReport</span><span class="p">(</span><span class="n">showStopper</span><span class="o">=</span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="n">assignedTo</span><span class="o">=</span><span class="s">"Harry"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">testCase</span><span class="o">=</span><span class="n">CacheTest</span><span class="p">.</span><span class="na">class</span><span class="p">,</span>
+<span class="w">    </span><span class="n">status</span><span class="o">=</span><span class="n">BugReport</span><span class="p">.</span><span class="na">Status</span><span class="p">.</span><span class="na">CONFIRMED</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ref</span><span class="o">=</span><span class="nd">@Reference</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="mi">11235811</span><span class="p">),</span>
+<span class="w">    </span><span class="n">reportedBy</span><span class="o">=</span><span class="p">{</span><span class="s">"Harry"</span><span class="p">,</span><span class="w"> </span><span class="s">"Fred"</span><span class="p">})</span>
+</code></pre>
+<ul>
+<li>Values must be <strong>compile-time constants</strong> and can <strong>never be <code>null</code></strong>.</li>
+<li>A single-element array can drop the braces: <code>@BugReport(reportedBy=&quot;Harry&quot;)</code>.</li>
+<li>Elements may have <strong>defaults</strong>: <code>failureThreshold</code> of <code>@RepeatedTest</code> defaults to <code>Integer.MAX_VALUE</code>.</li>
+<li>If the only element is named <code>value</code>, drop <code>value=</code>: <code>@RepeatedTest(10)</code>.</li>
+</ul>
+<h3 id="11-1-2-multiple-and-repeated-annotations">11.1.2 Multiple and repeated annotations</h3>
+<ul>
+<li>An item can carry several annotations (<code>@Test @Tag(&quot;localized&quot;)</code>).</li>
+<li>A <strong>repeatable</strong> annotation may appear several times: <code>@Tag(&quot;localized&quot;) @Tag(&quot;showstopper&quot;)</code>.</li>
+</ul>
+<h3 id="11-1-3-annotating-declarations">11.1.3 Annotating declarations</h3>
+<ul>
+<li>Two categories: <strong>declarations</strong> and <strong>type uses</strong>. Declaration annotations apply to:
+<ul>
+<li>classes (including <code>enum</code>), interfaces (including annotation interfaces);</li>
+<li>methods, constructors;</li>
+<li>fields (including enum constants and record components);</li>
+<li>local variables (including <code>for</code> and try-with-resources), parameters and catch parameters;</li>
+<li>type parameters, packages and modules.</li>
+</ul>
+</li>
+<li>Placement: before the <code>class</code>, <code>interface</code> or <code>module</code> keyword and its modifiers; before the type for variables.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Placement examples</span>
+<span class="nd">@Entity</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">User</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+
+<span class="nd">@SuppressWarnings</span><span class="p">(</span><span class="s">"unchecked"</span><span class="p">)</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">User</span><span class="o">&gt;</span><span class="w"> </span><span class="n">users</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="nf">getUser</span><span class="p">(</span><span class="nd">@Param</span><span class="p">(</span><span class="s">"id"</span><span class="p">)</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">userId</span><span class="p">)</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">record</span> <span class="nc">Rectangle</span><span class="p">(</span><span class="nd">@ToString</span><span class="p">(</span><span class="n">includeName</span><span class="o">=</span><span class="kc">false</span><span class="p">)</span><span class="w"> </span><span class="n">Point</span><span class="w"> </span><span class="n">topLeft</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">width</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">height</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Cache</span><span class="o">&lt;</span><span class="nd">@NonNull</span><span class="w"> </span><span class="n">V</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">}</span>
+</code></pre>
+<ul>
+<li>A package is annotated in <strong><code>package-info.java</code></strong>, which holds only the package statement preceded by annotations. The annotation's <code>import</code> comes <strong>after</strong> the package declaration.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// package-info.java</span>
+<span class="cm">/**</span>
+<span class="cm"> * Package-level documentation</span>
+<span class="cm"> */</span>
+<span class="nd">@Generated</span><span class="p">(</span><span class="s">"com.horstmann.generator"</span><span class="p">)</span>
+<span class="kn">package</span><span class="w"> </span><span class="nn">com.horstmann.corejava.generated</span><span class="p">;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">javax.annotation.processing.Generated</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>Annotations on <strong>local variables and packages are discarded</strong> at compile time, so they work only at <strong>source level</strong>.</li>
+</ul>
+<h3 id="11-1-4-annotating-type-uses">11.1.4 Annotating type uses</h3>
+<ul>
+<li>A declaration annotation tells you about the item declared (<code>@NonNull String userId</code>)
+<ul>
+<li><code>@NonNull</code> and <code>@Localized</code> belong to the <strong>Checker Framework</strong> (<code>https://types.cs.washington.edu/checker-framework</code>), which a static analysis tool uses to check the assertions.</li>
+</ul>
+</li>
+<li>To say &quot;a list of non-null strings&quot;, use a <strong>type use</strong> annotation: <code>List&lt;@NonNull String&gt;</code>.</li>
+<li>Where type uses can go:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Position</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Generic type arguments</td>
+<td><code>List&lt;@NonNull String&gt;</code>, <code>Comparator.&lt;@NonNull String&gt; reverseOrder()</code></td>
+</tr>
+<tr>
+<td>Before array brackets</td>
+<td><code>String[] @NonNull [] words</code> (the arrays <code>words[i]</code> are non-null); <code>String @NonNull [][] words</code> (the variable is non-null); <code>@NonNull String[][] words</code> (the elements are non-null)</td>
+</tr>
+<tr>
+<td>Superclasses and interfaces</td>
+<td><code>class Warning extends @Localized Message</code></td>
+</tr>
+<tr>
+<td>Constructor calls</td>
+<td><code>new @Localized String(...)</code></td>
+</tr>
+<tr>
+<td>Nested types</td>
+<td><code>Map.@Localized Entry</code></td>
+</tr>
+<tr>
+<td>Casts and <code>instanceof</code></td>
+<td><code>(@Localized String) text</code>, <code>text instanceof @Localized String</code> (no effect on behaviour)</td>
+</tr>
+<tr>
+<td><code>throws</code></td>
+<td><code>throws @Localized IOException</code></td>
+</tr>
+<tr>
+<td>Wildcards and bounds</td>
+<td><code>List&lt;@Localized ? extends Message&gt;</code>, <code>List&lt;? extends @Localized Message&gt;</code></td>
+</tr>
+<tr>
+<td>Method references</td>
+<td><code>@Localized Message::getText</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Not annotatable: class literals (<code>@NonNull String.class</code>) and imports (<code>import java.lang.@NonNull String;</code>).</li>
+<li>Convention: <strong>declaration annotations before</strong> modifiers, <strong>type use annotations after</strong> them. If an annotation is valid for both a variable and a type use, <strong>both</strong> are annotated.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Convention</span>
+<span class="kd">private</span><span class="w"> </span><span class="nd">@NonNull</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">text</span><span class="p">;</span><span class="w"> </span><span class="c1">// type use</span>
+<span class="nd">@Id</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">userId</span><span class="p">;</span><span class="w">    </span><span class="c1">// variable</span>
+</code></pre>
+<h3 id="11-1-5-receiver-parameters">11.1.5 Receiver parameters</h3>
+<ul>
+<li>To say a method does not mutate <code>this</code>, you need to annotate <code>this</code>, which is never declared
+<ul>
+<li>The rare <strong>receiver parameter</strong> syntax declares it: the first parameter, named <code>this</code>, typed as the class.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Point.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Point</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">equals</span><span class="p">(</span><span class="nd">@NonNull</span><span class="w"> </span><span class="n">Point</span><span class="w"> </span><span class="k">this</span><span class="p">,</span><span class="w"> </span><span class="nd">@Nullable</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="n">other</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Methods only</strong>, not constructors (the object is not of the type until the constructor completes; a constructor annotation describes the constructed object).</li>
+<li>An inner-class constructor has a hidden parameter for the enclosing instance. Name it <code>EnclosingClass.this</code>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Sequence.java</span>
+<span class="kd">static</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Sequence</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">from</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="kd">to</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">class</span> <span class="nc">Iterator</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">java</span><span class="p">.</span><span class="na">util</span><span class="p">.</span><span class="na">Iterator</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">current</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">public</span><span class="w"> </span><span class="nf">Iterator</span><span class="p">(</span><span class="nd">@NonNull</span><span class="w"> </span><span class="n">Sequence</span><span class="w"> </span><span class="n">Sequence</span><span class="p">.</span><span class="na">this</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">this</span><span class="p">.</span><span class="na">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Sequence</span><span class="p">.</span><span class="na">this</span><span class="p">.</span><span class="na">from</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="11-2-defining-annotations">11.2 Defining annotations</h2>
+<ul>
+<li>Each annotation is declared by an <strong>annotation interface</strong> (<code>@interface</code>). Its <strong>methods are the elements</strong>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// RepeatedTest.java</span>
+<span class="nd">@Target</span><span class="p">(</span><span class="n">ElementType</span><span class="p">.</span><span class="na">METHOD</span><span class="p">)</span>
+<span class="nd">@Retention</span><span class="p">(</span><span class="n">RetentionPolicy</span><span class="p">.</span><span class="na">RUNTIME</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="nd">@interface</span><span class="w"> </span><span class="n">RepeatedTest</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="nf">failureThreshold</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>@interface</code> creates a real Java interface. Tools get <strong>proxy objects</strong> implementing it and call methods such as <code>failureThreshold()</code>.</li>
+<li>Element methods have <strong>no parameters, no <code>throws</code>, and cannot be generic</strong>.</li>
+<li><code>@Target</code> and <code>@Retention</code> are <strong>meta-annotations</strong>
+<ul>
+<li><code>@Target</code> takes an array of <code>ElementType</code>: <code>@Target({ElementType.FIELD, ElementType.RECORD_COMPONENT, ElementType.TYPE})</code></li>
+<li>Misplacing the annotation is a <strong>compile error</strong>.</li>
+</ul>
+</li>
+<li>Without <code>@Target</code> an annotation fits any declaration but <strong>not type parameters or type uses</strong>.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th><code>ElementType</code></th>
+<th>Applies to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ANNOTATION_TYPE</code></td>
+<td>Annotation type declarations</td>
+</tr>
+<tr>
+<td><code>MODULE</code></td>
+<td>Modules</td>
+</tr>
+<tr>
+<td><code>PACKAGE</code></td>
+<td>Packages</td>
+</tr>
+<tr>
+<td><code>TYPE</code></td>
+<td>Classes (including <code>enum</code>) and interfaces (including annotation types)</td>
+</tr>
+<tr>
+<td><code>METHOD</code></td>
+<td>Methods</td>
+</tr>
+<tr>
+<td><code>CONSTRUCTOR</code></td>
+<td>Constructors</td>
+</tr>
+<tr>
+<td><code>FIELD</code></td>
+<td>Fields (including enum constants)</td>
+</tr>
+<tr>
+<td><code>PARAMETER</code></td>
+<td>Method or constructor parameters</td>
+</tr>
+<tr>
+<td><code>RECORD_COMPONENT</code></td>
+<td>Record components</td>
+</tr>
+<tr>
+<td><code>LOCAL_VARIABLE</code></td>
+<td>Local variables</td>
+</tr>
+<tr>
+<td><code>TYPE_PARAMETER</code></td>
+<td>Type parameters</td>
+</tr>
+<tr>
+<td><code>TYPE_USE</code></td>
+<td>Uses of a type</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>On a <strong>record component</strong>, the annotation passes to the fields and methods it produces, where permitted (the <code>topLeft</code> field gets it if the target includes <code>FIELD</code>).</li>
+<li><code>@Retention</code>:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SOURCE</code></td>
+<td>Available to source processors, <strong>not in class files</strong></td>
+</tr>
+<tr>
+<td><code>CLASS</code></td>
+<td>In class files, <strong>not loaded by the VM</strong> (<strong>the default</strong>)</td>
+</tr>
+<tr>
+<td><code>RUNTIME</code></td>
+<td>Available at runtime through <strong>reflection</strong></td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/core-java-vol-1/img/cj-11-retention-policies.svg" alt="Retention policies: how far an annotation survives" loading="lazy" /></p>
+<ul>
+<li>Defaults use a <strong><code>default</code> clause</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// BugReport.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="nd">@interface</span><span class="w"> </span><span class="n">BugReport</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">String</span><span class="o">[]</span><span class="w"> </span><span class="nf">reportedBy</span><span class="p">()</span><span class="w"> </span><span class="k">default</span><span class="w"> </span><span class="p">{};</span><span class="w">          </span><span class="c1">// empty array</span>
+<span class="w">    </span><span class="n">Reference</span><span class="w"> </span><span class="nf">ref</span><span class="p">()</span><span class="w"> </span><span class="k">default</span><span class="w"> </span><span class="nd">@Reference</span><span class="p">(</span><span class="n">id</span><span class="o">=</span><span class="mi">0</span><span class="p">);</span><span class="w">  </span><span class="c1">// default annotation</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Defaults are <strong>computed dynamically</strong>, not stored in the annotation: change a default, recompile the annotation, and <strong>even older class files</strong> use the new one.</li>
+<li>Every annotation interface extends <strong><code>java.lang.annotation.Annotation</code></strong> (a regular interface). You cannot extend annotation interfaces or implement them
+<ul>
+<li>tools and the VM generate proxies.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th><code>Annotation</code> method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Class&lt;? extends Annotation&gt; annotationType()</code></td>
+<td>The annotation interface (not <code>getClass()</code>, which gives the proxy)</td>
+</tr>
+<tr>
+<td><code>boolean equals(Object)</code></td>
+<td>Same interface and all elements equal</td>
+</tr>
+<tr>
+<td><code>int hashCode()</code></td>
+<td>Compatible with <code>equals</code>, from the interface name and element values</td>
+</tr>
+<tr>
+<td><code>String toString()</code></td>
+<td>Interface name plus element names and values</td>
+</tr>
+</tbody>
+</table>
+<h2 id="11-3-annotations-in-the-java-api">11.3 Annotations in the Java API</h2>
+<ul>
+<li>Defined in <code>java.lang</code>, <code>java.lang.annotation</code> and <code>javax.annotation</code>: four are <strong>meta-annotations</strong>, the rest are normal annotations.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Annotation</th>
+<th>Applies to</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Override</code></td>
+<td>Methods</td>
+<td>Checks the method overrides a superclass method</td>
+</tr>
+<tr>
+<td><code>Serial</code></td>
+<td>Methods</td>
+<td>Checks a serialisation method is correct</td>
+</tr>
+<tr>
+<td><code>Deprecated</code></td>
+<td>All declarations</td>
+<td>Marks as deprecated</td>
+</tr>
+<tr>
+<td><code>SuppressWarnings</code></td>
+<td>All except packages</td>
+<td>Suppresses warnings of a type</td>
+</tr>
+<tr>
+<td><code>SafeVarargs</code></td>
+<td>Methods, constructors</td>
+<td>Asserts varargs use is safe</td>
+</tr>
+<tr>
+<td><code>FunctionalInterface</code></td>
+<td>Interfaces</td>
+<td>Marks a single-abstract-method interface</td>
+</tr>
+<tr>
+<td><code>Generated</code></td>
+<td>All declarations</td>
+<td>Marks tool-generated source</td>
+</tr>
+<tr>
+<td><code>Target</code></td>
+<td>Annotations</td>
+<td>Where it may be applied</td>
+</tr>
+<tr>
+<td><code>Retention</code></td>
+<td>Annotations</td>
+<td>Where it can be used</td>
+</tr>
+<tr>
+<td><code>Documented</code></td>
+<td>Annotations</td>
+<td>Include in generated documentation</td>
+</tr>
+<tr>
+<td><code>Inherited</code></td>
+<td>Annotations</td>
+<td>Inherited by subclasses</td>
+</tr>
+<tr>
+<td><code>Repeatable</code></td>
+<td>Annotations</td>
+<td>May be applied several times</td>
+</tr>
+</tbody>
+</table>
+<h3 id="11-3-1-annotations-for-compilation">11.3.1 Annotations for compilation</h3>
+<ul>
+<li><strong><code>@Deprecated</code></strong>:
+<ul>
+<li>the compiler warns on use</li>
+<li>Same role as the <code>@deprecated</code> Javadoc tag, but it <strong>persists until runtime</strong></li>
+<li>The JDK's <strong><code>jdeprscan</code></strong> scans JAR files for deprecated elements.</li>
+</ul>
+</li>
+<li><strong><code>@Override</code></strong>: <code>public boolean equals(Point other)</code> with <code>@Override</code> is a compile error because <code>Object.equals</code> takes an <code>Object</code>.</li>
+<li><strong><code>@Serial</code></strong>: checks the parameter types of serialisation methods that interfaces do not declare.</li>
+<li><strong><code>@SuppressWarnings(&quot;unchecked&quot;)</code></strong> on a declaration such as <code>T[] result = (T[]) Array.newInstance(cl, n);</code>.</li>
+<li><strong><code>@SafeVarargs</code></strong>: the method does not corrupt its varargs parameter (chapter 8).</li>
+<li><strong><code>@Generated</code></strong>
+<ul>
+<li>(for code generators): needs a <strong>unique generator id</strong></li>
+<li>an ISO 8601/RFC 3339 <code>date</code> and a <code>comment</code> are optional. Editors can hide generated code, generators can remove older output.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Generated usage</span>
+<span class="nd">@Generated</span><span class="p">(</span><span class="n">value</span><span class="o">=</span><span class="s">"com.horstmann.generator"</span><span class="p">,</span><span class="w"> </span><span class="n">date</span><span class="o">=</span><span class="s">"2025-12-04T12:08:56.235-0700"</span><span class="p">)</span>
+</code></pre>
+<ul>
+<li><strong><code>@FunctionalInterface</code></strong>
+<ul>
+<li>(chapter 6) marks lambda conversion targets</li>
+<li>adding a second abstract method <strong>becomes a compile error</strong>. Apply it only to interfaces that describe functions (not, say, <code>AutoCloseable</code>).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// IntFunction.java</span>
+<span class="nd">@FunctionalInterface</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">IntFunction</span><span class="o">&lt;</span><span class="n">R</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">R</span><span class="w"> </span><span class="nf">apply</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">value</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<h3 id="11-3-2-meta-annotations">11.3.2 Meta-annotations</h3>
+<ul>
+<li><strong><code>@Documented</code></strong>: treat the annotation like a modifier (<code>private</code>, <code>static</code>) in Javadoc. <code>@SuppressWarnings</code> is <strong>not</strong> documented (implementation detail); <code>@FunctionalInterface</code> is.</li>
+<li><strong><code>@Inherited</code></strong>: <strong>class annotations only</strong>. Subclasses automatically carry it, similar to marker interfaces such as <code>Serializable</code>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Persistent.java</span>
+<span class="nd">@Inherited</span>
+<span class="nd">@interface</span><span class="w"> </span><span class="n">Persistent</span>
+<span class="p">{</span>
+<span class="p">}</span>
+
+<span class="nd">@Persistent</span>
+<span class="kd">class</span> <span class="nc">Employee</span>
+<span class="p">{</span>
+<span class="p">}</span>
+
+<span class="kd">class</span> <span class="nc">Manager</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Employee</span><span class="w"> </span><span class="c1">// also @Persistent</span>
+<span class="p">{</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong><code>@Repeatable</code></strong>: needs a <strong>container annotation</strong> holding an array. Two or more <code>@Tag</code> annotations are wrapped automatically into <code>@Tags</code>, which complicates processing.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Tag.java</span>
+<span class="nd">@Repeatable</span><span class="p">(</span><span class="n">Tag</span><span class="p">.</span><span class="na">class</span><span class="p">)</span>
+<span class="nd">@interface</span><span class="w"> </span><span class="n">Tag</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="nf">value</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="nd">@interface</span><span class="w"> </span><span class="n">Tags</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">Tag</span><span class="o">[]</span><span class="w"> </span><span class="nf">value</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<blockquote>
+<p>[!note] Book detail
+The book writes <code>@Repeatable(Tag.class)</code> on <code>Tag</code> itself. Taken literally the container should be named: <code>@Repeatable(Tags.class)</code> on <code>Tag</code> (unverified against the printed text).</p>
+</blockquote>
+<p><img src="/book-digest/core-java-vol-1/img/cj-11-repeatable-container.svg" alt="A repeatable annotation wrapped in its container" loading="lazy" /></p>
+<h2 id="11-4-processing-annotations-at-runtime">11.4 Processing annotations at runtime</h2>
+<ul>
+<li>Goal: a customisable <code>toString</code>. For <code>Point</code>, show <code>[5,10]</code> rather than <code>Point[x=5,y=10]</code>.</li>
+<li>Annotate classes <strong>and</strong> the fields to include.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// ToString.java</span>
+<span class="nd">@Target</span><span class="p">({</span><span class="n">ElementType</span><span class="p">.</span><span class="na">FIELD</span><span class="p">,</span><span class="w"> </span><span class="n">ElementType</span><span class="p">.</span><span class="na">RECORD_COMPONENT</span><span class="p">,</span><span class="w"> </span><span class="n">ElementType</span><span class="p">.</span><span class="na">TYPE</span><span class="p">})</span>
+<span class="nd">@Retention</span><span class="p">(</span><span class="n">RetentionPolicy</span><span class="p">.</span><span class="na">RUNTIME</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="nd">@interface</span><span class="w"> </span><span class="n">ToString</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">includeName</span><span class="p">()</span><span class="w"> </span><span class="k">default</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Point.java</span>
+<span class="nd">@ToString</span><span class="p">(</span><span class="n">includeName</span><span class="o">=</span><span class="kc">false</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Point</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="nd">@ToString</span><span class="p">(</span><span class="n">includeName</span><span class="o">=</span><span class="kc">false</span><span class="p">)</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+<span class="w">    </span><span class="nd">@ToString</span><span class="p">(</span><span class="n">includeName</span><span class="o">=</span><span class="kc">false</span><span class="p">)</span><span class="w"> </span><span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Rectangle.java</span>
+<span class="nd">@ToString</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">record</span> <span class="nc">Rectangle</span><span class="p">(</span>
+<span class="w">    </span><span class="nd">@ToString</span><span class="p">(</span><span class="n">includeName</span><span class="o">=</span><span class="kc">false</span><span class="p">)</span><span class="w"> </span><span class="n">Point</span><span class="w"> </span><span class="n">topLeft</span><span class="p">,</span>
+<span class="w">    </span><span class="nd">@ToString</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">width</span><span class="p">,</span>
+<span class="w">    </span><span class="nd">@ToString</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">height</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The intended output is <code>Rectangle[[5, 10],width=20,height=30]</code>.</li>
+<li>You cannot replace <code>toString</code> at runtime, so provide a method that <strong>formats any object</strong> and uses the annotations when present.</li>
+<li>The key API, from <strong><code>AnnotatedElement</code></strong> (implemented by <code>Class</code>, <code>Field</code>, <code>Parameter</code>, <code>Method</code>, <code>Constructor</code>, <code>Package</code>): <code>getAnnotation</code>, <code>getDeclaredAnnotation</code>, <code>getAnnotationsByType</code>, <code>getDeclaredAnnotationsByType</code>, <code>getAnnotations</code>, <code>getDeclaredAnnotations</code>, <code>isAnnotationPresent</code>.
+<ul>
+<li>Methods with <strong><code>Declared</code></strong> give only annotations on the item itself; the others include <strong>inherited</strong> ones (<code>@Inherited</code> on a superclass).</li>
+<li><code>getAnnotation(ToString.class)</code> returns a <strong>proxy</strong> object, or <code>null</code> if absent.</li>
+<li>For a <strong>repeatable</strong> annotation that was repeated, <code>getAnnotation</code> returns <strong><code>null</code></strong> (the repeats are in the container)
+<ul>
+<li>Use <strong><code>getAnnotationsByType</code></strong>, which looks through the container (a single use gives an array of length 1).</li>
+</ul>
+</li>
+<li><code>getAnnotations</code> returns all annotations, repeats wrapped in containers.</li>
+</ul>
+</li>
+<li><strong>Listing 11.2 (<code>ToStrings</code>)</strong>:
+<ul>
+<li><code>null</code> gives <code>&quot;null&quot;</code></li>
+<li>a class <strong>without</strong> <code>@ToString</code> uses its normal <code>toString</code> (the recursion stops there)</li>
+<li>otherwise it loops over <code>getDeclaredFields</code>, includes fields annotated with <code>@ToString</code>, calls <code>setAccessible(true)</code>, optionally prints the name, and recurses on the value.</li>
+</ul>
+</li>
+<li>Listing 11.1 (<code>RuntimeAnnotationDemo</code>) builds <code>new Rectangle(new Point(5, 10), 20, 30)</code> and prints <code>ToStrings.toString(rect)</code>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// ToStrings.java (core)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">toString</span><span class="p">(</span><span class="n">Object</span><span class="w"> </span><span class="n">obj</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">obj</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">"null"</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Class</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">cl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">obj</span><span class="p">.</span><span class="na">getClass</span><span class="p">();</span>
+<span class="w">    </span><span class="n">ToString</span><span class="w"> </span><span class="n">ts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cl</span><span class="p">.</span><span class="na">getAnnotation</span><span class="p">(</span><span class="n">ToString</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ts</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">obj</span><span class="p">.</span><span class="na">toString</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">StringBuilder</span><span class="p">();</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ts</span><span class="p">.</span><span class="na">includeName</span><span class="p">())</span>
+<span class="w">        </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="n">cl</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">"["</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">boolean</span><span class="w"> </span><span class="n">first</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Field</span><span class="w"> </span><span class="n">f</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">cl</span><span class="p">.</span><span class="na">getDeclaredFields</span><span class="p">())</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">f</span><span class="p">.</span><span class="na">getAnnotation</span><span class="p">(</span><span class="n">ToString</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ts</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">null</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">first</span><span class="p">)</span>
+<span class="w">                </span><span class="n">first</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="w">            </span><span class="k">else</span>
+<span class="w">                </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">","</span><span class="p">);</span>
+<span class="w">            </span><span class="n">f</span><span class="p">.</span><span class="na">setAccessible</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ts</span><span class="p">.</span><span class="na">includeName</span><span class="p">())</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="n">f</span><span class="p">.</span><span class="na">getName</span><span class="p">());</span>
+<span class="w">                </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">"="</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="k">try</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="n">ToStrings</span><span class="p">.</span><span class="na">toString</span><span class="p">(</span><span class="n">f</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">obj</span><span class="p">)));</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">ReflectiveOperationException</span><span class="w"> </span><span class="n">ex</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">ex</span><span class="p">.</span><span class="na">printStackTrace</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">"]"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">result</span><span class="p">.</span><span class="na">toString</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-11-runtime-processing.svg" alt="Runtime annotation processing with reflection" loading="lazy" /></p>
+<ul>
+<li>The typical recipe: <strong>reflect</strong> to find classes and fields, call <code>getAnnotation</code> or <code>getAnnotationsByType</code>, then call the <strong>annotation interface's methods</strong> for the element values.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th><code>AnnotatedElement</code> method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>isAnnotationPresent(Class)</code></td>
+<td>Whether an annotation of that type is present</td>
+</tr>
+<tr>
+<td><code>getAnnotation(Class&lt;T&gt;)</code></td>
+<td>The annotation or <code>null</code></td>
+</tr>
+<tr>
+<td><code>getAnnotationsByType(Class&lt;T&gt;)</code> (8)</td>
+<td>All of a repeatable type; empty array if none</td>
+</tr>
+<tr>
+<td><code>getAnnotations()</code></td>
+<td>All, including inherited; empty array if none</td>
+</tr>
+<tr>
+<td><code>getDeclaredAnnotations()</code></td>
+<td>All declared, excluding inherited</td>
+</tr>
+</tbody>
+</table>
+<h2 id="11-5-source-level-annotation-processing">11.5 Source-level annotation processing</h2>
+<ul>
+<li>Annotations can drive <strong>source generation</strong>. The example regenerates <code>toString</code> as real Java source, so it compiles with the program and runs <strong>at full speed</strong> without reflection.</li>
+</ul>
+<h3 id="11-5-1-annotation-processors">11.5.1 Annotation processors</h3>
+<ul>
+<li>Processing is <strong>part of the compiler</strong>: <code>javac -processor ProcessorClassName1,ProcessorClassName2 sourceFiles</code>.</li>
+<li>Each processor runs in turn with the annotations it is interested in
+<ul>
+<li>If one <strong>creates a new source file</strong>, another <strong>round</strong> follows</li>
+<li>When a round yields no new files, everything is compiled.</li>
+</ul>
+</li>
+<li>A processor can <strong>only generate new files, never modify existing ones</strong>.</li>
+<li>It implements <code>Processor</code>, normally by extending <code>AbstractProcessor</code>, and declares what it supports; wildcards such as <code>&quot;com.horstmann.*&quot;</code> or <code>&quot;*&quot;</code> are allowed.</li>
+<li><code>process(Set&lt;? extends TypeElement&gt; annotations, RoundEnvironment currentRound)</code> is called <strong>once per round</strong>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// ToStringAnnotationProcessor.java (outline)</span>
+<span class="nd">@SupportedAnnotationTypes</span><span class="p">(</span><span class="s">"annotations.ToString"</span><span class="p">)</span>
+<span class="nd">@SupportedSourceVersion</span><span class="p">(</span><span class="n">SourceVersion</span><span class="p">.</span><span class="na">RELEASE_8</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ToStringAnnotationProcessor</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">AbstractProcessor</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">process</span><span class="p">(</span><span class="n">Set</span><span class="o">&lt;?</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">TypeElement</span><span class="o">&gt;</span><span class="w"> </span><span class="n">annotations</span><span class="p">,</span>
+<span class="w">        </span><span class="n">RoundEnvironment</span><span class="w"> </span><span class="n">currentRound</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<h3 id="11-5-2-the-language-model-api">11.5.2 The language model API</h3>
+<ul>
+<li>Use it for <strong>source-level</strong> analysis. Unlike reflection (VM view of classes), it analyses a program <strong>by the rules of the language</strong>.</li>
+<li>The compiler builds a tree of <code>javax.lang.model.element.Element</code> nodes: <code>TypeElement</code>, <code>VariableElement</code>, <code>ExecutableElement</code> and so on (compile-time analogues of <code>Class</code>, <code>Field</code>/<code>Parameter</code>, <code>Method</code>/<code>Constructor</code>).</li>
+<li><code>RoundEnvironment.getElementsAnnotatedWith(Class)</code> returns the annotated elements; <code>getElementsAnnotatedWithAny(Set)</code> suits repeated annotations.</li>
+<li><code>AnnotatedConstruct</code> is the source-level <code>AnnotatedElement</code>, with <code>getAnnotation</code> and <code>getAnnotationsByType</code>.</li>
+<li><code>TypeElement.getEnclosedElements()</code> lists fields and methods. <code>getSimpleName</code> (on an <code>Element</code>) and <code>getQualifiedName</code> (on a <code>TypeElement</code>) give a <code>Name</code>, convertible with <code>toString</code>.</li>
+</ul>
+<h3 id="11-5-3-using-annotations-to-generate-source-code">11.5.3 Using annotations to generate source code</h3>
+<ul>
+<li>A processor cannot add methods to existing classes, so the generated <code>toString</code> methods go into a <strong>utility class <code>ToStrings</code></strong> with one overload per annotated class plus a fallback <code>toString(Object)</code> using <code>Objects.toString</code>.</li>
+<li>No reflection is wanted, so <strong>accessor methods are annotated, not fields</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Rectangle.java (annotated accessors)</span>
+<span class="nd">@ToString</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Rectangle</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="nd">@ToString</span><span class="p">(</span><span class="n">includeName</span><span class="o">=</span><span class="kc">false</span><span class="p">)</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="n">Point</span><span class="w"> </span><span class="nf">getTopLeft</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">topLeft</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nd">@ToString</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">getWidth</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">width</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nd">@ToString</span><span class="w"> </span><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">getHeight</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">height</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The processor generates, for each annotated class:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// generated ToStrings.java (one method)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">toString</span><span class="p">(</span><span class="n">Rectangle</span><span class="w"> </span><span class="n">obj</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">StringBuilder</span><span class="p">();</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">"Rectangle"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">"["</span><span class="p">);</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="n">toString</span><span class="p">(</span><span class="n">obj</span><span class="p">.</span><span class="na">getTopLeft</span><span class="p">()));</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">","</span><span class="p">);</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">"width="</span><span class="p">);</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="n">toString</span><span class="p">(</span><span class="n">obj</span><span class="p">.</span><span class="na">getWidth</span><span class="p">()));</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">","</span><span class="p">);</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">"height="</span><span class="p">);</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="n">toString</span><span class="p">(</span><span class="n">obj</span><span class="p">.</span><span class="na">getHeight</span><span class="p">()));</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">append</span><span class="p">(</span><span class="s">"]"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">result</span><span class="p">.</span><span class="na">toString</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong><code>process</code></strong> (Listing 11.4):
+<ul>
+<li>returns at once if <code>annotations</code> is empty (later rounds are called with an empty set, so the file is not created twice);</li>
+<li>creates <code>ToStrings</code> via <code>processingEnv.getFiler().createSourceFile(...)</code>;</li>
+<li>writes the package and class header, one method per <code>TypeElement</code> found by <code>getElementsAnnotatedWith(ToString.class)</code>, then <code>toString(Object)</code>;</li>
+<li>reports <code>IOException</code> through <code>processingEnv.getMessager()</code> with <code>Diagnostic.Kind.ERROR</code>.</li>
+</ul>
+</li>
+<li><strong><code>writeToStringMethod</code></strong>: reads the qualified class name, prints the header and <code>StringBuilder</code>, adds the class name if <code>includeName</code>, then for each <strong>enclosed element</strong> with <code>@ToString</code> appends the field name (derived from the accessor with <code>Introspector.decapitalize</code> after stripping <code>get</code> or <code>is</code>, so <code>getWidth</code> gives <code>width</code>, <code>getURL</code> gives <code>URL</code>) and <code>toString(obj.methodName())</code>.</li>
+<li><strong><code>-XprintRounds</code></strong> shows the rounds: round 1 has the input files and the <code>ToString</code> annotation, round 2 has no input files and is the last round.</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>v1ch11/sourceAnnotations/ToStringAnnotationProcessor.java
+<span class="gp">$ </span>javac<span class="w"> </span>-XprintRounds<span class="w"> </span>-processor<span class="w"> </span>v1ch11.sourceAnnotations.ToStringAnnotationProcessor<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch11/annotated/*.java
+<span class="gp">$ </span>java<span class="w"> </span>v1ch11/sourceAnnotations/SourceLevelAnnotationDemo.java
+</code></pre>
+<pre class="hl"><code>Round 1:
+  input files: {v1ch11.annotated.Point, v1ch11.annotated.Rectangle}
+  annotations: [v1ch11.sourceAnnotations.ToString]
+  last round: false
+Round 2:
+  input files: {}
+  annotations: []
+  last round: true
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-11-processor-rounds.svg" alt="Annotation processor rounds in javac" loading="lazy" /></p>
+<ul>
+<li>Processors may generate <strong>any file type</strong>: XML descriptors, property files, scripts, HTML documentation.</li>
+<li><strong>Getters and setters</strong>
+<ul>
+<li>from <code>@Property private String title;</code> would need <strong>editing the same class</strong>, which processors cannot do</li>
+<li>An annotation <strong>describes</strong> an item, it is not a directive to change code.</li>
+</ul>
+</li>
+<li><strong>Project Lombok</strong> works around this by <strong>modifying internal compiler data structures</strong>, so it generates getters and setters; it works for now but <strong>is not standard Java</strong>.</li>
+</ul>
+<h2 id="11-6-bytecode-engineering">11.6 Bytecode engineering</h2>
+<ul>
+<li>Annotations stay in class files unless removed, so a third route is processing at <strong>bytecode level</strong>
+<ul>
+<li>The class file format is documented at <code>https://docs.oracle.com/javase/specs/jvms/se21/html</code></li>
+<li>It is complex, but since <strong>Java 24</strong> the JDK has a <strong>class file API</strong> (<code>https://openjdk.org/jeps/484</code>).</li>
+</ul>
+</li>
+</ul>
+<h3 id="11-6-1-modifying-class-files">11.6.1 Modifying class files</h3>
+<ul>
+<li>Example: <code>@LogEntry(logger=loggerName)</code> on a method makes the tool insert, at the start of the method, the equivalent of <code>System.getLogger(loggerName).log(System.Logger.Level.TRACE, &quot;Entering {0}.{1}&quot;, className, methodName)</code>.</li>
+<li>Steps:
+<ol>
+<li>Load the class file bytes.</li>
+<li>Locate all methods.</li>
+<li>For each, check for <code>LogEntry</code>.</li>
+<li>If present, insert the bytecodes at the start.</li>
+</ol>
+</li>
+<li>The inserted instructions (book list): <code>ldc loggerName</code>, <code>invokestatic System.getLogger(String)</code>, <code>getstatic System.Logger.Level.INFO</code>, <code>ldc &quot;Entering {0}.{1}&quot;</code>, <code>iconst_2</code>, <code>anewarray</code>, <code>dup</code>, <code>iconst_0</code>, <code>ldc className</code>, <code>aastore</code>, <code>dup</code>, <code>iconst_1</code>, <code>ldc methodName</code>, <code>aastore</code>, <code>invokeinterface System.Logger.log(...)</code>.</li>
+<li>Result for <code>@LogEntry(logger=&quot;com.horstmann&quot;) public int hashCode()</code> in <code>Item</code>:</li>
+</ul>
+<pre class="hl"><code>Dec 03, 2025 5:58:44 PM set.Item hashCode
+INFO: Entering set.Item.hashCode
+</code></pre>
+<ul>
+<li>Run it:</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>v1ch11/set/Item.java<span class="w"> </span>v1ch11/set/SetDemo.java
+<span class="gp">$ </span>javac<span class="w"> </span>v1ch11/bytecodeAnnotations/EntryLogger.java
+<span class="gp">$ </span>java<span class="w"> </span>v1ch11.bytecodeAnnotations.EntryLogger<span class="w"> </span>v1ch11/set/Item.class
+<span class="gp">$ </span>java<span class="w"> </span>v1ch11.set.SetDemo
+</code></pre>
+<ul>
+<li><code>javap -c set.Item</code> before and after shows the instructions at the beginning of <code>hashCode</code>, <code>equals</code> and <code>compareTo</code>. <strong>Constant pool indices</strong> may differ on your machine.</li>
+<li><code>SetDemo</code> (Listing 11.7) sets the <code>com.horstmann</code> logger and a <code>ConsoleHandler</code> to <code>FINEST</code>, then adds <code>Toaster 1279</code>, <code>Microwave 4104</code>, <code>Toaster 1279</code> to a <code>HashSet&lt;Item&gt;</code>
+<ul>
+<li>Output shows three <code>hashCode</code> messages and one <strong><code>equals</code></strong> call (the duplicate), then <code>[[description=Microwave, partNumber=4104], [description=Toaster, partNumber=1279]]</code>.</li>
+</ul>
+</li>
+<li>The point: annotations add <strong>directives</strong>; a bytecode tool reads them and <strong>changes the VM instructions</strong>.</li>
+<li><strong><code>EntryLogger</code></strong> (Listing 11.5), in short:
+<ul>
+<li><code>ClassFile.of().parse(bytes)</code> gives a <code>ClassModel</code>; the class name comes from <code>thisClass().asInternalName()</code> with <code>/</code> replaced by <code>.</code>.</li>
+<li>A <strong><code>MethodTransform</code></strong> rebuilds a method's <code>CodeModel</code> with <code>withCode</code>, first calling <code>addLoggingCode</code>, then copying the original elements.</li>
+<li><code>ClassTransform.transformingMethods(EntryLogger::hasLoggingAnnotation, methodTransform)</code> applies it only to methods with the annotation.</li>
+<li><code>hasLoggingAnnotation</code> and <code>getLoggerName</code> read the <strong><code>RuntimeVisibleAnnotations</code></strong> attribute and compare the annotation descriptor with <code>LogEntry</code>'s
+<ul>
+<li><code>logger</code> is read as an <code>AnnotationValue.OfString</code>.</li>
+</ul>
+</li>
+<li><code>addLoggingCode</code> uses <code>CodeBuilder</code> calls (<code>ldc</code>, <code>invokestatic</code>, <code>getstatic</code>, <code>anewarray</code>, <code>aastore</code>, <code>invokeinterface</code>).</li>
+<li><code>main</code> reads the class file, calls <code>addLogging</code> and <strong>writes the bytes back</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-11-class-file-edit.svg" alt="A tool edits a class file" loading="lazy" /></p>
+<h3 id="11-6-2-modifying-bytecodes-at-load-time">11.6.2 Modifying bytecodes at load time</h3>
+<ul>
+<li>Another tool in the build is cumbersome, so <strong>defer to load time</strong>, when the class loader loads the class.</li>
+<li>The <strong>instrumentation API</strong> has a hook for a bytecode transformer, which must be installed <strong>before <code>main</code></strong>
+<ul>
+<li>Do that with an <strong>agent</strong>: a library loaded to monitor a program, which initialises in <code>premain</code>.</li>
+</ul>
+</li>
+<li>Building an agent:
+<ol>
+<li>Implement <code>public static void premain(String arg, Instrumentation instr)</code>. It gets one command-line argument and the <code>Instrumentation</code> to install hooks.</li>
+<li>Write a manifest <code>EntryLoggingAgent.mf</code> with <code>Premain-Class: v1ch11.bytecodeAnnotations.EntryLoggingAgent</code>.</li>
+<li>Package it into a JAR.</li>
+<li>Launch with <code>java -javaagent:AgentJARFile=agentArgument ...</code>.</li>
+</ol>
+</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>javac<span class="w"> </span>v1ch11/bytecodeAnnotations/EntryLoggingAgent.java
+<span class="gp">$ </span>jar<span class="w"> </span>cvfm<span class="w"> </span>EntryLoggingAgent.jar<span class="w"> </span>v1ch11/bytecodeAnnotations/EntryLoggingAgent.mf<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>v1ch11/bytecodeAnnotations/Entry*.class
+<span class="gp">$ </span>javac<span class="w"> </span>v1ch11/set/*.java
+</code></pre>
+<ul>
+<li>The book then runs <code>SetDemo</code> with <code>-javaagent:...=</code> and the class name <code>Item</code> as the agent argument (the exact command line is cut off in the captured text).</li>
+<li><strong>Listing 11.8</strong>:
+<ul>
+<li>the agent registers a <code>ClassFileTransformer</code></li>
+<li>It compares the class name (<code>/</code> to <code>.</code>) with the agent argument; on a match it returns <code>EntryLogger.addLogging(data)</code>, otherwise <code>null</code></li>
+<li>The modified bytes are <strong>not saved</strong>: they are returned for loading</li>
+<li>This is &quot;just in time&quot; bytecode modification.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// EntryLoggingAgent.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">EntryLoggingAgent</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">premain</span><span class="p">(</span><span class="kd">final</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">arg</span><span class="p">,</span><span class="w"> </span><span class="n">Instrumentation</span><span class="w"> </span><span class="n">instr</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">instr</span><span class="p">.</span><span class="na">addTransformer</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ClassFileTransformer</span><span class="p">()</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">public</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="nf">transform</span><span class="p">(</span><span class="n">ClassLoader</span><span class="w"> </span><span class="n">loader</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">className</span><span class="p">,</span><span class="w"> </span><span class="n">Class</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">cl</span><span class="p">,</span>
+<span class="w">                </span><span class="n">ProtectionDomain</span><span class="w"> </span><span class="n">pd</span><span class="p">,</span><span class="w"> </span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">data</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">IllegalClassFormatException</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">className</span><span class="p">.</span><span class="na">replace</span><span class="p">(</span><span class="s">"/"</span><span class="p">,</span><span class="w"> </span><span class="s">"."</span><span class="p">).</span><span class="na">equals</span><span class="p">(</span><span class="n">arg</span><span class="p">))</span>
+<span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="n">EntryLogger</span><span class="p">.</span><span class="na">addLogging</span><span class="p">(</span><span class="n">data</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">});</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<p><img src="/book-digest/core-java-vol-1/img/cj-11-load-time-agent.svg" alt="Modifying classes at load time with an agent" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>You learned to <strong>add annotations</strong>, <strong>design annotation interfaces</strong> and <strong>implement tools</strong> that use them.</li>
+<li>Three processing technologies:
+<ul>
+<li>scripting, compiling Java programs and processing annotations. The first two are straightforward</li>
+<li><strong>annotation tools are complex</strong> and rarely needed by most developers, but this chapter explains how the tools you meet work.</li>
+</ul>
+</li>
+<li>Next, chapter 12 covers the Java Platform Module System, which protects the integrity of the platform.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Annotation element</strong>: a key/value pair, a method of the annotation interface.</li>
+<li><strong>Meta-annotation</strong>: <code>@Target</code>, <code>@Retention</code>, <code>@Documented</code>, <code>@Inherited</code>, <code>@Repeatable</code>.</li>
+<li><strong>Type use annotation</strong>: annotates a type occurrence such as <code>List&lt;@NonNull String&gt;</code>.</li>
+<li><strong>Receiver parameter</strong>: explicit <code>this</code> first parameter, to annotate the receiver.</li>
+<li><strong>Retention policy</strong>: <code>SOURCE</code>, <code>CLASS</code> (default), <code>RUNTIME</code>.</li>
+<li><strong>Annotation processor / round</strong>: compiler plug-in that generates new files; repeats until no new sources.</li>
+<li><strong>Language model API</strong>: compile-time view of the program (<code>Element</code>, <code>TypeElement</code>).</li>
+<li><strong>Class file API / agent</strong>: Java 24 library to edit class files; <code>premain</code> plus <code>Instrumentation</code> for load-time edits.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed. (Pearson, 2025), chapter 11, read on O'Reilly.</li>
+<li>JUnit: <a href="https://junit.org" target="_blank" rel="noopener noreferrer">https://junit.org</a>. Jakarta Persistence: <a href="https://jakarta.ee/specifications/persistence/" target="_blank" rel="noopener noreferrer">https://jakarta.ee/specifications/persistence/</a>. JCommander: <a href="https://jcommander.org" target="_blank" rel="noopener noreferrer">https://jcommander.org</a>. picocli: <a href="https://picocli.info" target="_blank" rel="noopener noreferrer">https://picocli.info</a>.</li>
+<li>Checker Framework: <a href="https://types.cs.washington.edu/checker-framework" target="_blank" rel="noopener noreferrer">https://types.cs.washington.edu/checker-framework</a>.</li>
+<li>Class file format (JVMS 21): <a href="https://docs.oracle.com/javase/specs/jvms/se21/html" target="_blank" rel="noopener noreferrer">https://docs.oracle.com/javase/specs/jvms/se21/html</a>. Class file API: <a href="https://openjdk.org/jeps/484" target="_blank" rel="noopener noreferrer">https://openjdk.org/jeps/484</a>.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/core-java-vol-1/cj-10-concurrency/">Core Java 10: Concurrency</a></li>
+<li><a href="/book-digest/core-java-vol-1/cj-12-the-java-platform-module-system/">Core Java 12: The Java Platform Module System</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/core-java-vol-1/cj-10-concurrency/">&larr; Core Java 10: Concurrency</a><a href="/book-digest/core-java-vol-1/">Contents</a><a href="/book-digest/core-java-vol-1/cj-12-the-java-platform-module-system/">Core Java 12: The Java Platform Module System &rarr;</a></nav></main></body></html>

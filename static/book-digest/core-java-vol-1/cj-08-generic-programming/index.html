@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Core Java 8: Generic Programming</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a href="/book-digest/">Book digests</a><span>/</span><a href="/book-digest/core-java-vol-1/">Core Java Vol 1</a></div>
+<main>
+<h1 id="core-java-8-generic-programming">Core Java 8: Generic Programming</h1>
+<p>Source: Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed. (Pearson, 2025), ch. 8. Previous: <a href="/book-digest/core-java-vol-1/cj-07-exceptions-assertions-and-logging/">Core Java 7: Exceptions, Assertions and Logging</a>. Next: <a href="/book-digest/core-java-vol-1/cj-09-collections/">Core Java 9: Collections</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Generics</strong> give classes and methods <strong>type parameters</strong>, replacing the old <code>Object</code> plus cast approach: code is easier to read and <strong>errors become compile-time errors</strong>, not run-time <code>ClassCastException</code>s.</li>
+<li>Using generic classes is easy; <strong>writing</strong> them is hard. Use the knowledge mainly to understand and troubleshoot.</li>
+<li>The JVM has <strong>no generic types</strong>: the compiler <strong>erases</strong> type parameters to their bounds (or <code>Object</code>), inserts casts, and creates <strong>bridge methods</strong> to keep polymorphism. That explains most limitations.</li>
+<li><code>Pair&lt;Manager&gt;</code> is <strong>not</strong> a subtype of <code>Pair&lt;Employee&gt;</code>. <strong>Wildcards</strong> (<code>? extends T</code> to read, <code>? super T</code> to write) restore flexibility safely.</li>
+<li>Limits: no primitive type arguments, no <code>new T()</code> or <code>new T[n]</code>, no <code>instanceof Pair&lt;String&gt;</code>, no generic exceptions, no arrays of parameterised types.</li>
+</ul>
+</div></div>
+<h2 id="8-1-type-parameters">8.1 Type parameters</h2>
+<ul>
+<li><strong>Generic programming</strong> means writing code reusable for many types. <code>ArrayList</code> is one example: you do not write separate classes for <code>String</code> and <code>File</code> collections.</li>
+</ul>
+<h3 id="8-1-1-the-advantage-of-generic-programming">8.1.1 The advantage of generic programming</h3>
+<ul>
+<li>Before generics, reuse used <strong>inheritance</strong>: <code>ArrayList</code> held <code>Object</code> references.</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ArrayList</span><span class="w"> </span><span class="c1">// before generic classes</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">Object</span><span class="o">[]</span><span class="w"> </span><span class="n">elementData</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="n">Object</span><span class="w"> </span><span class="n">o</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Two problems: <strong>a cast is needed</strong> on every read (<code>String filename = (String) files.get(i);</code>), and <strong>no error checking</strong>: <code>files.add(Path.of(&quot;...&quot;))</code> and <code>files.add(new File(&quot;...&quot;))</code> both compile and the failure appears later as a <code>ClassCastException</code>.</li>
+<li>With a <strong>type parameter</strong>:
+<ul>
+<li><code>var files = new ArrayList&lt;String&gt;();</code>, or <code>ArrayList&lt;String&gt; files = new ArrayList&lt;&gt;();</code> (diamond; the type is inferred from the variable)</li>
+<li>No cast on <code>get</code>; <code>files.add(new File(&quot;...&quot;))</code> <strong>does not compile</strong></li>
+<li>&quot;A compiler error is much better than a class cast exception at runtime.&quot;</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-object-vs-typed-list.svg" alt="Raw Object lists versus a typed list" loading="lazy" /></p>
+<h3 id="8-1-2-who-wants-to-be-a-generic-programmer">8.1.2 Who wants to be a generic programmer?</h3>
+<ul>
+<li>Using <code>ArrayList&lt;String&gt;</code> is as easy as using <code>String[]</code>
+<ul>
+<li><strong>Implementing</strong> generic classes is hard: users will plug in all kinds of classes and expect everything to work without odd restrictions or confusing errors, so you must anticipate uses.</li>
+</ul>
+</li>
+<li>Example: <code>addAll</code> should accept an <code>ArrayList&lt;Manager&gt;</code> into an <code>ArrayList&lt;Employee&gt;</code> but not the reverse. The designers invented the <strong>wildcard type</strong> to allow one and forbid the other.</li>
+<li><strong>Three skill levels:</strong>
+<ul>
+<li>just use generic classes like <code>ArrayList</code></li>
+<li>understand enough to decode <strong>confusing error messages</strong> when mixing generic classes and solve them systematically instead of by &quot;random tinkering&quot;</li>
+<li>implement your own generic classes and methods. The author expects most readers to use the knowledge for troubleshooting and curiosity</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-1-3-defining-a-simple-generic-class">8.1.3 Defining a simple generic class</h3>
+<ul>
+<li>A <strong>generic class</strong> has one or more <strong>type variables</strong>, written in angle brackets after the class name:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="n">first</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="n">second</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">Pair</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">first</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">        </span><span class="n">second</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">Pair</span><span class="p">(</span><span class="n">T</span><span class="w"> </span><span class="n">first</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="n">second</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">first</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">first</span><span class="p">;</span>
+<span class="w">        </span><span class="k">this</span><span class="p">.</span><span class="na">second</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">second</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="nf">getFirst</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">first</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="nf">getSecond</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">second</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setFirst</span><span class="p">(</span><span class="n">T</span><span class="w"> </span><span class="n">newValue</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">first</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">newValue</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setSecond</span><span class="p">(</span><span class="n">T</span><span class="w"> </span><span class="n">newValue</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">second</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">newValue</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>(Why not an immutable record? The class is mutable on purpose, for reasons that appear soon.)</li>
+<li>Several variables are allowed:
+<ul>
+<li><code>public class Pair&lt;T, U&gt; { ... }</code></li>
+<li>Use <strong>short uppercase letters</strong>: <code>E</code> for collection elements, <code>K</code> and <code>V</code> for key and value, <code>T</code> (and neighbours <code>U</code>, <code>S</code>) for &quot;any type&quot;.</li>
+</ul>
+</li>
+<li><strong>Instantiate</strong>
+<ul>
+<li>by substituting types: <code>Pair&lt;String&gt;</code> acts like an ordinary class with constructors <code>Pair&lt;String&gt;()</code> and <code>Pair&lt;String&gt;(String, String)</code> and methods <code>String getFirst()</code>, <code>void setFirst(String)</code> and so on</li>
+<li><strong>A generic class is a factory for ordinary classes.</strong></li>
+</ul>
+</li>
+<li>Listing 8.1 (<code>PairDemo1.java</code>): <code>minmax(String[] a)</code> scans an array and returns a <code>Pair&lt;String&gt;</code> holding the min and max (for &quot;Mary had a little lamb&quot;: min is <code>a</code>, max is <code>little</code>).</li>
+</ul>
+<h3 id="8-1-4-generic-methods">8.1.4 Generic methods</h3>
+<ul>
+<li>A single method can have type parameters, <strong>between the modifiers and the return type</strong>, and may live in an ordinary class or a generic one:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="nf">getMiddle</span><span class="p">(</span><span class="n">T</span><span class="p">...</span><span class="w"> </span><span class="n">a</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="n">a</span><span class="p">.</span><span class="na">length</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">2</span><span class="o">]</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Usually <strong>no type argument is supplied</strong>:
+<ul>
+<li><code>getMiddle(&quot;John&quot;, &quot;Q.&quot;, &quot;Public&quot;)</code> infers <code>T = String</code></li>
+<li>When you must, put it <strong>before the method name after a dot</strong>: <code>Collections.&lt;String&gt;emptySet()</code>, or <code>this.&lt;String&gt;getMiddle(&quot;John&quot;, &quot;Q.&quot;, &quot;Public&quot;)</code>.</li>
+<li>C++ puts type arguments after the name, causing parsing ambiguities (<code>g(f&lt;a,b&gt;(c))</code> could be a call with <code>f&lt;a,b&gt;(c)</code> or two boolean comparisons).</li>
+</ul>
+</li>
+<li><strong>Inference sometimes fails</strong>
+<ul>
+<li>with a cryptic message. <code>double middle = getMiddle(3.14, 1729, 0);</code> makes the compiler look for a common type of <code>double</code> and <code>int</code> arguments and find <code>Number</code> plus the generic <code>Comparable</code>, producing a long &quot;inferred type does not conform to upper bound(s)&quot; error</li>
+<li>the fix is to write all arguments as <code>double</code>.</li>
+</ul>
+</li>
+<li><strong>Peter von der Ahé's trick</strong>
+<ul>
+<li>to see an inferred type: deliberately cause an error</li>
+<li>Assigning <code>getMiddle(&quot;Hello&quot;, 0, null)</code> to a <code>LocalDate</code> yields an error listing the inferred type (<code>Object &amp; Serializable &amp; Comparable&lt;...&gt; &amp; Constable &amp; ConstantDesc</code>): you can assign it to any of those.</li>
+</ul>
+</li>
+<li><strong>Inference can be slow</strong>: <code>List.of(...)</code> with hundreds of <code>new Pair&lt;&gt;(&quot;John&quot;, &quot;Smith&quot;)</code> takes the compiler a long time; help it with <code>List.&lt;Pair&lt;String&gt;&gt;of(...)</code>.</li>
+</ul>
+<h3 id="8-1-5-bounds-for-type-variables">8.1.5 Bounds for type variables</h3>
+<ul>
+<li>To compute the smallest element of any array, <code>T</code> must have a <code>compareTo</code>. <strong>Bound it</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Comparable</span><span class="o">&gt;</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="nf">min</span><span class="p">(</span><span class="n">T</span><span class="o">[]</span><span class="w"> </span><span class="n">a</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">length</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">T</span><span class="w"> </span><span class="n">smallest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">length</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">smallest</span><span class="p">.</span><span class="na">compareTo</span><span class="p">(</span><span class="n">a</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">smallest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">smallest</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>Comparable</code> is itself generic (ignore the warnings for now; section 8.4 does it properly). Now calling it with a <code>Rectangle[]</code> (not <code>Comparable</code>) is a compile error.</li>
+<li><strong>Why <code>extends</code> for an interface?</strong>
+<ul>
+<li><code>&lt;T extends BoundingType&gt;</code> means &quot;subtype of&quot;, and both can be classes or interfaces</li>
+<li><code>extends</code> approximates subtyping and the designers did not want a new keyword.</li>
+</ul>
+</li>
+<li><strong>Multiple bounds</strong> with <code>&amp;</code>: <code>T extends Comparable &amp; Serializable</code> (commas separate type variables). At most <strong>one bound can be a class, and it must be first</strong>.</li>
+<li>Listing 8.2 (<code>PairDemo2.java</code>): a generic <code>&lt;T extends Comparable&gt; Pair&lt;T&gt; minmax(T[] a)</code> applied to four birthdays (Hopper, Lovelace, von Neumann, Zuse): min is 1815-12-10, max is 1910-06-22.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-type-variable-bounds.svg" alt="Class and interface bounds on a type variable" loading="lazy" /></p>
+<h3 id="8-1-6-generic-exceptions">8.1.6 Generic exceptions</h3>
+<ul>
+<li>A <code>throws</code> clause may use a type variable:</li>
+</ul>
+<pre class="hl"><code><span class="kd">interface</span> <span class="nc">Task</span><span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Throwable</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">run</span><span class="p">()</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">T</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Throwable</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">repeat</span><span class="p">(</span><span class="n">Task</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">t</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">n</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">T</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">t</span><span class="p">.</span><span class="na">run</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>repeat(() -&gt; Thread.sleep(100), 10)</code> throws the same checked <code>InterruptedException</code>
+<ul>
+<li>If the lambda throws both <code>InterruptedException</code> and <code>IOException</code>, <code>T</code> is inferred as the <strong>least upper bound <code>Exception</code></strong> (the union is not a Java type).</li>
+</ul>
+</li>
+<li><strong>You cannot use a type variable in a <code>catch</code></strong>:
+<ul>
+<li><code>catch (T e)</code> is an error</li>
+<li><strong>You can neither throw nor catch objects of a generic class</strong>, and a generic class cannot even extend <code>Throwable</code>: <code>public class Problem&lt;T&gt; extends Exception</code> does not compile.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-2-generic-code-and-the-virtual-machine">8.2 Generic code and the virtual machine</h2>
+<ul>
+<li>The VM has <strong>no objects of generic types</strong>, only ordinary classes
+<ul>
+<li>(An early generics implementation could even compile to class files running on 1.0 VMs.) The compiler <strong>erases</strong> type parameters.</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-2-1-type-erasure">8.2.1 Type erasure</h3>
+<ul>
+<li>Every generic type gets a <strong>raw type</strong>: the generic name with parameters removed; type variables are replaced by their <strong>bounding types</strong>, or <code>Object</code> if unbounded. The raw <code>Pair</code>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Pair</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="n">first</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="n">second</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">Pair</span><span class="p">(</span><span class="n">Object</span><span class="w"> </span><span class="n">first</span><span class="p">,</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="n">second</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="nf">getFirst</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">first</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setFirst</span><span class="p">(</span><span class="n">Object</span><span class="w"> </span><span class="n">newValue</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">first</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">newValue</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>Pair&lt;String&gt;</code>, <code>Pair&lt;LocalDate&gt;</code> and so on all become the raw <code>Pair</code>. Erasure is efficient but <strong>only works because all type arguments are reference types</strong>.
+<ul>
+<li>C++ generates separate code per type argument; C# is a middle way (one implementation for all reference types, separate ones for value types).</li>
+<li><strong>Planned:</strong> value types in Java as type parameters, with an optimised memory layout, so one day <code>ArrayList&lt;int&gt;</code> could be backed by an <code>int[]</code>.</li>
+</ul>
+</li>
+<li>The raw type uses the <strong>first bound</strong>
+<ul>
+<li>For <code>class Interval&lt;T extends Comparable &amp; Serializable&gt; implements Serializable</code> the raw type has <code>Comparable lower, upper</code></li>
+<li>Swap the bounds (<code>T extends Serializable &amp; Comparable</code>) and <code>T</code> becomes <code>Serializable</code>, with casts to <code>Comparable</code> inserted where needed.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-type-erasure.svg" alt="Type erasure: one raw class for every parameterisation" loading="lazy" /></p>
+<h3 id="8-2-2-translating-generic-expressions">8.2.2 Translating generic expressions</h3>
+<ul>
+<li>When the erased return type differs from the use, <strong>the compiler inserts casts</strong>
+<ul>
+<li><code>Employee buddy = buddies.getFirst();</code> (with <code>Pair&lt;Employee&gt; buddies</code>) becomes two VM instructions: call the raw <code>Pair.getFirst</code>, then <strong>cast the returned <code>Object</code> to <code>Employee</code></strong></li>
+<li>The same happens when accessing a generic <strong>field</strong> (<code>buddies.first</code>).</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-2-3-translating-generic-methods">8.2.3 Translating generic methods</h3>
+<ul>
+<li>A generic method looks like a family but after erasure <strong>only one remains</strong>: <code>&lt;T extends Comparable&gt; T min(T[] a)</code> becomes <code>Comparable min(Comparable[] a)</code>.</li>
+<li><strong>Bridge methods</strong> preserve polymorphism. A subclass overriding a generic method:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">DateInterval</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">LocalDate</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setSecond</span><span class="p">(</span><span class="n">LocalDate</span><span class="w"> </span><span class="n">second</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">second</span><span class="p">.</span><span class="na">compareTo</span><span class="p">(</span><span class="n">getFirst</span><span class="p">())</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">super</span><span class="p">.</span><span class="na">setSecond</span><span class="p">(</span><span class="n">second</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>After erasure <code>DateInterval</code> has <code>setSecond(LocalDate)</code> <strong>and</strong> the inherited <code>setSecond(Object)</code> from <code>Pair</code>, which look unrelated
+<ul>
+<li>But <code>Pair&lt;LocalDate&gt; pair = interval; pair.setSecond(aDate);</code> must call <code>DateInterval.setSecond</code></li>
+<li>The compiler generates a <strong>bridge method</strong> in <code>DateInterval</code>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setSecond</span><span class="p">(</span><span class="n">Object</span><span class="w"> </span><span class="n">second</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">setSecond</span><span class="p">((</span><span class="n">LocalDate</span><span class="p">)</span><span class="w"> </span><span class="n">second</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Trace of <code>pair.setSecond(aDate)</code>: the declared type <code>Pair&lt;LocalDate&gt;</code> has only <code>setSecond(Object)</code>
+<ul>
+<li>the VM calls it on the <code>DateInterval</code></li>
+<li>that is the <strong>synthesised bridge</strong>, which calls <code>setSecond(LocalDate)</code>.</li>
+</ul>
+</li>
+<li>Bridges can be stranger:
+<ul>
+<li>if <code>DateInterval</code> overrides <code>getSecond</code> with return type <code>LocalDate</code>, the class has two <code>getSecond</code> methods, <code>LocalDate getSecond()</code> and a bridge <code>Object getSecond()</code></li>
+<li>You cannot write this in Java (same parameter list) but <strong>the VM identifies methods by parameter types and return type</strong>, so it is fine.</li>
+</ul>
+</li>
+<li>Bridges are not only for generics:
+<ul>
+<li><strong>covariant return types</strong> need them too</li>
+<li><code>Employee.clone()</code> returning <code>Employee</code> also gets a synthesised bridge <code>Object clone()</code> overriding <code>Object.clone</code>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-bridge-method.svg" alt="A bridge method keeps polymorphism working after erasure" loading="lazy" /></p>
+<p><strong>Remember:</strong></p>
+<ol>
+<li>There are <strong>no generics in the virtual machine</strong>, only ordinary classes and methods.</li>
+<li>All type parameters are replaced by their bounds.</li>
+<li><strong>Bridge methods</strong> are synthesised to preserve polymorphism.</li>
+<li><strong>Casts</strong> are inserted as necessary to preserve type safety.</li>
+</ol>
+<h3 id="8-2-4-calling-legacy-code">8.2.4 Calling legacy code</h3>
+<ul>
+<li>A design goal was <strong>interoperability with legacy code</strong>
+<ul>
+<li>Example: Swing's <code>JSlider.setLabelTable(Dictionary table)</code> uses a raw <code>Dictionary</code> (generified in Java 5 but <code>JSlider</code> never updated).</li>
+</ul>
+</li>
+<li>Populate with a generic type, then pass it, getting a <strong>warning</strong>: the compiler cannot know whether <code>setLabelTable</code> will, say, replace keys with strings:</li>
+</ul>
+<pre class="hl"><code><span class="n">Dictionary</span><span class="o">&lt;</span><span class="n">Integer</span><span class="p">,</span><span class="w"> </span><span class="n">Component</span><span class="o">&gt;</span><span class="w"> </span><span class="n">labelTable</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Hashtable</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+<span class="n">labelTable</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">JLabel</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ImageIcon</span><span class="p">(</span><span class="s">"nine.png"</span><span class="p">)));</span>
+<span class="n">labelTable</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">JLabel</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ImageIcon</span><span class="p">(</span><span class="s">"ten.png"</span><span class="p">)));</span>
+<span class="n">slider</span><span class="p">.</span><span class="na">setLabelTable</span><span class="p">(</span><span class="n">labelTable</span><span class="p">);</span><span class="w"> </span><span class="c1">// warning</span>
+</code></pre>
+<ul>
+<li>Ask what the legacy code will really do (<code>JSlider</code> only reads), then the warning can be ignored. The reverse (a raw return assigned to a generic variable, <code>Dictionary&lt;Integer, Component&gt; labelTable = slider.getLabelTable();</code>) also warns
+<ul>
+<li>verify the contents, knowing there is never an absolute guarantee but things are <strong>no worse than before generics</strong> (worst case an exception).</li>
+</ul>
+</li>
+<li>Silence it with <strong><code>@SuppressWarnings(&quot;unchecked&quot;)</code></strong> on a local variable declaration or a whole method (which turns off the check for all its code).</li>
+</ul>
+<h2 id="8-3-inheritance-rules-for-generic-types">8.3 Inheritance rules for generic types</h2>
+<ul>
+<li><strong><code>Pair&lt;Manager&gt;</code> is not a subtype of <code>Pair&lt;Employee&gt;</code></strong>,
+<ul>
+<li>even though <code>Manager</code> extends <code>Employee</code></li>
+<li><code>Pair&lt;Employee&gt; buddies = new Pair&lt;Manager&gt;(ceo, cfo);</code> is illegal</li>
+<li>In general there is <strong>no relationship between <code>Pair&lt;S&gt;</code> and <code>Pair&lt;T&gt;</code></strong> whatever <code>S</code> and <code>T</code> are.</li>
+</ul>
+</li>
+<li>Necessary for <strong>type safety</strong>: if it were allowed, <code>employeeBuddies.setFirst(lowlyEmployee)</code> would put a lowly employee in what is really a <code>Pair&lt;Manager&gt;</code>.</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-no-generic-subtyping.svg" alt="No subtype relationship between Pair&lt;Manager&gt; and Pair&lt;Employee&gt;" loading="lazy" /></p>
+<ul>
+<li><strong>Arrays differ:</strong> <code>Employee[] employeeBuddies = managerBuddies;</code> is allowed, protected by <code>ArrayStoreException</code> at run time (chapter 5).</li>
+<li><strong>Raw types:</strong>
+<ul>
+<li>you can always convert a parameterised type to its raw type (<code>Pair&lt;Employee&gt;</code> is a subtype of raw <code>Pair</code>), needed for legacy code</li>
+<li>You can then cause a type error with only a <strong>compile-time warning</strong> (<code>rawBuddies.setFirst(new File(&quot;...&quot;))</code>), but VM security is not at stake: reading it later as a <code>Manager</code> throws <code>ClassCastException</code>.</li>
+</ul>
+</li>
+<li><strong>Generic classes extend generic classes</strong> as usual: <code>ArrayList&lt;T&gt;</code> implements <code>List&lt;T&gt;</code>, so an <code>ArrayList&lt;Manager&gt;</code> converts to <code>List&lt;Manager&gt;</code>, but <strong>not</strong> to <code>ArrayList&lt;Employee&gt;</code> or <code>List&lt;Employee&gt;</code>.</li>
+</ul>
+<h2 id="8-4-wildcard-types">8.4 Wildcard types</h2>
+<ul>
+<li>A rigid generic type system is unpleasant; the designers added the <strong>wildcard type</strong> as a safe escape hatch.</li>
+</ul>
+<h3 id="8-4-1-the-wildcard-concept">8.4.1 The wildcard concept</h3>
+<ul>
+<li><strong><code>Pair&lt;? extends Employee&gt;</code></strong> denotes any <code>Pair</code> whose type parameter is a subclass of <code>Employee</code>: <code>Pair&lt;Manager&gt;</code> yes, <code>Pair&lt;String&gt;</code> no.</li>
+<li><code>void printBuddies(Pair&lt;Employee&gt; p)</code> cannot take a <code>Pair&lt;Manager&gt;</code>. Use <strong><code>void printBuddies(Pair&lt;? extends Employee&gt; p)</code></strong>: <code>Pair&lt;Manager&gt;</code> is a subtype of <code>Pair&lt;? extends Employee&gt;</code>.</li>
+<li><strong>Can wildcards corrupt?</strong> No:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">managerBuddies</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">Manager</span><span class="o">&gt;</span><span class="p">(</span><span class="n">ceo</span><span class="p">,</span><span class="w"> </span><span class="n">cfo</span><span class="p">);</span>
+<span class="n">Pair</span><span class="o">&lt;?</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Employee</span><span class="o">&gt;</span><span class="w"> </span><span class="n">wildcardBuddies</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">managerBuddies</span><span class="p">;</span><span class="w"> </span><span class="c1">// OK</span>
+<span class="n">wildcardBuddies</span><span class="p">.</span><span class="na">setFirst</span><span class="p">(</span><span class="n">lowlyEmployee</span><span class="p">);</span><span class="w"> </span><span class="c1">// compile-time error</span>
+</code></pre>
+<ul>
+<li>The methods look like <code>? extends Employee getFirst()</code> and <code>void setFirst(? extends Employee)</code>
+<ul>
+<li>For <code>setFirst</code> the compiler knows the parameter is <em>some specific</em> subtype but not which, so it <strong>rejects every argument except <code>null</code></strong> (even a <code>Manager</code>)</li>
+<li><code>getFirst</code> works: it returns some subtype of <code>Employee</code>, safe to assign to an <code>Employee</code>.</li>
+</ul>
+</li>
+<li>This distinguishes <strong>safe accessors from unsafe mutators</strong>.</li>
+</ul>
+<h3 id="8-4-2-supertype-bounds-for-wildcards">8.4.2 Supertype bounds for wildcards</h3>
+<ul>
+<li><strong><code>? super Executive</code></strong>:
+<ul>
+<li>all supertypes of <code>Executive</code></li>
+<li>Behaviour is <strong>opposite</strong>: you can <strong>supply arguments</strong> to methods but cannot usefully use return values</li>
+<li><code>Pair&lt;? super Executive&gt;</code> has <code>void setFirst(? super Executive)</code> and <code>? super Executive getFirst()</code>.</li>
+<li>The unknown type is one of <code>Object</code>, <code>Employee</code>, <code>Manager</code>, <code>Executive</code> (more with interfaces). <code>setFirst</code> cannot take an <code>Employee</code> or <code>Object</code> (it might really be <code>Manager</code>), but <strong>can take an <code>Executive</code></strong>
+<ul>
+<li><code>getFirst</code> can only be assigned to an <code>Object</code>.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kt">void</span><span class="w"> </span><span class="nf">minmaxTitle</span><span class="p">(</span><span class="n">Executive</span><span class="o">[]</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;?</span><span class="w"> </span><span class="kd">super</span><span class="w"> </span><span class="n">Executive</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">.</span><span class="na">length</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">Executive</span><span class="w"> </span><span class="n">smallest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Executive</span><span class="w"> </span><span class="n">largest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="na">length</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">smallest</span><span class="p">.</span><span class="na">getTitle</span><span class="p">().</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="p">.</span><span class="na">getTitle</span><span class="p">().</span><span class="na">length</span><span class="p">())</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">smallest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">largest</span><span class="p">.</span><span class="na">getTitle</span><span class="p">().</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="p">.</span><span class="na">getTitle</span><span class="p">().</span><span class="na">length</span><span class="p">())</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">largest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="o">[</span><span class="n">i</span><span class="o">]</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">setFirst</span><span class="p">(</span><span class="n">smallest</span><span class="p">);</span>
+<span class="w">    </span><span class="n">result</span><span class="p">.</span><span class="na">setSecond</span><span class="p">(</span><span class="n">largest</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>This accepts a <code>Pair&lt;Executive&gt;</code>, <code>Pair&lt;Manager&gt;</code>, <code>Pair&lt;Employee&gt;</code> or <code>Pair&lt;Object&gt;</code>.</li>
+<li><strong>Rule of thumb:</strong> <em><code>? super</code> wildcards let you write to a generic object; <code>? extends</code> wildcards let you read from one.</em> (PECS, the book's wording above.)</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-wildcard-extends-vs-super.svg" alt="extends reads, super writes" loading="lazy" /></p>
+<ul>
+<li><strong><code>Comparable&lt;? super T&gt;</code>:</strong>
+<ul>
+<li><code>&lt;T extends Comparable&lt;T&gt;&gt; Pair&lt;T&gt; minmax(T[] a)</code> fails for <code>LocalDate</code>, which implements <code>Comparable&lt;ChronoLocalDate&gt;</code> (through <code>ChronoLocalDate</code>) not <code>Comparable&lt;LocalDate&gt;</code></li>
+<li>The fix:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Comparable</span><span class="o">&lt;?</span><span class="w"> </span><span class="kd">super</span><span class="w"> </span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">minmax</span><span class="p">(</span><span class="n">T</span><span class="o">[]</span><span class="w"> </span><span class="n">a</span><span class="p">)</span>
+</code></pre>
+<ul>
+<li><code>compareTo(? super T)</code> may take a <code>T</code> or a supertype of <code>T</code>, and passing a <code>T</code> is always safe. It looks intimidating, but its purpose is to <strong>remove unnecessary restrictions on callers</strong>
+<ul>
+<li>application programmers can gloss over it, library programmers must get used to wildcards &quot;or your users will curse you and throw random casts at their code&quot;.</li>
+</ul>
+</li>
+<li>Functional interface parameters: <code>default boolean removeIf(Predicate&lt;? super E&gt; filter)</code> lets you pass a <code>Predicate&lt;Object&gt;</code> to an <code>ArrayList&lt;Employee&gt;</code>:</li>
+</ul>
+<pre class="hl"><code><span class="n">ArrayList</span><span class="o">&lt;</span><span class="n">Employee</span><span class="o">&gt;</span><span class="w"> </span><span class="n">staff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+<span class="n">Predicate</span><span class="o">&lt;</span><span class="n">Object</span><span class="o">&gt;</span><span class="w"> </span><span class="n">oddHashCode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">obj</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">obj</span><span class="p">.</span><span class="na">hashCode</span><span class="p">()</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="n">staff</span><span class="p">.</span><span class="na">removeIf</span><span class="p">(</span><span class="n">oddHashCode</span><span class="p">);</span>
+</code></pre>
+<h3 id="8-4-3-unbounded-wildcards">8.4.3 Unbounded wildcards</h3>
+<ul>
+<li><strong><code>Pair&lt;?&gt;</code></strong>
+<ul>
+<li>looks like raw <code>Pair</code> but is very different: methods are <code>? getFirst()</code> and <code>void setFirst(?)</code></li>
+<li>The result of <code>getFirst</code> can only go to an <code>Object</code>; <strong><code>setFirst</code> can never be called, not even with an <code>Object</code></strong> (only <code>setFirst(null)</code>)</li>
+<li>Raw <code>Pair</code> accepts any <code>Object</code>.</li>
+</ul>
+</li>
+<li>Useful for simple operations that never need the actual type:</li>
+</ul>
+<pre class="hl"><code><span class="kt">boolean</span><span class="w"> </span><span class="nf">hasNulls</span><span class="p">(</span><span class="n">Pair</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">p</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="na">getFirst</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="na">getSecond</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>A generic <code>&lt;T&gt; boolean hasNulls(Pair&lt;T&gt; p)</code> would work too, but the wildcard version reads better.</li>
+</ul>
+<h3 id="8-4-4-wildcard-capture">8.4.4 Wildcard capture</h3>
+<ul>
+<li><code>swap(Pair&lt;?&gt; p)</code> cannot hold a temporary, since <strong><code>?</code> is not a type</strong>: <code>? t = p.getFirst();</code> is an error. Use a <strong>generic helper</strong> whose type variable <strong>captures</strong> the wildcard:</li>
+</ul>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">swapHelper</span><span class="p">(</span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">p</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">T</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="na">getFirst</span><span class="p">();</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setFirst</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="na">getSecond</span><span class="p">());</span>
+<span class="w">    </span><span class="n">p</span><span class="p">.</span><span class="na">setSecond</span><span class="p">(</span><span class="n">t</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">swap</span><span class="p">(</span><span class="n">Pair</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">p</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">swapHelper</span><span class="p">(</span><span class="n">p</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>T</code> is unknown but definite, so <code>swapHelper</code> makes sense
+<ul>
+<li>Here a generic <code>swap</code> would have worked, but when a wildcard arises mid-computation capture is unavoidable, as in <code>maxminTitle(Executive[] a, Pair&lt;? super Executive&gt; result) { minmaxTitle(a, result); swap(result); }</code>.</li>
+</ul>
+</li>
+<li>Capture is only legal when the compiler can guarantee <strong>one definite type</strong>: the <code>T</code> in <code>ArrayList&lt;Pair&lt;T&gt;&gt;</code> can <strong>never</strong> capture the wildcard in <code>ArrayList&lt;Pair&lt;?&gt;&gt;</code> (each element may have a different type for <code>?</code>).</li>
+<li>Listing 8.3 (<code>PairDemo3.java</code>) gathers <code>printBuddies</code> (<code>Pair&lt;? extends Employee&gt;</code>), <code>minmaxTitle</code>, <code>maxminTitle</code>, <code>hasNulls</code> and <code>swap</code> together, using <code>Executive</code>s (CEO Gus Greedy and Senior Associate Vice President Sue Striver).</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-wildcard-capture.svg" alt="Wildcard capture with a helper method" loading="lazy" /></p>
+<h2 id="8-5-restrictions-and-limitations">8.5 Restrictions and limitations</h2>
+<ul>
+<li>Most are consequences of <strong>type erasure</strong>.</li>
+</ul>
+<h3 id="8-5-1-type-parameters-cannot-be-instantiated-with-primitive-types">8.5.1 Type parameters cannot be instantiated with primitive types</h3>
+<ul>
+<li>No <code>Pair&lt;double&gt;</code>, only <code>Pair&lt;Double&gt;</code>:
+<ul>
+<li>after erasure the fields are <code>Object</code> and cannot hold a <code>double</code>. Annoying but consistent with the separate status of the <strong>eight</strong> primitive types</li>
+<li>write separate classes and methods when wrappers will not do.</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-5-2-casts-only-work-with-raw-types">8.5.2 Casts only work with raw types</h3>
+<ul>
+<li>The VM only knows raw types, so type inquiries return raw types:</li>
+</ul>
+<pre class="hl"><code><span class="n">Pair</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="n">obj</span><span class="p">;</span><span class="w"> </span><span class="c1">// warning: only tests that obj is some Pair</span>
+<span class="n">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">q</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="n">obj</span><span class="p">;</span><span class="w">           </span><span class="c1">// only checks for a raw Pair</span>
+<span class="n">T</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">T</span><span class="p">)</span><span class="w"> </span><span class="n">obj</span><span class="p">;</span><span class="w">                       </span><span class="c1">// does nothing at run time</span>
+</code></pre>
+<ul>
+<li>The casts compile with warnings, but the <strong><code>instanceof</code> tests are compile-time errors</strong>: <code>obj instanceof Pair&lt;String&gt; p</code>, <code>obj instanceof Pair&lt;T&gt; p</code>, <code>obj instanceof T</code>.</li>
+<li>Why casts are needed:
+<ul>
+<li><code>&lt;T&gt; T defaultValue(Class&lt;T&gt; cl)</code> returning <code>&quot;&quot;</code> fails (&quot;result type is T but <code>&quot;&quot;</code> is a String&quot;), so <code>return (T) &quot;&quot;;</code></li>
+<li>Primitives need two or three casts: <code>return (T) (Integer) 0;</code> and <code>return (T) (Character) (char) 0;</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-5-3-you-cannot-create-arrays-of-parameterised-types">8.5.3 You cannot create arrays of parameterised types</h3>
+<ul>
+<li><code>var table = new Pair&lt;String&gt;[10];</code> is an <strong>error</strong>
+<ul>
+<li>After erasure it is <code>Pair[]</code>, convertible to <code>Object[]</code>
+<ul>
+<li><code>objarray[0] = new Pair&lt;Employee&gt;();</code> would <strong>pass the array-store check</strong> but still be a type error, so such arrays are outlawed</li>
+</ul>
+</li>
+<li>Only <strong>creation</strong> is banned: you can declare a variable <code>Pair&lt;String&gt;[]</code>.</li>
+</ul>
+</li>
+<li>A cast of a wildcard array, <code>var table = (Pair&lt;String&gt;[]) new Pair&lt;?&gt;[10];</code>, is <strong>not safe</strong>: storing a <code>Pair&lt;Employee&gt;</code> then using a <code>String</code> method on <code>getFirst()</code> gives a <code>ClassCastException</code>.</li>
+<li><strong>Collect parameterised objects in an <code>ArrayList</code></strong>: <code>ArrayList&lt;Pair&lt;String&gt;&gt;</code> is safe and effective.</li>
+</ul>
+<h3 id="8-5-4-varargs-warnings">8.5.4 Varargs warnings</h3>
+<ul>
+<li>Generic varargs create arrays of generic types, which the rules otherwise forbid:</li>
+</ul>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addAll</span><span class="p">(</span><span class="n">Collection</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="n">coll</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="p">...</span><span class="w"> </span><span class="n">elements</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">E</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">elements</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">coll</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">element</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">Collection</span><span class="o">&lt;</span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+<span class="n">addAll</span><span class="p">(</span><span class="n">table</span><span class="p">,</span><span class="w"> </span><span class="n">pair1</span><span class="p">,</span><span class="w"> </span><span class="n">pair2</span><span class="p">);</span><span class="w"> </span><span class="c1">// warning at the call site</span>
+</code></pre>
+<ul>
+<li>The rules are <strong>relaxed</strong> to a warning at the call site (suppress with <code>@SuppressWarnings(&quot;unchecked&quot;)</code> at the caller), plus a &quot;possible heap pollution&quot; warning at the declaration
+<ul>
+<li>To avoid both, annotate the <strong>method</strong> with <strong><code>@SafeVarargs</code></strong>, promising that it <strong>does not write to the parameter array nor pass it to others who might</strong>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="nd">@SafeVarargs</span>
+<span class="kd">static</span><span class="w"> </span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addAll</span><span class="p">(</span><span class="n">Collection</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span><span class="w"> </span><span class="n">coll</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="p">...</span><span class="w"> </span><span class="n">elements</span><span class="p">)</span>
+</code></pre>
+<ul>
+<li><code>@SafeVarargs</code> works only on constructors and methods that are <strong>static, final or private</strong> (others could be overridden).</li>
+<li>It can defeat the no-generic-arrays rule:
+<ul>
+<li><code>@SafeVarargs static &lt;E&gt; E[] array(E... array) { return array; }</code> then <code>Pair&lt;String&gt;[] table = array(pair1, pair2);</code></li>
+<li><strong>Hidden danger:</strong> <code>Object[] objarray = table; objarray[0] = new Pair&lt;Employee&gt;();</code> runs <strong>without</strong> <code>ArrayStoreException</code> (the store checks only the erased type), and the exception appears later.</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-5-5-generic-varargs-do-not-spread-primitive-arrays">8.5.5 Generic varargs do not spread primitive arrays</h3>
+<ul>
+<li>
+<p>A <strong>reference</strong> array passes as if spread: <code>String[] moreStrings = new String[] { &quot;Mary&quot;, &quot;had&quot;, &quot;a&quot;, &quot;little&quot;, &quot;lamb&quot; }; addAll(strings, moreStrings);</code> is the same as listing the elements.</p>
+</li>
+<li>
+<p>The elements are not really spread: <strong>the converse</strong> holds. Individually listed arguments are <strong>gathered into an array</strong>; a supplied array is passed <strong>directly</strong>.</p>
+</li>
+<li>
+<p><strong>Primitive arrays do not spread:</strong> <code>Collection&lt;Integer&gt; numbers = ...; int[] moreNumbers = { 11, 12, 13, 14, 15 }; addAll(numbers, moreNumbers);</code> is an <strong>error</strong> (no valid <code>E</code>; an <code>int[]</code> is not an <code>Integer[]</code>).</p>
+</li>
+<li>
+<p><strong>Insidious case:</strong></p>
+<ul>
+<li><code>List.of(E... elements)</code></li>
+<li><code>List.of(moreStrings)</code> gives a list of <strong>5</strong> elements, but <strong><code>List.of(moreNumbers)</code> gives a <code>List&lt;int[]&gt;</code> with a single element</strong> (the whole array), because <code>E</code> cannot match <code>int</code> and instead matches the array type <code>int[]</code>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-5-6-you-cannot-instantiate-type-variables">8.5.6 You cannot instantiate type variables</h3>
+<ul>
+<li><code>new T(...)</code> is illegal: <code>&lt;T&gt; Pair&lt;T&gt; makePair() { return new Pair&lt;T&gt;(new T(), new T()); }</code> (erasure would make it <code>new Object()</code>).</li>
+<li><strong>Modern workaround:</strong> let the caller supply a <strong>constructor expression</strong> via a <code>Supplier&lt;T&gt;</code>:</li>
+</ul>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">makePair</span><span class="p">(</span><span class="n">Supplier</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">constr</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">constr</span><span class="p">.</span><span class="na">get</span><span class="p">(),</span><span class="w"> </span><span class="n">constr</span><span class="p">.</span><span class="na">get</span><span class="p">());</span>
+<span class="p">}</span>
+
+<span class="n">Pair</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makePair</span><span class="p">(</span><span class="n">String</span><span class="p">::</span><span class="k">new</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li><strong>Reflection workaround:</strong> you cannot write <code>T.class.getConstructor().newInstance()</code> (<code>T.class</code> would erase to <code>Object.class</code>); the API must receive a <code>Class</code> object:</li>
+</ul>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">makePair</span><span class="p">(</span><span class="n">Class</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">cl</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">ReflectiveOperationException</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">Constructor</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">constr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cl</span><span class="p">.</span><span class="na">getConstructor</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">constr</span><span class="p">.</span><span class="na">newInstance</span><span class="p">(),</span><span class="w"> </span><span class="n">constr</span><span class="p">.</span><span class="na">newInstance</span><span class="p">());</span>
+<span class="p">}</span>
+
+<span class="n">Pair</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Pair</span><span class="p">.</span><span class="na">makePair</span><span class="p">(</span><span class="n">String</span><span class="p">.</span><span class="na">class</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>It throws <code>ReflectiveOperationException</code> because the class may lack a no-argument constructor
+<ul>
+<li><code>Class</code> is generic: <code>String.class</code> is the sole instance of <code>Class&lt;String&gt;</code>, so the method infers <code>Pair&lt;String&gt;</code>.</li>
+</ul>
+</li>
+<li><strong>Varargs workaround</strong>
+<ul>
+<li>(confusing API): a varargs parameter that exists only to give the component type: <code>&lt;T&gt; Pair&lt;T&gt; makePair(T... dummy)</code>, called as <code>Pair&lt;String&gt; names = makePair();</code> (an empty <code>String[]</code> supplies the type)</li>
+<li>Users must be told to call it with no arguments.</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-5-7-you-cannot-construct-a-generic-array">8.5.7 You cannot construct a generic array</h3>
+<ul>
+<li><code>T[] mm = new T[2];</code> is an error: an array carries a type used for <strong>store checks</strong>, and that type is erased (it would always build <code>Comparable[2]</code>).</li>
+<li>If the array is only a <strong>private field</strong>, declare the <strong>erased element type</strong> and cast on reads:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ArrayList</span><span class="o">&lt;</span><span class="n">E</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">Object</span><span class="o">[]</span><span class="w"> </span><span class="n">elements</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="nd">@SuppressWarnings</span><span class="p">(</span><span class="s">"unchecked"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="p">(</span><span class="n">E</span><span class="p">)</span><span class="w"> </span><span class="n">elements</span><span class="o">[</span><span class="n">n</span><span class="o">]</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">set</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="n">E</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">elements</span><span class="o">[</span><span class="n">n</span><span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">e</span><span class="p">;</span><span class="w"> </span><span class="c1">// no cast needed</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>That does <strong>not</strong> work when <strong>returning</strong> a <code>T[]</code>: <code>var result = new Comparable[2]; return (T[]) result;</code> compiles with a warning, and <code>String[] names = minmax(&quot;Tom&quot;, &quot;Dick&quot;, &quot;Harry&quot;);</code> compiles with none, but throws <code>ClassCastException</code> after the call.</li>
+<li><strong>Best fix: ask for an array constructor expression:</strong> <code>String[] names = minmax(String[]::new, &quot;Tom&quot;, &quot;Dick&quot;, &quot;Harry&quot;);</code> with</li>
+</ul>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Comparable</span><span class="o">&gt;</span><span class="w"> </span><span class="n">T</span><span class="o">[]</span><span class="w"> </span><span class="nf">minmax</span><span class="p">(</span><span class="n">IntFunction</span><span class="o">&lt;</span><span class="n">T</span><span class="o">[]&gt;</span><span class="w"> </span><span class="n">constr</span><span class="p">,</span><span class="w"> </span><span class="n">T</span><span class="p">...</span><span class="w"> </span><span class="n">a</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">T</span><span class="o">[]</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">constr</span><span class="p">.</span><span class="na">apply</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Old-fashioned:</strong> <code>var result = (T[]) Array.newInstance(a.getClass().getComponentType(), 2);</code>.</li>
+<li><code>ArrayList.toArray</code> lacks the component type, so it has two variants: <code>Object[] toArray()</code> and <code>T[] toArray(T[] result)</code> (uses the array if large enough, otherwise builds a new one of the same component type).</li>
+</ul>
+<h3 id="8-5-8-type-variables-are-not-valid-in-static-contexts-of-generic-classes">8.5.8 Type variables are not valid in static contexts of generic classes</h3>
+<ul>
+<li><strong>No static fields or methods using the class's type variable:</strong></li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Singleton</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="n">singleInstance</span><span class="p">;</span><span class="w"> </span><span class="c1">// ERROR</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">T</span><span class="w"> </span><span class="nf">getSingleInstance</span><span class="p">()</span><span class="w"> </span><span class="c1">// ERROR</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// construct a new instance of T if null</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">singleInstance</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>It could never work: after erasure there is <strong>one</strong> <code>Singleton</code> class and <strong>one</strong> <code>singleInstance</code> field, not one per <code>Singleton&lt;Random&gt;</code> or <code>Singleton&lt;JFileChooser&gt;</code>.</li>
+</ul>
+<h3 id="8-5-9-you-can-defeat-checked-exception-checking">8.5.9 You can defeat checked exception checking</h3>
+<ul>
+<li>A bedrock rule is that checked exceptions need handlers, but <strong>generics can defeat it</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">Sneaky</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="nd">@SuppressWarnings</span><span class="p">(</span><span class="s">"unchecked"</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Throwable</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">throwAs</span><span class="p">(</span><span class="n">Throwable</span><span class="w"> </span><span class="n">t</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">T</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">throw</span><span class="w"> </span><span class="p">(</span><span class="n">T</span><span class="p">)</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>Sneaky.&lt;RuntimeException&gt;throwAs(e);</code> makes the compiler believe <code>e</code> becomes unchecked, but <strong>it stays checked</strong>: the cast <code>(T) t</code> does nothing at run time
+<ul>
+<li>A plain <code>throw (RuntimeException) t;</code> would fail with <code>ClassCastException</code>.</li>
+</ul>
+</li>
+<li>Use: <code>Runnable.run</code> cannot throw checked exceptions. An adapter lets a task throw anything:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">Sneaky</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">interface</span> <span class="nc">Runnable</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">void</span><span class="w"> </span><span class="nf">run</span><span class="p">()</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">Exception</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">static</span><span class="w"> </span><span class="n">java</span><span class="p">.</span><span class="na">lang</span><span class="p">.</span><span class="na">Runnable</span><span class="w"> </span><span class="nf">asRunnable</span><span class="p">(</span><span class="n">Sneaky</span><span class="p">.</span><span class="na">Runnable</span><span class="w"> </span><span class="n">task</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">try</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">task</span><span class="p">.</span><span class="na">run</span><span class="p">();</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">Exception</span><span class="w"> </span><span class="n">e</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="n">Sneaky</span><span class="p">.</span><span class="o">&lt;</span><span class="n">RuntimeException</span><span class="o">&gt;</span><span class="n">throwAs</span><span class="p">(</span><span class="n">e</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The demo thread sleeps (<code>Thread.sleep</code> throws <code>InterruptedException</code>, no catch needed), prints &quot;Hello, World!&quot; and throws <code>new Exception(&quot;Check this out!&quot;)</code>, which appears as a stack trace.</li>
+<li>Remarkable:
+<ul>
+<li><strong>no wrapping into an unchecked exception</strong></li>
+<li>the checked exception is simply rethrown. &quot;Using generic classes and erasure, we were able to defeat an essential part of the Java type system.&quot;</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-sneaky-throw.svg" alt="Sneaking a checked exception past the compiler" loading="lazy" /></p>
+<h3 id="8-5-10-beware-of-clashes-after-erasure">8.5.10 Beware of clashes after erasure</h3>
+<ul>
+<li><strong>Method clash:</strong> <code>public boolean equals(T value)</code> in <code>Pair&lt;T&gt;</code>: its erasure <code>equals(Object)</code> clashes with <code>Object.equals</code>. Rename the method.</li>
+<li><strong>Interface rule</strong> from the generics spec: a class or type variable may not be a subtype of <strong>two different parameterisations of the same interface</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">class</span> <span class="nc">Employee</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Comparable</span><span class="o">&lt;</span><span class="n">Employee</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="kd">class</span> <span class="nc">Manager</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">Employee</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Comparable</span><span class="o">&lt;</span><span class="n">Manager</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="c1">// ERROR</span>
+</code></pre>
+<ul>
+<li>The non-generic version (raw <code>Comparable</code> twice) is legal
+<ul>
+<li>The reason is <strong>synthesised bridge methods</strong>: <code>Comparable&lt;X&gt;</code> gets a bridge <code>public int compareTo(Object other) { return compareTo((X) other); }</code>, and you cannot have two such methods for different <code>X</code>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-erasure-clash.svg" alt="Erasure clashes" loading="lazy" /></p>
+<h3 id="8-5-11-type-inference-in-generic-record-patterns-is-limited">8.5.11 Type inference in generic record patterns is limited</h3>
+<ul>
+<li>A generic record <code>record Pair&lt;T&gt;(T first, T second) {}</code> works in patterns, with the type argument <strong>inferred</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">(</span><span class="s">"Hello"</span><span class="p">,</span><span class="w"> </span><span class="s">"World"</span><span class="p">);</span>
+<span class="n">String</span><span class="w"> </span><span class="n">content</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="n">Pair</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="kd">var</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">" "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span><span class="p">.</span><span class="na">toUpperCase</span><span class="p">();</span>
+<span class="p">};</span>
+</code></pre>
+<ul>
+<li>Explicit forms: <code>case Pair&lt;String&gt;(var a, var b)</code>, <code>case Pair(String a, String b)</code>, <code>case Pair&lt;String&gt;(String a, String b)</code>.</li>
+<li><strong>Exhaustiveness with generics</strong> needs work from the compiler. With a sealed hierarchy:</li>
+</ul>
+<pre class="hl"><code><span class="kd">sealed</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">JSONPrimitive</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+<span class="kd">record</span> <span class="nc">JSONNumber</span><span class="p">(</span><span class="kt">double</span><span class="w"> </span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">JSONPrimitive</span><span class="o">&lt;</span><span class="n">Double</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+<span class="kd">record</span> <span class="nc">JSONBoolean</span><span class="p">(</span><span class="kt">boolean</span><span class="w"> </span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">JSONPrimitive</span><span class="o">&lt;</span><span class="n">Boolean</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+<span class="kd">record</span> <span class="nc">JSONString</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">JSONPrimitive</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="nf">toNumber</span><span class="p">(</span><span class="n">JSONPrimitive</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="n">JSONNumber</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">n</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">n</span><span class="p">;</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="n">JSONBoolean</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="n">JSONString</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="k">try</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">yield</span><span class="w"> </span><span class="n">Double</span><span class="p">.</span><span class="na">parseDouble</span><span class="p">(</span><span class="n">s</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">NumberFormatException</span><span class="w"> </span><span class="n">ex</span><span class="p">)</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">yield</span><span class="w"> </span><span class="n">Double</span><span class="p">.</span><span class="na">NaN</span><span class="p">;</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>It is exhaustive: the compiler knows there are only three implementors.</li>
+<li>Summing a <strong>pair</strong> of primitives with <code>Pair&lt;? extends JSONPrimitive&lt;?&gt;&gt;</code> <strong>is not exhaustive</strong>: <code>sum(Pair.of(new JSONNumber(42), new JSONString(&quot;Fred&quot;)))</code> is possible
+<ul>
+<li>You could add the other six combinations throwing exceptions, but that is a run-time check</li>
+<li>To accept only <strong>homogeneous pairs</strong> at compile time:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="o">&lt;</span><span class="n">T</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">JSONPrimitive</span><span class="o">&lt;</span><span class="n">U</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">U</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Object</span><span class="w"> </span><span class="nf">sum</span><span class="p">(</span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">pair</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">pair</span><span class="p">)</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="n">Pair</span><span class="p">(</span><span class="n">JSONNumber</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">left</span><span class="p">),</span><span class="w"> </span><span class="n">JSONNumber</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">right</span><span class="p">))</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">left</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">right</span><span class="p">;</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="n">Pair</span><span class="p">(</span><span class="n">JSONBoolean</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">left</span><span class="p">),</span><span class="w"> </span><span class="n">JSONBoolean</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">right</span><span class="p">))</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">left</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">right</span><span class="p">;</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="n">Pair</span><span class="p">(</span><span class="n">JSONString</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">left</span><span class="p">),</span><span class="w"> </span><span class="n">JSONString</span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">right</span><span class="p">))</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">left</span><span class="p">.</span><span class="na">concat</span><span class="p">(</span><span class="n">right</span><span class="p">);</span>
+<span class="w">        </span><span class="k">default</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">AssertionError</span><span class="p">();</span><span class="w"> </span><span class="c1">// Java cannot tell this will not happen</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The mixed call no longer compiles, but the <strong><code>default</code> is still required</strong>: the type system cannot prove the components share a type
+<ul>
+<li>Explicit type arguments (<code>case Pair&lt;JSONNumber&gt;(JSONNumber(var left), ...)</code>) fail with &quot;unsafe casts&quot; because the compiler cannot prove the cast from <code>Pair&lt;T&gt;</code> to <code>Pair&lt;JSONNumber&gt;</code> safe.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-6-reflection-and-generics">8.6 Reflection and generics</h2>
+<ul>
+<li>Reflection on generic objects shows little about type parameters (erased), but the declarations themselves survive in some places.</li>
+</ul>
+<h3 id="8-6-1-the-generic-class-class">8.6.1 The generic <code>Class</code> class</h3>
+<ul>
+<li><code>String.class</code> is the sole object of <code>Class&lt;String&gt;</code>
+<ul>
+<li>The parameter makes <code>Class&lt;T&gt;</code> methods more precise: <code>T cast(Object obj)</code>, <code>T[] getEnumConstants()</code>, <code>Class&lt;? super T&gt; getSuperclass()</code>, <code>Constructor&lt;T&gt; getConstructor(Class&lt;?&gt;... parameterTypes)</code>, <code>Constructor&lt;T&gt; getDeclaredConstructor(...)</code>.</li>
+</ul>
+</li>
+<li><code>getConstructor</code> returns <code>Constructor&lt;T&gt;</code>, so no cast is needed: <code>Class&lt;T&gt; cl = ...; T noArgInstance = cl.getConstructor().newInstance();</code>.</li>
+<li><code>cast</code> returns the object typed as <code>T</code> if it is a subtype, else throws <code>ClassCastException</code>; <code>getEnumConstants</code> returns <code>null</code> if the class is not an enum.</li>
+</ul>
+<p><code>java.lang.Class&lt;T&gt;</code> (1.0): <code>T cast(Object obj)</code> (null passes), <code>T[] getEnumConstants()</code> (5.0), <code>Class&lt;? super T&gt; getSuperclass()</code>, <code>Constructor&lt;T&gt; getConstructor(Class... parameterTypes)</code> and <code>getDeclaredConstructor(...)</code> (1.1).</p>
+<h3 id="8-6-2-using-class-t-parameters-for-type-matching">8.6.2 Using <code>Class&lt;T&gt;</code> parameters for type matching</h3>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">makePair</span><span class="p">(</span><span class="n">Class</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">c</span><span class="p">)</span><span class="w"> </span><span class="kd">throws</span><span class="w"> </span><span class="n">ReflectiveOperationException</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">Constructor</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">constr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="na">getConstructor</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Pair</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">constr</span><span class="p">.</span><span class="na">newInstance</span><span class="p">(),</span><span class="w"> </span><span class="n">constr</span><span class="p">.</span><span class="na">newInstance</span><span class="p">());</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>makePair(String.class)</code>: <code>String.class</code> is a <code>Class&lt;String&gt;</code>, so <code>T</code> matches <code>String</code> and the result is a <code>Pair&lt;String&gt;</code>.</li>
+</ul>
+<h3 id="8-6-3-generic-type-information-in-the-virtual-machine">8.6.3 Generic type information in the virtual machine</h3>
+<ul>
+<li>Erased classes keep a <strong>faint memory</strong> of their generic origin: raw <code>Pair</code> knows it came from <code>Pair&lt;T&gt;</code> (but an object cannot tell whether it was a <code>Pair&lt;String&gt;</code> or a <code>Pair&lt;Employee&gt;</code>)
+<ul>
+<li>For <code>Comparable min(Comparable[] a)</code> erased from <code>&lt;T extends Comparable&lt;? super T&gt;&gt; T min(T[] a)</code>, reflection can show the type parameter <code>T</code>, its generic bound, the wildcard, the wildcard's supertype bound and the generic array parameter</li>
+<li><strong>Everything the implementor declared can be reconstructed, but not how parameters were resolved for a call or object.</strong></li>
+</ul>
+</li>
+<li>The <code>java.lang.reflect.Type</code> interface expresses declarations. Its subtypes:
+<ul>
+<li><strong><code>Class</code></strong>: concrete types</li>
+<li><strong><code>TypeVariable</code></strong>: <code>T extends Comparable&lt;? super T&gt;</code></li>
+<li><strong><code>WildcardType</code></strong>: <code>? super T</code></li>
+<li><strong><code>ParameterizedType</code></strong>: <code>Comparable&lt;? super T&gt;</code></li>
+<li><strong><code>GenericArrayType</code></strong>: <code>T[]</code></li>
+</ul>
+</li>
+<li>The last four are <strong>interfaces</strong> (the VM supplies implementing classes).</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-reflection-type-hierarchy.svg" alt="The Type interface and its descendants" loading="lazy" /></p>
+<ul>
+<li>Listings 8.4 and 8.5 (<code>GenericReflectionDemo</code> and <code>Printer</code>) print what reflection finds
+<ul>
+<li>For <code>Pair</code> the report is <code>class com.horstmann.corejava.Pair&lt;T&gt; extends java.lang.Object</code> followed by <code>public T getFirst()</code>, <code>public T getSecond()</code>, <code>public void setFirst(T)</code>, <code>public void setSecond(T)</code></li>
+<li>For <code>java.util.Collections</code> it shows signatures such as <code>public static &lt;T extends java.lang.Object &amp; java.lang.Comparable&lt;? super T&gt;&gt; T min(java.util.Collection&lt;? extends T&gt;)</code>.</li>
+</ul>
+</li>
+<li><code>Printer.printType</code> is a chain of <code>instanceof</code> patterns over <code>Class&lt;?&gt;</code>, <code>TypeVariable&lt;?&gt;</code>, <code>WildcardType</code>, <code>ParameterizedType</code> and <code>GenericArrayType</code>, printing bounds with <code>getBounds</code>, <code>getUpperBounds</code>, <code>getLowerBounds</code>, <code>getActualTypeArguments</code>, <code>getRawType</code>.</li>
+</ul>
+<h3 id="8-6-4-type-literals">8.6.4 Type literals</h3>
+<ul>
+<li>To drive behaviour by a <strong>generic type</strong> (a persistence mechanism saving <code>ArrayList&lt;Integer&gt;</code> differently from <code>ArrayList&lt;String&gt;</code>), erasure is a problem since both are raw <code>ArrayList</code>
+<ul>
+<li>A <strong>type literal</strong> captures a <code>Type</code> via an <strong>anonymous subclass</strong>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">var</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TypeLiteral</span><span class="o">&lt;</span><span class="n">ArrayList</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">};</span><span class="w"> </span><span class="c1">// note the {}</span>
+
+<span class="kd">class</span> <span class="nc">TypeLiteral</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kd">private</span><span class="w"> </span><span class="n">Type</span><span class="w"> </span><span class="n">type</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="nf">TypeLiteral</span><span class="p">()</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">Type</span><span class="w"> </span><span class="n">parentType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getClass</span><span class="p">().</span><span class="na">getGenericSuperclass</span><span class="p">();</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">parentType</span><span class="w"> </span><span class="k">instanceof</span><span class="w"> </span><span class="n">ParameterizedType</span><span class="w"> </span><span class="n">paramType</span><span class="p">)</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">paramType</span><span class="p">.</span><span class="na">getActualTypeArguments</span><span class="p">()</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">UnsupportedOperationException</span><span class="p">(</span><span class="s">"Construct as new TypeLiteral&lt;...&gt;(){}"</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The generic superclass of the anonymous subclass <strong>survives in the VM</strong>
+<ul>
+<li>You cannot get a generic type from an <strong>object</strong> (erased), but the generic types of <strong>fields and method parameters</strong> survive</li>
+<li>Injection frameworks like <strong>CDI</strong> and <strong>Guice</strong> use type literals to inject generic types.</li>
+</ul>
+</li>
+<li>Listing 8.6 (<code>TypeLiterals.java</code>): a <code>Formatter</code> keeps <code>Map&lt;TypeLiteral&lt;?&gt;, Function&lt;?, String&gt;&gt;</code> rules, then <code>formatFields(obj)</code> walks the object's fields, looks up each field's <code>getGenericType()</code> and applies the matching rule: an <code>ArrayList&lt;Integer&gt;</code> is joined with spaces, an <code>ArrayList&lt;Character&gt;</code> is joined into a quoted string, other lists use <code>toString</code>
+<ul>
+<li>For the sample (<code>nums</code> 42 and 1729, <code>chars</code> 'H' and 'i', <code>strings</code> &quot;Hello&quot; and &quot;World&quot;) the result is <code>nums=42 1729</code>, <code>chars=&quot;Hi&quot;</code>, <code>strings=[Hello, World]</code>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/core-java-vol-1/img/cj-08-type-literal.svg" alt="A type literal keeps the generic type through an anonymous subclass" loading="lazy" /></p>
+<p><code>java.lang.Class&lt;T&gt;</code> (generic reflection): <code>TypeVariable[] getTypeParameters()</code> (5.0), <code>Type getGenericSuperclass()</code> (5.0), <code>Type[] getGenericInterfaces()</code> (5.0). <code>java.lang.reflect.Method</code> (1.1): <code>getTypeParameters()</code>, <code>Type getGenericReturnType()</code>, <code>Type[] getGenericParameterTypes()</code>.</p>
+<p><code>TypeVariable</code> (5.0): <code>getName()</code>, <code>Type[] getBounds()</code>. <code>WildcardType</code> (5.0): <code>Type[] getUpperBounds()</code>, <code>Type[] getLowerBounds()</code>. <code>ParameterizedType</code> (5.0): <code>Type getRawType()</code>, <code>Type[] getActualTypeArguments()</code>, <code>Type getOwnerType()</code> (null for top-level).</p>
+<p><code>GenericArrayType</code> (5.0): <code>Type getGenericComponentType()</code>.</p>
+<ul>
+<li>You now know how to use generics, write your own, and, importantly, <strong>decipher generic declarations in the API docs and error messages</strong>.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Type parameters make code safer and cleaner; generic classes and methods can have bounds (<code>extends</code>, <code>&amp;</code>).</li>
+<li>Erasure: no generics in the VM, bounds replace type variables, casts and bridge methods are added.</li>
+<li>No subtype relation between different parameterisations; use <code>? extends</code> to read and <code>? super</code> to write; capture wildcards with helper methods.</li>
+<li>Restrictions: no primitives as type arguments, no <code>new T</code>, no <code>new T[]</code>, no <code>instanceof</code> with parameterised types, no static type variables, no generic exceptions, no arrays of parameterised types, beware of erasure clashes.</li>
+<li>Work-arounds: <code>Supplier&lt;T&gt;</code>, <code>Class&lt;T&gt;</code>, <code>IntFunction&lt;T[]&gt;</code>, <code>@SafeVarargs</code>, type literals.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Type variable, type parameter, diamond:</strong> <code>T</code>, <code>&lt;T&gt;</code>, <code>&lt;&gt;</code>.</li>
+<li><strong>Bound (<code>extends</code>, <code>&amp;</code>):</strong> restricting a type variable.</li>
+<li><strong>Raw type, type erasure:</strong> the generic type without parameters.</li>
+<li><strong>Bridge method:</strong> compiler-made method preserving polymorphism.</li>
+<li><strong>Wildcard (<code>?</code>, <code>? extends</code>, <code>? super</code>), wildcard capture:</strong> flexible generic types.</li>
+<li><strong>Unchecked warning, <code>@SuppressWarnings</code>, <code>@SafeVarargs</code>:</strong> managing generics warnings.</li>
+<li><strong>Heap pollution:</strong> a variable pointing to an object of the wrong generic type.</li>
+<li><strong><code>Type</code>, <code>TypeVariable</code>, <code>ParameterizedType</code>:</strong> reflection of generic declarations.</li>
+<li><strong>Type literal:</strong> capturing a generic type with an anonymous subclass.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Cay S. Horstmann, <em>Core Java, Volume I: Fundamentals</em>, 14th ed., Pearson, 2025, ch. 8. Read through O'Reilly's learning platform for personal use.</li>
+<li>Peter von der Ahé's inference-error trick is described by the book; no online link given.</li>
+<li>The generics specification rule on parameterisations of the same interface is quoted by the book; no online link given.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li>java-concurrency</li>
+<li><a href="/book-digest/core-java-vol-1/cj-07-exceptions-assertions-and-logging/">Core Java 7: Exceptions, Assertions and Logging</a></li>
+<li><a href="/book-digest/core-java-vol-1/cj-09-collections/">Core Java 9: Collections</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/core-java-vol-1/cj-07-exceptions-assertions-and-logging/">&larr; Core Java 7: Exceptions, Assertions and Logging</a><a href="/book-digest/core-java-vol-1/">Contents</a><a href="/book-digest/core-java-vol-1/cj-09-collections/">Core Java 9: Collections &rarr;</a></nav></main></body></html>

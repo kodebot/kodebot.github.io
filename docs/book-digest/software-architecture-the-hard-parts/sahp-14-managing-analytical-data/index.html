@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 14: Managing Analytical Data</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-15-build-your-own-trade-off-analysis/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-14-managing-analytical-data">Software Architecture: The Hard Parts 14: Managing Analytical Data</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 14. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/">Software Architecture: The Hard Parts 13: Contracts</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-15-build-your-own-trade-off-analysis/">Software Architecture: The Hard Parts 15: Build Your Own Trade-Off Analysis</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Operational data (transactions) and analytical data (reports, aggregations, machine learning) have different purposes and need different shapes. Three architectures for analytical data: <strong>data warehouse</strong>, <strong>data lake</strong>, <strong>data mesh</strong>.</li>
+<li>The <strong>data warehouse</strong> extracts, transforms into a single (star) schema and loads, centralising data and technically partitioning it; it fails on brittle integration, split domain knowledge, complexity and limited value.</li>
+<li>The <strong>data lake</strong> inverts it (<strong>load and transform on demand</strong>): less up-front work, but discovery is hard, PII risk rises and it is still technically partitioned.</li>
+<li><strong>Data mesh</strong> (a sociotechnical approach, Zhamak Dehghani) aligns analytical data ownership with business domains. Its core architectural element is the <strong>data product quantum (DPQ)</strong>, a cooperative quantum beside each service, always asynchronous and eventually consistent with it.</li>
+<li>The chapter also shows the book's method applied to a new capability: understand it through trade-offs.</li>
+</ul>
+</div></div>
+<h2 id="14-1-the-scene">14.1 The scene</h2>
+<ul>
+<li>Dana (data architect) asks how analytical data will be handled once the operational databases are split into small parts: reporting and analytics need the data glued back together, and the company wants better <strong>predictive planning</strong> with data science and statistics
+<ul>
+<li>Logan: a data warehouse solved consolidation but had many issues.</li>
+</ul>
+</li>
+<li>Operational data has been the book's focus; analytical data now.</li>
+</ul>
+<h2 id="14-2-previous-approaches">14.2 Previous approaches</h2>
+<h3 id="the-data-warehouse">The data warehouse</h3>
+<ul>
+<li>History:
+<ul>
+<li>monolithic applications held code and data on one system</li>
+<li>client/server separated application and data processing, giving better transactional management and the ability to use historical data for analytics. The <strong>Data Warehouse pattern</strong> was an early attempt to provide queryable analytical data: operational and analytical formats do not fit each other, and aggregations and calculations are expensive on a relational database already under transactional load.</li>
+</ul>
+</li>
+<li>The pattern's characteristics:
+<ul>
+<li><strong>Data extracted from many sources</strong>: querying all operational databases for reports was impractical, so data is extracted into one large store.</li>
+<li><strong>Transformed to a single schema</strong>:
+<ul>
+<li>operational schemas are built around transactions (OLTP, chapter 1)</li>
+<li>analytics wants large-volume reporting and aggregation. Most warehouses used a <strong>star schema</strong> (dimensional modelling), denormalised for speed and simpler queries.</li>
+</ul>
+</li>
+<li><strong>Loaded into the warehouse</strong>:
+<ul>
+<li>regular extract, transform, load, using database replication or specialised tools</li>
+<li>any schema change in an operational system must be mirrored in the transformed schema, so change coordination is hard.</li>
+</ul>
+</li>
+<li><strong>Analysis done on the warehouse</strong>: storage and compute were massive, offloading the heavy work.</li>
+<li><strong>Used by data analysts</strong>: building reports needs domain understanding, so domain expertise must exist in both the operational and analytical systems.</li>
+<li><strong>BI reports and dashboards</strong> as the output, with a <strong>SQL-ish interface</strong> for DBAs (one reason for the transformation step).</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-info"><div class="callout-title">The star schema</div><div class="callout-body">
+<p>It separates <strong>facts</strong> (the organisation's quantifiable data; for the Sysops Squad: hourly rate, time to repair, distance to client) from <strong>dimensions</strong> (descriptive attributes: squad member specialities, names, store locations), hence &quot;dimensional models&quot;. It is purposely <strong>denormalised</strong>: simpler queries and business logic (fewer complex joins), faster queries and aggregations, data cubes and multidimensional queries. Most star schemas become incredibly complex.</p>
+</div></div>
+<ul>
+<li>The warehouse is a good example of <strong>technical partitioning</strong>: data is transformed into a schema that suits queries but loses the domain partitioning, which must be re-created in queries, requiring highly trained specialists.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-14-warehouse.svg" alt="The data warehouse" loading="lazy" /></p>
+<ul>
+<li>Failings:
+<ul>
+<li><strong>Integration brittleness</strong>: transforming during ingestion couples the warehouse schema to the semantics of the domain; a domain change means a schema change and an import-logic change.</li>
+<li><strong>Extreme partitioning of domain knowledge</strong>: architects, developers, DBAs and data scientists have partly overlapping expertise and must coordinate on every data change.</li>
+<li><strong>Complexity</strong>: an alternate schema, plus ingestion and transformation, is a separate ecosystem yet tightly coupled to the domains.</li>
+<li><strong>Limited functionality for the intended purpose</strong>: most warehouses failed to deliver value commensurate with the cost (large infrastructure before the cloud; requested reports the warehouse could not give).</li>
+<li><strong>Synchronisation creates bottlenecks</strong>: converging many data streams, sometimes affecting operational systems despite the wish for decoupling.</li>
+<li><strong>Operational versus analytical contract differences</strong> (chapter 13): the pipelines transform as well as ingest, adding contractual brittleness.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Centralised consolidation of data</td>
+<td>Extreme partitioning of domain knowledge</td>
+</tr>
+<tr>
+<td>Dedicated analytics silo provides isolation</td>
+<td>Integration brittleness</td>
+</tr>
+<tr>
+<td></td>
+<td>Complexity</td>
+</tr>
+<tr>
+<td></td>
+<td>Limited functionality for the intended purpose</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Logan: the warehouse fit older monolithic architectures better than modern distributed ones, and the team has many more <strong>machine learning</strong> cases to support.</li>
+</ul>
+<h3 id="the-data-lake">The data lake</h3>
+<ul>
+<li>A reaction to the warehouse's cost and failures
+<ul>
+<li>it keeps the centralised model and pipelines but inverts <strong>transform-and-load</strong> into <strong>load-and-transform</strong>: do no up-front transformation, give users data in its native form, and <strong>transform only on demand</strong> (reactive instead of proactive work)</li>
+<li>Observations behind it: prebuilt warehouse schemas often did not suit the reports requested, and many ML models work better with data <strong>closer to its raw form</strong></li>
+<li>Domain experts had endured data stripped of domain context only to need domain knowledge to craft queries.</li>
+</ul>
+</li>
+<li>Characteristics: data extracted from many sources, less transformed (often stored raw, perhaps snapshots dumped as files), <strong>loaded into the lake</strong> (often cloud) with regular dumps, and <strong>used by data scientists</strong> who discover data and do the needed aggregation and composition.</li>
+<li>Martin Fowler's 2015 blog post on the Data Lake pattern (the chapter's footnote: <a href="https://martinfowler.com/bliki/DataLake.html" target="_blank" rel="noopener noreferrer">https://martinfowler.com/bliki/DataLake.html</a>) influenced the discussion
+<ul>
+<li>Logan recalls the question &quot;how do we manage reporting in architectures like microservices?&quot; and the lake as an early answer.</li>
+</ul>
+</li>
+<li>Problems:
+<ul>
+<li><strong>Difficult discovery of the proper assets</strong>: understanding of data relationships evaporates, so domain experts must still help.</li>
+<li><strong>PII and other sensitive data</strong>:
+<ul>
+<li>combining pieces of information can reveal private facts</li>
+<li>many countries restrict not just private information but data that can be combined to identify people. Dumping unstructured data risks exposure, and domain experts must reanalyse the lake to avoid it.</li>
+</ul>
+</li>
+<li><strong>Still technically, not domain, partitioned</strong>: both warehouse and lake have separate ingestion, transformation, loading and serving partitions and separate data from its context (such as PII), against the trend towards domain partitioning (as in microservices, which keep data inside the service boundary).</li>
+<li>Brittleness and pathological coupling of pipelines remain (some transformation and cleansing still occur)
+<ul>
+<li>integrity and quality testing is pushed downstream, recreating bottlenecks</li>
+<li>batch nature and technical partitioning cause <strong>stale data</strong> unless upstream changes are coordinated, or pipelines break.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Less structured than a warehouse</td>
+<td>Sometimes difficult to understand relationships</td>
+</tr>
+<tr>
+<td>Less up-front transformation</td>
+<td>Requires ad hoc transformations</td>
+</tr>
+<tr>
+<td>Better suited to distributed architectures</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="14-3-the-data-mesh">14.3 The data mesh</h2>
+<ul>
+<li>Dehghani and others derived the <strong>Data Mesh</strong> from domain-oriented decoupling in microservices, <strong>service mesh</strong> and <strong>sidecars</strong> (chapter 8), applied to analytical data with modifications
+<ul>
+<li>The split between operational and analytical data is another <strong>orthogonal coupling</strong>, but more complex than operational coupling.</li>
+</ul>
+</li>
+<li>Definition: data mesh is a <strong>sociotechnical approach to sharing, accessing and managing analytical data in a decentralised fashion</strong>, serving reporting, ML training and insight generation, by aligning the architecture and ownership of the data with business domains and enabling <strong>peer-to-peer</strong> consumption.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-14-three-approaches.svg" alt="Warehouse, lake and mesh" loading="lazy" /></p>
+<h3 id="four-principles">Four principles</h3>
+<ul>
+<li><strong>Domain ownership of data</strong>: owned and shared by the domains most familiar with it (those originating it or its first-class consumers), accessed peer to peer without a central lake or warehouse and <strong>without a dedicated data team</strong>.</li>
+<li><strong>Data as a product</strong>:
+<ul>
+<li>data is served as a product to avoid silos</li>
+<li>organisational roles and success metrics make domains share data in a way that delights consumers. This introduces the <strong>data product quantum</strong>, serving discoverable, understandable, timely, secure, high-quality data.</li>
+</ul>
+</li>
+<li><strong>Self-serve data platform</strong>: capabilities for data product developers and consumers, including declarative creation of data products, search and browse discoverability, and emerging graphs such as lineage and knowledge graphs.</li>
+<li><strong>Computational federated governance</strong>:
+<ul>
+<li>organisation-wide requirements (compliance, security, privacy, quality, interoperability) are met across all domains through a federated decision model of domain data product owners</li>
+<li>policies are <strong>automated and embedded as code</strong> in each data product, through a platform-supplied <strong>sidecar</strong> in each DPQ that stores and executes policies at the point of access (read or write).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-14-mesh-principles.svg" alt="The four principles" loading="lazy" /></p>
+<ul>
+<li>The book defers the wider topic to Zhamak Dehghani's <em>Data Mesh</em> (O'Reilly); this chapter covers the <strong>data product quantum</strong>.</li>
+</ul>
+<h3 id="data-product-quantum-dpq">Data product quantum (DPQ)</h3>
+<ul>
+<li>As in a service mesh, a team builds a DPQ <strong>adjacent to, but coupled with, its service</strong>
+<ul>
+<li>Service Alpha holds behaviour and operational data; its DPQ holds code and data as the interface to the analytics and reporting side</li>
+<li>The DPQ is <strong>operationally independent but highly coupled</strong> to its service.</li>
+</ul>
+</li>
+<li>Types:
+<ul>
+<li><strong>Source-aligned (native) DPQ</strong>: provides analytical data for its collaborating quantum, typically a microservice.</li>
+<li><strong>Aggregate DPQ</strong>: aggregates data from several inputs, synchronously or asynchronously (some aggregations are fine asynchronously; others need synchronous queries to a source-aligned DPQ).</li>
+<li><strong>Fit-for-purpose DPQ</strong>: custom-made for a need such as reporting, BI or machine learning.</li>
+</ul>
+</li>
+<li>Each domain contributing to analysis has a DPQ owned by the <strong>domain team</strong> that implements the service
+<ul>
+<li>It overlaps the information in the database and may interact asynchronously with domain behaviour.</li>
+</ul>
+</li>
+<li>A <strong>cooperative quantum</strong> is operationally separate, communicates with its cooperator <strong>asynchronously with eventual consistency</strong>, has <strong>tight contract coupling</strong> with its cooperator and generally <strong>looser</strong> contract coupling with the <strong>analytics quantum</strong> (the part responsible for reports, analysis and BI)
+<ul>
+<li>They are two sides of the data: operational in the quantum, analytical in the DPQ</li>
+<li>The analytics quantum has <strong>static coupling</strong> to the DPQs it needs, calling them synchronously or asynchronously (some DPQs expose a SQL interface for synchronous queries, other needs aggregate across DPQs).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-14-dpq.svg" alt="The data product quantum" loading="lazy" /></p>
+<h3 id="data-mesh-coupling-and-quantum">Data mesh, coupling and quantum</h3>
+<ul>
+<li>Analytical reporting is probably required, so the DPQ and its communication belong to the <strong>static coupling</strong> of the quantum (a service plane must exist in microservices, a message broker if messaging is used)
+<ul>
+<li>Like a sidecar it should be <strong>orthogonal</strong> to implementation changes in the service and keep its own contract with the data plane.</li>
+</ul>
+</li>
+<li>Dynamic coupling:
+<ul>
+<li>the data sidecar should always use a pattern with <strong>both eventual consistency and asynchronicity</strong>, that is <strong>Parallel Saga(aeo)</strong> or <strong>Anthology Saga(aec)</strong> (chapter 12)</li>
+<li>It should <strong>never include a transactional requirement</strong> to keep operational and analytical data in sync, which would defeat the point, and communication to the data plane should generally be asynchronous to protect the service's operational characteristics.</li>
+</ul>
+</li>
+</ul>
+<h3 id="when-to-use-it">When to use it</h3>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Highly suitable for microservices architectures</td>
+<td>Requires contract coordination with the data product quantum</td>
+</tr>
+<tr>
+<td>Follows modern architecture principles and engineering practices</td>
+<td>Requires asynchronous communication and eventual consistency</td>
+</tr>
+<tr>
+<td>Excellent decoupling of analytical and operational data</td>
+<td></td>
+</tr>
+<tr>
+<td>Carefully formed contracts allow loosely coupled evolution of analytical capabilities</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Most suitable for modern distributed architectures with well-contained transactionality and good isolation between services
+<ul>
+<li>domain teams decide the amount, cadence, quality and transparency of the data
+<ul>
+<li>Harder where analytical and operational data must stay in sync at all times (a daunting challenge in distributed architectures)</li>
+</ul>
+</li>
+<li>supporting eventual consistency, perhaps with strict contracts, avoids many difficulties.</li>
+</ul>
+</li>
+<li>The authors present data mesh as an example of <strong>incremental evolution</strong> in the ecosystem: new capabilities resolve old problems such as the artificial separation of domain from data.</li>
+</ul>
+<h2 id="14-4-sysops-squad-saga-data-mesh">14.4 Sysops Squad saga: data mesh</h2>
+<ul>
+<li>Goal:
+<ul>
+<li>become data-driven in <strong>expert supply planning</strong> (skill-set demand by location and time, to help recruitment and training)</li>
+<li>Each new service already includes a DPQ run by its domain team, built out gradually</li>
+<li>The <strong>data mesh platform team</strong> supplies self-serve capabilities (find and connect to data products, create new ones) and monitors the mesh for downtime and policy incompatibility</li>
+<li>A <strong>global federated governance group</strong> (domain data product owners with security, legal, risk and compliance experts and platform owners) standardises data-sharing contracts, asynchronous transport and access control
+<ul>
+<li>the platform team uniformly upgrades the DPQ sidecars.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>The Tickets DPQ is its own quantum, aggregating ticket views. For supply planning the team takes the <strong>Tickets DPQ</strong> (long-term view of tickets raised and resolved), the <strong>User Maintenance DPQ</strong> (daily snapshots of expert profiles) and the <strong>Survey DPQ</strong> (customer survey log) and adds a new <strong>Experts Supply DPQ</strong> that takes asynchronous input from the three
+<ul>
+<li>its first product, <strong>supply recommendations</strong>, uses an ML model trained on that data and yields daily recommendations.</li>
+</ul>
+</li>
+<li>Concern: incomplete data for a period skews trend analysis. Dana: <strong>no data for a day is better than incomplete data</strong>; an empty day can be exempted if it is rare.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-14-experts-supply.svg" alt="Experts Supply DPQ" loading="lazy" /></p>
+<div class="callout c-note"><div class="callout-title">ADR: ensure Expert Supply DPQ sources supply an entire day&#x27;s data or none</div><div class="callout-body">
+<ul>
+<li><strong>Context:</strong> the Experts Supply DPQ analyses trends over time periods; incomplete days skew the results.</li>
+<li><strong>Decision:</strong> each source delivers complete daily snapshots or nothing for that day, so data scientists can exempt the day; contracts between the feeds and the DPQ are loosely coupled to avoid brittleness.</li>
+<li><strong>Consequences:</strong> if too many days are exempt (availability or other problems) trend accuracy suffers.</li>
+<li><strong>Fitness functions:</strong> (1) complete daily snapshot: check message timestamps on arrival; given typical volume, a gap over <strong>one minute</strong> marks the day exempt. (2) A <strong>consumer-driven contract</strong> fitness function for the Ticket DPQ and the Experts Supply DPQ so internal evolution of the Ticket domain does not break supply planning.</li>
+</ul>
+</div></div>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Choose the analytical architecture by how well it respects domain boundaries: warehouse and lake centralise and technically partition data
+<ul>
+<li>the mesh keeps analytical data with its domain behind contracts and asynchronous eventual consistency.</li>
+</ul>
+</li>
+<li>Next: how to apply the trade-off method yourself (chapter 15).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Data warehouse, data lake, data mesh</strong>; <strong>ETL vs load-and-transform</strong>.</li>
+<li><strong>Star schema, facts, dimensions</strong>; <strong>OLTP</strong> vs analytical use.</li>
+<li><strong>Data product quantum (DPQ)</strong>: source-aligned, aggregate, fit-for-purpose.</li>
+<li><strong>Cooperative quantum</strong>; <strong>analytics quantum</strong>.</li>
+<li><strong>Four data mesh principles</strong>: domain ownership, data as a product, self-serve platform, computational federated governance.</li>
+<li><strong>PII</strong> risk of combined data.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 14: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch14.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch14.html</a></li>
+<li>Martin Fowler on the Data Lake pattern (2015), as cited in the chapter's footnote: <a href="https://martinfowler.com/bliki/DataLake.html" target="_blank" rel="noopener noreferrer">https://martinfowler.com/bliki/DataLake.html</a></li>
+<li>Zhamak Dehghani, <em>Data Mesh</em> (O'Reilly), named in the chapter for the full treatment (no URL in the page text). Figures 14-1 to 14-4 are redrawn in summary form.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/">Software Architecture: The Hard Parts 13: Contracts</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-15-build-your-own-trade-off-analysis/">Software Architecture: The Hard Parts 15: Build Your Own Trade-Off Analysis</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/">Software Architecture: The Hard Parts 8: Reuse Patterns</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-12-transactional-sagas/">Software Architecture: The Hard Parts 12: Transactional Sagas</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/">&larr; Software Architecture: The Hard Parts 13: Contracts</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-15-build-your-own-trade-off-analysis/">Software Architecture: The Hard Parts 15: Build Your Own Trade-Off Analysis &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

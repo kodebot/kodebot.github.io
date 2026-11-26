@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 7: Service Granularity</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-7-service-granularity">Software Architecture: The Hard Parts 7: Service Granularity</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 7. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/">Software Architecture: The Hard Parts 6: Pulling Apart Operational Data</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/">Software Architecture: The Hard Parts 8: Reuse Patterns</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Modularity</strong> is breaking a system into parts; <strong>granularity</strong> is the <strong>size</strong> of those parts. Most distributed-system problems are about granularity, not modularity.</li>
+<li>Granularity is not classes or lines of code but <strong>what the service does</strong>. Measure it with <strong>statements</strong> and <strong>public interfaces or operations</strong>, which are still partly subjective but the best objective proxies the authors have.</li>
+<li>Replace opinion (&quot;single responsibility&quot;, &quot;micro means small&quot;) with trade-off analysis between <strong>six disintegrators</strong> and <strong>four integrators</strong>.</li>
+<li>Teams over-focus on disintegrators and forget the integrators; the right size is an <strong>equilibrium</strong> between them.</li>
+<li>Put each trade-off to the business as a plain choice (for example time-to-market versus data integrity), and record the outcome in an ADR.</li>
+</ul>
+</div></div>
+<h2 id="7-1-the-scene">7.1 The scene</h2>
+<ul>
+<li>Taylen (tech lead) wants every domain service split smaller:
+<ul>
+<li>&quot;micro means small&quot;, justified by the single-responsibility principle</li>
+<li>Logan (the consulting architect) answers that <strong>not every part of an application has to be microservices</strong>, calling that one of the biggest pitfalls of the style.</li>
+</ul>
+</li>
+<li>Test case:
+<ul>
+<li>a customer notification service (SMS, email, postal letter): one service or three? Taylen says three, Addison says one, Austen would toss a coin. Logan: remove opinion and gut feeling</li>
+<li>use <strong>granularity disintegrators and integrators</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-2-modularity-versus-granularity">7.2 Modularity versus granularity</h2>
+<ul>
+<li>The dictionary definitions look alike, so people conflate the terms
+<ul>
+<li>In the book's usage, <strong>modularity</strong> is breaking systems into separate parts (chapter 3) and <strong>granularity</strong> is the size of those parts.</li>
+</ul>
+</li>
+<li>Why measure by statements:
+<ul>
+<li>every developer has a different style, so <strong>class counts and lines of code</strong> are poor metrics</li>
+<li>a <strong>statement</strong> (a single complete action in source, ended by a semicolon or newline) at least measures what the service does (chapter 4).</li>
+</ul>
+</li>
+<li>A second metric is the <strong>number of public interfaces or operations</strong> a service exposes.</li>
+<li>Two opposing forces (Figure 7-1): <strong>disintegrators</strong> answer &quot;when should I consider breaking apart a service?&quot;, <strong>integrators</strong> answer &quot;when should I consider putting services back together?&quot;.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-07-drivers.svg" alt="Figure 7-1: disintegrators and integrators" loading="lazy" /></p>
+<h2 id="7-3-granularity-disintegrators">7.3 Granularity disintegrators</h2>
+<table>
+<thead>
+<tr>
+<th>Driver</th>
+<th>Question</th>
+<th>Reason for applying it (Table 7-2)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Service scope and function</strong></td>
+<td>Is the service doing too many unrelated things?</td>
+<td>Single-purpose services with tight cohesion</td>
+</tr>
+<tr>
+<td><strong>Code volatility</strong></td>
+<td>Are changes isolated to one part of the service?</td>
+<td>Agility: smaller testing scope, lower deployment risk</td>
+</tr>
+<tr>
+<td><strong>Scalability and throughput</strong></td>
+<td>Do parts need to scale differently?</td>
+<td>Lower cost, faster responsiveness</td>
+</tr>
+<tr>
+<td><strong>Fault tolerance</strong></td>
+<td>Do errors in one part cause critical functions to fail?</td>
+<td>Better overall uptime</td>
+</tr>
+<tr>
+<td><strong>Security</strong></td>
+<td>Do some parts need a higher security level?</td>
+<td>Better access control for certain functions</td>
+</tr>
+<tr>
+<td><strong>Extensibility</strong></td>
+<td>Does the service keep adding new contexts?</td>
+<td>Agility: easier to add functionality</td>
+</tr>
+</tbody>
+</table>
+<h3 id="service-scope-and-function">Service scope and function</h3>
+<ul>
+<li>Two dimensions: <strong>cohesion</strong> (how the operations interrelate) and <strong>size</strong> (statements and public entry points).</li>
+<li>The notification service has <strong>relatively strong cohesion</strong> (everything is &quot;notifying the customer&quot;), so splitting into SMS, email and letter services is not justified <strong>by scope alone</strong>
+<ul>
+<li>&quot;single purpose&quot; is a matter of opinion.</li>
+</ul>
+</li>
+<li>A service holding customer profile, customer preferences and website comments has <strong>weak cohesion</strong> (a broad &quot;customer&quot; scope) and is a good candidate to split into three.</li>
+<li>Related to Robert C
+<ul>
+<li>Martin's <strong>single-responsibility principle</strong> (SOLID), originally about classes and later extended to components and services</li>
+<li>A microservice is defined as a single-purpose, separately deployed unit that does one thing really well, which tempts developers to go as small as possible without asking why</li>
+<li>Cohesion metrics such as LCOM exist, but for services the question stays subjective: is &quot;notify the customer&quot; one thing, or is &quot;notify by email&quot; one thing? So use the other drivers too.</li>
+</ul>
+</li>
+</ul>
+<h3 id="code-volatility">Code volatility</h3>
+<ul>
+<li><strong>Volatility-based decomposition</strong>:
+<ul>
+<li>split on how often code changes, measurable from version control</li>
+<li>Notification example: SMS changes about every six months, email about every six months, <strong>postal letter weekly</strong>.</li>
+</ul>
+</li>
+<li>As one service, every letter change means testing and redeploying SMS and email too (a bigger testing scope and higher deployment risk, and possibly SMS and email unavailable during deployment)
+<ul>
+<li>Splitting into <strong>Electronic Notification</strong> and <strong>Postal Letter Notification</strong> isolates the frequent change.</li>
+</ul>
+</li>
+</ul>
+<h3 id="scalability-and-throughput">Scalability and throughput</h3>
+<ul>
+<li>Measured demand:
+<ul>
+<li>SMS <strong>220,000 per minute</strong>, email 500 per minute, postal letter 1 per minute</li>
+<li>As one service, email and letter must scale to meet SMS, which hurts <strong>cost</strong> and <strong>elasticity</strong> (mean time to startup)</li>
+<li>Three services scale independently.</li>
+</ul>
+</li>
+</ul>
+<h3 id="fault-tolerance">Fault tolerance</h3>
+<ul>
+<li>If email repeatedly crashes (out of memory), a combined service takes SMS and letters down with it; three services contain the failure.</li>
+<li>Why three and not &quot;email versus the rest&quot; even though only email is unstable: the leftover SMS-plus-letter service would be weakly cohesive and hard to name
+<ul>
+<li>The book's test names: <em>Other Notification Service</em>, <em>Non-Email Service</em> and <em>SMS-Letter Service</em> are all poor; <em>Email</em>, <em>SMS</em> and <em>Letter</em> are good</li>
+<li>A service that is hard to name is doing multiple things (scope driver)</li>
+<li><strong>When splitting for any driver, check that strong cohesion can be formed with the leftover functionality.</strong> The volatility split into two worked because email and SMS are both &quot;electronic&quot;.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-07-notification.svg" alt="Notification service analysed by driver" loading="lazy" /></p>
+<h3 id="security">Security</h3>
+<ul>
+<li>Securing sensitive data (for example PCI data in a separate schema or region) must also cover <strong>how the data is accessed</strong>, not just where it is stored.</li>
+<li>A Customer Profile Service that also does credit-card maintenance exposes card functionality to anyone entering the service for something else, even through different API entry points
+<ul>
+<li>Splitting gives the card operations a single-purpose service with tighter access control.</li>
+</ul>
+</li>
+</ul>
+<h3 id="extensibility">Extensibility</h3>
+<ul>
+<li>A payment service that handles credit cards, gift cards and PayPal must be retested and redeployed in full every time a method is added (reward points, store credit, ApplePay, SamsungPay)
+<ul>
+<li>Separate services per method mean only the new service is developed, tested and deployed.</li>
+</ul>
+</li>
+<li>Advice:
+<ul>
+<li>apply this driver only if the extension is <strong>planned, desired or part of the normal domain</strong></li>
+<li>Payment types are likely to keep growing; notification methods probably will not</li>
+<li>Since guessing is hard, <strong>wait</strong> until a pattern or confirmed growth establishes it.</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-4-granularity-integrators">7.4 Granularity integrators</h2>
+<table>
+<thead>
+<tr>
+<th>Driver</th>
+<th>Question</th>
+<th>Reason (Table 7-3)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Database transactions</strong></td>
+<td>Is an ACID transaction needed between the services?</td>
+<td>Data integrity and consistency</td>
+</tr>
+<tr>
+<td><strong>Workflow and choreography</strong></td>
+<td>Do the services need to talk to one another?</td>
+<td>Fault tolerance, performance and reliability</td>
+</tr>
+<tr>
+<td><strong>Shared code</strong></td>
+<td>Do the services share code?</td>
+<td>Maintainability</td>
+</tr>
+<tr>
+<td><strong>Data relationships</strong></td>
+<td>Can the data be split as well as the service?</td>
+<td>Data integrity and correctness</td>
+</tr>
+</tbody>
+</table>
+<h3 id="database-transactions">Database transactions</h3>
+<ul>
+<li>A Customer Profile Service and a Password Service give good <strong>access control to password operations</strong> (change, reset, sign-in lookup) since access is at service level.</li>
+<li>But registering a customer needs both inserts:
+<ul>
+<li>the Profile Service inserts and commits, then calls the Password Service, which inserts and commits</li>
+<li>If the second fails, the first is already committed: <strong>no ACID transaction</strong>, inconsistent data, and complex, error-prone compensation (see chapter 12 sagas).</li>
+</ul>
+</li>
+<li>If a single-unit-of-work transaction is required by the business, <strong>consolidate</strong> the services.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-07-acid.svg" alt="Figures 7-9 to 7-11: ACID against security" loading="lazy" /></p>
+<h3 id="workflow-and-choreography">Workflow and choreography</h3>
+<ul>
+<li>Services talking to each other is <strong>interservice (east-west) communication</strong>. As services get smaller, it grows, with three costs:
+<ul>
+<li><strong>Fault tolerance</strong>:
+<ul>
+<li>with A calling B and C, B calling C, D calling E and E calling C, a failure of C leaves all of them nonoperational (transitive dependency)</li>
+<li>Splitting for fault tolerance gains nothing if the services are tightly dependent.</li>
+</ul>
+</li>
+<li><strong>Performance and responsiveness</strong>:
+<ul>
+<li>a customer service split into five, retrieved through one choreographed request, costs five hops</li>
+<li>at 300 ms of network and security latency each, that is <strong>1,500 ms of added latency</strong>. Chapter 11 offers orchestration as an alternative.</li>
+</ul>
+</li>
+<li><strong>Reliability and data integrity</strong>:
+<ul>
+<li>adding a customer across five services where A, B and C commit and D fails leaves committed partial data that may already have been read or broadcast</li>
+<li>it needs compensating transactions or a stored state to restart.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Rule of thumb for performance:
+<ul>
+<li>look at the <strong>percentage of requests needing inter-service workflow</strong> and their <strong>criticality</strong>. 30% workflow and 70% atomic may be fine to keep separate</li>
+<li>reversed, consider merging</li>
+<li>if a critical, fast-response request is in the 30%, merge even then. There is more leeway for backend work where no user waits.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-07-workflow.svg" alt="Figures 7-12 to 7-14: too much workflow" loading="lazy" /></p>
+<h3 id="shared-code">Shared code</h3>
+<ul>
+<li>Shared code (logging, security, utilities, formatters and so on) usually lives in a library bound at compile time (a JAR, GEM or DLL); chapter 8 covers reuse patterns.</li>
+<li>If five services share a library of <strong>domain functionality</strong>, a change eventually forces all of them to be changed, tested and deployed together (eventually, because versioning can defer it)
+<ul>
+<li>Consolidating avoids multiple deployments and services out of sync on library versions.</li>
+</ul>
+</li>
+<li><strong>Infrastructure cross-cutting code</strong> (logging, auditing, authentication, authorization, monitoring) is <strong>not</strong> a reason to merge services or go back to a monolith.</li>
+<li>Three guidelines for treating shared code as an integrator:
+<ul>
+<li><strong>Specific shared domain functionality</strong>:
+<ul>
+<li>consider it when the shared share is relatively high</li>
+<li>the example is shared code over <strong>40% of the collective codebase</strong> for profile, preference and comment functions, so nearly half the code would live in a library used only by those three services.</li>
+</ul>
+</li>
+<li><strong>Frequent shared code changes</strong>: frequent library changes mean frequent coordinated deployments even if versioning helps.</li>
+<li><strong>Defects that cannot be versioned</strong>: when a defect or business-rule change must reach all services at once, and this happens often, consider merging.</li>
+</ul>
+</li>
+</ul>
+<h3 id="data-relationships">Data relationships</h3>
+<ul>
+<li>This integrator assumes the data of a split service is <strong>not shared</strong> but formed into bounded contexts for change control and availability.</li>
+<li>Table 7-1 maps functions A, B and C to tables 1 to 6 (owner means writes; access means read-only)
+<ul>
+<li>If the service splits and Service B owns table 3 but needs table 5 (owned by C), while C needs table 3, neither may query the other's table, because a column removal in table 3 would break C</li>
+<li>They must <strong>call each other back and forth</strong>, so merge them to avoid the latency, fault-tolerance and scalability costs.</li>
+</ul>
+</li>
+<li>It is the integrator with the <strong>fewest trade-offs</strong>, because reorganising table relationships for the sake of splitting a service is seldom feasible (chapter 6 covers breaking up data).</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-07-shared-data.svg" alt="Shared code and data relationships" loading="lazy" /></p>
+<h2 id="7-5-finding-the-right-balance">7.5 Finding the right balance</h2>
+<ul>
+<li>The secret is understanding both sets of drivers and analysing the trade-offs, <strong>collaborating with business stakeholders</strong>, not deciding alone.</li>
+<li>Turn a pair of drivers into a <strong>trade-off statement</strong> for the product owner or sponsor. The book gives three examples:
+<ul>
+<li>Isolate frequent code changes (agility, faster time-to-market) versus keep a database transaction (data integrity). The sponsor prefers integrity and keeps one service for now.</li>
+<li>Keep the service together for a transaction versus separate sensitive functionality for security
+<ul>
+<li>The sponsor, whose CIO has been through rough security situations, keeps the services separate and works on mitigating consistency problems.</li>
+</ul>
+</li>
+<li>Split payment for extensibility versus avoid the extra workflow that hurts responsiveness when several payment types are used
+<ul>
+<li>The sponsor expects only two or three more payment types over a couple of years and chooses responsiveness, since the customer waits for the order ID.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-6-sysops-squad-saga-ticket-assignment-granularity">7.6 Sysops Squad saga: ticket assignment granularity</h2>
+<ul>
+<li>Two components: <strong>assignment</strong> (picks the expert by skill, location and availability) and <strong>routing</strong> (finds the expert, sends the ticket to the mobile app, notifies by SMS).</li>
+<li>Taylen argues for separate services:
+<ul>
+<li>assignment algorithms are complex and change <strong>two to three times a month</strong> (volatility-based decomposition)</li>
+<li>Skyler argues they are one function</li>
+<li>Addison finds the common ground: they are two activities <strong>tightly bound synchronously</strong>, so if routing cannot find the expert it must tell assignment to pick another, which would mean heavy coordination.</li>
+</ul>
+</li>
+<li>Addison frames the trade-off:
+<ul>
+<li>isolating assignment for change control versus one service for performance, error handling and workflow control. Taylen agrees to the single service</li>
+<li>to keep the code isolated, the single service gets <strong>three architectural components</strong> (assignment, routing, shared code) in separate <strong>namespaces</strong>.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">ADR: consolidated service for ticket assignment and routing</div><div class="callout-body">
+<ul>
+<li><strong>Decision:</strong> one consolidated service. Reasons: tickets are routed immediately once assigned; both functions scale the same (no throughput difference or back-pressure need); neither fault tolerance nor scale is a driver; separate services would add workflow with performance, fault-tolerance and reliability risk.</li>
+<li><strong>Consequences:</strong> assignment changes (frequent) and routing changes (infrequent) both require testing and deployment of both functions, so testing scope and deployment risk grow.</li>
+</ul>
+</div></div>
+<h2 id="7-7-sysops-squad-saga-customer-registration-granularity">7.7 Sysops Squad saga: customer registration granularity</h2>
+<ul>
+<li>Registration collects profile, credit card, password with security question, and covered products. Three options (Figure 7-19): one customer service
+<ul>
+<li>four services (profile, credit card, password, supported product)</li>
+<li>or two (profile with products, and a secure service for card and password).</li>
+</ul>
+</li>
+<li>The product owner Parker requires <strong>all or nothing</strong>:
+<ul>
+<li>never a customer without a credit card or password record</li>
+<li>The security expert Sam wants separate secured services</li>
+<li>The card and password data are already <strong>tokenised and encrypted</strong>, and the team uses the <em>Tortoise</em> security libraries at the API layer and within each service through the service mesh (a double check).</li>
+</ul>
+</li>
+<li>The trade-off (transactionality versus security) resolves in favour of <strong>one customer service</strong>, since the all-or-nothing rule is absolute and the security risk is mitigated by library use
+<ul>
+<li>The book draws the lesson that <strong>security can be controlled by design</strong> (a custom library) rather than by architecture (separate deployment units)</li>
+<li>Austen facilitated the discussion rather than controlling it.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">ADR: consolidated service for customer-related functionality</div><div class="callout-body">
+<ul>
+<li><strong>Decision:</strong> one consolidated service for profile, credit card, password and supported products. Registration and unsubscribe need one atomic unit of work, which separate services cannot give; the Tortoise library in the API gateway and service mesh mitigates the access risk.</li>
+<li><strong>Consequences:</strong> Tortoise is required in both places; any change to profile, card, password or products widens the testing scope and deployment risk; everything scales as one unit.</li>
+</ul>
+</div></div>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-07-decisions.svg" alt="Both decisions" loading="lazy" /></p>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Granularity is decided by weighing disintegrators against integrators, with measurements (statements, change rates, throughput, request mix) and conversations with the business, not by &quot;micro means small&quot;.</li>
+<li>Next: how to <strong>reuse</strong> code across services (chapter 8) and, in Part II, how to put data and workflows back together.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Granularity vs modularity</strong>: the size of the parts vs breaking into parts.</li>
+<li><strong>Granularity disintegrator / integrator</strong>: a driver to split a service or to merge services.</li>
+<li><strong>Cohesion</strong>: how the operations in a service interrelate.</li>
+<li><strong>Volatility-based decomposition</strong>: splitting by rate of code change.</li>
+<li><strong>East-west communication</strong>: interservice calls.</li>
+<li><strong>Statement count</strong>, <strong>public interfaces</strong>: the size metrics.</li>
+<li><strong>Trade-off statement</strong>: a question put to the business that sets one driver against another.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 7: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch07.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch07.html</a></li>
+<li>No other URLs in the page text
+<ul>
+<li>The 220,000 per minute, 300 ms, 40% and similar figures are the authors' illustrative examples, not measurements</li>
+<li>Figures 7-2 to 7-19 are redrawn in summary form.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/">Software Architecture: The Hard Parts 6: Pulling Apart Operational Data</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/">Software Architecture: The Hard Parts 8: Reuse Patterns</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-04-architectural-decomposition/">Software Architecture: The Hard Parts 4: Architectural Decomposition</a></li>
+<li><a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">Software Architecture Patterns 6: Microservices Architecture</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/">&larr; Software Architecture: The Hard Parts 6: Pulling Apart Operational Data</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/">Software Architecture: The Hard Parts 8: Reuse Patterns &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 12: Transactional Sagas</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-11-managing-distributed-workflows/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-12-transactional-sagas">Software Architecture: The Hard Parts 12: Transactional Sagas</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 12. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-11-managing-distributed-workflows/">Software Architecture: The Hard Parts 11: Managing Distributed Workflows</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/">Software Architecture: The Hard Parts 13: Contracts</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Eight saga patterns come from three binary dimensions: <strong>communication</strong> (synchronous or asynchronous), <strong>consistency</strong> (atomic or eventual), <strong>coordination</strong> (orchestrated or choreographed). Each has named ratings for coupling, complexity, responsiveness and scale.</li>
+<li>The &quot;traditional&quot; <strong>Epic Saga(sao)</strong> (sync, atomic, orchestrated) is the most coupled and scales worst; it uses <strong>compensating updates</strong>, which have no isolation, can cause side effects and can fail.</li>
+<li>The best general trade-offs are usually <strong>Fairy Tale(seo)</strong> and <strong>Parallel(aeo)</strong> (orchestrated, eventual) and, for simple high-throughput flows, <strong>Anthology(aec)</strong>. <strong>Horror Story(aac)</strong> (async, atomic, choreographed) is the worst combination.</li>
+<li>Instead of compensating, <strong>manage saga state</strong> with a finite state machine, retries and escalation: better responsiveness, at the cost of temporarily out-of-sync data.</li>
+<li>Sagas are not framework features: they must be <strong>designed, coded and maintained</strong>, so document them (for example with annotations and a small tool).</li>
+</ul>
+</div></div>
+<h2 id="12-1-the-scene">12.1 The scene</h2>
+<ul>
+<li>Austen's ticket workflow (asynchronous communication, atomic transactions, choreography) is called a &quot;horror story&quot; by Addison. Logan: it is the <strong>Horror Story saga pattern, really an anti-pattern</strong>
+<ul>
+<li>there are eight generic saga patterns, each with a different balance of trade-offs.</li>
+</ul>
+</li>
+<li>History:
+<ul>
+<li>the saga concept predates microservices, originally limiting the scope of database locks in early distributed systems</li>
+<li>the book says the paper widely assumed to have coined it is from the <strong>1987 ACM conference proceedings</strong>
+<ul>
+<li>Chris Richardson (<em>Microservices Patterns</em>, Manning, and his website's &quot;Saga Pattern&quot; section) describes it for microservices as a sequence of <strong>local transactions</strong>, each publishing an event that triggers the next</li>
+</ul>
+</li>
+<li>on failure the saga issues <strong>compensating updates</strong> to undo prior changes. That is only one of the eight types (chapter 2).</li>
+</ul>
+</li>
+<li>Because distributed transactions lack atomicity, what makes sagas interesting is <strong>when problems occur</strong>.</li>
+</ul>
+<h2 id="12-2-the-eight-saga-patterns">12.2 The eight saga patterns</h2>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Communication</th>
+<th>Consistency</th>
+<th>Coordination</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Epic Saga(sao)</td>
+<td>Synchronous</td>
+<td>Atomic</td>
+<td>Orchestrated</td>
+</tr>
+<tr>
+<td>Phone Tag Saga(sac)</td>
+<td>Synchronous</td>
+<td>Atomic</td>
+<td>Choreographed</td>
+</tr>
+<tr>
+<td>Fairy Tale Saga(seo)</td>
+<td>Synchronous</td>
+<td>Eventual</td>
+<td>Orchestrated</td>
+</tr>
+<tr>
+<td>Time Travel Saga(sec)</td>
+<td>Synchronous</td>
+<td>Eventual</td>
+<td>Choreographed</td>
+</tr>
+<tr>
+<td>Fantasy Fiction Saga(aao)</td>
+<td>Asynchronous</td>
+<td>Atomic</td>
+<td>Orchestrated</td>
+</tr>
+<tr>
+<td>Horror Story(aac)</td>
+<td>Asynchronous</td>
+<td>Atomic</td>
+<td>Choreographed</td>
+</tr>
+<tr>
+<td>Parallel Saga(aeo)</td>
+<td>Asynchronous</td>
+<td>Eventual</td>
+<td>Orchestrated</td>
+</tr>
+<tr>
+<td>Anthology Saga(aec)</td>
+<td>Asynchronous</td>
+<td>Eventual</td>
+<td>Choreographed</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The names are whimsical
+<ul>
+<li>the <strong>superscript</strong> lists the three dimensions in alphabetical order (communication, consistency, coordination) as a memory aid, so the book wants no memorisation test.</li>
+</ul>
+</li>
+<li>Each is shown as a 3D intersection of the three forces and as an <strong>isomorphic diagram</strong> (generic services, only the differentiating features). All have legitimate uses.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-12-matrix.svg" alt="The eight patterns and their ratings" loading="lazy" /></p>
+<h3 id="epic-saga-sao">Epic Saga(sao)</h3>
+<ul>
+<li>The &quot;traditional&quot; saga, also called the <strong>orchestrated saga</strong>
+<ul>
+<li>It mimics a monolith: a monolith added to the dimensional diagram would be the <strong>origin (0, 0, 0)</strong></li>
+<li>An orchestrator coordinates updates to three services expected to succeed or fail together.</li>
+</ul>
+</li>
+<li>The authors warn that a <strong>pattern names a commonality, not a solvability</strong>: moving transactions into the distributed world is not an incremental change, and the difficulty grows with the semantic coupling of the problem
+<ul>
+<li>Such transactions limit database choice and have &quot;legendary failure modes&quot;.</li>
+</ul>
+</li>
+<li>A common implementation uses <strong>compensating transactions</strong>:
+<ul>
+<li>a compensating update reverses a write done by another service (reverses an update, reinserts a deleted row, deletes an inserted row)</li>
+<li>The mediator monitors success and, if a call fails, asks the others to undo.</li>
+</ul>
+</li>
+<li>Advantage:
+<ul>
+<li>familiar monolith-like transactional behaviour, with a clear workflow owner. Disadvantages: orchestration plus transactionality hurts performance, scale and elasticity (timing bottlenecks)</li>
+<li>failure modes and boundary conditions abound.</li>
+</ul>
+</li>
+<li>Ratings:
+<ul>
+<li>coupling <strong>very high</strong>, complexity <strong>low</strong> (synchronous calls avoid race conditions and deadlocks), responsiveness/availability <strong>low</strong> (fails if any service is down), scale/elasticity <strong>very low</strong>. Many default to it because it feels familiar and stakeholders demand synchronised state</li>
+<li>other patterns often fit better.</li>
+</ul>
+</li>
+</ul>
+<h3 id="phone-tag-saga-sac">Phone Tag Saga(sac)</h3>
+<ul>
+<li>Like Epic but <strong>choreographed</strong>
+<ul>
+<li>named for the children's telephone game. With no orchestrator, the first service becomes the coordination point (the <strong>front controller</strong>)</li>
+<li>on error each service sends <strong>compensating requests back along the chain</strong>
+<ul>
+<li>Logic to coordinate atomicity must live somewhere, so services carry workflow context, error handling and routing, and for a complex workflow the front controller becomes as complex as a mediator.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>On the happy path the last service can return the result, so throughput can beat Epic; error paths are slower because each service unwinds the chain.</li>
+<li>Fairly rare:
+<ul>
+<li>choreography is usually paired with asynchronicity</li>
+<li>Synchronous calls prevent race conditions, and if errors are easy to resolve or services are <strong>idempotent</strong> with retries, it can scale beyond Epic.</li>
+</ul>
+</li>
+<li>Ratings:
+<ul>
+<li>coupling <strong>high</strong>, complexity <strong>high</strong> (rising with workflow complexity; stamp coupling is an alternative), responsiveness <strong>low</strong>, scale <strong>low</strong></li>
+<li>Better for simple workflows without common errors.</li>
+</ul>
+</li>
+</ul>
+<h3 id="fairy-tale-saga-seo">Fairy Tale Saga(seo)</h3>
+<ul>
+<li>A happy, easy-to-follow story
+<ul>
+<li><strong>Eventual consistency</strong> removes the atomic requirement: if a service is down, a change can be cached until it returns</li>
+<li>The orchestrator coordinates requests, responses and error handling, but <strong>each domain service owns its own transaction</strong>
+<ul>
+<li>the orchestrator can send compensating calls without being inside a transaction.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>&quot;Much more attractive&quot;, common in microservices: a mediator eases workflows, synchronous is the easier choice, and eventual consistency removes the hardest error-handling challenge.</li>
+<li>Ratings: coupling <strong>high</strong> (two of three forces maximised, but transactionality gone), complexity <strong>very low</strong>, responsiveness <strong>medium</strong>, scale <strong>high</strong>.</li>
+</ul>
+<h3 id="time-travel-saga-sec">Time Travel Saga(sec)</h3>
+<ul>
+<li>Synchronous, eventual, choreographed:
+<ul>
+<li>no mediator, each service accepts a request, acts and forwards it</li>
+<li>It can implement <strong>Chain of Responsibility</strong> or <strong>Pipes and Filters</strong>: any one-way series of steps</li>
+<li>&quot;Time Travel&quot; because everything is decoupled in time: consistency arrives gradually.</li>
+</ul>
+</li>
+<li>Strong for <strong>fire-and-forget</strong> workflows such as data ingestion and bulk transactions
+<ul>
+<li>weak for complex error handling, which each service must solve itself. Only asynchrony (Anthology) would scale better</li>
+<li>extra effort is needed to synchronise data.</li>
+</ul>
+</li>
+<li>Ratings:
+<ul>
+<li>coupling <strong>medium</strong>, complexity <strong>low</strong>, responsiveness <strong>medium</strong>, scale <strong>high</strong></li>
+<li>An on-ramp to Anthology: synchronous is easier to reason about, implement and debug, so if scale suffices stay here.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-12-choreographed-sagas.svg" alt="Phone Tag, Time Travel and Horror Story" loading="lazy" /></p>
+<h3 id="fantasy-fiction-saga-aao">Fantasy Fiction Saga(aao)</h3>
+<ul>
+<li>Like Epic but <strong>asynchronous</strong>
+<ul>
+<li>it seems a way to speed up an Epic, but asynchrony adds layers of complexity in the mediator. Example: transaction Alpha is pending, Beta starts, then Gamma depends on Alpha's pending outcome: the mediator must track all pending transactions, with possible <strong>deadlocks and race conditions</strong>.</li>
+</ul>
+</li>
+<li>Ratings:
+<ul>
+<li>coupling <strong>high</strong> (extreme, with out-of-order problems), complexity <strong>high</strong>, responsiveness <strong>low</strong> (extremely bad if a service is unavailable), scale <strong>low</strong> (&quot;high scale is virtually impossible in transaction systems&quot;). More popular than it should be</li>
+<li><strong>Parallel Saga is usually the better option</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="horror-story-aac">Horror Story(aac)</h3>
+<ul>
+<li>Atomic consistency (the strictest) with asynchronous communication and choreography (the loosest): no mediator manages transactional consistency across async calls
+<ul>
+<li>Each service must track undo information for several pending transactions, possibly out of order, and coordinate in error cases (if Alpha's call fails while Beta is pending, services must reverse the firing order, undoing elements potentially out of order).</li>
+</ul>
+</li>
+<li>Typically the result of an architect starting from Epic, seeing slow performance and adding asynchrony and choreography without considering the entangled dimensions
+<ul>
+<li>Anthology (no holistic transactions) is the better move.</li>
+</ul>
+</li>
+<li>Ratings: coupling <strong>medium</strong> (not the worst; Epic is), complexity <strong>very high</strong> (the worst), responsiveness <strong>low</strong> (heavy interservice chatter), scale <strong>medium</strong>.</li>
+</ul>
+<h3 id="parallel-saga-aeo">Parallel Saga(aeo)</h3>
+<ul>
+<li>Epic with two restrictions relaxed:
+<ul>
+<li><strong>asynchronous and eventual</strong>. A mediator makes it suitable for complex workflows</li>
+<li>services own their transactions</li>
+<li>on error the mediator sends asynchronous compensating messages (retries, data synchronisation, other remediation)
+<ul>
+<li>Costs: more burden on the mediator, and async timing issues (race conditions, deadlocks, queue reliability).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Ratings:
+<ul>
+<li>coupling <strong>low</strong>, complexity <strong>low</strong>, responsiveness <strong>high</strong>, scale <strong>high</strong> (isolating transactions at domain level lets the system scale around domain concepts; some public-facing services need scale, back-office ones need security)</li>
+<li>&quot;An attractive set of trade-offs for many scenarios, especially with complex workflows that need high scale.&quot;</li>
+</ul>
+</li>
+</ul>
+<h3 id="anthology-saga-aec">Anthology Saga(aec)</h3>
+<ul>
+<li>The opposite of Epic:
+<ul>
+<li>asynchronous, eventual, choreographed, using message queues without orchestration</li>
+<li>The <strong>least coupled</strong> pattern, with the highest throughput, scale and elasticity, but each service carries workflow context and error handling</li>
+<li>Works for simple, mostly linear workflows; <strong>prohibitively hard</strong> for complex or critical ones (stamp coupling can carry workflow state)</li>
+<li>A Pipes and Filters architecture would fit exactly.</li>
+</ul>
+</li>
+<li>Ratings: coupling <strong>very low</strong>, complexity <strong>high</strong>, responsiveness <strong>high</strong>, scale <strong>very high</strong>.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-12-eventual-sagas.svg" alt="Fairy Tale, Parallel and Anthology" loading="lazy" /></p>
+<h2 id="12-3-state-management-and-eventual-consistency">12.3 State management and eventual consistency</h2>
+<ul>
+<li>Instead of compensating updates, an orchestrator can <strong>manage saga state</strong> with a <strong>finite state machine</strong>, always knowing the saga's current state and <strong>eventually correcting</strong> errors through retries or automated or manual action.</li>
+<li>Example (Fairy Tale implementation of ticket completion):
+<ul>
+<li>the Survey Service is down, so no compensating update; the saga state becomes <strong>NO_SURVEY</strong> and a success response goes to the expert (step 7)</li>
+<li>The Ticket Orchestrator Service then retries and analyses the error behind the scenes and, if it cannot resolve it, sends it to an administrator or supervisor</li>
+<li>The expert is not concerned that the survey was not sent.</li>
+</ul>
+</li>
+</ul>
+<h3 id="saga-state-machines">Saga state machines</h3>
+<ul>
+<li>A state machine describes all possible paths: a <strong>start</strong> state, <strong>transition</strong> states and the <strong>actions</strong> that occur on a transition. The new-ticket saga:
+<ul>
+<li><strong>START</strong>:
+<ul>
+<li>customer submits a ticket</li>
+<li>support plan and data are validated</li>
+<li>the row is inserted</li>
+<li>state becomes CREATED and the customer is notified. Errors here prevent the saga from starting.</li>
+</ul>
+</li>
+<li><strong>CREATED</strong>: assign to an available expert (held until one is free) then ASSIGNED.</li>
+<li><strong>ASSIGNED</strong>: route to the expert; stays until routing succeeds and the expert acknowledges, then ACCEPTED.</li>
+<li><strong>ACCEPTED</strong>: either COMPLETED (expert marks complete) or REASSIGN (wrongly assigned or expert cannot finish).</li>
+<li><strong>REASSIGN</strong>: find another expert (waits if none) then back to ASSIGNED.</li>
+<li><strong>COMPLETED</strong>: send the survey and go to CLOSED, or NO_SURVEY if the survey service errs.</li>
+<li><strong>NO_SURVEY</strong>: keep retrying until the survey is sent, then CLOSED.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-12-state-machine.svg" alt="Ticket saga state machine" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Initiating state</th>
+<th>Transition state</th>
+<th>Transaction action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>START</td>
+<td>CREATED</td>
+<td>Assign ticket to expert</td>
+</tr>
+<tr>
+<td>CREATED</td>
+<td>ASSIGNED</td>
+<td>Route ticket to assigned expert</td>
+</tr>
+<tr>
+<td>ASSIGNED</td>
+<td>ACCEPTED</td>
+<td>Expert fixes problem</td>
+</tr>
+<tr>
+<td>ACCEPTED</td>
+<td>COMPLETED</td>
+<td>Send customer survey</td>
+</tr>
+<tr>
+<td>ACCEPTED</td>
+<td>REASSIGN</td>
+<td>Reassign to a different expert</td>
+</tr>
+<tr>
+<td>REASSIGN</td>
+<td>ASSIGNED</td>
+<td>Route ticket to assigned expert</td>
+</tr>
+<tr>
+<td>COMPLETED</td>
+<td>CLOSED</td>
+<td>Ticket saga done</td>
+</tr>
+<tr>
+<td>COMPLETED</td>
+<td>NO_SURVEY</td>
+<td>Send customer survey</td>
+</tr>
+<tr>
+<td>NO_SURVEY</td>
+<td>CLOSED</td>
+<td>Ticket saga done</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Developers can implement such a table as transition triggers and error handling in an orchestrator (or in the services if choreographed). Compensating updates versus state management depends on the situation and a <strong>responsiveness versus consistency</strong> trade-off
+<ul>
+<li>either way the transaction's state should be <strong>known and managed</strong>.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages of state management</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Good responsiveness</td>
+<td>Data may be out of sync when errors occur</td>
+</tr>
+<tr>
+<td>Less impact on the end user for errors</td>
+<td>Eventual consistency may take some time</td>
+</tr>
+</tbody>
+</table>
+<h2 id="12-4-techniques-for-managing-sagas">12.4 Techniques for managing sagas</h2>
+<ul>
+<li>Distributed transactions cannot be &quot;dropped in&quot; like an ACID transaction manager; they are <strong>designed, coded and maintained</strong> by developers and architects.</li>
+<li>A useful technique:
+<ul>
+<li><strong>annotations</strong> (Java) or <strong>custom attributes</strong> (C#)</li>
+<li>They hold no functionality but document and associate services with sagas</li>
+<li>The sagas are listed in one <code>Transaction</code> enum:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Saga.java</span>
+<span class="nd">@Retention</span><span class="p">(</span><span class="n">RetentionPolicy</span><span class="p">.</span><span class="na">RUNTIME</span><span class="p">)</span>
+<span class="nd">@Target</span><span class="p">(</span><span class="n">ElementType</span><span class="p">.</span><span class="na">TYPE</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="nd">@interface</span><span class="w"> </span><span class="n">Saga</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Transaction</span><span class="o">[]</span><span class="w"> </span><span class="nf">value</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">enum</span><span class="w"> </span><span class="n">Transaction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">NEW_TICKET</span><span class="p">,</span>
+<span class="w">        </span><span class="n">CANCEL_TICKET</span><span class="p">,</span>
+<span class="w">        </span><span class="n">NEW_CUSTOMER</span><span class="p">,</span>
+<span class="w">        </span><span class="n">UNSUBSCRIBE</span><span class="p">,</span>
+<span class="w">        </span><span class="n">NEW_SUPPORT_CONTRACT</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Saga.cs</span>
+<span class="na">[AttributeUsage(AttributeTargets.Class)]</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Saga</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">System</span><span class="p">.</span><span class="n">Attribute</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="n">Transaction</span><span class="p">[]</span><span class="w"> </span><span class="n">transaction</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">public</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="n">Transaction</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="n">NEW_TICKET</span><span class="p">,</span>
+<span class="w">        </span><span class="n">CANCEL_TICKET</span><span class="p">,</span>
+<span class="w">        </span><span class="n">NEW_CUSTOMER</span><span class="p">,</span>
+<span class="w">        </span><span class="n">UNSUBSCRIBE</span><span class="p">,</span>
+<span class="w">        </span><span class="n">NEW_SUPPORT_CONTRACT</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// SurveyServiceAPI.java and TicketServiceAPI.java</span>
+<span class="nd">@ServiceEntrypoint</span>
+<span class="nd">@Saga</span><span class="p">(</span><span class="n">Transaction</span><span class="p">.</span><span class="na">NEW_TICKET</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">SurveyServiceAPI</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="p">}</span>
+
+<span class="nd">@ServiceEntrypoint</span>
+<span class="nd">@Saga</span><span class="p">({</span><span class="n">Transaction</span><span class="p">.</span><span class="na">NEW_TICKET</span><span class="p">,</span><span class="w"> </span><span class="n">Transaction</span><span class="p">.</span><span class="na">CANCEL_TICKET</span><span class="p">})</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">TicketServiceAPI</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>This shows the Survey Service in the NEW_TICKET saga and the Ticket Service in two
+<ul>
+<li>It defines the <strong>testing scope</strong> for a change and which services a change might impact</li>
+<li>A simple CLI that walks the code base (finding classes with <code>@ServiceEntrypoint</code> and checking <code>@Saga</code>) can answer, even for a business analyst:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="gp">$ </span>./sagatool.sh<span class="w"> </span>NEW_TICKET<span class="w"> </span>-services
+<span class="go">-&gt; Ticket Service</span>
+<span class="go">-&gt; Assignment Service</span>
+<span class="go">-&gt; Routing Service</span>
+<span class="go">-&gt; Survey Service</span>
+</code></pre>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-12-techniques.svg" alt="Annotations and the state-versus-compensation trade-off" loading="lazy" /></p>
+<h2 id="12-5-sysops-squad-saga-atomic-transactions-and-compensating-updates">12.5 Sysops Squad saga: atomic transactions and compensating updates</h2>
+<ul>
+<li>Logan walks through <strong>ticket completion</strong> as an Epic Saga:
+<ul>
+<li>the expert marks the ticket complete on the mobile app</li>
+<li>the Ticket Orchestrator calls the Ticket Service synchronously (updates and commits), which asynchronously sends analytics data to a queue for the Analytics Service and acknowledges</li>
+<li>the orchestrator then calls the Survey Service synchronously (inserts a survey row, emails the survey and acknowledges), then answers the expert, who can take the next ticket.</li>
+</ul>
+</li>
+<li>Problems with compensating updates:
+<ul>
+<li><strong>User coupled to the business process</strong>:
+<ul>
+<li>if the Survey Service is down, a compensating update reverts the ticket to in-progress and the expert gets an error and must retry</li>
+<li>Why should the expert care about the survey? (In the monolith it all ran in one transaction, which Addison always thought odd.)</li>
+</ul>
+</li>
+<li><strong>No isolation, so side effects</strong>:
+<ul>
+<li>the Analytics Service already processed the completed ticket's data, so reversing the ticket does not reverse that</li>
+<li>Telling Analytics to ignore it needs complex code and timing logic, and downstream actions may already have occurred: &quot;turtles all the way down&quot;.</li>
+</ul>
+</li>
+<li><strong>Compensation can fail</strong>:
+<ul>
+<li>if the compensating update to the Ticket Service errors, the ticket stays &quot;complete&quot;</li>
+<li>retrying gives &quot;already marked as complete&quot; and confusion about what to tell the expert. Logan: developers' confusion is often a good check on an incomplete architecture.</li>
+</ul>
+</li>
+<li><strong>Responsiveness</strong>: the user waits until all corrective action is done (asynchronous compensation via Parallel or Anthology helps).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-12-epic-compensation.svg" alt="Epic Saga compensation problems" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>All data restored to prior state</td>
+<td>No transaction isolation</td>
+</tr>
+<tr>
+<td>Allows retries and restart</td>
+<td>Side effects may occur on compensation</td>
+</tr>
+<tr>
+<td></td>
+<td>Compensation may fail</td>
+</tr>
+<tr>
+<td></td>
+<td>Poor responsiveness for the end user</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Further challenges raised by the team: a service cannot perform a rollback (what if it cannot undo?), and <strong>whether to lock</strong> participating services during the workflow (blocking other requests guarantees validity but destroys performance and scale; worse with asynchronous calls).</li>
+<li>Logan's observation:
+<ul>
+<li>transactions make participants &quot;stop their individual worlds and synchronise&quot;; easy in a monolith with a relational database, so overused there</li>
+<li>Much of the real world is not transactional (Gregor Hohpe's essay &quot;Starbucks Does Not Use Two-Phase Commit&quot;)</li>
+<li><strong>The broader the transaction scope, the worse it gets.</strong></li>
+</ul>
+</li>
+<li>Alternative:
+<ul>
+<li>a <strong>Fairy Tale or Parallel Saga</strong> with asynchronous eventual consistency and state management, so errors are handled behind the scenes, the user is less affected and responsiveness is better</li>
+<li>If atomicity is a problem, look at those patterns.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Choose the saga pattern by naming which of communication, consistency and coordination the business really needs, then read its ratings
+<ul>
+<li>Avoid distributed atomic transactions unless they are essential, and make state visible.</li>
+</ul>
+</li>
+<li>Next: <strong>contracts</strong> between services, and how they influence coupling and workflows (chapter 13).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Saga</strong> (local transactions plus compensating updates); the eight patterns and their superscript codes.</li>
+<li><strong>Compensating update, side effect, compensation failure</strong>.</li>
+<li><strong>Front controller, stamp coupling, idempotence</strong>.</li>
+<li><strong>Saga state machine</strong>: START, CREATED, ASSIGNED, ACCEPTED, REASSIGN, COMPLETED, NO_SURVEY, CLOSED.</li>
+<li><strong>Isomorphic diagram</strong>, <strong>chain of responsibility</strong>, <strong>pipes and filters</strong>.</li>
+<li><strong>Atomic vs eventual consistency</strong> as the dimension that most affects complexity.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 12: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch12.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch12.html</a></li>
+<li>No other URLs in the page text
+<ul>
+<li>The 1987 ACM paper and the Richardson and Hohpe references are cited by name in the chapter only</li>
+<li>The ratings tables 12-2 to 12-9 are merged into one matrix figure; Figures 12-1 to 12-24 are otherwise redrawn in summary form.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-11-managing-distributed-workflows/">Software Architecture: The Hard Parts 11: Managing Distributed Workflows</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/">Software Architecture: The Hard Parts 13: Contracts</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-02-discerning-coupling-in-software-architecture/">Software Architecture: The Hard Parts 2: Discerning Coupling in Software Architecture</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/">Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</a></li>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-11-managing-distributed-workflows/">&larr; Software Architecture: The Hard Parts 11: Managing Distributed Workflows</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/">Software Architecture: The Hard Parts 13: Contracts &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

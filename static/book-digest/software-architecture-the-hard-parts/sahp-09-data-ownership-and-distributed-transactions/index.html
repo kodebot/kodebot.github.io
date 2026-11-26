@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-10-distributed-data-access/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-9-data-ownership-and-distributed-transactions">Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 9. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/">Software Architecture: The Hard Parts 8: Reuse Patterns</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-10-distributed-data-access/">Software Architecture: The Hard Parts 10: Distributed Data Access</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Once data is split it must be stitched back together: who <strong>owns</strong> each table, how to run <strong>distributed transactions</strong>, and (chapter 10) how to <strong>read</strong> data you do not own.</li>
+<li>Rule of thumb: <strong>the service that writes to a table owns it</strong>. It gets messy with <strong>joint</strong> ownership (a few services in a domain write it) and <strong>common</strong> ownership (most or all services write it).</li>
+<li>Joint ownership has four techniques: <strong>table split</strong>, <strong>data domain</strong>, <strong>delegate</strong>, <strong>service consolidation</strong>.</li>
+<li>A business request spread across services is a <strong>distributed transaction</strong>: <strong>BASE</strong>, not ACID. Three <strong>eventual consistency</strong> patterns: <strong>background synchronisation</strong>, <strong>orchestrated request-based</strong>, <strong>event-based</strong>.</li>
+<li>Every technique trades something away; the book frames the choice as availability versus consistency, response time versus data integrity, coupling versus independence.</li>
+</ul>
+</div></div>
+<h2 id="9-1-the-scene">9.1 The scene</h2>
+<ul>
+<li>Sydney put the expert-profile table in the Ticket Assignment service because assignment queries it constantly
+<ul>
+<li>Addison says the User Maintenance service does the writes, so it should own the table.</li>
+</ul>
+</li>
+<li>Sydney's workaround (let User Maintenance connect to the other database) hits Dana's rule: <strong>several services may connect to the same schema, but a service may not connect to several schemas or databases</strong>
+<ul>
+<li>More collaboration with the database team is needed.</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-2-assigning-data-ownership">9.2 Assigning data ownership</h2>
+<div class="callout c-tip"><div class="callout-title">The service that performs write operations to a table is the owner of that table. Joint ownership makes this simple rule complex.</div><div class="callout-body">
+</div></div>
+<ul>
+<li>Running example (Figure 9-1): a Wishlist Service (writes Wishlist and Audit), a Catalog Service (writes Product and Audit) and an Inventory Service (writes Product and Audit).</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-09-scenarios.svg" alt="Three scenarios" loading="lazy" /></p>
+<h3 id="single-ownership">Single ownership</h3>
+<ul>
+<li>One service writes the table, whatever read-only access others need (the Wishlist table belongs to the Wishlist Service)
+<ul>
+<li>Diagram it by drawing the table inside the service's bounded context</li>
+<li>Resolve these first, to clear the field for the harder cases.</li>
+</ul>
+</li>
+</ul>
+<h3 id="common-ownership">Common ownership</h3>
+<ul>
+<li>Most or all services write the same table (the <strong>Audit</strong> table), potentially hundreds or thousands of them
+<ul>
+<li>Putting it in a shared schema brings back the chapter 6 problems (change control, connection starvation, scalability, fault tolerance).</li>
+</ul>
+</li>
+<li>Popular answer: <strong>one dedicated service owns the table</strong>; the others send it their writes.
+<ul>
+<li>No reply needed:
+<ul>
+<li><strong>persisted queue, asynchronous fire-and-forget</strong></li>
+<li>Persistent means the broker stores the message on disk, giving guaranteed delivery through a service or broker failure.</li>
+</ul>
+</li>
+<li>Reply needed (a confirmation number, a database key): <strong>REST, gRPC or request-reply messaging</strong> (pseudosynchronous).</li>
+</ul>
+</li>
+<li>Services that must read common data they do not own are covered in chapter 10.</li>
+</ul>
+<h3 id="joint-ownership">Joint ownership</h3>
+<ul>
+<li>A couple of services <strong>within the same domain</strong> write the same table. Catalog inserts, removes and updates static product information
+<ul>
+<li>Inventory reads and updates the stock count. Techniques:</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-09-joint-techniques.svg" alt="The four joint-ownership techniques" loading="lazy" /></p>
+<h4 id="table-split-technique">Table split technique</h4>
+<ul>
+<li>Split the table so each service owns its part (see <em>Refactoring Databases</em>): create an <code>Inventory</code> table keyed by product, copy the counts, then drop the column from <code>Product</code>.</li>
+</ul>
+<pre class="hl"><code><span class="c1">-- split-product.sql</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">Inventory</span>
+<span class="p">(</span>
+<span class="w">    </span><span class="n">product_id</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+<span class="w">    </span><span class="n">inv_cnt</span><span class="w"> </span><span class="nb">INT</span>
+<span class="p">);</span>
+
+<span class="k">INSERT</span><span class="w"> </span><span class="k">INTO</span><span class="w"> </span><span class="n">Inventory</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="n">product_id</span><span class="p">,</span><span class="w"> </span><span class="n">inv_cnt</span><span class="p">)</span>
+<span class="k">AS</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">product_id</span><span class="p">,</span><span class="w"> </span><span class="n">inv_cnt</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">Product</span><span class="p">;</span>
+
+<span class="k">COMMIT</span><span class="p">;</span>
+
+<span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">Product</span><span class="w"> </span><span class="k">DROP</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">inv_cnt</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>Joint ownership becomes two single-ownership cases, but the services must <strong>talk</strong>: when Catalog adds a product it sends the new product ID (and perhaps initial counts) to Inventory
+<ul>
+<li>on removal Catalog removes the row, then tells Inventory to remove the inventory row.</li>
+</ul>
+</li>
+<li>Hard questions:
+<ul>
+<li>synchronous or asynchronous? What if Inventory is down when Catalog adds or removes a product? That is the <strong>availability versus consistency</strong> trade-off
+<ul>
+<li>Choose availability and Catalog can always add or remove products, perhaps without the matching inventory row</li>
+</ul>
+</li>
+<li>choose consistency and the operation fails if Inventory is down
+<ul>
+<li>Since network partitions must be accepted, the <strong>CAP theorem</strong> says only one of the two is possible</li>
+<li>Synchronous confirmation gives better consistency at a cost in performance</li>
+</ul>
+</li>
+<li>fire-and-forget the reverse.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Preserves the bounded context</td>
+<td>Tables must be altered and restructured</td>
+</tr>
+<tr>
+<td>Single data ownership</td>
+<td>Possible data consistency issues</td>
+</tr>
+<tr>
+<td></td>
+<td>No ACID transaction between table updates</td>
+</tr>
+<tr>
+<td></td>
+<td>Data synchronisation is difficult</td>
+</tr>
+<tr>
+<td></td>
+<td>Data replication between tables may occur</td>
+</tr>
+</tbody>
+</table>
+<h4 id="data-domain-technique">Data domain technique</h4>
+<ul>
+<li>Both services own the table:
+<ul>
+<li>tables used by the same services share one schema or database, forming a <strong>broader bounded context</strong> (drawn with the table in a separate box outside both services)</li>
+<li>It resolves performance, availability and consistency issues, and the services stay independent of each other, but sharing data is generally discouraged in distributed architectures, particularly microservices.</li>
+</ul>
+</li>
+<li>Re-ask why the services are separate at all, since they share data: valid reasons include scalability differences, fault tolerance needs, throughput differences or isolating code volatility (chapter 7).</li>
+<li>Costs: <strong>schema changes</strong> involve more services (more effort, testing scope and deployment risk), and <strong>write responsibility</strong> must be governed explicitly if it matters who writes what.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Good data access performance</td>
+<td>Schema changes involve more services</td>
+</tr>
+<tr>
+<td>No scalability or throughput issues</td>
+<td>Increased testing scope for schema changes</td>
+</tr>
+<tr>
+<td>Data remains consistent</td>
+<td>Write-responsibility governance needed</td>
+</tr>
+<tr>
+<td>No service dependency</td>
+<td>Increased deployment risk for schema changes</td>
+</tr>
+</tbody>
+</table>
+<h4 id="delegate-technique">Delegate technique</h4>
+<ul>
+<li>One service is the <strong>delegate</strong>, the sole owner; the others ask it to update. Choosing the owner:
+<ul>
+<li><strong>Primary domain priority</strong>: the service doing most CRUD on the main entity (Catalog owns Product; Inventory must call Catalog to read or update counts).</li>
+<li><strong>Operational characteristics priority</strong>: the service needing higher performance, scalability, availability or throughput (Inventory, whose updates are frequent and real time, owns the table and uses direct database calls).</li>
+</ul>
+</li>
+<li>The communication is synchronous (waits, consistent, slower) or asynchronous (faster, eventually consistent, and no guarantee the update ever succeeded, which hurts integrity).</li>
+<li>The authors usually recommend <strong>domain priority</strong>, because under operational priority Inventory would take on managing static product data and its errors, which is not its domain
+<ul>
+<li>use a <strong>replicated in-memory or distributed cache</strong> to help performance and fault tolerance.</li>
+</ul>
+</li>
+<li>The delegate technique suits writes that <strong>do not need atomic transactions</strong> and tolerate eventual consistency through asynchronous communication.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-09-delegate.svg" alt="Delegate options" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Forms single table ownership</td>
+<td>High level of service coupling</td>
+</tr>
+<tr>
+<td>Good schema change control</td>
+<td>Low performance for non-owner writes</td>
+</tr>
+<tr>
+<td>Abstracts data structures from other services</td>
+<td>No atomic transaction for non-owner writes</td>
+</tr>
+<tr>
+<td></td>
+<td>Low fault tolerance for non-owner services</td>
+</tr>
+</tbody>
+</table>
+<h4 id="service-consolidation-technique">Service consolidation technique</h4>
+<ul>
+<li>Merge the owning services into one coarser service, turning joint into single ownership
+<ul>
+<li>It keeps ACID transactions and performance and removes the service dependency, but increases testing scope and <strong>deployment risk</strong>, reduces <strong>fault tolerance</strong> (all parts fail together) and forces <strong>scalability</strong> to be uniform (catalogue maintenance must scale with inventory demand).</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Preserves atomic transactions</td>
+<td>More coarse-grained scalability</td>
+</tr>
+<tr>
+<td>Good overall performance</td>
+<td>Less fault tolerance</td>
+</tr>
+<tr>
+<td></td>
+<td>Increased deployment risk</td>
+</tr>
+<tr>
+<td></td>
+<td>Increased testing scope</td>
+</tr>
+</tbody>
+</table>
+<h3 id="data-ownership-summary">Data ownership summary</h3>
+<ul>
+<li>Figure 9-10:
+<ul>
+<li>Wishlist table to the Wishlist Service</li>
+<li>Audit table to a new <strong>Audit Service</strong> fed by a persisted queue</li>
+<li>Product table to the Catalog Service (delegate), with Inventory sending update requests.</li>
+</ul>
+</li>
+<li>Then <strong>validate ownership against business workflows</strong> and their transaction requirements.</li>
+</ul>
+<h2 id="9-3-distributed-transactions">9.3 Distributed transactions</h2>
+<h3 id="acid-first">ACID first</h3>
+<ul>
+<li>The book insists an architect cannot weigh distributed transactions without understanding ACID (see chapter 6).
+<ul>
+<li><strong>Atomicity</strong>:
+<ul>
+<li>all updates commit or roll back as one unit. Customer registration inserts profile, wallet (credit card) and security rows</li>
+<li>if the security insert fails, the other two roll back.</li>
+</ul>
+</li>
+<li><strong>Consistency</strong>: the database is never left inconsistent or in violation of integrity constraints (no order detail row without the order row), although some databases defer the check to commit.</li>
+<li><strong>Isolation</strong>: uncommitted data from a transaction is not visible to others (a profile row inserted mid-transaction cannot be read until commit).</li>
+<li><strong>Durability</strong>: after a successful commit, the updates are permanent regardless of later failures.</li>
+</ul>
+</li>
+<li>ACID can exist <strong>inside each service</strong>, if its database supports it
+<ul>
+<li>A business request spanning services is not ACID but a <strong>distributed transaction</strong>: an atomic business request with several database updates done by separately deployed remote services.</li>
+</ul>
+</li>
+</ul>
+<h3 id="why-a-distributed-transaction-is-not-acid">Why a distributed transaction is not ACID</h3>
+<ul>
+<li>Registration spread across a Customer Profile Service, a Support Contract Service and a Billing Payment Service:
+<ul>
+<li><strong>Atomicity</strong> is bound to the <strong>service</strong>, not the business request: each commits only its own part.</li>
+<li><strong>Consistency</strong>: a billing failure leaves profile and contract out of sync with billing; foreign-key constraints cannot span services.</li>
+<li><strong>Isolation</strong>: the profile row is visible to anyone before registration finishes.</li>
+<li><strong>Durability</strong> holds per service, not for the whole business transaction.</li>
+</ul>
+</li>
+<li>Instead, distributed transactions give <strong>BASE</strong> (the chemical opposite of ACID, the authors point out):
+<ul>
+<li><strong>Basic availability</strong>: every participant is expected to be available (asynchronous communication helps decoupling but lengthens time to consistency).</li>
+<li><strong>Soft state</strong>: the request is in progress and the state is not yet complete, or even known (three services working in parallel report back, so the state is unknown until all do; with asynchronous workflows it is hard to determine).</li>
+<li><strong>Eventual consistency</strong>: given enough time, all parts complete and the data is in sync.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-09-acid-base.svg" alt="ACID against BASE" loading="lazy" /></p>
+<h2 id="9-4-eventual-consistency-patterns">9.4 Eventual consistency patterns</h2>
+<ul>
+<li>Distributed architectures rely on eventual consistency as a trade for better performance, scalability, elasticity, fault tolerance and availability. Running example: customer 123 unsubscribes
+<ul>
+<li>the Customer Profile Service removes the profile row and confirms, but the Contract table (Support Contract Service) and Billing table (Billing Payment Service) still hold the customer's data.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-09-consistency-patterns.svg" alt="Three eventual consistency patterns" loading="lazy" /></p>
+<h3 id="background-synchronisation-pattern">Background synchronisation pattern</h3>
+<ul>
+<li>An external service or process (nightly batch, or a service waking hourly) checks the data sources and keeps them in sync
+<ul>
+<li>In the example, at 11:23:00 the user unsubscribes, at 11:23:01 gets confirmation, and at 23:00 the batch finds customer 123 removed (through an event stream, a trigger, or table deltas) and updates Contract and Billing.</li>
+</ul>
+</li>
+<li>Good <strong>responsiveness</strong> (the user does not wait), and for unsubscribe it hardly matters that contracts linger until night. Slowest consistency of the three.</li>
+<li>Disadvantages:
+<ul>
+<li>the process needs <strong>write access to every table</strong>, so it <strong>couples all the data sources and breaks every bounded context</strong> (shared ownership between the services and the process; every schema change must be coordinated with it)</li>
+<li><strong>Business logic is duplicated</strong>: the contract and billing rows are kept three months after unsubscribe via a <code>remove_date</code> column (zero means active), and that logic lives in the services and again in the batch.</li>
+</ul>
+</li>
+<li>Unsuitable for tight bounded contexts such as microservices
+<ul>
+<li>Useful for <strong>closed, self-contained heterogeneous systems</strong> that do not communicate or share data, such as a contractor order entry system that feeds a separate invoicing system on another platform.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Services are decoupled</td>
+<td>Data source coupling</td>
+</tr>
+<tr>
+<td>Good responsiveness</td>
+<td>Complex implementation</td>
+</tr>
+<tr>
+<td></td>
+<td>Breaks bounded contexts</td>
+</tr>
+<tr>
+<td></td>
+<td>Business logic may be duplicated</td>
+</tr>
+<tr>
+<td></td>
+<td>Slow eventual consistency</td>
+</tr>
+</tbody>
+</table>
+<h3 id="orchestrated-request-based-pattern">Orchestrated request-based pattern</h3>
+<ul>
+<li>The whole distributed transaction is processed <strong>during the request, while the user waits</strong>, by an <strong>orchestrator</strong>: a designated existing service or a new one, which holds the business process knowledge, participants, multicast logic, error handling and contract ownership.</li>
+<li>Using a primary service (Customer Profile) as orchestrator overloads it and encourages tight coupling and synchronous dependencies
+<ul>
+<li>The authors prefer a <strong>dedicated orchestration service</strong></li>
+<li>Timing example: request at 11:23:00</li>
+<li>the Unsubscribe Orchestrator calls Customer Profile synchronously, then Support Contract and Billing Payment in parallel</li>
+<li>it answers at 11:23:02.</li>
+</ul>
+</li>
+<li>Trade-offs:
+<ul>
+<li>it favours <strong>consistency over responsiveness</strong> (extra network hops, serial or parallel calls)</li>
+<li>Profile is done first and synchronously for error handling: if the customer cannot be removed because of an outstanding charge, nothing needs reversing.</li>
+</ul>
+</li>
+<li><strong>Complex error handling</strong>:
+<ul>
+<li>if the profile and contract removals succeeded but billing fails, the orchestrator must choose among retrying billing, compensating (reinserting the customer and resetting <code>remove_date</code> to zero), replying &quot;error, wait&quot; while repairing, or ignoring the error</li>
+<li>With no other repair mechanism in this pattern, only the compensating transaction is really available
+<ul>
+<li>it needs all the information to reinsert the customer and no side effects when doing so (billing and contract initialisation)</li>
+</ul>
+</li>
+<li>If <strong>compensation itself fails</strong>, the data is out of sync with no other service to fix it, and a human usually must intervene</li>
+<li>Details in the saga chapters (11 and 12).</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Services are decoupled</td>
+<td>Slower responsiveness</td>
+</tr>
+<tr>
+<td>Timeliness of data consistency</td>
+<td>Complex error handling</td>
+</tr>
+<tr>
+<td>Atomic business request</td>
+<td>Usually requires compensating transactions</td>
+</tr>
+</tbody>
+</table>
+<h3 id="event-based-pattern">Event-based pattern</h3>
+<ul>
+<li>&quot;One of the most popular and reliable&quot; patterns for modern distributed architectures (microservices, event-driven)
+<ul>
+<li><strong>Events</strong>
+<ul>
+<li>(customer unsubscribed) or <strong>command messages</strong> (unsubscribe customer) go to a topic or stream through asynchronous publish-and-subscribe</li>
+<li>interested services react in parallel</li>
+</ul>
+</li>
+<li>The consistency window is usually short, services are highly decoupled, and the triggering service returns at once (confirmation at 11:23:01).</li>
+</ul>
+</li>
+<li>Reliability:
+<ul>
+<li>with topic-based messaging (ActiveMQ, RabbitMQ, Amazon MQ) the subscribers must be <strong>durable subscribers</strong>, so a subscriber that is unavailable at publication still receives the message later</li>
+<li>with event streaming (Apache Kafka) the broker must persist the message and keep it available long enough.</li>
+</ul>
+</li>
+<li>Main trade-off:
+<ul>
+<li><strong>error handling</strong></li>
+<li>If a service fails while processing the event, brokers retry a number of times and then route the message to a <strong>dead letter queue</strong> (DLQ), where an automated process tries to fix it, falling back to manual processing.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Services are decoupled</td>
+<td>Complex error handling</td>
+</tr>
+<tr>
+<td>Timeliness of data consistency</td>
+<td></td>
+</tr>
+<tr>
+<td>Fast responsiveness</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="9-5-sysops-squad-saga-data-ownership-for-ticket-processing">9.5 Sysops Squad saga: data ownership for ticket processing</h2>
+<ul>
+<li>After talking with Dana, Sydney and Addison recognise that data decomposition needs both teams working together
+<ul>
+<li>Rule applied: the writer owns the table, regardless of readers</li>
+<li>The User Maintenance service owns the expert-profile table.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">ADR: single table ownership for bounded contexts</div><div class="callout-body">
+<ul>
+<li><strong>Decision:</strong> when only one service writes a table, that service owns it; services needing read-only access cannot access the other database or schema directly. Table ownership means the service that performs writes.</li>
+<li><strong>Consequences:</strong> depending on the read technique, read-only users may suffer performance and fault-tolerance problems.</li>
+</ul>
+</div></div>
+<ul>
+<li>Then the <strong>Survey</strong> table:
+<ul>
+<li>Ticket Completion writes the completion timestamp and expert, and the Survey Service writes the sent timestamp and results (joint ownership)</li>
+<li>Table split is not possible given the structure of the table</li>
+<li>A <strong>common data domain</strong> would not work because Ticket Completion is already connected to the ticketing schema (no connections to several schemas), and adding the survey tables to it would slowly rebuild a monolithic database.</li>
+</ul>
+</li>
+<li>Solution (Addison's idea):
+<ul>
+<li>since Ticket Completion already sends the Survey Service a message to start the survey, <strong>include the needed data in that message</strong></li>
+<li>the Survey Service inserts it when creating the survey. Delegation, with the Survey Service as sole owner.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-09-survey-delegation.svg" alt="Survey delegation and summary" loading="lazy" /></p>
+<div class="callout c-note"><div class="callout-title">ADR: Survey Service owns the Survey table</div><div class="callout-body">
+<ul>
+<li><strong>Decision:</strong> Survey Service is the single owner; the completion data is passed in the existing notification event so Ticket Completion has no access to the table.</li>
+<li><strong>Consequences:</strong> all data Ticket Completion would have inserted must travel in the payload; and creating the survey record is now a separate activity handled by the Survey Service (in the monolith ticket completion inserted it).</li>
+</ul>
+</div></div>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Pick the ownership technique for each scenario, then choose the consistency pattern according to how much the business needs timeliness, responsiveness and a clean error path.</li>
+<li>Next: how services read data they do not own (chapter 10), then workflows and sagas (11 and 12).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Single, common, joint ownership</strong>; <strong>table split, data domain, delegate, service consolidation</strong>.</li>
+<li><strong>Primary domain priority / operational characteristics priority</strong> (choosing a delegate).</li>
+<li><strong>Distributed transaction, ACID, BASE</strong> (basic availability, soft state, eventual consistency).</li>
+<li><strong>Background synchronisation, orchestrated request-based, event-based</strong> patterns.</li>
+<li><strong>Compensating transaction, durable subscriber, dead letter queue (DLQ), persisted queue, fire-and-forget</strong>.</li>
+<li><strong>CAP theorem</strong>: consistency or availability, not both, once partitions occur.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 9: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch09.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch09.html</a></li>
+<li>No other URLs in the page text. Timings (11:23:00 and so on) are the book's illustrative scenario. Figures 9-1 to 9-21 are redrawn in summary form.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/">Software Architecture: The Hard Parts 8: Reuse Patterns</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-10-distributed-data-access/">Software Architecture: The Hard Parts 10: Distributed Data Access</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/">Software Architecture: The Hard Parts 6: Pulling Apart Operational Data</a></li>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/">&larr; Software Architecture: The Hard Parts 8: Reuse Patterns</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-10-distributed-data-access/">Software Architecture: The Hard Parts 10: Distributed Data Access &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

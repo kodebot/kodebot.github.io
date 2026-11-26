@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 4: Architectural Decomposition</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-03-architectural-modularity/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-4-architectural-decomposition">Software Architecture: The Hard Parts 4: Architectural Decomposition</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 4. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-03-architectural-modularity/">Software Architecture: The Hard Parts 3: Architectural Modularity</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/">Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Modularity is the <strong>why</strong> of breaking up a monolith; <strong>decomposition is the how</strong>.</li>
+<li>Eating the elephant &quot;one bite at a time&quot; is the <strong>Elephant Migration Anti-Pattern</strong>: an unstructured approach that tends to produce a <strong>big ball of distributed mud</strong> (a distributed monolith).</li>
+<li>Two approaches: <strong>component-based decomposition</strong> (refactor and extract well-defined components) and <strong>tactical forking</strong> (clone the monolith and delete what each team does not need).</li>
+<li>The choice follows the <strong>structure of the codebase</strong>: first decide whether it is decomposable at all, then whether components exist.</li>
+<li>Coupling metrics help: <strong>afferent and efferent coupling</strong>, <strong>abstractness</strong>, <strong>instability</strong> and <strong>distance from the main sequence</strong>.</li>
+</ul>
+</div></div>
+<h2 id="4-1-choosing-an-approach">4.1 Choosing an approach</h2>
+<ul>
+<li>Addison and Austen want to start with reporting, the knowledge base or surveys
+<ul>
+<li>Addison notes that making reporting a service does not solve the data problem; a separate reporting database with <strong>data pumps</strong> might be needed, &quot;too big of a bite&quot;</li>
+<li>Logan calls bite-by-bite the <strong>Elephant Migration Anti-Pattern</strong>: it &quot;may seem like a good approach at the start&quot; but usually becomes a <strong>big ball of distributed mud</strong>, &quot;what some people also call a distributed monolith&quot;</li>
+<li>Take a holistic view and use <strong>tactical forking</strong> or <strong>component-based decomposition</strong>.</li>
+</ul>
+</li>
+<li><strong>Component-based decomposition</strong>: an extraction approach applying refactoring patterns that refine and extract <strong>components</strong> (the logical building blocks) into a distributed architecture incrementally and in a controlled fashion.</li>
+<li><strong>Tactical forking</strong>: replicate the application and chip away at the unwanted parts to form services, &quot;similar to the way a sculptor creates a beautiful work of art from a block of granite or marble&quot;.</li>
+<li>The deciding factor is <strong>how well the existing code is structured</strong>: are there clear components and boundaries, or a big ball of mud? The flowchart (Figure 4-1):
+<ol>
+<li>Is the codebase decomposable?</li>
+<li>If yes, is it largely an unstructured mess with no definable components? Then <strong>tactical forking</strong>.</li>
+<li>If files are structured into well-defined (even loosely defined) components, use <strong>component-based decomposition</strong> (patterns in Chapter 5).</li>
+</ol>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-04-decision-tree.svg" alt="Figure 4-1: the decision tree for choosing a decomposition approach" loading="lazy" /></p>
+<h2 id="4-2-is-the-codebase-decomposable">4.2 Is the codebase decomposable?</h2>
+<ul>
+<li>A codebase without internal structure is the <strong>Big Ball of Mud</strong> anti-pattern, coined by <strong>Brian Foote</strong> in an essay of the same name in <strong>1999</strong>
+<ul>
+<li>Example: a complex web application with event handlers wired directly to database calls and no modularity</li>
+<li>Architects rarely make patterns for these systems because architecture concerns internal structure and these lack it.</li>
+</ul>
+</li>
+<li>Without governance, many systems degrade this way. Step one in any restructuring is to understand the internal structure and ask: <strong>is this codebase salvageable</strong>? No single measure decides it
+<ul>
+<li>architects judge, using coupling metrics for macro characteristics.</li>
+</ul>
+</li>
+</ul>
+<h3 id="afferent-and-efferent-coupling">Afferent and efferent coupling</h3>
+<ul>
+<li><strong>Edward Yourdon and Larry Constantine</strong> (<em>Structured Design</em>, 1979) defined <strong>afferent coupling</strong> (incoming connections to a code artifact: component, class, function) and <strong>efferent coupling</strong> (outgoing connections to other artifacts).</li>
+<li>Why it matters:
+<ul>
+<li>when deconstructing a monolith you find shared classes such as <strong>Address</strong></li>
+<li>reuse is encouraged in a monolith, but now you must see how many other parts of the system use the shared asset.</li>
+</ul>
+</li>
+<li>Many platforms have tools showing a <strong>matrix of class and component relationships</strong>
+<ul>
+<li>the example (Figure 4-2) is an Eclipse plug-in visualising <strong>JDepend</strong> output with per-package coupling analysis.</li>
+</ul>
+</li>
+</ul>
+<h3 id="abstractness-and-instability">Abstractness and instability</h3>
+<ul>
+<li><strong>Robert Martin</strong> created derived metrics for a C++ book in the late 1990s, applicable to any object-oriented language.</li>
+<li><strong>Abstractness (Equation 4-1):</strong>
+<ul>
+<li>A = sum(ma) / (sum(mc) + sum(ma)), where ma are abstract elements (interfaces, abstract classes) and mc concrete elements. Abstract elements help developers understand overall function</li>
+<li>a codebase with one <code>main()</code> method and 10,000 lines scores near zero and is hard to understand.</li>
+</ul>
+</li>
+<li><strong>Instability (Equation 4-2):</strong> I = Ce / (Ce + Ca), Ce efferent and Ca afferent coupling. High instability means the code breaks more easily when changed because of high coupling.
+<ul>
+<li>Example: with Ca = 2, Ce = 0 gives instability <strong>0</strong>; Ce = 3 gives <strong>3/5</strong>.</li>
+<li>It reflects how many changes might be forced by changes to related components
+<ul>
+<li>Near <strong>1</strong>: highly unstable</li>
+<li>Near <strong>0</strong>: either <strong>stable</strong> (mostly abstract elements) or <strong>rigid</strong> (mostly concrete)</li>
+<li>The trade-off for high stability is <strong>lack of reuse</strong>: if every component is self-contained, duplication is likely.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Look at I and A <strong>together</strong>, which leads to the main sequence.</li>
+</ul>
+<h3 id="distance-from-the-main-sequence">Distance from the main sequence</h3>
+<ul>
+<li><strong>Equation 4-3:</strong> D = |A + I - 1|. It imagines an ideal relationship between abstractness and instability; components near the line have a healthy mix (Figure 4-3).</li>
+<li>Plot a candidate component and measure its distance from the line.
+<ul>
+<li><strong>Upper right</strong>: the <strong>zone of uselessness</strong>: too abstract, hard to use.</li>
+<li><strong>Lower left</strong>: the <strong>zone of pain</strong>: too much implementation, too little abstraction, brittle and hard to maintain (Figure 4-4).</li>
+</ul>
+</li>
+<li>Implication:
+<ul>
+<li>like moving a large structure on a poor foundation, restructuring a poorly structured application is risky</li>
+<li>improving internal structure first eases the move. If many components lie in the zones of uselessness or pain, perhaps &quot;it is not a good use of time&quot; to repair the internal structure.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-04-metrics.svg" alt="Afferent and efferent coupling, abstractness, instability and distance" loading="lazy" /></p>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-04-main-sequence.svg" alt="Figures 4-3 and 4-4: the main sequence and its two zones" loading="lazy" /></p>
+<h2 id="4-3-component-based-decomposition">4.3 Component-based decomposition</h2>
+<ul>
+<li>The authors' experience:
+<ul>
+<li>most difficulty migrating monoliths to microservices comes from <strong>poorly defined architectural components</strong></li>
+<li>A component here has a well-defined role and responsibility and a well-defined set of operations, usually a namespace or directory</li>
+<li>In Figure 4-5 the directory <code>penultimate/ss/ticket/assign</code> is the component Ticket Assign with namespace <code>penultimate.ss.ticket.assign</code>.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Build services from components</div><div class="callout-body">
+<p>When breaking monolithic applications into distributed architectures, build services from components, not individual classes.</p>
+</div></div>
+<ul>
+<li>The Chapter 5 patterns refactor source code into well-defined components that can become services
+<ul>
+<li>They essentially migrate a monolith to a <strong>service-based architecture</strong>: a hybrid of microservices where the application splits into <strong>domain services</strong>, coarse-grained, separately deployed services containing all business logic for a domain.</li>
+</ul>
+</li>
+<li>Service-based is a fine <strong>final target or stepping stone</strong>:
+<ul>
+<li>as a stepping stone it shows which domains need finer granularity (Chapter 7) and which can stay coarse</li>
+<li>it does <strong>not require breaking the database</strong>, so you can do domain and functional partitioning before database decomposition (Chapter 6)</li>
+<li>it needs <strong>no operational automation or containerisation</strong>; each domain service can use the original deployment artifact (EAR, WAR, assembly)</li>
+<li>the move is <strong>technical</strong>: it generally does not involve business stakeholders or change IT organisation structure or the testing and deployment environments</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Consider service-based first</div><div class="callout-body">
+<p>When migrating monoliths to microservices, consider moving to service-based architecture first as a stepping stone.</p>
+</div></div>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-04-component-namespace.svg" alt="Figure 4-5: directory structure becomes the component namespace" loading="lazy" /></p>
+<h2 id="4-4-tactical-forking">4.4 Tactical forking</h2>
+<ul>
+<li>Named by <strong>Fausto De La Torre</strong> as a pragmatic approach for restructuring big balls of mud.</li>
+<li>Usual thinking is <strong>extraction</strong> (Figure 4-6):
+<ul>
+<li>developers constantly meet strands of coupling and find more and more of the monolith must come along</li>
+<li><strong>Deletion</strong> (Figure 4-7) removes unneeded code and leaves dependencies intact, avoiding the unravelling.</li>
+</ul>
+</li>
+<li>The pattern (Figures 4-8 to 4-11), with two teams making two services (one for the hexagon and square domain, one for the circle domain):
+<ol>
+<li>Start with the monolith of several domain behaviours and little internal organisation.</li>
+<li><strong>Clone the entire monolith</strong>; each team gets a copy.</li>
+<li>Each team <strong>deletes</strong> the code it does not need; in a tightly coupled codebase this is easier than extracting many dependencies. Once functionality is isolated, delete any code that does not break anything.</li>
+<li>Teams keep refactoring to remove unwanted code; at the end two coarse-grained services remain, preserving the coarse structure.</li>
+</ol>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-04-extract-delete.svg" alt="Figures 4-6 and 4-7: extraction versus deletion" loading="lazy" /></p>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-04-tactical-forking.svg" alt="Figures 4-8 to 4-11: the tactical forking steps" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Trade-offs</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Benefits</strong></td>
+<td>Teams start immediately with virtually no up-front analysis. Deleting is easier than extracting from a chaotic codebase, because unneeded code is verified by compilation or simple testing.</td>
+</tr>
+<tr>
+<td><strong>Shortcomings</strong></td>
+<td>The services likely keep a lot of latent leftover code. Unless more work is done, code inside the new services is <strong>no better than the chaotic monolith, just less of it</strong>. Naming of shared code and shared component files may become inconsistent, making common code hard to identify and keep consistent.</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The name is apt: a <strong>tactical</strong>, not strategic, approach for quickly migrating important or critical systems, albeit in an unstructured way.</li>
+</ul>
+<h2 id="4-5-sysops-squad-saga-choosing-a-decomposition-approach">4.5 Sysops Squad saga: choosing a decomposition approach</h2>
+<ul>
+<li>They analyse the application with abstractness and instability: <strong>most code lies along the main sequence</strong>, with a few outliers, so decomposition is feasible.</li>
+<li>Austen likes tactical forking (the sculptor removing marble that should not be there)
+<ul>
+<li>Addison objects:
+<ul>
+<li><strong>duplicate code and shared functionality</strong> (logging, security, persistence-layer database calls) and the problems are <strong>maintainability, testability and reliability</strong></li>
+<li>applying the same change to several services &quot;would be a nightmare&quot;</li>
+</ul>
+</li>
+<li>Since component boundaries are good, Austen agrees to the slower component-based approach.</li>
+</ul>
+</li>
+</ul>
+<h3 id="adr-migration-using-the-component-based-decomposition-approach">ADR: Migration using the component-based decomposition approach</h3>
+<ul>
+<li><strong>Context:</strong> break the monolith into separately deployed services; the two approaches considered were tactical forking and component-based decomposition.</li>
+<li><strong>Decision:</strong> use <strong>component-based decomposition</strong>, because:
+<ul>
+<li>the application has well-defined component boundaries</li>
+<li>it reduces the chance of maintaining duplicate code in each service</li>
+<li>tactical forking would need service boundaries defined <strong>up front</strong> (to know how many forks to create)
+<ul>
+<li>with component-based decomposition the service definitions <strong>emerge through component grouping</strong></li>
+</ul>
+</li>
+<li>given the reliability, availability, scalability and workflow problems, it is a safer, more controlled, incremental migration</li>
+</ul>
+</li>
+<li><strong>Consequences:</strong>
+<ul>
+<li>it will likely take <strong>longer</strong> than tactical forking</li>
+<li>developers work collaboratively to identify shared functionality, component boundaries and domain boundaries
+<ul>
+<li>tactical forking would split the team into smaller teams per fork and increase coordination</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Check decomposability first (coupling metrics, distance from the main sequence), then choose by structure.</li>
+<li>Component-based decomposition builds service-based architecture first; tactical forking suits balls of mud at the cost of duplicated, unimproved code.</li>
+<li>Avoid ad hoc bite-by-bite migration.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Elephant Migration Anti-Pattern</strong>: unstructured piecemeal migration leading to distributed mud.</li>
+<li><strong>Afferent / efferent coupling</strong>: incoming / outgoing connections.</li>
+<li><strong>Abstractness, instability, distance from the main sequence.</strong></li>
+<li><strong>Zone of uselessness / zone of pain.</strong></li>
+<li><strong>Tactical forking</strong>: clone and delete.</li>
+<li><strong>Component-based decomposition</strong>: refactor components, then extract services.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 4: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch04.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch04.html</a></li>
+<li>Cited:
+<ul>
+<li>Brian Foote, &quot;Big Ball of Mud&quot; (1999)</li>
+<li>Edward Yourdon and Larry Constantine, <em>Structured Design</em> (1979)</li>
+<li>Robert Martin's metrics for a C++ book (late 1990s)</li>
+<li>Fausto De La Torre (tactical forking). No URLs in the page text.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-03-architectural-modularity/">Software Architecture: The Hard Parts 3: Architectural Modularity</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/">Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-03-architectural-modularity/">&larr; Software Architecture: The Hard Parts 3: Architectural Modularity</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/">Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

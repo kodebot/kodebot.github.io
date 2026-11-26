@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 10: Distributed Data Access</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-11-managing-distributed-workflows/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-10-distributed-data-access">Software Architecture: The Hard Parts 10: Distributed Data Access</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 10. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/">Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-11-managing-distributed-workflows/">Software Architecture: The Hard Parts 11: Managing Distributed Workflows</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>When data is split, a service that needs data it does <strong>not own</strong> (outside its bounded context) cannot just join a table. The chapter gives <strong>four read-access patterns</strong>: <strong>Interservice Communication</strong>, <strong>Column Schema Replication</strong>, <strong>Replicated Caching</strong>, <strong>Data Domain</strong>.</li>
+<li>None is free: simple and common (interservice) is slow and couples availability; replicated columns and caches are fast but need synchronisation; a shared data domain is the fastest and most consistent but widens the bounded context.</li>
+<li>&quot;If an architect thinks they have discovered something that isn't a trade-off, they just haven't identified the trade-off yet&quot; (the first law of software architecture, from <em>Fundamentals of Software Architecture</em>).</li>
+<li>Measure before choosing: data volume, instance counts and update rate decided the Sysops Squad choice.</li>
+</ul>
+</div></div>
+<h2 id="10-1-the-scene">10.1 The scene</h2>
+<ul>
+<li>The expert-profile table is owned by the User Management Service, but Ticket Assignment queries it constantly
+<ul>
+<li>Taylen cannot rewrite the assignment algorithms to read less, and says messaging would be &quot;the same thing&quot; as REST (you still wait)</li>
+<li>Taylen wants the table in the ticketing data domain; Addison asks Logan for options.</li>
+</ul>
+</li>
+<li>In a monolith one SQL join gets everything; across schemas and services, reads become hard.</li>
+<li>Example used throughout: a <strong>Wishlist Service</strong> (customer ID, item ID, date added) must display the <strong>item description</strong> (<code>item_desc</code>), but that column lives in the Product table owned by the <strong>Catalog Service</strong>.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-10-patterns.svg" alt="The four patterns" loading="lazy" /></p>
+<h2 id="10-2-interservice-communication-pattern">10.2 Interservice communication pattern</h2>
+<ul>
+<li>By far the most common pattern: ask the owner through a remote access protocol (the Wishlist Service sends a list of item IDs to the Catalog Service and gets descriptions back).</li>
+<li>Three kinds of added latency per request:
+<ul>
+<li><strong>Network latency</strong>: usually about 30 to 300 ms.</li>
+<li><strong>Security latency</strong>: extra authorisation on the endpoint, about 20 to 400 ms.</li>
+<li><strong>Data latency</strong>: the owner needs an additional database call instead of a join, about 10 to 50 ms.</li>
+<li>Together, up to about <strong>one second</strong> just to fetch descriptions (the authors' ranges).</li>
+</ul>
+</li>
+<li><strong>Service coupling</strong>: if Catalog is unavailable, so is Wishlist (semantic and static coupling), and as Wishlist scales, so must Catalog.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-10-interservice.svg" alt="Interservice latency" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Simplicity</td>
+<td>Network, data and security latency (performance)</td>
+</tr>
+<tr>
+<td>No data volume issues</td>
+<td>Scalability and throughput issues</td>
+</tr>
+<tr>
+<td></td>
+<td>No fault tolerance (availability issues)</td>
+</tr>
+<tr>
+<td></td>
+<td>Requires contracts between services</td>
+</tr>
+</tbody>
+</table>
+<h2 id="10-3-column-schema-replication-pattern">10.3 Column schema replication pattern</h2>
+<ul>
+<li>The needed column (<code>item_desc</code>) is <strong>copied into the Wishlist table</strong>, so Wishlist reads it with an ordinary query or join.</li>
+<li>Problems:
+<ul>
+<li><strong>Synchronisation and consistency</strong>:
+<ul>
+<li>whenever a product is created, removed or its description changes, Catalog must tell Wishlist (and any other copy-holder), usually through queues, topics or event streams</li>
+<li>Asynchronous is preferred unless immediate transactional sync is needed (better responsiveness, less availability dependency).</li>
+</ul>
+</li>
+<li><strong>Ownership governance</strong>: the replica lives in another service's table, so that service can update it even though it does not own it.</li>
+</ul>
+</li>
+<li>Services remain coupled through the synchronisation, but the reader gets performance, fault tolerance and scalability that interservice communication lacked.</li>
+<li>The authors <strong>caution against it</strong> for the Wishlist/Catalog case, but it may fit <strong>data aggregation, reporting</strong>, or cases where other patterns fail because of large data volumes, high responsiveness needs or high fault tolerance needs.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Good data access performance</td>
+<td>Data consistency issues</td>
+</tr>
+<tr>
+<td>No scalability or throughput issues</td>
+<td>Data ownership issues</td>
+</tr>
+<tr>
+<td>No fault-tolerance issues</td>
+<td>Data synchronisation is required</td>
+</tr>
+<tr>
+<td>No service dependencies</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="10-4-replicated-caching-pattern">10.4 Replicated caching pattern</h2>
+<ul>
+<li>Caching is usually seen as a responsiveness tool (dozens of milliseconds down to a couple of nanoseconds)
+<ul>
+<li>Here it is also a <strong>sharing</strong> tool: <strong>replicated in-memory caches</strong> hold the data in each service and keep it continuously synchronised.</li>
+</ul>
+</li>
+<li>Compare the caching models:
+<ul>
+<li><strong>Single in-memory cache</strong>: each service has its own, unsynchronised, so useless for sharing.</li>
+<li><strong>Distributed cache</strong>:
+<ul>
+<li>data sits in an <strong>external caching server</strong> reached over a proprietary protocol. Weaknesses for this purpose: the fault-tolerance dependency just moves to the cache server</li>
+<li>other services can <strong>update</strong> the shared data, breaking ownership and risking inconsistency with the owning database</li>
+<li>and remote access adds latency.</li>
+</ul>
+</li>
+<li><strong>Replicated cache</strong>:
+<ul>
+<li>no external dependency</li>
+<li>each instance holds the same data and an update is propagated asynchronously behind the scenes to the others. Not every caching product supports it</li>
+<li>ones that do include <strong>Hazelcast, Apache Ignite and Oracle Coherence</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-10-caching-models.svg" alt="Caching models" loading="lazy" /></p>
+<ul>
+<li>Applied:
+<ul>
+<li>the Catalog Service owns an in-memory cache of product descriptions (it is the only one that can modify it) and the Wishlist Service holds a <strong>read-only replica</strong>. No calls are needed</li>
+<li>Catalog's updates reach the Wishlist cache automatically.</li>
+</ul>
+</li>
+<li>Advantages: <strong>responsiveness</strong> (fastest possible access), <strong>fault tolerance</strong> (Wishlist keeps working if Catalog goes down, and caches reconnect when it returns) and <strong>scalability</strong> (Wishlist scales independently).</li>
+<li>The four trade-offs:
+<ul>
+<li><strong>Startup dependency</strong>:
+<ul>
+<li>Catalog populates the cache, so it must be running when the <strong>first</strong> Wishlist instance starts</li>
+<li>otherwise that instance waits. Other instances can start from a peer's cache, and once loaded the owner can come and go.</li>
+</ul>
+</li>
+<li><strong>Data volume</strong>: feasibility drops quickly past about <strong>500 MB</strong>, and every instance holds its own copy (500 MB and 5 instances means 2.5 GB). Analyse cache size times instance count.</li>
+<li><strong>Update rate</strong>: if data changes too quickly the caches cannot stay in sync (inventory counts); it suits relatively static data such as product descriptions.</li>
+<li><strong>Configuration and setup</strong>:
+<ul>
+<li>services find each other through <strong>TCP/IP broadcasts and lookups</strong></li>
+<li>a broad range slows the socket handshake, and cloud and containerised environments make this hard because IP addresses are dynamic and not under your control.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-10-replicated-cache.svg" alt="Replicated cache strengths and trade-offs" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Good data access performance</td>
+<td>Cloud and containerised configuration can be hard</td>
+</tr>
+<tr>
+<td>No scalability or throughput issues</td>
+<td>Not good for high data volumes</td>
+</tr>
+<tr>
+<td>Good level of fault tolerance</td>
+<td>Not good for high update rates</td>
+</tr>
+<tr>
+<td>Data remains consistent</td>
+<td>Initial service startup dependency</td>
+</tr>
+<tr>
+<td>Data ownership is preserved</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="10-5-data-domain-pattern">10.5 Data domain pattern</h2>
+<ul>
+<li>The chapter 9 shared data domain also works for reads:
+<ul>
+<li>put the Wishlist and Product tables in <strong>one shared schema</strong>, so Wishlist gets descriptions with a simple SQL join</li>
+<li>The tables then belong to neither service but to a broader bounded context.</li>
+</ul>
+</li>
+<li>When it makes sense: interservice communication is ruled out by Catalog's reliability and latency, column replication by the need for high consistency, and replicated cache by data volume.</li>
+<li>Benefits: services fully decoupled (no availability, responsiveness, throughput or scalability problems), data consistency and integrity very high (nothing to transfer or synchronise; <strong>foreign keys, views, stored procedures and triggers</strong> can exist in the domain, which is itself a reason to choose it), and <strong>no contract is needed since the table schema is the contract</strong>.</li>
+<li>That last point is also a <strong>trade-off</strong>:
+<ul>
+<li>contracts act as an abstraction layer over the table schema in the other patterns, keeping schema changes inside a tight bounded context</li>
+<li>Here a table change may force several services to change.</li>
+</ul>
+</li>
+<li>Other costs: ownership governance, and <strong>data access security</strong>: Wishlist sees all data in the domain, which is fine here but not where a service should not see certain data (a tighter, contract-based bounded context can prevent that).</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Good data access performance</td>
+<td>Broader bounded context to manage data changes</td>
+</tr>
+<tr>
+<td>No scalability or throughput issues</td>
+<td>Data ownership governance</td>
+</tr>
+<tr>
+<td>No fault tolerance issues</td>
+<td>Data access security</td>
+</tr>
+<tr>
+<td>No service dependency</td>
+<td></td>
+</tr>
+<tr>
+<td>Data remains consistent</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="10-6-sysops-squad-saga-data-access-for-ticket-assignment">10.6 Sysops Squad saga: data access for ticket assignment</h2>
+<ul>
+<li>Ticket Assignment needs expert skills, service-location zones and standard schedule from the expert-profile table (the live location feed comes from elsewhere).</li>
+<li><strong>Ruled out:</strong>
+<ul>
+<li>service consolidation (different domains) and the data domain (Ticket Assignment already connects to the ticketing schema and cannot connect to a second; and the domains should not merge)</li>
+<li>Left: interservice communication or replicated caching.</li>
+</ul>
+</li>
+<li>Sizing: 900 experts at about 1.3 KB each is roughly <strong>1,200 KB</strong>; relatively static; at most 2 User Management and 4 Ticket Assignment instances at peak, so little total memory.</li>
+<li>Hypothesis-based trade-off analysis:
+<ul>
+<li>the first trade-off Taylen finds is the <strong>startup dependency</strong> (User Management must start first)</li>
+<li>Addison's counterpoint: with remote calls the assignment service stops whenever User Management is down, while with the cache it is independent once loaded, so the cache is <strong>more fault tolerant</strong> overall.</li>
+</ul>
+</li>
+<li>Sydney raises the next one:
+<ul>
+<li><strong>which caching product</strong>, and nobody on the team has done replicated caching, so there is risk</li>
+<li>Taylen volunteers for research and proofs of concept; Addison investigates licensing cost and technical limits such as availability-zone crossovers and firewalls</li>
+<li>Logan approves.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-10-decision.svg" alt="Decision" loading="lazy" /></p>
+<div class="callout c-note"><div class="callout-title">ADR: in-memory replicated caching for expert profile data</div><div class="callout-body">
+<ul>
+<li><strong>Decision:</strong> replicated caching between User Management and Ticket Assignment, with User Management as sole writer. A common data domain is rejected because Ticket Assignment cannot connect to a second schema and the domains should not be combined; the cache fixes the performance and fault-tolerance issues of interservice communication.</li>
+<li><strong>Consequences:</strong> at least one User Management instance must run when the first Ticket Assignment instance starts; licensing costs for the caching product.</li>
+</ul>
+</div></div>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Choose a read pattern from the data's size, change rate, consistency need and the cost of coupling availability, then record the choice in an ADR.</li>
+<li>Next: managing workflows across services, orchestration versus choreography (chapter 11).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Interservice communication, column schema replication, replicated caching, data domain</strong>: the four read-access patterns.</li>
+<li><strong>Network, security and data latency</strong>.</li>
+<li><strong>Single in-memory, distributed, replicated cache</strong>.</li>
+<li><strong>Startup dependency</strong> of a replicated cache.</li>
+<li><strong>First law of software architecture</strong>: everything is a trade-off.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 10: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch10.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch10.html</a></li>
+<li>No other URLs in the page text. The latency ranges and the 500 MB threshold are the authors' guidance, not measured here. Figures 10-1 to 10-8 are redrawn in summary form.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/">Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-11-managing-distributed-workflows/">Software Architecture: The Hard Parts 11: Managing Distributed Workflows</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-08-reuse-patterns/">Software Architecture: The Hard Parts 8: Reuse Patterns</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/">&larr; Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-11-managing-distributed-workflows/">Software Architecture: The Hard Parts 11: Managing Distributed Workflows &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

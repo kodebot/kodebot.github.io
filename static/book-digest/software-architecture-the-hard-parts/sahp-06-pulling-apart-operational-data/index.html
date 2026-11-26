@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 6: Pulling Apart Operational Data</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-6-pulling-apart-operational-data">Software Architecture: The Hard Parts 6: Pulling Apart Operational Data</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 6. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/">Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/">Software Architecture: The Hard Parts 7: Service Granularity</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Breaking apart a database is <strong>harder and riskier</strong> than breaking apart application code: data is the company's most important asset and is tightly coupled to functionality.</li>
+<li>Decide with <strong>six data disintegrators</strong> (change control, connection management, scalability, fault tolerance, architectural quanta, database type optimisation) against <strong>two data integrators</strong> (data relationships, database transactions).</li>
+<li>Decompose with the <strong>five-step process</strong> built on <strong>data domains</strong>: analyse, assign tables to schemas, separate connections, move schemas to separate servers, switch over.</li>
+<li>The end state is <strong>data sovereignty per service</strong>: each service owns its data and others must ask it through a contract.</li>
+<li>Once data is split, each domain can pick the most suitable <strong>database type</strong>; the chapter rates eight types on seven characteristics.</li>
+</ul>
+</div></div>
+<h2 id="6-1-the-scene-justifying-the-split">6.1 The scene: justifying the split</h2>
+<ul>
+<li>The Sysops Squad application is now separately deployed domain services. Addison starts on the monolithic database, with the data architect Dana and DBA Devon.</li>
+<li>Dana refuses to break it apart without a <strong>solid justification</strong>; only then will Dana discuss Devon's five-step process.</li>
+<li>Parallels with code decomposition: <strong>components map to data domains</strong>, <strong>class files to tables</strong>, and <strong>coupling points between classes to foreign keys, views, triggers and stored procedures</strong>.</li>
+<li>Some styles need split data (microservices: each service owns its data, forming a bounded context), others tolerate one shared database (service-based).</li>
+</ul>
+<h2 id="6-2-data-decomposition-drivers">6.2 Data decomposition drivers</h2>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-06-drivers.svg" alt="Figure 6-1: disintegrators and integrators" loading="lazy" /></p>
+<h3 id="data-disintegrators-when-to-break-data-apart">Data disintegrators (when to break data apart)</h3>
+<table>
+<thead>
+<tr>
+<th>Driver</th>
+<th>Question</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Change control</strong></td>
+<td>How many services are hit by a database table change?</td>
+</tr>
+<tr>
+<td><strong>Connection management</strong></td>
+<td>Can the database handle the connections of many distributed services?</td>
+</tr>
+<tr>
+<td><strong>Scalability</strong></td>
+<td>Can the database scale to the demand of the services using it?</td>
+</tr>
+<tr>
+<td><strong>Fault tolerance</strong></td>
+<td>How many services are hit by a database crash or maintenance downtime?</td>
+</tr>
+<tr>
+<td><strong>Architectural quanta</strong></td>
+<td>Is the shared database forcing one undesirable quantum?</td>
+</tr>
+<tr>
+<td><strong>Database type optimisation</strong></td>
+<td>Could multiple database types suit the data better?</td>
+</tr>
+</tbody>
+</table>
+<h4 id="change-control">Change control</h4>
+<ul>
+<li><strong>Breaking changes</strong> (drop a table or column, rename, change a column type) break the SQL of every service using that table. Adding tables or columns generally does not.</li>
+<li>With a shared database, every impacted service must be updated, tested and deployed <strong>together</strong> with the database change
+<ul>
+<li>The book's example: imagine coordinating 42 services for one change.</li>
+</ul>
+</li>
+<li>The bigger danger is a <strong>forgotten service</strong> that touches the changed table: it fails in production until redeployed
+<ul>
+<li>With 400 microservices sharing one clustered database, finding every user of a table is, in the authors' words, a mind-numbing exercise.</li>
+</ul>
+</li>
+<li>A <strong>bounded context</strong> (Eric Evans, <em>Domain-Driven Design</em>) encapsulates code, logic, data structures and data
+<ul>
+<li>Usually it forms around a service and the data it <strong>owns</strong>, meaning the service that <strong>writes</strong> to it (read-only access is not ownership; see chapter 9).</li>
+</ul>
+</li>
+<li>Another service needing that data must <strong>ask the owner</strong> (techniques in chapter 10), not read the database.</li>
+<li>The <strong>contract</strong> returned to the caller can differ from the schema, which abstracts the caller from the database. Worked example:</li>
+</ul>
+<pre class="hl"><code><span class="c1">-- Wishlist table in Database D</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">Wishlist</span>
+<span class="p">(</span>
+<span class="w">    </span><span class="n">CUSTOMER_ID</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+<span class="w">    </span><span class="n">ITEM_ID</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
+<span class="w">    </span><span class="n">QUANTITY</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span>
+<span class="w">    </span><span class="n">EXPIRATION_DT</span><span class="w"> </span><span class="nb">DATE</span>
+<span class="p">);</span>
+</code></pre>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"$schema"</span><span class="p">:</span><span class="w"> </span><span class="s2">"http://json-schema.org/draft-04/schema#"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"properties"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"cust_id"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"item_id"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"qty"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"number"</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"exp_dt"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"number"</span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The contract names the date <code>exp_dt</code> and sends it as an epoch number, while the table has a <code>DATE</code> column. If the business stops expiring wish lists:</li>
+</ul>
+<pre class="hl"><code><span class="c1">-- schema.sql</span>
+<span class="k">ALTER</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">Wishlist</span>
+<span class="k">DROP</span><span class="w"> </span><span class="k">COLUMN</span><span class="w"> </span><span class="n">EXPIRATION_DT</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>Service D must change, but the contract need not: until it is changed on purpose, D can send a far-future date or zero for &quot;does not expire&quot;. Service C is shielded from the schema.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-06-bounded-context.svg" alt="Figures 6-4 and 6-5: bounded context and contract" loading="lazy" /></p>
+<h4 id="connection-management">Connection management</h4>
+<ul>
+<li>Opening a database connection is expensive, so a <strong>connection pool</strong> is used to speed things up and to <strong>cap</strong> concurrent connections. In a monolith the application server owns the pool
+<ul>
+<li>in a distributed system <strong>each service instance has its own</strong>.</li>
+</ul>
+</li>
+<li>The first sign of saturation is <strong>connection waits</strong>, which also show up as request time-outs or tripped circuit breakers. Look for them first.</li>
+<li>Worked example:
+<ul>
+<li>a monolith with 200 connections becomes 50 services of 10 connections, minimum 2 instances each, which is <strong>1,000</strong> connections</li>
+<li>if half scale to an average of 5 instances, <strong>1,700</strong>.</li>
+</ul>
+</li>
+<li>Govern it with a <strong>connection quota</strong> per service (the maximum it may hold in its pool), either:
+<ul>
+<li><strong>even distribution</strong>: simple, good at the start when needs are unknown, but wasteful because some services need more than others;</li>
+<li><strong>variable distribution</strong>: efficient but needs knowledge of each service's function and scalability needs.</li>
+</ul>
+</li>
+<li>The authors recommend starting even, measuring concurrent connection use with <strong>fitness functions</strong>, and keeping quotas in an <strong>external configuration server</strong> so they can be tuned manually or programmatically.</li>
+<li>Tables 6-1 to 6-3 tune a 100-connection database across services A to E (even 20 each: B and D wait; after moving spare capacity, quotas of 8, 29, 20, 25 and 18 remove the waits).</li>
+<li>Table 6-4 shows the catch:
+<ul>
+<li>once the services scale to 14 instances in total, <strong>242 connections</strong> are used, 142 more than the database has</li>
+<li>Quotas set per service stop working when instances multiply.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-06-connections.svg" alt="Connection arithmetic" loading="lazy" /></p>
+<h4 id="scalability">Scalability</h4>
+<ul>
+<li>A distributed system scales only if <strong>every part scales, including the database</strong>. Service scaling strains connections, throughput and capacity of a shared database.</li>
+<li>Splitting into data domains or database-per-service means <strong>fewer connections to each database</strong> and less load on each, improving scalability and performance as the services scale.</li>
+</ul>
+<h4 id="fault-tolerance">Fault tolerance</h4>
+<ul>
+<li>A shared database is a <strong>single point of failure</strong>: if it goes down, all services stop. Fault tolerance here means parts of the system continue when a service or database fails.</li>
+<li>Split data limits the blast radius: if Database B fails, only Services B and C (its users) stop; the rest continue.</li>
+</ul>
+<h4 id="architectural-quantum">Architectural quantum</h4>
+<ul>
+<li>Recall from chapter 2:
+<ul>
+<li>an architectural quantum is an independently deployable artifact with <strong>high functional cohesion, high static coupling and synchronous dynamic coupling</strong></li>
+<li>The database is part of it.</li>
+</ul>
+</li>
+<li>Services A and B may need different characteristics from C, D and E, but a <strong>single shared database</strong> keeps all five services and the database in one quantum
+<ul>
+<li>Splitting the database lets A and B with their data form a <strong>separate quantum</strong> from C, D and E.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-06-quanta.svg" alt="Figures 6-11 and 6-12: one quantum becomes two" loading="lazy" /></p>
+<h4 id="database-type-optimisation">Database type optimisation</h4>
+<ul>
+<li>A monolithic database forces <strong>all</strong> data into one type. Example: reference data such as country, product and warehouse codes is key-value in nature and awkward in a relational database
+<ul>
+<li>a key-value database would suit it better.</li>
+</ul>
+</li>
+</ul>
+<h3 id="data-integrators-when-to-keep-data-together">Data integrators (when to keep data together)</h3>
+<h4 id="data-relationships">Data relationships</h4>
+<ul>
+<li>Tables are coupled by <strong>foreign keys, triggers, views and stored procedures</strong>, and by logical relationships (a ticket table and its status table).</li>
+<li>Moving tables to another schema or database means <strong>removing</strong> those cross-domain artifacts. Within one bounded context (same schema or database) a foreign key can stay
+<ul>
+<li>across contexts it must go, and so must a view that spans them.</li>
+</ul>
+</li>
+<li>Putting every service in its own bounded context means removing every cross-domain foreign key and view, which is why this is a trade-off: is change control worth more than the foreign keys? Is fault tolerance worth more than the materialised views?</li>
+</ul>
+<h4 id="database-transactions">Database transactions</h4>
+<ul>
+<li>When one service writes several tables in the same database, an <strong>ACID</strong> transaction commits or rolls back the whole unit of work.</li>
+<li>Once the data is in separate schemas or databases there is <strong>no single unit of work</strong> across remote calls: one write can commit while another fails, risking inconsistent data
+<ul>
+<li>Distributed transactions and sagas are covered in chapter 12.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">Sysops Squad saga: justifying the split</div><div class="callout-body">
+<p>Addison and Devon bring evidence to Dana:</p>
+<ul>
+<li>Logs show <strong>ticketing freezes whenever operational reports run</strong>: reporting uses parallel threads that take all the database connections, so ticket queries time out.</li>
+<li>Projected services and instances need about <strong>2,000 more connections</strong> than the single database can give.</li>
+<li>If the monolithic database fails or is down for maintenance, all services stop; split data gives ticketing standalone fault tolerance. Addison names this an architectural quantum.</li>
+<li>Dana agrees, then asks how to cope with all the foreign keys and views. Answer: data domains and the five-step process.</li>
+</ul>
+</div></div>
+<h2 id="6-3-decomposing-monolithic-data">6.3 Decomposing monolithic data</h2>
+<p>A <strong>data domain</strong> is a collection of coupled database artifacts (tables, views, foreign keys, triggers) that relate to one domain and are used together within a limited functional scope. Table 6-5 assigns the 24 Sysops Squad tables to six data domains: <strong>Customer</strong>, <strong>Survey</strong>, <strong>Payment</strong>, <strong>Profile</strong>, <strong>Knowledge Base</strong>, <strong>Ticketing</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Data domain</th>
+<th>Tables</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Customer</td>
+<td>customer, customer_notification</td>
+</tr>
+<tr>
+<td>Survey</td>
+<td>survey, question, survey_administered, survey_question, survey_response</td>
+</tr>
+<tr>
+<td>Payment</td>
+<td>billing, contract, payment_method, payment</td>
+</tr>
+<tr>
+<td>Profile</td>
+<td>sysops_user, profile, expert_profile, expertise, location</td>
+</tr>
+<tr>
+<td>Knowledge Base</td>
+<td>article, tag, keyword, article_tag, article_keyword</td>
+</tr>
+<tr>
+<td>Ticketing</td>
+<td>ticket, ticket_type, ticket_history</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Picture the database as a <strong>soccer ball</strong>:
+<ul>
+<li>each white hexagon is a data domain. Inside a hexagon, all dependencies stay</li>
+<li><strong>lines crossing hexagons</strong> (foreign keys, views, stored procedures) must be removed when a domain is extracted.</li>
+</ul>
+</li>
+<li>Database teams can use the refactoring patterns in <em>Refactoring Databases</em> by Scott Ambler and Pramod Sadalage.</li>
+<li>Worked example: the Payment view <code>v_customer_contract</code> joined the <code>customer</code> table from another domain. To extract Payment, the join and the <code>customer_name</code> column are removed:</li>
+</ul>
+<pre class="hl"><code><span class="c1">-- before: v_customer_contract (Example 6-1)</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">VIEW</span><span class="w"> </span><span class="p">[</span><span class="n">payment</span><span class="p">].[</span><span class="n">v_customer_contract</span><span class="p">]</span>
+<span class="k">AS</span>
+<span class="k">SELECT</span>
+<span class="w">    </span><span class="n">customer</span><span class="p">.</span><span class="n">customer_id</span><span class="p">,</span><span class="w"> </span><span class="n">customer</span><span class="p">.</span><span class="n">customer_name</span><span class="p">,</span>
+<span class="w">    </span><span class="n">contract</span><span class="p">.</span><span class="n">contract_start_date</span><span class="p">,</span><span class="w"> </span><span class="n">contract</span><span class="p">.</span><span class="n">contract_duration</span><span class="p">,</span>
+<span class="w">    </span><span class="n">billing</span><span class="p">.</span><span class="n">billing_date</span><span class="p">,</span><span class="w"> </span><span class="n">billing</span><span class="p">.</span><span class="n">billing_amount</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">payment</span><span class="p">.</span><span class="n">contract</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">contract</span>
+<span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">customer</span><span class="p">.</span><span class="n">customer</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">customer</span>
+<span class="w">    </span><span class="k">ON</span><span class="w"> </span><span class="p">(</span><span class="w"> </span><span class="n">contract</span><span class="p">.</span><span class="n">customer_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">customer</span><span class="p">.</span><span class="n">customer_id</span><span class="w"> </span><span class="p">)</span>
+<span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">payment</span><span class="p">.</span><span class="n">billing</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">billing</span>
+<span class="w">    </span><span class="k">ON</span><span class="w"> </span><span class="p">(</span><span class="w"> </span><span class="n">contract</span><span class="p">.</span><span class="n">contract_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">billing</span><span class="p">.</span><span class="n">contract_id</span><span class="w"> </span><span class="p">)</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">contract</span><span class="p">.</span><span class="n">auto_renewal</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">-- after: v_customer_contract (Example 6-2)</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">VIEW</span><span class="w"> </span><span class="p">[</span><span class="n">payment</span><span class="p">].[</span><span class="n">v_customer_contract</span><span class="p">]</span>
+<span class="k">AS</span>
+<span class="k">SELECT</span>
+<span class="w">    </span><span class="n">billing</span><span class="p">.</span><span class="n">customer_id</span><span class="p">,</span><span class="w"> </span><span class="n">contract</span><span class="p">.</span><span class="n">contract_start_date</span><span class="p">,</span>
+<span class="w">    </span><span class="n">contract</span><span class="p">.</span><span class="n">contract_duration</span><span class="p">,</span><span class="w"> </span><span class="n">billing</span><span class="p">.</span><span class="n">billing_date</span><span class="p">,</span>
+<span class="w">    </span><span class="n">billing</span><span class="p">.</span><span class="n">billing_amount</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">payment</span><span class="p">.</span><span class="n">contract</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">contract</span>
+<span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">payment</span><span class="p">.</span><span class="n">billing</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">billing</span>
+<span class="w">    </span><span class="k">ON</span><span class="w"> </span><span class="p">(</span><span class="w"> </span><span class="n">contract</span><span class="p">.</span><span class="n">contract_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">billing</span><span class="p">.</span><span class="n">contract_id</span><span class="w"> </span><span class="p">)</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">contract</span><span class="p">.</span><span class="n">auto_renewal</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span>
+</code></pre>
+<ul>
+<li>The bounded-context rule holds for data domains too: <strong>a service cannot talk to several data domains</strong>, so the Payment service now <strong>calls the Customer service</strong> for the customer name.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-06-five-steps.svg" alt="Figure 6-17: the five-step process" loading="lazy" /></p>
+<h3 id="step-1-analyse-the-database-and-create-data-domains">Step 1: analyse the database and create data domains</h3>
+<ul>
+<li>At the start, every service can reach all data, the <strong>shared database integration style</strong> (Hohpe and Woolf, <em>Enterprise Integration Patterns</em>), which couples services tightly to the data
+<ul>
+<li>Group related tables into candidate data domains (Table 6-5).</li>
+</ul>
+</li>
+</ul>
+<h3 id="step-2-assign-tables-to-data-domains">Step 2: assign tables to data domains</h3>
+<ul>
+<li>Give each data domain its own <strong>schema</strong> (a logical construct holding tables, views and functions; in Oracle the schema is the user, in SQL Server a logical space users get access to) and move tables into it.</li>
+<li>**A data domain is an architectural concept
+<ul>
+<li>a schema is the database construct that holds it.** Usually one to one, but combined domains (tightly coupled data, chapter 9) can map to several schemas. The book uses the two terms interchangeably.</li>
+</ul>
+</li>
+<li>Moving a table:</li>
+</ul>
+<pre class="hl"><code><span class="c1">-- move-table.sql</span>
+<span class="k">ALTER</span><span class="w"> </span><span class="k">SCHEMA</span><span class="w"> </span><span class="n">payment</span><span class="w"> </span><span class="n">TRANSFER</span><span class="w"> </span><span class="n">sysops</span><span class="p">.</span><span class="n">billing</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li><strong>Synonyms</strong> (like symlinks) give a table in another schema an alternate name, so a cross-domain query can be rewritten without a cross-schema name:</li>
+</ul>
+<pre class="hl"><code><span class="c1">-- synonym.sql</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="n">SYNONYM</span><span class="w"> </span><span class="n">ticketing</span><span class="p">.</span><span class="n">sysops_user</span>
+<span class="k">FOR</span><span class="w"> </span><span class="n">profile</span><span class="p">.</span><span class="n">sysops_user</span><span class="p">;</span>
+<span class="k">GO</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">-- history-query.sql</span>
+<span class="k">SELECT</span>
+<span class="w">    </span><span class="n">history</span><span class="p">.</span><span class="n">ticket_id</span><span class="p">,</span><span class="w"> </span><span class="n">history</span><span class="p">.</span><span class="n">notes</span><span class="p">,</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">name</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">ticket</span><span class="p">.</span><span class="n">ticket_history</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">history</span>
+<span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">ticket</span><span class="p">.</span><span class="n">sysops_user</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">agent</span>
+<span class="w">    </span><span class="k">ON</span><span class="w"> </span><span class="p">(</span><span class="w"> </span><span class="n">history</span><span class="p">.</span><span class="n">assigned_to_sysops_user_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">sysops_user_id</span><span class="w"> </span><span class="p">)</span>
+</code></pre>
+<ul>
+<li>A synonym does <strong>not</strong> remove cross-schema access (it still needs read or write privileges)
+<ul>
+<li>it is a coupling point to break later, moving the integration from the database layer to the application layer. Its value is that dependency checking and code analysis become easier.</li>
+</ul>
+</li>
+<li>If tightly related tables belong to different domains, the domains must be combined, giving a broader bounded context owned by several services (chapter 9).</li>
+</ul>
+<h3 id="step-3-separate-database-connections-to-data-domains">Step 3: separate database connections to data domains</h3>
+<ul>
+<li>Refactor each service so it connects to <strong>one schema</strong> with read and write access only to its domain's tables
+<ul>
+<li>This is the <strong>most difficult</strong> step because all cross-schema access must be resolved in services, and the synonyms are removed.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">When data from another domain is needed, do not reach into its database. Ask the service that owns that data domain.</div><div class="callout-body">
+</div></div>
+<ul>
+<li>The end of step 3 is <strong>data sovereignty per service</strong>, which the authors call the nirvana state of a distributed architecture, with these trade-offs:
+<ul>
+<li>Benefit: teams change the schema without worrying about other domains.</li>
+<li>Benefit: each service can use the database type best suited to it.</li>
+<li>Shortcoming: <strong>performance</strong> problems when a service needs large volumes of another domain's data.</li>
+<li>Shortcoming: <strong>referential integrity</strong> cannot be kept by the database, so bad data is possible.</li>
+<li>Shortcoming: stored procedures and functions touching other domains must move into the service layer.</li>
+</ul>
+</li>
+</ul>
+<h3 id="step-4-move-schemas-to-separate-database-servers">Step 4: move schemas to separate database servers</h3>
+<ul>
+<li>Needed because separate schemas on one server are still <strong>one quantum</strong>, with adverse effects on scalability, fault tolerance and performance. Two options:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Method</th>
+<th>Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Backup and restore</strong></td>
+<td>Back up each schema, set up servers, restore, connect services, remove from the original</td>
+<td>Usually needs <strong>downtime</strong></td>
+</tr>
+<tr>
+<td><strong>Replicate</strong></td>
+<td>Set up servers, replicate schemas, switch connections, remove from the original</td>
+<td>No downtime, but more work to set up replication and more coordination</td>
+</tr>
+</tbody>
+</table>
+<h3 id="step-5-switch-over-to-independent-database-servers">Step 5: switch over to independent database servers</h3>
+<ul>
+<li>Once schemas are replicated, switch the connections and <strong>remove the old connections and schemas</strong>
+<ul>
+<li>Each domain then has an independent server that can be tuned for availability and scalability, and its data can be analysed to pick the right database type: <strong>polyglot databases</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-4-selecting-a-database-type">6.4 Selecting a database type</h2>
+<ul>
+<li>Since about 2005 a &quot;revolution&quot; in databases produced the <strong>Paradox of Choice</strong>: more products, more trade-off decisions
+<ul>
+<li>Each product is optimised for certain trade-offs, so the software and data architects must choose with the problem in mind.</li>
+</ul>
+</li>
+<li>Seven rated characteristics (star ratings in the book's figures; higher stars is better, except that low learning-curve stars mean harder to learn):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Characteristic</th>
+<th>What it asks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Ease of learning curve</strong></td>
+<td>How easily new people can learn and adopt it</td>
+</tr>
+<tr>
+<td><strong>Ease of data modeling</strong></td>
+<td>How well the domain maps to the data model, and how easy it is to change</td>
+</tr>
+<tr>
+<td><strong>Scalability/throughput</strong></td>
+<td>Can it scale (horizontally, vertically or both) to higher throughput?</td>
+</tr>
+<tr>
+<td><strong>Availability/partition tolerance</strong></td>
+<td>High-availability configurations and network-partition handling</td>
+</tr>
+<tr>
+<td><strong>Consistency</strong></td>
+<td>ACID or BASE (eventual), tunable or not</td>
+</tr>
+<tr>
+<td><strong>Programming language support, maturity, SQL support, community</strong></td>
+<td>Languages, maturity, and how easy it is to hire</td>
+</tr>
+<tr>
+<td><strong>Read/write priority</strong></td>
+<td>Optimised for reads, writes, or balanced (a scale, not a binary choice)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-types-in-brief">The types in brief</h3>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Core idea</th>
+<th>Strengths</th>
+<th>Weak points</th>
+<th>Products</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Relational</strong></td>
+<td>Tables and rows, SQL, ACID</td>
+<td>Easy to learn, flexible modelling, strong consistency, mature, balanced read/write</td>
+<td>Mostly <strong>vertical</strong> scaling; replication and switchover are complex; favours consistency over availability and partition tolerance; arbitrary-depth graphs are hard</td>
+<td>PostgreSQL, Oracle, SQL Server</td>
+</tr>
+<tr>
+<td><strong>Key-value</strong></td>
+<td>Hash table: key to opaque value; only get, put, delete</td>
+<td>Fast key lookups, easy scaling, tunable consistency, read priority</td>
+<td>No joins, where or order by; query by key only; aggregate changes rewrite the data; configurations differ between products</td>
+<td>Riak KV, DynamoDB, Redis</td>
+</tr>
+<tr>
+<td><strong>Document</strong></td>
+<td>JSON or XML aggregates the database understands and can index</td>
+<td>Most popular NoSQL, easy to learn, forgiving aggregate design, read priority</td>
+<td>Complex indexing hurts scaling; sharding adds a <strong>sharding key</strong> and complexity; ACID only in some cases</td>
+<td>MongoDB, Couchbase, AWS DocumentDB</td>
+</tr>
+<tr>
+<td><strong>Column family</strong></td>
+<td>Rows with varying name-value columns, row key</td>
+<td>Highly scalable (horizontal), high write volume, copes with sparse data, replication factor 3 by default</td>
+<td>Hard to learn and model; row-key design takes iterations; consistency level trades against availability</td>
+<td>Cassandra, Scylla, SimpleDB</td>
+</tr>
+<tr>
+<td><strong>Graph</strong></td>
+<td>Nodes and <strong>directed</strong> edges as explicit objects</td>
+<td>Very fast relationship traversal, read-heavy, ACID in many (Neo4j), Cypher and Gremlin</td>
+<td>Steep learning curve, hard modelling, <strong>hard to shard</strong> so write throughput is constrained; changing a relationship type is expensive</td>
+<td>Neo4j, Infinite Graph, TigerGraph</td>
+</tr>
+<tr>
+<td><strong>NewSQL</strong></td>
+<td>SQL and ACID with automatic sharding and multiple active nodes</td>
+<td>Familiar to relational users, horizontal scale, high availability (CockroachDB survives disk, machine and data-centre failure)</td>
+<td>Some are DBaaS only; sharding design is a wrinkle</td>
+<td>VoltDB, ClustrixDB, SingleStore (MemSQL)</td>
+</tr>
+<tr>
+<td><strong>Cloud native</strong></td>
+<td>Cloud-only, managed, pay for use</td>
+<td>Little operational burden, easy to experiment, automatic scaling</td>
+<td>Varies widely; hard to find experienced people; <strong>cost</strong> is the trade-off; Datomic uses immutable atomic facts and Clojure</td>
+<td>Snowflake, Datomic, Redshift</td>
+</tr>
+<tr>
+<td><strong>Time-series</strong></td>
+<td>Append-only data points, each with a timestamp and tags</td>
+<td>Easy to grasp, suited to read-heavy analysis over time windows</td>
+<td>Not general purpose; append-only needs unlearning of updates</td>
+<td>InfluxDB, kdb+, Amazon Timestream</td>
+</tr>
+</tbody>
+</table>
+<div class="callout c-info"><div class="callout-title">Boxed terms</div><div class="callout-body">
+<ul>
+<li><strong>Aggregate orientation</strong>: a preference for operating on related data of complex structure (a Sysops Squad ticket with its dependent tables). Aggregate comes from Evans' <em>Domain-Driven Design</em>. Benefits: easy distribution across a cluster, fewer joins so faster reads and writes, less impedance mismatch with the application model. Shortcomings: proper aggregates are hard to find and change, and analysing across aggregates is difficult.</li>
+<li><strong>Sharding</strong>: like partitioning, but the data lives on different servers or nodes, and nodes decide where data goes using a <strong>sharding key</strong>; a shard is a horizontal partition.</li>
+<li><strong>Schema-less</strong>: NoSQL data always has a schema, even if implicit or held elsewhere; the application must handle several schema versions. &quot;Entirely schema-less&quot; is misleading.</li>
+<li><strong>Changing relationship types</strong> in a graph is expensive: both nodes must be visited, the new edge created and the old one removed.</li>
+<li>Details the book adds: key-value stores are not all alike (Riak tunes quorum per query: one, quorum, all); in tunable consistency, higher consistency costs latency or availability; NewSQL was named by Matthew Aslett.</li>
+</ul>
+</div></div>
+<h2 id="6-5-sysops-squad-saga-polyglot-databases">6.5 Sysops Squad saga: polyglot databases</h2>
+<ul>
+<li>Devon and Skyler (UI developer) want the <strong>Survey</strong> domain in a <strong>document database</strong>; Dana wants to stay relational (&quot;the survey tables have always worked&quot;).</li>
+<li>Skyler's point:
+<ul>
+<li>the relational survey data is a real pain for the user interface</li>
+<li>Parker (product owner) confirms marketing is frustrated that even small survey changes take days, so they stop asking.</li>
+</ul>
+</li>
+<li>Addison builds the <strong>business justification</strong>:
+<ul>
+<li>survey flexibility and speed of change depend on how the data is stored</li>
+<li>The technical point of friction becomes a business case, and Dana agrees.</li>
+</ul>
+</li>
+<li>Two document models are compared (the survey and question tables are one-to-many):
+<ul>
+<li><strong>Single aggregate</strong>: the survey with its questions embedded, so one <code>get</code> returns it all and the UI renders it directly. Cost: a common question is <strong>replicated</strong> in every survey.</li>
+<li><strong>Split aggregates</strong>: the survey holds question references; questions are reusable but harder to retrieve and render.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"survey_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"19999"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"created_date"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Dec 28 2021"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Survey to gauge customer..."</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"questions"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"question_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"50001"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"question"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Rate the expert"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"answer_type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Option"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"answer_options"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1,2,3,4,5"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"order"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"question_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"50000"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"question"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Did the expert fix the problem?"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"answer_type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Boolean"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"answer_options"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Yes,No"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"order"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"survey_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"19999"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"created_date"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Dec 28"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Survey to gauge customer..."</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"questions"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="nt">"question_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"50001"</span><span class="p">,</span><span class="w"> </span><span class="nt">"order"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2"</span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"question_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"50000"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"order"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The team picks the <strong>single aggregate</strong>:
+<ul>
+<li>only five survey types exist (one per product category), most changes add or remove questions, and the UI is where the complexity is</li>
+<li>They accept duplicated question data in exchange for easier change and rendering.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-06-survey-aggregates.svg" alt="Figures 6-36 and 6-37: single versus split aggregates" loading="lazy" /></p>
+<div class="callout c-note"><div class="callout-title">ADR: use of document database for customer survey</div><div class="callout-body">
+<ul>
+<li><strong>Context:</strong> customers get one of five survey types after a repair or installation; it is stored relationally, and the team wants JSON in a document database.</li>
+<li><strong>Decision:</strong> use a document database for the customer survey, because marketing needs more flexibility and timely changes, and it simplifies the survey UI.</li>
+<li><strong>Consequences:</strong> with a single aggregate, a change to a common question touches <strong>multiple documents</strong>; survey functionality must be <strong>shut down during migration</strong> from relational to document.</li>
+</ul>
+</div></div>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Splitting data is justified by weighing the disintegrators against the integrators, with evidence (logs, connection projections), not by preference.</li>
+<li>The five-step data-domain process moves a database apart iteratively and safely, ending in data sovereignty per service and the freedom to choose a database type per domain.</li>
+<li>The next question is <strong>how big</strong> each resulting service should be (chapter 7), and later how services share and move data (chapters 9 and 10).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Data disintegrator / integrator</strong>: a driver to split or keep data together.</li>
+<li><strong>Breaking change</strong>: a schema change (drop, rename, retype) that breaks existing queries.</li>
+<li><strong>Bounded context</strong>: code, logic, data structures and data encapsulated per service.</li>
+<li><strong>Connection quota</strong>: the cap on database connections per service.</li>
+<li><strong>Data domain / schema</strong>: architectural grouping / database construct holding it.</li>
+<li><strong>Data sovereignty per service</strong>: each service owns its own data.</li>
+<li><strong>Synonym</strong>: an alternate name for an object in another schema.</li>
+<li><strong>Polyglot databases</strong>: different database types per domain.</li>
+<li><strong>Aggregate, shard, sharding key</strong>: a unit of related data, a horizontal partition, the key that places data.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 6: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch06.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch06.html</a></li>
+<li>No other URLs in the page text
+<ul>
+<li>The per-type star ratings (Figures 6-25 to 6-33) are images, so the table above summarises the <strong>text</strong> of each rating section rather than reproducing the stars</li>
+<li>Figures are redrawn in summary form.</li>
+</ul>
+</li>
+<li>The book's statements about product behaviour (for example CockroachDB, Riak quorums, Redshift availability zones) are the authors' and are not independently verified here.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/">Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/">Software Architecture: The Hard Parts 7: Service Granularity</a></li>
+<li><a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">Software Architecture Patterns 6: Microservices Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/">&larr; Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/">Software Architecture: The Hard Parts 7: Service Granularity &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

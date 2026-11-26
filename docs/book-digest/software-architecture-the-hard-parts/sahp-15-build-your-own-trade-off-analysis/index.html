@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 15: Build Your Own Trade-Off Analysis</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-14-managing-analytical-data/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-16-appendices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-15-build-your-own-trade-off-analysis">Software Architecture: The Hard Parts 15: Build Your Own Trade-Off Analysis</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 15. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-14-managing-analytical-data/">Software Architecture: The Hard Parts 14: Managing Analytical Data</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-16-appendices/">Software Architecture: The Hard Parts, Appendices A to C</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Generic solutions are rarely complete for a specific architecture. The chapter turns the book's method into a <strong>three-step process</strong>: find what is <strong>entangled</strong>, analyse how it is <strong>coupled</strong>, assess the <strong>trade-offs</strong> of change, iterating until only design is left.</li>
+<li>Techniques: prefer <strong>qualitative</strong> analysis (true quantitative comparison is rare), use <strong>MECE lists</strong> (mutually exclusive, collectively exhaustive), avoid the <strong>out-of-context trap</strong>, <strong>model relevant domain scenarios</strong>, give stakeholders the <strong>bottom line</strong> rather than overwhelming evidence, and <strong>avoid snake oil and evangelism</strong>.</li>
+<li>Epilogue: the Sysops Squad turned around through business drivers, collaboration between application and database teams, and disciplined trade-off analysis recorded in tables and ADRs: &quot;That's architecture.&quot;</li>
+</ul>
+</div></div>
+<h2 id="15-1-the-scene-the-retrospective">15.1 The scene: the retrospective</h2>
+<ul>
+<li>Months after the business sponsors almost cancelled the Sysops Squad support-contract line, Bailey (the main business sponsor) opens a retrospective. What worked, in the team's words:
+<ul>
+<li><strong>Business drivers</strong> as the way to frame problems; before, IT looked only at the technical side.</li>
+<li><strong>Collaboration</strong> between database and application teams (Dana).</li>
+<li><strong>Trade-off analysis</strong>, with Logan's guidance, which justified solutions from a business perspective (the sponsors say the early business justifications are what earned IT a last chance).</li>
+</ul>
+</li>
+<li>Keeping it up:
+<ul>
+<li><strong>discipline</strong></li>
+<li>Keep creating <strong>trade-off tables</strong> for all decisions, keep documenting with <strong>ADRs</strong>, keep collaborating</li>
+<li>Is that extra process? Logan: &quot;No</li>
+<li>That's architecture.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="15-2-the-three-step-process">15.2 The three-step process</h2>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-15-process.svg" alt="The process" loading="lazy" /></p>
+<ol>
+<li><strong>Find what parts are entangled together.</strong></li>
+<li><strong>Analyse how they are coupled to one another.</strong></li>
+<li><strong>Assess trade-offs</strong> by determining the impact of change to interdependent systems.</li>
+</ol>
+<h3 id="finding-entangled-dimensions">Finding entangled dimensions</h3>
+<ul>
+<li>Entanglement is unique to an architecture but discoverable by experienced developers, architects, operations staff and others who know the ecosystem.</li>
+</ul>
+<h3 id="coupling">Coupling</h3>
+<ul>
+<li>Simplest definition: <strong>if someone changes X, will it possibly force Y to change?</strong></li>
+<li><strong>Static coupling</strong> diagrams (chapter 2) have no generic tool, but a team can build one manually or by automation. For a microservice, gather:
+<ul>
+<li>operating system and container dependencies;</li>
+<li>dependencies from transitive dependency management (frameworks, libraries);</li>
+<li>persistence dependencies (databases, search engines, cloud environments);</li>
+<li>architecture integration points needed for the service to bootstrap;</li>
+<li>messaging infrastructure (such as a broker) for communicating with other quanta.</li>
+</ul>
+</li>
+<li>The diagram does not include quanta whose only coupling is <strong>workflow communication</strong>: AssignTicket and ManageTicket cooperating in a workflow with no other coupling are <strong>statically independent but dynamically coupled</strong> during the workflow
+<ul>
+<li>Teams with automated environments can generate the coupling documentation as the system builds.</li>
+</ul>
+</li>
+<li>For this book the authors looked at hundreds of distributed architecture examples (microservices and others) and found them sensitive to <strong>communication, consistency and coordination</strong>, hence the three dimensions of dynamic quantum coupling
+<ul>
+<li>This shows <strong>iterative design</strong>: &quot;no architect is so brilliant that their first draft is always perfect&quot;</li>
+<li>Sample topologies for workflows allow a matrix of trade-offs and faster, more thorough analysis than ad hoc approaches.</li>
+</ul>
+</li>
+</ul>
+<h3 id="analyse-coupling-points">Analyse coupling points</h3>
+<ul>
+<li>Model the possible combinations lightly (skip infeasible ones) and decide which forces need trade-off analysis
+<ul>
+<li>Here: <strong>coupling, complexity, responsiveness/availability and scale/elasticity</strong>, besides the three forces</li>
+<li>Each design (named saga) is rated in isolation, then all are combined:</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Coupling</th>
+<th>Complexity</th>
+<th>Responsiveness/availability</th>
+<th>Scale/elasticity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Epic Saga</td>
+<td>Very high</td>
+<td>Low</td>
+<td>Low</td>
+<td>Very low</td>
+</tr>
+<tr>
+<td>Phone Tag Saga</td>
+<td>High</td>
+<td>High</td>
+<td>Low</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>Fairy Tale Saga</td>
+<td>High</td>
+<td>Very low</td>
+<td>Medium</td>
+<td>High</td>
+</tr>
+<tr>
+<td>Time Travel Saga</td>
+<td>Medium</td>
+<td>Low</td>
+<td>Medium</td>
+<td>High</td>
+</tr>
+<tr>
+<td>Fantasy Fiction Saga</td>
+<td>High</td>
+<td>High</td>
+<td>Low</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>Horror Story</td>
+<td>Medium</td>
+<td>Very high</td>
+<td>Low</td>
+<td>Medium</td>
+</tr>
+<tr>
+<td>Parallel Saga</td>
+<td>Low</td>
+<td>Low</td>
+<td>High</td>
+<td>High</td>
+</tr>
+<tr>
+<td>Anthology Saga</td>
+<td>Very low</td>
+<td>High</td>
+<td>High</td>
+<td>Very high</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Two observations from the matrix: a <strong>direct inverse correlation between coupling and scale/elasticity</strong> (more services involved in a workflow means harder design for scale), and a similar, less direct one between <strong>coupling and responsiveness/availability</strong> (the more services involved, the likelier a service failure fails the workflow).</li>
+<li>(The book's Table 15-1 lists the Parallel Saga's coordination as &quot;Centralized&quot;, i.e. orchestrated.)</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-15-coupling-analysis.svg" alt="Coupling analysis" loading="lazy" /></p>
+<h3 id="assess-trade-offs">Assess trade-offs</h3>
+<ul>
+<li>With a platform for iterative what-if scenarios, fix the <strong>fundamental trade-off</strong> first (here synchronous versus asynchronous communication); that choice limits later ones
+<ul>
+<li>Then repeat on the decisions it forces, until the difficult (entangled) decisions are solved</li>
+<li>&quot;What's left is design.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="15-3-trade-off-techniques">15.3 Trade-off techniques</h2>
+<h3 id="qualitative-versus-quantitative-analysis">Qualitative versus quantitative analysis</h3>
+<ul>
+<li>Virtually none of the book's tables are quantitative, because two architectures always differ too much for true quantitative comparison
+<ul>
+<li>Statistical analysis over a large set of examples still supports a reasonable <strong>qualitative</strong> scale (the comparative scale in Table 15-2 came from many implementations of each combination).</li>
+</ul>
+</li>
+<li>Organisations can do likewise:
+<ul>
+<li>a dimensional matrix of coupled concerns, representative examples (existing systems or targeted spikes)</li>
+<li>The authors recommend honing qualitative analysis, since <strong>few opportunities for true quantitative analysis exist</strong> in architecture.</li>
+</ul>
+</li>
+</ul>
+<h3 id="mece-lists">MECE lists</h3>
+<ul>
+<li>Compare like with like
+<ul>
+<li>Comparing a simple message queue with an ESB (which contains a queue plus dozens of other components) is invalid</li>
+<li><strong>MECE</strong> (borrowed from technology strategy): <strong>mutually exclusive</strong> (no overlapping capabilities between items; to compare only messaging, reduce the ESB to its messaging capability) and <strong>collectively exhaustive</strong> (all the options in the decision space are covered; evaluating an ESB and a simple queue but not Kafka for high-performance messaging leaves a gap).</li>
+</ul>
+</li>
+<li>Aim: cover a category with no holes or overlaps. The ecosystem keeps evolving, so before a long-term decision check that a new capability has not changed the criteria.</li>
+</ul>
+<h3 id="the-out-of-context-trap">The out-of-context trap</h3>
+<ul>
+<li>Keep a decision in its context, or external factors distort it
+<ul>
+<li>Example: shared service versus shared library</li>
+<li>A generic matrix favoured the library overall, but when the actual <strong>context</strong> was added the decision criteria changed (Figures 15-3 and 15-4).</li>
+</ul>
+</li>
+<li>Two lessons:
+<ul>
+<li>finding the best narrow context lets an architect consider <strong>fewer options</strong>, which is how &quot;embrace simple designs&quot; can actually be achieved</li>
+<li>and <strong>iterative design</strong> (diagramming sample solutions and playing qualitative what-if games) reveals the context a decision belongs in.</li>
+</ul>
+</li>
+</ul>
+<h3 id="model-relevant-domain-cases">Model relevant domain cases</h3>
+<ul>
+<li>Decisions need domain drivers. Question: one payment service or one per payment type? The generic disintegrators and integrators (chapter 7) are a start; model scenarios:
+<ul>
+<li><strong>Update the credit card service</strong>: separate services give better maintainability, testability and deployability through quantum-level isolation, but often need duplicated code to avoid static coupling between services, damaging that benefit.</li>
+<li><strong>Add a payment type</strong> (reward points): separate services highlight <strong>extensibility</strong>.</li>
+<li><strong>A multi-type payment workflow</strong>:
+<ul>
+<li>separate services need coordination, best by an <strong>orchestrator</strong> (chapter 11), which likely hurts performance and makes consistency harder</li>
+<li>avoiding an orchestrator just moves the workflow logic elsewhere (semantic coupling can only be increased by implementation).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>The real trade-off emerges: <strong>performance and data consistency (single service) versus extensibility and agility (separate services).</strong></li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-15-scenarios.svg" alt="Scenarios" loading="lazy" /></p>
+<h3 id="prefer-bottom-line-over-overwhelming-evidence">Prefer bottom line over overwhelming evidence</h3>
+<ul>
+<li>Architects gather much detail that is arcane to non-technical stakeholders and can overwhelm their ability to help decide
+<ul>
+<li>Reduce the analysis to a few key points (sometimes aggregates of trade-offs).</li>
+</ul>
+</li>
+<li>Example (Table 15-3), credit card processing, synchronous REST calls from an orchestrator versus asynchronous message queues:
+<ul>
+<li>Synchronous:
+<ul>
+<li>the customer must wait for the approval process to start, but it is <strong>guaranteed to start</strong> before the request ends</li>
+<li>the application is <strong>rejected if the orchestrator is down</strong>.</li>
+</ul>
+</li>
+<li>Asynchronous: no wait, and submission does not depend on the orchestrator, but <strong>no guarantee</strong> the process has started.</li>
+<li>Bottom line for stakeholders: is a <strong>guarantee that approval starts immediately</strong> more important than <strong>responsiveness and fault tolerance</strong>?</li>
+</ul>
+</li>
+</ul>
+<h3 id="avoiding-snake-oil-and-evangelism">Avoiding snake oil and evangelism</h3>
+<ul>
+<li>Evangelism (enhancing the good, diminishing the bad) is a luxury for tech leads and developers and gets architects in trouble, because the trade-offs &quot;always eventually return to complicate things&quot;
+<ul>
+<li>Be wary of any tool or technique promising shocking new capabilities, and make evangelists give an honest account of good and bad: <strong>nothing in software architecture is all good.</strong></li>
+</ul>
+</li>
+<li>Case (Figure 15-10):
+<ul>
+<li>an architect who valued <strong>extensibility</strong> on past projects wants to keep one <strong>publish-and-subscribe</strong> topic that broadcasts changes and add <strong>bid history</strong> to the workflow, versus <strong>point-to-point</strong> messaging per consumer</li>
+<li>Scenario analysis:</li>
+<li><strong>Single topic</strong>
+<ul>
+<li>problems: one large contract for everyone (the stamp coupling anti-pattern, creating accidental coupling: a change by one team requires all to coordinate)</li>
+<li><strong>every consumer sees all data</strong> (security and PII, chapter 14)</li>
+<li>consumers are <strong>operationally coupled</strong> (operations cannot auto-scale bid capture and tracking on queue depth without the others).</li>
+</ul>
+</li>
+<li><strong>Individual queues</strong>
+<ul>
+<li>(bid capture, tracking, analytics, history): a contract per consumer, security and data access in each producer-consumer contract (different information and rate of change), independent monitoring and scaling</li>
+<li>Not perfect, just different trade-offs.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Point-to-point</th>
+<th>Publish-and-subscribe</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Allows heterogeneous contracts</td>
+<td>Extensibility (easy to add new consumers)</td>
+</tr>
+<tr>
+<td>More granular security access and data control</td>
+<td></td>
+</tr>
+<tr>
+<td>Individual operational profiles per consumer</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Then consult interested parties (operations, enterprise architects, business analysts) on which set of trade-offs matters more.</li>
+<li>Another case:
+<ul>
+<li>a tech lead wanted one author to argue against a <strong>monorepo</strong> versus trunk-based development (&quot;it's not an argument if two sides don't exist&quot;)</li>
+<li>The author declined the foil role, noting the claimed monorepo benefits needed discipline the team had not shown, agreed to try it while <strong>gathering metrics</strong>, and had the team build <strong>fitness functions</strong> against the anti-pattern of accidental coupling between projects through repository proximity.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Don&#x27;t allow others to force you into evangelising something: bring it back to trade-offs.</div><div class="callout-body">
+</div></div>
+<ul>
+<li>The authors advise becoming the <strong>objective arbiter of trade-offs</strong> rather than chasing silver bullets.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-15-pubsub.svg" alt="Publish-subscribe versus point-to-point, and avoiding evangelism" loading="lazy" /></p>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-15-techniques.svg" alt="Techniques: MECE, out-of-context, qualitative analysis" loading="lazy" /></p>
+<h2 id="15-4-sysops-squad-saga-epilogue">15.4 Sysops Squad saga: epilogue</h2>
+<ul>
+<li>Generic advice is not enough
+<ul>
+<li>the team must do trade-off analysis constantly, which is an <strong>advantage</strong>: isolating dimensions and analysing trade-offs produces <strong>concrete knowledge of your own architecture</strong></li>
+<li>boil the trade-offs for a problem down to a small number you can model and test.</li>
+</ul>
+</li>
+<li>Logan's closing analogy:
+<ul>
+<li>structural engineers have math and predictive tools but their building is hard and expensive; software is &quot;softer&quot;, and <strong>testing is the engineering rigor of software development</strong></li>
+<li>Testing with objective outcomes moves trade-off analysis from qualitative to quantitative, &quot;from speculation to engineering&quot;</li>
+<li>The more concrete facts learned about your own ecosystem, the more precise the analysis.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>The book's method: entangle, couple, trade off; name the forces, model scenarios, test, and give the business a plain choice recorded in an ADR.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Entangled dimensions</strong>, <strong>static vs dynamic coupling</strong> (workflow-only partners).</li>
+<li><strong>Qualitative vs quantitative analysis</strong>.</li>
+<li><strong>MECE</strong> list: mutually exclusive, collectively exhaustive.</li>
+<li><strong>Out-of-context trap</strong>.</li>
+<li><strong>Bottom line over overwhelming evidence</strong>.</li>
+<li><strong>Evangelism / snake oil</strong>; <strong>objective arbiter of trade-offs</strong>.</li>
+<li><strong>Fitness function</strong> as the governance backstop for an experiment.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 15: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch15.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch15.html</a></li>
+<li>No other URLs in the page text. Figures 15-1 to 15-12 are redrawn in summary form
+<ul>
+<li>Table 15-4 is reproduced above and the shared-service-versus-library matrices (Figures 15-3 and 15-4) are described, not reproduced.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-14-managing-analytical-data/">Software Architecture: The Hard Parts 14: Managing Analytical Data</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-16-appendices/">Software Architecture: The Hard Parts, Appendices A to C</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-01-what-happens-when-there-are-no-best-practices/">Software Architecture: The Hard Parts 1: What Happens When There Are No &quot;Best Practices&quot;?</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/">Software Architecture: The Hard Parts 7: Service Granularity</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-12-transactional-sagas/">Software Architecture: The Hard Parts 12: Transactional Sagas</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-14-managing-analytical-data/">&larr; Software Architecture: The Hard Parts 14: Managing Analytical Data</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-16-appendices/">Software Architecture: The Hard Parts, Appendices A to C &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

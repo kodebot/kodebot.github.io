@@ -1,0 +1,1111 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-04-architectural-decomposition/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-5-component-based-decomposition-patterns">Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 5. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-04-architectural-decomposition/">Software Architecture: The Hard Parts 4: Architectural Decomposition</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/">Software Architecture: The Hard Parts 6: Pulling Apart Operational Data</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Six patterns, used <strong>in sequence</strong> to break a structured monolith into services, then individually during maintenance: <strong>Identify and Size Components</strong>, <strong>Gather Common Domain Components</strong>, <strong>Flatten Components</strong>, <strong>Determine Component Dependencies</strong>, <strong>Create Component Domains</strong>, <strong>Create Domain Services</strong>.</li>
+<li>Each pattern has a description, <strong>fitness functions for governance</strong> (so the codebase stays correct while the migration runs) and a Sysops Squad worked example.</li>
+<li>Changes are recorded as <strong>architecture stories</strong>, distinct from user stories and from technical debt stories.</li>
+<li>Services are built from <strong>components</strong> (leaf-node namespaces holding code), not from classes; orphaned classes in root namespaces must be removed.</li>
+<li>Sizes, shared-code percentages and coupling counts are the <strong>measurements</strong> that decide whether a migration is feasible.</li>
+</ul>
+</div></div>
+<h2 id="5-1-the-pattern-roadmap">5.1 The pattern roadmap</h2>
+<ul>
+<li>Logan says little is written on these patterns
+<ul>
+<li>he learned of them at a conference about four years earlier, in a session by an experienced architect, and has used them &quot;with quite a bit of success&quot; for an iterative, methodical, safe move from monolith to service-based architecture and microservices.</li>
+</ul>
+</li>
+<li>They suit a codebase that is &quot;somewhat structured and grouped by namespaces (or directories)&quot;.</li>
+<li>The six patterns (Figure 5-1):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Identify and Size Components</strong></td>
+<td>Usually first: identify, manage and properly size components</td>
+</tr>
+<tr>
+<td><strong>Gather Common Domain Components</strong></td>
+<td>Consolidate duplicated business-domain logic, reducing duplicate services later</td>
+</tr>
+<tr>
+<td><strong>Flatten Components</strong></td>
+<td>Collapse or expand domains, subdomains and components so code lives only in well-defined components</td>
+</tr>
+<tr>
+<td><strong>Determine Component Dependencies</strong></td>
+<td>Identify and refine dependencies; judge feasibility and effort of the migration</td>
+</tr>
+<tr>
+<td><strong>Create Component Domains</strong></td>
+<td>Group components into logical domains; align namespaces and directories to them</td>
+</tr>
+<tr>
+<td><strong>Create Domain Services</strong></td>
+<td>Physically break the monolith by moving domains to separately deployed domain services</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Each pattern is described in three sections: <strong>Pattern Description</strong> (how, why, outcome), <strong>Fitness Functions for Governance</strong> (automated checks during ongoing maintenance, since systems are moving targets) and a <strong>Sysops Squad</strong> illustration.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-05-roadmap.svg" alt="Figure 5-1: the pattern flow" loading="lazy" /></p>
+<h3 id="architecture-stories">Architecture stories</h3>
+<ul>
+<li>An <strong>architecture story</strong> records code refactoring that affects the <strong>structure</strong> of the application and satisfies a business driver such as scalability or time-to-market
+<ul>
+<li>Example: &quot;As an architect, I need to decouple the payment service to support better extensibility and agility when adding additional payment types.&quot;</li>
+</ul>
+</li>
+<li>Unlike user stories (features) and unlike <strong>technical debt stories</strong> (cleanup done later), an architecture story captures something that must change quickly to support an architecture characteristic or business need.</li>
+</ul>
+<h2 id="5-2-identify-and-size-components-pattern">5.2 Identify and size components pattern</h2>
+<h3 id="pattern-description">Pattern description</h3>
+<ul>
+<li>Services are built from components, so identify them and <strong>size</strong> them. Components too large (doing too much) are more coupled, harder to split into services and make the architecture less modular
+<ul>
+<li>components too small do not do enough.</li>
+</ul>
+</li>
+<li>Files, classes and lines of code are poor size metrics because programmers design differently
+<ul>
+<li>The useful metric is the <strong>total number of statements</strong> in a component (a single complete action terminated by a character such as a semicolon, or a newline in Python and Ruby).</li>
+</ul>
+</li>
+<li>Keep sizes consistent:
+<ul>
+<li>component size should fall within <strong>one to two standard deviations of the mean</strong>, and each component's share of the code should be somewhat evenly distributed</li>
+<li>Static analysis tools usually show statements per file, so the architect post-processes to accumulate by component and compute percentages.</li>
+</ul>
+</li>
+<li>The inventory (Table 5-1) records:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Component name</strong></td>
+<td>Descriptive, consistent across diagrams; rename vague ones (a component called &quot;Ticket Manager&quot; leaves too many unanswered questions)</td>
+</tr>
+<tr>
+<td><strong>Component namespace</strong></td>
+<td>Namespace, package or directory (dots replace separators: <code>ss/customer/notification</code> becomes <code>ss.customer.notification</code>); keep the identifier type consistent</td>
+</tr>
+<tr>
+<td><strong>Percent</strong></td>
+<td>Statements in the component divided by statements in the whole codebase (5 for <code>ss.billing.payment</code> means 5% of the codebase)</td>
+</tr>
+<tr>
+<td><strong>Statements</strong></td>
+<td>Sum of statements in all its source files; a &quot;simple&quot; Customer Wishlist with 12,000 statements is more complex than it looks</td>
+</tr>
+<tr>
+<td><strong>Files</strong></td>
+<td>Number of source files (classes, interfaces, types); a component with 18,409 statements and only 2 files is a candidate for splitting into smaller classes</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>To resize a large component use <strong>functional decomposition or a domain-driven approach</strong> to find subdomains
+<ul>
+<li>Example: a Trouble Ticket component at 22% of the code, covering creation, assignment, routing and completion, could become four components</li>
+<li>If no clear subdomains exist, leave it.</li>
+</ul>
+</li>
+</ul>
+<h3 id="fitness-functions-for-governance">Fitness functions for governance</h3>
+<p>Automated <strong>holistic</strong> fitness functions run on deployment through CI/CD, custom code or open-source or COTS tools:</p>
+<ol>
+<li><strong>Maintain component inventory</strong>: alerts the architect to components added or removed (Example 5-1):</li>
+</ol>
+<pre class="hl"><code># Get prior component namespaces that are stored in a datastore
+LIST prior_list = read_from_datastore()
+
+# Walk the directory structure, creating namespaces for each complete path
+LIST current_list = identify_components(root_directory)
+
+# Send an alert if new or removed components are identified
+LIST added_list = find_added(current_list, prior_list)
+LIST removed_list = find_removed(current_list, prior_list)
+IF added_list NOT EMPTY
+{
+    add_to_datastore(added_list)
+    send_alert(added_list)
+}
+IF removed_list NOT EMPTY
+{
+    remove_from_datastore(removed_list)
+    send_alert(removed_list)
+}
+</code></pre>
+<ol start="2">
+<li><strong>No component shall exceed some percent of the codebase</strong> (Example 5-2). The threshold depends on size: <strong>30%</strong> for a small application with 10 components, <strong>10%</strong> for a large one with 50.</li>
+</ol>
+<pre class="hl"><code># Walk the directory structure, creating namespaces for each complete path
+LIST component_list = identify_components(root_directory)
+
+# Walk through all of the source code to accumulate total statements
+total_statements = accumulate_statements(root_directory)
+
+# Walk through the source code for each component, accumulating statements
+# and calculating the percentage of code each component represents. Send
+# an alert if greater than 10%
+FOREACH component IN component_list
+{
+    component_statements = accumulate_statements(component)
+    percent = component_statements / total_statements
+    IF percent &gt; .10
+    {
+        send_alert(component, percent)
+    }
+}
+</code></pre>
+<ol start="3">
+<li><strong>No component shall exceed some number of standard deviations from the mean size</strong> (Example 5-3, three standard deviations). The sample standard deviation is s = sqrt( (1/(N-1)) * sum((x_i - mean)^2) ), with the mean the average of observed sizes.</li>
+</ol>
+<pre class="hl"><code># Walk the directory structure, creating namespaces for each complete path
+LIST component_list = identify_components(root_directory)
+
+# Walk through all of the source code to accumulate total statements and number
+# of statements per component
+SET total_statements TO 0
+MAP component_size_map
+FOREACH component IN component_list
+{
+    num_statements = accumulate_statements(component)
+    ADD num_statements TO total_statements
+    ADD component,num_statements TO component_size_map
+}
+
+# Calculate the standard deviation
+SET square_diff_sum TO 0
+num_components = get_num_entries(component_list)
+mean = total_statements / num_components
+FOREACH component,size IN component_size_map
+{
+    diff = size - mean
+    ADD square(diff) TO square_diff_sum
+}
+std_dev = square_root(square_diff_sum / (num_components - 1))
+
+# For each component calculate the number of standard deviations from the
+# mean. Send an alert if greater than 3
+FOREACH component,size IN component_size_map
+{
+    diff_from_mean = absolute_value(size - mean);
+    num_std_devs = diff_from_mean / std_dev
+    IF num_std_devs &gt; 3
+    {
+        send_alert(component, num_std_devs)
+    }
+}
+</code></pre>
+<h3 id="sysops-squad-sizing-components">Sysops Squad: sizing components</h3>
+<p>Addison measures every component; the application totals <strong>82,931 statements</strong> (Table 5-2).</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Namespace</th>
+<th>Percent</th>
+<th>Statements</th>
+<th>Files</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Login</td>
+<td><code>ss.login</code></td>
+<td>2</td>
+<td>1,865</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Billing Payment</td>
+<td><code>ss.billing.payment</code></td>
+<td>5</td>
+<td>4,312</td>
+<td>23</td>
+</tr>
+<tr>
+<td>Billing History</td>
+<td><code>ss.billing.history</code></td>
+<td>4</td>
+<td>3,209</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Customer Notification</td>
+<td><code>ss.customer.notification</code></td>
+<td>2</td>
+<td>1,433</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Customer Profile</td>
+<td><code>ss.customer.profile</code></td>
+<td>5</td>
+<td>4,012</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Expert Profile</td>
+<td><code>ss.expert.profile</code></td>
+<td>6</td>
+<td>5,099</td>
+<td>32</td>
+</tr>
+<tr>
+<td>KB Maint</td>
+<td><code>ss.kb.maintenance</code></td>
+<td>2</td>
+<td>1,701</td>
+<td>14</td>
+</tr>
+<tr>
+<td>KB Search</td>
+<td><code>ss.kb.search</code></td>
+<td>3</td>
+<td>2,871</td>
+<td>4</td>
+</tr>
+<tr>
+<td><strong>Reporting</strong></td>
+<td><code>ss.reporting</code></td>
+<td><strong>33</strong></td>
+<td><strong>27,765</strong></td>
+<td><strong>162</strong></td>
+</tr>
+<tr>
+<td>Ticket</td>
+<td><code>ss.ticket</code></td>
+<td>8</td>
+<td>7,009</td>
+<td>45</td>
+</tr>
+<tr>
+<td>Ticket Assign</td>
+<td><code>ss.ticket.assign</code></td>
+<td>9</td>
+<td>7,845</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Ticket Notify</td>
+<td><code>ss.ticket.notify</code></td>
+<td>2</td>
+<td>1,765</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Ticket Route</td>
+<td><code>ss.ticket.route</code></td>
+<td>2</td>
+<td>1,468</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Support Contract</td>
+<td><code>ss.supportcontract</code></td>
+<td>5</td>
+<td>4,104</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Survey</td>
+<td><code>ss.survey</code></td>
+<td>3</td>
+<td>2,204</td>
+<td>5</td>
+</tr>
+<tr>
+<td>Survey Notify</td>
+<td><code>ss.survey.notify</code></td>
+<td>2</td>
+<td>1,299</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Survey Templates</td>
+<td><code>ss.survey.templates</code></td>
+<td>2</td>
+<td>1,672</td>
+<td>7</td>
+</tr>
+<tr>
+<td>User Maintenance</td>
+<td><code>ss.users</code></td>
+<td>4</td>
+<td>3,298</td>
+<td>12</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Reporting is 33% of the codebase (Figure 5-2). It holds three categories of reports plus shared code:
+<ul>
+<li><strong>ticketing reports</strong> (ticket demographics, tickets per day, week or month, resolution time)</li>
+<li><strong>expert reports</strong> (utilisation, distribution)</li>
+<li><strong>financial reports</strong> (repair cost, expert cost, profit)</li>
+<li>shared code: common utilities, calculators, shared data queries, report distribution, shared data formatters</li>
+</ul>
+</li>
+<li>An architecture story has developer <strong>Sydney</strong> split it into four components: <strong>Reporting Shared</strong> plus <strong>Ticket Reports, Expert Reports</strong> and <strong>Financial Reports</strong> (Figure 5-3)
+<ul>
+<li>After re-analysis (Table 5-3) the changed rows are:</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Namespace</th>
+<th>Percent</th>
+<th>Statements</th>
+<th>Files</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reporting Shared</td>
+<td><code>ss.reporting.shared</code></td>
+<td>7</td>
+<td>5,309</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Ticket Reports</td>
+<td><code>ss.reporting.tickets</code></td>
+<td>8</td>
+<td>6,955</td>
+<td>58</td>
+</tr>
+<tr>
+<td>Expert Reports</td>
+<td><code>ss.reporting.experts</code></td>
+<td>9</td>
+<td>7,734</td>
+<td>48</td>
+</tr>
+<tr>
+<td>Financial Reports</td>
+<td><code>ss.reporting.financial</code></td>
+<td>9</td>
+<td>7,767</td>
+<td>36</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>ss.reporting</code> still exists as a namespace but is now a <strong>subdomain</strong>, not a component.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-05-reporting-split.svg" alt="Figures 5-2 and 5-3: the oversized Reporting component split into four" loading="lazy" /></p>
+<h2 id="5-3-gather-common-domain-components-pattern">5.3 Gather common domain components pattern</h2>
+<h3 id="pattern-description">Pattern description</h3>
+<ul>
+<li><strong>Domain functionality</strong>
+<ul>
+<li>is part of the business logic and common to only some processes (notification, data formatting, data validation)</li>
+<li><strong>infrastructure functionality</strong> is operational and common to all processes (logging, metrics, security).</li>
+</ul>
+</li>
+<li>Consolidating common domain functionality removes duplicate services
+<ul>
+<li>the subtle differences between duplicated versions are usually easy to resolve in one common service or shared library.</li>
+</ul>
+</li>
+<li>Finding it is mostly manual
+<ul>
+<li>Hints: <strong>shared classes across components</strong> or a common inheritance structure</li>
+<li>Example: an <code>SMTPConnection</code> class used by five classes in different namespaces suggests spread-out email notification.</li>
+</ul>
+</li>
+<li>Another hint is <strong>names</strong>. Ticket Auditing (<code>penultimate.ss.ticket.audit</code>), Billing Auditing and Survey Auditing all insert a row in an audit table
+<ul>
+<li>consolidate into <code>penultimate.ss.shared.audit</code>.</li>
+</ul>
+</li>
+<li>Not everything becomes a shared service: common code can go in a <strong>shared library</strong> bound at compile time (service versus library trade-offs in Chapter 8).</li>
+</ul>
+<h3 id="fitness-functions-somewhat-manual">Fitness functions (somewhat manual)</h3>
+<p>Subjectivity limits automation, but these help:</p>
+<ol>
+<li><strong>Find common names in leaf nodes of component namespaces</strong> (Example 5-4), with an <strong>exclusion file</strong> for known false positives such as <code>.calculate</code> or <code>.validate</code>:</li>
+</ol>
+<pre class="hl"><code># Walk the directory structure, creating namespaces for each complete path
+LIST component_list = identify_components(root_directory)
+
+# Locate possible duplicate component node names that are not in the exclusion
+# list stored in a datastore
+LIST excluded_leaf_node_list = read_datastore()
+LIST leaf_node_list
+LIST common_component_list
+FOREACH component IN component_list
+{
+    leaf_name = get_last_node(component)
+    IF leaf_name IN leaf_node_list AND
+       leaf_name NOT IN excluded_leaf_node_list
+    {
+        ADD component TO common_component_list
+    }
+    ELSE
+    {
+        ADD leaf_name TO leaf_node_list
+    }
+}
+
+# Send an alert if any possible common components were found
+IF common_component_list NOT EMPTY
+{
+    send_alert(common_component_list)
+}
+</code></pre>
+<ol start="2">
+<li><strong>Find common code across components</strong> (Example 5-5), also with an exclusion file:</li>
+</ol>
+<pre class="hl"><code># Walk the directory structure, creating namespaces for each complete path and a list
+# of source file names for each component
+LIST component_list = identify_components(root_directory)
+LIST source_file_list = get_source_files(root_directory)
+MAP component_source_file_map
+FOREACH component IN component_list
+{
+    LIST component_source_file_list = get_source_files(component)
+    ADD component, component_source_file_list TO component_source_file_map
+}
+
+# Locate possible common source file usage across components that are not in
+# the exclusion list stored in a datastore
+LIST excluded_source_file_list = read_datastore()
+LIST common_source_file_list
+FOREACH source_file IN source_file_list
+{
+    SET count TO 0
+    FOREACH component,component_source_file_list IN component_source_file_map
+    {
+        IF source_file IN component_source_file_list
+        {
+            ADD 1 TO count
+        }
+    }
+    IF count &gt; 1 AND source_file NOT IN excluded_source_file_list
+    {
+        ADD source_file TO common_source_file_list
+    }
+}
+
+# Send an alert if any source files are used in multiple components
+IF common_source_file_list NOT EMPTY
+{
+    send_alert(common_source_file_list)
+}
+</code></pre>
+<h3 id="sysops-squad-gathering-common-components">Sysops Squad: gathering common components</h3>
+<ul>
+<li>Three notification components (Table 5-4):
+<ul>
+<li><strong>Customer Notification</strong> (<code>ss.customer.notification</code>, general), <strong>Ticket Notify</strong> (<code>ss.ticket.notify</code>, expert en route) and <strong>Survey Notify</strong> (<code>ss.survey.notify</code>, survey email)</li>
+<li>The source is very similar (Figure 5-4).</li>
+</ul>
+</li>
+<li>Austen worries about <strong>coupling</strong>. Addison compares afferent coupling (CA):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Before (Table 5-5)</th>
+<th>CA</th>
+<th>Used by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Customer Notification</td>
+<td>2</td>
+<td>Billing Payment, Support Contract</td>
+</tr>
+<tr>
+<td>Ticket Notify</td>
+<td>2</td>
+<td>Ticket, Ticket Route</td>
+</tr>
+<tr>
+<td>Survey Notify</td>
+<td>1</td>
+<td>Survey</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>After (Table 5-6)</th>
+<th>CA</th>
+<th>Used by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Notification</td>
+<td>5</td>
+<td>Billing Payment, Support Contract, Ticket, Ticket Route, Survey</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The consolidated component has high incoming coupling, but the <strong>total</strong> (5) is unchanged, so they consolidate
+<ul>
+<li>The lesson: analyse coupling after consolidating, because it can rise to too many dependencies on one shared component.</li>
+</ul>
+</li>
+<li>Result (Figure 5-5, Table 5-7):
+<ul>
+<li>a single <strong>Notification</strong> component (<code>ss.notification</code>)</li>
+<li>the three older components are removed. The components are now: Login, Billing Payment, Billing History, Customer Profile, Expert Profile, KB Maint, KB Search, Notification, Reporting Shared, Ticket/Expert/Financial Reports, Ticket, Ticket Assign, Ticket Route, Support Contract, Survey, Survey Templates, User Maintenance.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-05-notification.svg" alt="Figures 5-4 and 5-5: notification consolidation and coupling" loading="lazy" /></p>
+<h2 id="5-4-flatten-components-pattern">5.4 Flatten components pattern</h2>
+<h3 id="pattern-description">Pattern description</h3>
+<ul>
+<li>When components are built on top of other components, they &quot;lose their identity&quot;. <strong>Flatten</strong> so that components are <strong>leaf nodes</strong> of the directory or namespace tree.</li>
+<li>Extending a namespace (adding a node) turns the prior namespace into a <strong>subdomain</strong>
+<ul>
+<li>Example: <code>ss.survey</code> (5 class files) extended by <code>ss.survey.templates</code> (7 classes), Table 5-8</li>
+<li>Treating Survey Templates as a subcomponent of Survey raises the question of whether they form one service or two.</li>
+</ul>
+</li>
+<li>The resolution: a <strong>component is the last (leaf) node</strong> of a namespace or directory. So <code>ss.survey.templates</code> is a component and <code>ss.survey</code> a subdomain.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Component</strong></td>
+<td>A collection of classes in a leaf-node namespace doing specific functionality (payment processing, customer survey)</td>
+</tr>
+<tr>
+<td><strong>Root namespace</strong></td>
+<td>A namespace node extended by another node (<code>ss.survey</code> is extended by <code>.templates</code>); also called a subdomain</td>
+</tr>
+<tr>
+<td><strong>Orphaned classes</strong></td>
+<td>Classes in a root namespace, so belonging to no definable component</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>In Figure 5-6 (drawn bottom-up to emphasise &quot;hills&quot;), <code>ss.survey</code> and <code>ss.ticket</code> are root namespaces with orphaned classes
+<ul>
+<li>the only components are <code>ss.survey.templates</code>, <code>ss.login</code>, <code>ss.ticket.assign</code> and <code>ss.ticket.route</code>.</li>
+</ul>
+</li>
+<li>Two ways to flatten <code>ss.survey</code>:
+<ul>
+<li><strong>move the template code down</strong> into <code>ss.survey</code>, making it one component (Figure 5-7)</li>
+<li><strong>apply functional decomposition or DDD</strong> to the orphaned classes to create new leaf components, for example <code>ss.survey.create</code> (creates and sends the survey) and <code>ss.survey.process</code> (processes a completed survey) (Figure 5-8)</li>
+</ul>
+</li>
+<li>Whichever direction, make sure <strong>code lives only in leaf nodes</strong>.</li>
+<li><strong>Shared code</strong> in a root namespace is also orphaned (Figure 5-9). Move it to a new component such as <code>ss.survey.shared</code> (Figure 5-10).</li>
+<li>Name shared components with a unique word not used elsewhere, such as <code>.sharedcode</code> or <code>.commoncode</code>, so you can compute <strong>the percentage of code that is shared</strong> and <strong>the number of shared components</strong>. If shared-code namespaces total <strong>45%</strong> of the code, a distributed architecture will probably drown in shared-library dependencies
+<ul>
+<li>the count of such components shows how many shared libraries (JAR, DLL) or shared services will result.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-05-flatten.svg" alt="Figures 5-6 to 5-10: flattening options" loading="lazy" /></p>
+<h3 id="fitness-function">Fitness function</h3>
+<ul>
+<li>Some subjectivity remains (consolidate down or split up?)
+<ul>
+<li>This helps: <strong>no source code should reside in a root namespace</strong> (Example 5-6), alerting on orphaned classes at any time, including during ongoing maintenance:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code># Walk the directory structure, creating namespaces for each complete path
+LIST component_list = identify_components(root_directory)
+
+# Send an alert if a non-leaf node in any component contains source files
+FOREACH component IN component_list
+{
+    LIST component_node_list = get_nodes(component)
+    FOREACH node IN component_node_list
+    {
+        IF contains_code(node) AND NOT last_node(component_node_list)
+        {
+            send_alert(component)
+        }
+    }
+}
+</code></pre>
+<h3 id="sysops-squad-flattening-components">Sysops Squad: flattening components</h3>
+<ul>
+<li>Table 5-7 shows <code>ss.ticket</code> (7,009 statements, 45 files) and <code>ss.survey</code> (2,204, 5 files) with orphaned classes (Figure 5-11).</li>
+<li><strong>Tickets:</strong>
+<ul>
+<li>the choices were consolidating assign and route into <code>ss.ticket</code>, or moving the 45 orphaned classes out</li>
+<li>Since assignment is complex and changes often, they keep assign and route separate and split <code>ss.ticket</code> into three new components (Table 5-10):</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Namespace</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ticket Shared</td>
+<td><code>ss.ticket.shared</code></td>
+<td>Common code and utilities</td>
+</tr>
+<tr>
+<td>Ticket Maintenance</td>
+<td><code>ss.ticket.maintenance</code></td>
+<td>Add and maintain tickets</td>
+</tr>
+<tr>
+<td>Ticket Completion</td>
+<td><code>ss.ticket.completion</code></td>
+<td>Complete ticket and initiate survey</td>
+</tr>
+<tr>
+<td>Ticket Assign</td>
+<td><code>ss.ticket.assign</code></td>
+<td>Assign expert to ticket</td>
+</tr>
+<tr>
+<td>Ticket Route</td>
+<td><code>ss.ticket.route</code></td>
+<td>Send ticket to expert</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Surveys:</strong>
+<ul>
+<li>the functionality rarely changes and is not complicated</li>
+<li>developer Skyler had no reason for the templates namespace (&quot;It just seemed like a good idea at the time&quot;). The seven template classes move into <code>ss.survey</code> (Table 5-11) and <code>ss.survey.templates</code> is removed.</li>
+</ul>
+</li>
+<li>After flattening (Figure 5-12) there are no &quot;hills&quot; and no orphaned classes.</li>
+</ul>
+<h2 id="5-5-determine-component-dependencies-pattern">5.5 Determine component dependencies pattern</h2>
+<p>Three common questions: <strong>Is it feasible to break apart the monolith? What is the rough level of effort? Rewrite or refactor?</strong> A CIO once asked one author whether the migration was &quot;a golfball, basketball, or an airliner&quot;; applying this pattern answered it: an airliner, &quot;but only a small Embraer 190 migration rather than a large Boeing 787 Dreamliner migration&quot;.</p>
+<h3 id="pattern-description">Pattern description</h3>
+<ul>
+<li>Analyse <strong>incoming and outgoing dependencies between components</strong> to predict the service dependency graph after the split. Each component is a service candidate, so interactions matter.</li>
+<li>It concerns <strong>component dependencies, not class dependencies inside a component</strong>: a dependency forms when a class in one component's namespace uses a class in another. Example 5-7:</li>
+</ul>
+<pre class="hl"><code>namespace ss.survey
+class CustomerSurvey
+{
+    function createSurvey
+    {
+        ...
+    }
+
+    function sendSurvey
+    {
+        ...
+        ss.notification.CustomerNotification.send(customer_id, survey)
+    }
+}
+</code></pre>
+<ul>
+<li>Survey has an <strong>efferent</strong> dependency on Notification; Notification has an <strong>afferent</strong> dependency on Survey. A component's internal class mess does not matter here.</li>
+<li>Tools and IDE plug-ins draw component dependency diagrams, answering the three questions:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Diagram</th>
+<th>Feasible?</th>
+<th>Effort</th>
+<th>Rewrite or refactor?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Figure 5-13: a single dependency between components</td>
+<td>Yes</td>
+<td><strong>Golf ball</strong> (relatively straightforward)</td>
+<td>Refactoring (move existing code into separately deployed services)</td>
+</tr>
+<tr>
+<td>Figure 5-14: many dependencies, worst on the left, &quot;typical of most business applications&quot;</td>
+<td>Maybe</td>
+<td><strong>Basketball</strong> (much harder)</td>
+<td>Some refactoring, some rewriting</td>
+</tr>
+<tr>
+<td>Figure 5-15: too many dependencies</td>
+<td>No (&quot;turn around and run in the opposite direction&quot;)</td>
+<td><strong>Airliner</strong></td>
+<td>Total rewrite</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The diagrams are &quot;a radar&quot; to locate the enemy (high coupling) and picture the resulting service dependency matrix
+<ul>
+<li>Component coupling is one of the most significant factors in migration success and feasibility, and teams often jump to microservices without any such analysis and struggle.</li>
+</ul>
+</li>
+<li>Measure <strong>CA</strong> (afferent), <strong>CE</strong> (efferent) and <strong>CT</strong> (total = CA + CE)
+<ul>
+<li>Splitting a component can reduce coupling: if component A has CA 20 but 14 dependants need only a small part, split it into <strong>A1</strong> (the small coupled part, CA 14) and <strong>A2</strong> (the majority, CA 6).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-05-dependency-sizing.svg" alt="Golf ball, basketball and airliner dependency sizing" loading="lazy" /></p>
+<h3 id="fitness-functions">Fitness functions</h3>
+<ul>
+<li><strong>No component shall have more than some number of total dependencies</strong>
+<ul>
+<li>(Example 5-8, combined threshold of <strong>15</strong>, relatively high for most applications; can be variants for incoming only or outgoing only). The pseudocode as printed has unbalanced braces</li>
+<li>its intent is to count incoming and outgoing references per source file in each component and alert above the limit:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code># Walk the directory structure, gathering components and the source code files
+# contained within those components
+LIST component_list = identify_components(root_directory)
+MAP component_source_file_map
+FOREACH component IN component_list
+{
+    LIST component_source_file_list = get_source_files(component)
+    ADD component, component_source_file_list TO component_source_file_map
+}
+
+# Determine how many references exist for each source file and send an alert if
+# the total dependency count is greater than 15
+FOREACH component,component_source_file_list IN component_source_file_map
+{
+    FOREACH source_file IN component_source_file_list
+    {
+        incoming_count = used_by_other_components(source_file, component_source_file_map)
+        outgoing_count = uses_other_components(source_file)
+        total_count = incoming_count + outgoing_count
+        IF total_count &gt; 15
+        {
+            send_alert(component, total_count)
+        }
+    }
+}
+</code></pre>
+<ul>
+<li><strong>Component X should not depend on component Y</strong> (Example 5-9, ArchUnit): one function per restriction.</li>
+</ul>
+<pre class="hl"><code><span class="c1">// DependencyRules.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">ticket_maintenance_cannot_access_expert_profile</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">noClasses</span><span class="p">().</span><span class="na">that</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">resideInAPackage</span><span class="p">(</span><span class="s">"..ss.ticket.maintenance.."</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">should</span><span class="p">().</span><span class="na">accessClassesThat</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">resideInAPackage</span><span class="p">(</span><span class="s">"..ss.expert.profile.."</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">check</span><span class="p">(</span><span class="n">myClasses</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<h3 id="sysops-squad-identifying-dependencies">Sysops Squad: identifying dependencies</h3>
+<ul>
+<li>The IDE plug-in diagram (Figure 5-16) first looks discouraging
+<ul>
+<li>Notification has the most dependencies (expected, shared), and Ticketing and Reporting show many because each has a shared-code component of mostly compile-time class references, likely to become <strong>shared libraries</strong>, not services.</li>
+</ul>
+</li>
+<li>Filtering those out (Figure 5-17) shows minimal dependencies; Addison and Austen conclude the application is a <strong>good candidate</strong> for breaking apart.</li>
+</ul>
+<h2 id="5-6-create-component-domains-pattern">5.6 Create component domains pattern</h2>
+<h3 id="pattern-description">Pattern description</h3>
+<ul>
+<li>A service usually contains <strong>one or more components</strong> (one-to-many), so group components into <strong>component domains</strong> to create coarse-grained <strong>domain services</strong>
+<ul>
+<li>This tells you what becomes a service-based architecture's domain services.</li>
+</ul>
+</li>
+<li>Domains are expressed in <strong>namespaces</strong> (Figure 5-18): second node is the domain (<code>.customer</code>), third a subdomain (<code>.billing</code>), the leaf the component (<code>.payment</code>), and <code>.MonthlyBilling</code> a class in that component.</li>
+<li>Older systems predate DDD, so namespaces often need <strong>refactoring</strong> to show domains. Table 5-13 lists customer-related components whose namespaces do not say so
+<ul>
+<li>Table 5-14 adds the <code>.customer</code> node:</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Before</th>
+<th>After</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Billing Payment</td>
+<td><code>ss.billing.payment</code></td>
+<td><code>ss.customer.billing.payment</code></td>
+</tr>
+<tr>
+<td>Billing History</td>
+<td><code>ss.billing.history</code></td>
+<td><code>ss.customer.billing.history</code></td>
+</tr>
+<tr>
+<td>Customer Profile</td>
+<td><code>ss.customer.profile</code></td>
+<td><code>ss.customer.profile</code></td>
+</tr>
+<tr>
+<td>Support Contract</td>
+<td><code>ss.supportcontract</code></td>
+<td><code>ss.customer.supportcontract</code></td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-05-namespace-domains.svg" alt="Figure 5-18: domains, subdomains and components in the namespace" loading="lazy" /></p>
+<h3 id="fitness-function">Fitness function</h3>
+<ul>
+<li><strong>All namespaces under a root node should be restricted to a list of domains</strong> (Example 5-10, ArchUnit), preventing teams from accidentally creating new domains:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// DomainRules.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">restrict_domains</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">classes</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">should</span><span class="p">().</span><span class="na">resideInAPackage</span><span class="p">(</span><span class="s">"..ss.ticket.."</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">orShould</span><span class="p">().</span><span class="na">resideInAPackage</span><span class="p">(</span><span class="s">"..ss.customer.."</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">orShould</span><span class="p">().</span><span class="na">resideInAPackage</span><span class="p">(</span><span class="s">"..ss.admin.."</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">check</span><span class="p">(</span><span class="n">myClasses</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<h3 id="sysops-squad-creating-component-domains">Sysops Squad: creating component domains</h3>
+<ul>
+<li>With product owner <strong>Parker</strong>, they identify five domains (Figure 5-19): <strong>Ticketing</strong> (<code>ss.ticket</code>: ticket processing, customer surveys, knowledge base)
+<ul>
+<li><strong>Reporting</strong> (<code>ss.reporting</code>)</li>
+<li><strong>Customer</strong> (<code>ss.customer</code>: profile, billing, support contracts)</li>
+<li><strong>Admin</strong> (<code>ss.admin</code>: users and experts) and <strong>Shared</strong> (<code>ss.shared</code>: login and notification).</li>
+</ul>
+</li>
+<li>The grouping exercise validates the candidate domains and shows the need for <strong>business stakeholder collaboration</strong>; components with no home would need more of Parker's input.</li>
+<li>Refactorings (architecture stories):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Domain</th>
+<th>Current</th>
+<th>Target</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>KB Maint</td>
+<td>Ticket</td>
+<td><code>ss.kb.maintenance</code></td>
+<td><code>ss.ticket.kb.maintenance</code></td>
+</tr>
+<tr>
+<td>KB Search</td>
+<td>Ticket</td>
+<td><code>ss.kb.search</code></td>
+<td><code>ss.ticket.kb.search</code></td>
+</tr>
+<tr>
+<td>Survey</td>
+<td>Ticket</td>
+<td><code>ss.survey</code></td>
+<td><code>ss.ticket.survey</code></td>
+</tr>
+<tr>
+<td>Ticket Shared, Maintenance, Completion, Assign, Route</td>
+<td>Ticket</td>
+<td><code>ss.ticket.*</code></td>
+<td>unchanged</td>
+</tr>
+<tr>
+<td>Billing Payment</td>
+<td>Customer</td>
+<td><code>ss.billing.payment</code></td>
+<td><code>ss.customer.billing.payment</code></td>
+</tr>
+<tr>
+<td>Billing History</td>
+<td>Customer</td>
+<td><code>ss.billing.history</code></td>
+<td><code>ss.customer.billing.history</code></td>
+</tr>
+<tr>
+<td>Support Contract</td>
+<td>Customer</td>
+<td><code>ss.supportcontract</code></td>
+<td><code>ss.customer.supportcontract</code></td>
+</tr>
+<tr>
+<td>Customer Profile</td>
+<td>Customer</td>
+<td><code>ss.customer.profile</code></td>
+<td>unchanged</td>
+</tr>
+<tr>
+<td>Reporting Shared, Ticket, Expert, Financial Reports</td>
+<td>Reporting</td>
+<td><code>ss.reporting.*</code></td>
+<td>unchanged</td>
+</tr>
+<tr>
+<td>Login</td>
+<td>Shared</td>
+<td><code>ss.login</code></td>
+<td><code>aa.shared.login</code> (as printed; presumably <code>ss.shared.login</code>)</td>
+</tr>
+<tr>
+<td>Notification</td>
+<td>Shared</td>
+<td><code>ss.notification</code></td>
+<td><code>ss.shared.notification</code></td>
+</tr>
+<tr>
+<td>Expert Profile</td>
+<td>Admin</td>
+<td><code>ss.expert.profile</code></td>
+<td><code>ss.admin.experts</code> (renamed to avoid an unnecessary Expert subdomain)</td>
+</tr>
+<tr>
+<td>User Maintenance</td>
+<td>Admin</td>
+<td><code>ss.users</code></td>
+<td><code>ss.admin.users</code></td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-05-domains.svg" alt="The five Sysops Squad domains" loading="lazy" /></p>
+<h2 id="5-7-create-domain-services-pattern">5.7 Create domain services pattern</h2>
+<h3 id="pattern-description">Pattern description</h3>
+<ul>
+<li>Move each well-defined component domain to a <strong>separately deployed domain service</strong>, producing a <strong>service-based architecture</strong>: coarse-grained services containing all functionality for a domain (Ticketing, Customer, Reporting).</li>
+<li>Basic topology (Figure 5-20):
+<ul>
+<li>a <strong>user interface</strong> remotely accessing coarse-grained domain services that <strong>share one monolithic database</strong></li>
+<li>Variants exist (split UI, split database, API gateway), but this is a good starting point.</li>
+</ul>
+</li>
+<li>Benefit beyond those in Chapter 4:
+<ul>
+<li>teams learn about each domain service to decide whether to split it into microservices or leave it coarse</li>
+<li>&quot;Too many teams make the mistake of starting out too fine-grained&quot;, then must embrace all the trappings of microservices (data decomposition, distributed workflows and transactions, operational automation, containerisation) without needing them.</li>
+</ul>
+</li>
+<li>Figure 5-21: the Reporting domain is extracted into its own deployed Reporting service.</li>
+<li><strong>Do not apply the pattern until all component domains are identified and refactored.</strong> Otherwise a migrated service must be modified later, for example adding the Survey component to an already-created Ticket service.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-05-domain-services.svg" alt="Figures 5-20 to 5-22: domain services over one shared database" loading="lazy" /></p>
+<h3 id="fitness-function">Fitness function</h3>
+<ul>
+<li><strong>All components in a domain service should start with the same namespace</strong> (Example 5-11, ArchUnit), so the service does not become its own unstructured monolith
+<ul>
+<li>one function per domain service:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// TicketServiceRules.java</span>
+<span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">restrict_domain_within_ticket_service</span><span class="p">()</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">classes</span><span class="p">().</span><span class="na">should</span><span class="p">().</span><span class="na">resideInAPackage</span><span class="p">(</span><span class="s">"..ss.ticket.."</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">check</span><span class="p">(</span><span class="n">myClasses</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre>
+<h3 id="sysops-squad-creating-domain-services">Sysops Squad: creating domain services</h3>
+<ul>
+<li>Addison and Austen and the team plan a staged migration: extract each component domain from the monolith into a new project workspace, and make the <strong>user interface access the domain remotely</strong>.</li>
+<li>They migrate component by component (Figure 5-22) until each domain is a separately deployed service: a service-based architecture.</li>
+</ul>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>&quot;Seat-of-the-pants&quot; migrations rarely work. These patterns give a structured, controlled, incremental way to break apart monoliths.</li>
+<li>Next steps: decompose the monolithic data (Chapter 6) and, where needed, split domain services into microservices (Chapter 7).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Architecture story</strong>: a structural refactoring story tied to a business driver.</li>
+<li><strong>Component</strong>: classes in a leaf-node namespace; <strong>root namespace</strong> (subdomain); <strong>orphaned classes</strong>.</li>
+<li><strong>Domain vs infrastructure functionality</strong>: business logic common to some processes vs operational concerns common to all.</li>
+<li><strong>CA, CE, CT</strong>: afferent, efferent, total coupling.</li>
+<li><strong>Component domain / domain service</strong>: grouped components / the separately deployed service made from them.</li>
+<li><strong>Golf ball, basketball, airliner</strong>: migration effort sizing.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 5: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch05.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch05.html</a></li>
+<li>No other URLs in the page text. Figures 5-1 to 5-22 are redrawn in summary form (roadmap, sizing, flattening, dependency sizing, domains, domain services), not figure by figure.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-04-architectural-decomposition/">Software Architecture: The Hard Parts 4: Architectural Decomposition</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/">Software Architecture: The Hard Parts 6: Pulling Apart Operational Data</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-14-service-based-architecture-style/">Fundamentals of Software Architecture 14: Service-Based Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-04-architectural-decomposition/">&larr; Software Architecture: The Hard Parts 4: Architectural Decomposition</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-06-pulling-apart-operational-data/">Software Architecture: The Hard Parts 6: Pulling Apart Operational Data &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

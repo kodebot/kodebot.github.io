@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 8: Reuse Patterns</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-8-reuse-patterns">Software Architecture: The Hard Parts 8: Reuse Patterns</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 8. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/">Software Architecture: The Hard Parts 7: Service Granularity</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/">Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>In a monolith reuse is an import; in a distributed architecture it is a <strong>hard part</strong>. Four techniques: <strong>code replication</strong>, <strong>shared library</strong>, <strong>shared service</strong>, <strong>sidecar / service mesh</strong>, each with trade-offs.</li>
+<li><strong>Shared library</strong> (compile time): versionable and no runtime cost, but dependency and version management is hard. <strong>Shared service</strong> (runtime): good for volatile code and polyglot estates, but costs latency, scalability, fault tolerance and change risk.</li>
+<li>A <strong>sidecar</strong> is for <strong>operational coupling only</strong> (logging, monitoring, discovery, authentication, authorisation), never for domain classes.</li>
+<li><strong>Reuse is derived via abstraction but operationalised by slow rate of change</strong>: stable things are good coupling targets, volatile internal domain code is not.</li>
+</ul>
+</div></div>
+<h2 id="8-1-the-scene">8.1 The scene</h2>
+<ul>
+<li>Skyler wants one shared DLL
+<ul>
+<li>Taylen wants several libraries, and the authorisation code as a shared <strong>service</strong>. Addison proposes analysing the trade-offs of shared-library granularity and of library versus service instead of arguing.</li>
+</ul>
+</li>
+<li>Context:
+<ul>
+<li>formatters, calculators, validators, auditing, security, logging and metrics are all shared. In a monolith this is a class import</li>
+<li>in distributed architectures it is complicated (Figure 8-1).</li>
+</ul>
+</li>
+<li>Microservices and serverless circles say &quot;reuse is abuse&quot; and &quot;share nothing&quot;, and offer <strong>WET</strong> (write every time, or write everything twice) against <strong>DRY</strong>
+<ul>
+<li>The authors: limit reuse, but it is a fact of life that must be handled.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-08-techniques.svg" alt="The four techniques" loading="lazy" /></p>
+<h2 id="8-2-code-replication">8.2 Code replication</h2>
+<ul>
+<li>Shared code is <strong>copied</strong> into each service's repository, so nothing is shared. It became popular in early microservices out of confusion about the bounded context (&quot;share nothing&quot;)
+<ul>
+<li>in practice it quickly fell apart.</li>
+</ul>
+</li>
+<li>Risk: a bug or important change is hard and slow to apply to every copy.</li>
+<li>It still suits <strong>highly static, one-off code</strong>
+<ul>
+<li>The example is a service-entry-point marker, which holds no functionality, only tags the class for metadata annotations (service type, domain, bounded context):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// ServiceEntrypoint.java</span>
+<span class="nd">@Retention</span><span class="p">(</span><span class="n">RetentionPolicy</span><span class="p">.</span><span class="na">RUNTIME</span><span class="p">)</span>
+<span class="nd">@Target</span><span class="p">(</span><span class="n">ElementType</span><span class="p">.</span><span class="na">TYPE</span><span class="p">)</span>
+<span class="kd">public</span><span class="w"> </span><span class="nd">@interface</span><span class="w"> </span><span class="n">ServiceEntrypoint</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="cm">/* Usage:</span>
+<span class="cm">@ServiceEntrypoint</span>
+<span class="cm">public class PaymentServiceAPI {</span>
+<span class="cm">...</span>
+<span class="cm">}</span>
+<span class="cm">*/</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// ServiceEntrypoint.cs</span>
+<span class="na">[AttributeUsage(AttributeTargets.Class)]</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ServiceEntrypoint</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">Attribute</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="cm">/* Usage:</span>
+<span class="cm">[ServiceEntrypoint]</span>
+<span class="cm">class PaymentServiceAPI {</span>
+<span class="cm">...</span>
+<span class="cm">}</span>
+<span class="cm">*/</span>
+</code></pre>
+<ul>
+<li>The book points to Kevlin Henney and Trisha Gee, <em>97 Things Every Java Programmer Should Know</em> (chapter 89), for such metadata annotations.</li>
+<li>During a monolith migration it can also work for common static utility classes: replicate a <code>Utility.cs</code> into each service, then let each trim or evolve it, much like the tactical forking of chapter 3
+<ul>
+<li>The risk of defect propagation remains.</li>
+</ul>
+</li>
+<li>The authors encourage looking at the other techniques first.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Preserves the bounded context</td>
+<td>Difficult to apply code changes</td>
+</tr>
+<tr>
+<td>No code sharing</td>
+<td>Code inconsistency across services</td>
+</tr>
+<tr>
+<td></td>
+<td>No versioning across services</td>
+</tr>
+</tbody>
+</table>
+<h2 id="8-3-shared-library">8.3 Shared library</h2>
+<ul>
+<li>An external artifact (JAR, DLL and so on) with code used by many services, normally <strong>bound at compile time</strong>.</li>
+</ul>
+<h3 id="dependency-management-and-change-control">Dependency management and change control</h3>
+<ul>
+<li>The granularity trade-off pairs <strong>dependency management</strong> with <strong>change control</strong>.
+<ul>
+<li><strong>Coarse-grained</strong>
+<ul>
+<li>library: simple dependencies (each service uses the one library), but a change to any class forces every service to adopt it eventually, because of version deprecation, even if it does not care</li>
+<li>Large retesting and redeployment scope.</li>
+</ul>
+</li>
+<li><strong>Fine-grained</strong> libraries (security, formatters, annotations, calculators): a change affects fewer services (a change to shared class C7 touches only Services D and E), but the dependency matrix between libraries and services becomes a <strong>distributed monolith</strong> or &quot;big ball of distributed mud&quot;.</li>
+</ul>
+</li>
+<li>It matters little with a few services; with 200 services and 40 libraries it becomes unmaintainable.</li>
+<li>Advice:
+<ul>
+<li>avoid large coarse-grained libraries and favour smaller functional ones, so favour <strong>change control over dependency management</strong></li>
+<li>Carve out relatively static code such as formatters and security (authentication, authorisation) so it does not drag other shared code into needless version deprecations.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-08-library-granularity.svg" alt="Shared-library granularity" loading="lazy" /></p>
+<h3 id="versioning-strategies">Versioning strategies</h3>
+<ul>
+<li><strong>Always version.</strong>
+<ul>
+<li>Example: <code>Validation.jar</code> used by 10 services</li>
+<li>one service needs an immediate change, takes the new version and deploys without affecting the other nine. Without versioning all ten are retested and redeployed.</li>
+</ul>
+</li>
+<li>The authors call versioning the <strong>ninth fallacy of distributed computing</strong>: &quot;versioning is simple&quot; is false. Complexities:
+<ul>
+<li><strong>Communicating</strong> a version change across teams (what changed, who is impacted), even with tools such as JFrog Artifactory.</li>
+<li><strong>Deprecation</strong>: either custom per library or global.
+<ul>
+<li><strong>Custom</strong>
+<ul>
+<li>is usually right because libraries change at different rates: <code>Security.jar</code> rarely changes, so keep two or three versions</li>
+<li><code>Calculators.jar</code> changes weekly, so keep about 10 to avoid monthly or weekly forced upgrades. The cost: someone must track each library's deprecation.</li>
+</ul>
+</li>
+<li><strong>Global</strong> (for example no more than four back versions for every library) is easy to govern but causes <strong>churn</strong>, constant retesting and redeploying for frequently changing libraries.</li>
+</ul>
+</li>
+<li>Serious defects or breaking changes override any deprecation policy: all services adopt the new version at once
+<ul>
+<li>One more reason for fine-grained libraries instead of a <code>SharedStuff.jar</code>.</li>
+</ul>
+</li>
+<li><strong>Avoid <code>LATEST</code></strong> as a version: emergency hot deployments hit incompatibilities.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ability to version changes</td>
+<td>Dependencies can be difficult to manage</td>
+</tr>
+<tr>
+<td>Compile-based, reducing runtime errors</td>
+<td>Code duplication in heterogeneous codebases</td>
+</tr>
+<tr>
+<td>Good agility for shared code changes</td>
+<td>Version deprecation can be difficult</td>
+</tr>
+<tr>
+<td></td>
+<td>Version communication can be difficult</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>When to use:</strong>
+<ul>
+<li>homogeneous environments where shared code changes at a low to moderate rate</li>
+<li>Performance, scalability and fault tolerance are unaffected (bound at compile time) and the risk to other services is low thanks to versioning.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-4-shared-service">8.4 Shared service</h2>
+<ul>
+<li>Shared functionality goes into a <strong>separately deployed service</strong>, reached at runtime. The shared code must be <strong>composition, not inheritance</strong>
+<ul>
+<li>architecturally this matters (the book cites a Thoughtworks article, &quot;Composition vs. Inheritance: How to Choose&quot;, and Martin Fowler's &quot;Designed Inheritance&quot;).</li>
+</ul>
+</li>
+<li>Benefit: a change is isolated to the shared service and needs no redeployment of the callers (a discount calculator, for instance). The trade-offs:</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-08-shared-service.svg" alt="Shared-service costs" loading="lazy" /></p>
+<ul>
+<li><strong>Change risk:</strong> the change is at <strong>runtime</strong>, so a &quot;simple&quot; change can bring down the whole system. Versioning by endpoint is the usual answer:</li>
+</ul>
+<pre class="hl"><code>app/1.0/discountcalc?orderid=123
+app/1.1/discountcalc?orderid=123
+app/1.2/discountcalc?orderid=123
+app/1.3/discountcalc?orderid=123
+app/1.4/discountcalc?orderid=123   (latest change)
+</code></pre>
+<p>Problems: callers must change to point at the right version; when to create a new version (an error message? a new calculation?) is subjective; and it assumes REST via a gateway, while access may use messaging or gRPC too.</p>
+<ul>
+<li><strong>Performance:</strong>
+<ul>
+<li>interservice calls add network and security latency (a library has none)</li>
+<li>gRPC reduces network latency, and messaging lets a service send a request on a request queue, do other work, and read the reply from a reply queue by <strong>correlation ID</strong> (the book cites <em>Java Message Service</em>, 2nd edition, by Mark Richards and others).</li>
+</ul>
+</li>
+<li><strong>Scalability:</strong> the shared service must scale as its callers scale; a library does not have this issue.</li>
+<li><strong>Fault tolerance:</strong> if the service is down, callers are nonoperational (multiple instances mitigate but do not remove it).</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Good for high code volatility</td>
+<td>Versioning changes can be difficult</td>
+</tr>
+<tr>
+<td>No code duplication in heterogeneous codebases</td>
+<td>Performance impacted by latency</td>
+</tr>
+<tr>
+<td>Preserves the bounded context</td>
+<td>Fault tolerance and availability depend on the service</td>
+</tr>
+<tr>
+<td>No static code sharing</td>
+<td>Scalability and throughput depend on the service</td>
+</tr>
+<tr>
+<td></td>
+<td>Increased risk due to runtime changes</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>When to use:</strong> highly <strong>polyglot</strong> environments (several languages and platforms) and shared functionality that changes often, watching for runtime side effects.</li>
+</ul>
+<h2 id="8-5-sidecars-and-service-mesh">8.5 Sidecars and service mesh</h2>
+<ul>
+<li>Operational coupling shows the &quot;it depends&quot; nature of architecture
+<ul>
+<li>In microservices the guideline is <strong>&quot;duplication is preferable to coupling&quot;</strong>: for example two services pass customer information as name-value pairs in JSON, so each keeps its own internal <code>Customer</code> and may change technology stack freely</li>
+<li>In service-based architecture the likely answer is <strong>couple</strong>.</li>
+</ul>
+</li>
+<li>But operational capabilities (monitoring, logging, authentication and authorisation, circuit breakers) benefit from consistency
+<ul>
+<li>If every team implements monitoring, how does operations know they did, and how does the whole organisation upgrade a monitoring tool?</li>
+</ul>
+</li>
+<li>The answer is the <strong>sidecar pattern</strong>, based on Alistair Cockburn's earlier <strong>hexagonal architecture</strong> (ports and adapters): domain logic in the centre, technical coupling at the edge
+<ul>
+<li>Difference from microservices: <strong>data fidelity</strong></li>
+<li>The hexagon treated the database as just another pluggable adapter, whereas Domain-Driven Design puts data schemas and transactionality inside the interior.</li>
+</ul>
+</li>
+<li>The sidecar splits each service into domain concerns and operational concerns
+<ul>
+<li>the operational part goes in a sidecar component, owned either by all teams jointly or by a central infrastructure group
+<ul>
+<li>If every service includes it (governed by <strong>fitness functions</strong>), it forms a consistent operational interface linked by a <strong>service plane</strong></li>
+</ul>
+</li>
+<li>all the sidecars together form the <strong>service mesh</strong>, enabling dashboards, control of scale and more.</li>
+</ul>
+</li>
+<li>Governance benefit: unified governance without a common platform. Without a mesh, standardising on one monitoring solution means building a sidecar per platform anyway.</li>
+<li>A sidecar is an <strong>orthogonal reuse pattern</strong>:
+<ul>
+<li>reuse cutting across the domain seams of the architecture. Orthogonal coupling means two distinct purposes that must still intersect (monitoring is independent of catalogue checkout but necessary to it)</li>
+<li>recognising it helps find intersection points with the least entanglement.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-08-sidecar.svg" alt="Sidecar and service mesh" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A consistent way to create isolated coupling</td>
+<td>A sidecar is needed <strong>per platform</strong></td>
+</tr>
+<tr>
+<td>Consistent infrastructure coordination</td>
+<td>The sidecar component may grow large and complex</td>
+</tr>
+<tr>
+<td>Ownership per team, central, or a mix</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Use it to spread a cross-cutting concern
+<ul>
+<li>the book likens it to the <strong>Decorator</strong> design pattern (Gang of Four) applied across a distributed architecture, and notes uses beyond operations (chapter 14).</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">Sysops Squad saga: common infrastructure logic</div><div class="callout-body">
+<ul>
+<li>Duplicate log lines show the shared Message Dispatch library and the service both log. Addison: logging is <strong>operational shared behaviour</strong>, along with monitoring, service discovery and circuit breakers; a <strong>service mesh with a sidecar</strong> is being implemented.</li>
+<li>A <strong>shared infrastructure team</strong> owns the sidecar and its pipeline runs fitness functions on it after binding.</li>
+<li><strong>Never put domain classes</strong> (Address, Customer) in the sidecar: that increases coupling the way microservices try to avoid, since a change forces every team to coordinate (the architects <em>could</em> decide otherwise, as an explicit trade-off; contracts handle such changes).</li>
+<li>Utility libraries: the JSON-to-XML library is used by about 5 of 16 or 17 teams. Trade-off: every service pays the overhead versus how many teams need it. Rule of thumb from the saga: <strong>if fewer than half the teams use it, it is probably not worth the overhead</strong>, so it stays out for now.</li>
+</ul>
+</div></div>
+<div class="callout c-note"><div class="callout-title">ADR: using a sidecar for operational coupling</div><div class="callout-body">
+<ul>
+<li><strong>Decision:</strong> a sidecar with a service mesh for monitoring, logging, service discovery, authentication and authorisation, owned by the shared infrastructure team (service teams are its customers).</li>
+<li><strong>Consequences:</strong> no domain classes in the sidecar; shared operational libraries go in only if enough teams need them.</li>
+</ul>
+</div></div>
+<h2 id="8-6-code-reuse-when-does-it-add-value">8.6 Code reuse: when does it add value?</h2>
+<ul>
+<li>Reuse is one of the <strong>most abused abstractions</strong>
+<ul>
+<li>organisations treat it as a laudable goal without weighing trade-offs. The danger was learned in the early 21st century with <strong>orchestration-driven SOA</strong>, where maximising reuse was a primary goal.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>each division of an insurance company has its own view of the customer</li>
+<li>architects were told to unify these into one central Customer service. The authors call this <strong>an architectural disaster</strong>:</li>
+<li>the entity must be complex enough to handle every domain and scenario, making simple uses hard;</li>
+<li>it creates <strong>brittleness</strong>: when the Customer service gains a capability for one domain, the change can ripple through all the others.</li>
+</ul>
+</li>
+<li>Reuse has two aspects
+<ul>
+<li>Architects got the first right, <strong>abstraction</strong> (how candidates are found)</li>
+<li>The one that decides value is the second, <strong>rate of change</strong></li>
+<li>We happily reuse operating systems and open source libraries because their rate of change and update cadence are well understood
+<ul>
+<li>internal domain capabilities and fast-moving frameworks are terrible coupling targets.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Reuse is derived via abstraction but operationalised by slow rate of change.</div><div class="callout-body">
+</div></div>
+<ul>
+<li><strong>Reuse via platforms:</strong>
+<ul>
+<li>the modern reuse target is the platform, with a well-defined API per domain capability hiding implementation details. The API can be loosely coupled so the internals change quickly</li>
+<li>careful encapsulation and contracts (chapter 13) limit breaking change, though semantic changes in shared information remain a risk.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-08-reuse-value.svg" alt="Reuse value and the Sysops Squad decision" loading="lazy" /></p>
+<h2 id="8-7-sysops-squad-saga-shared-domain-functionality">8.7 Sysops Squad saga: shared domain functionality</h2>
+<ul>
+<li>Core ticketing is split into Ticket Creation (customer facing), Ticket Assignment and Ticket Completion, all using common database logic over shared ticketing tables. Taylen wants a <strong>shared Ticket Data service</strong> (database abstraction layer)
+<ul>
+<li>Skyler wants a <strong>shared library</strong>.</li>
+</ul>
+</li>
+<li>Addison uses a <strong>hypothesis-based approach</strong> (hypothesise the shared service is right, then test it):
+<ul>
+<li>Costs of the service:
+<ul>
+<li>an interservice call for every query or update (performance), and all three services go down if it does (fault tolerance). Taylen says it is mostly backend</li>
+<li>Addison notes Ticket Creation is customer facing.</li>
+</ul>
+</li>
+<li>Runtime change risk, and more testing of all ticketing services per change; the library can be versioned. Extra scaling coordination.</li>
+<li>Benefits Taylen offers:
+<ul>
+<li>data abstraction, centralised connection pooling (minor with three services) and easier change control</li>
+<li>The repository history shows the code <strong>rarely changes</strong>, so the change-control benefit is small.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Decision: shared library.</li>
+</ul>
+<div class="callout c-note"><div class="callout-title">ADR: shared library for common ticketing database logic</div><div class="callout-body">
+<ul>
+<li><strong>Decision:</strong> shared library, improving performance, scalability and fault tolerance of Ticket Creation and Ticket Assignment; the logic is stable; versioning avoids redeploying all services on a change; fewer service dependencies, less HTTP traffic and bandwidth.</li>
+<li><strong>Consequences:</strong> a change to the DLL means testing and deploying the ticketing services, reducing agility for that logic; each service instance manages its own database connection pool.</li>
+</ul>
+</div></div>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Pick the reuse technique by the code's rate of change, the language mix (homogeneous or polyglot) and the cost of runtime coupling. Operational plumbing goes in a sidecar
+<ul>
+<li>domain code stays out of it.</li>
+</ul>
+</li>
+<li>Next: who <strong>owns</strong> data when services share it, and how to do transactions across services (chapter 9).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Code replication, shared library, shared service, sidecar</strong>: the four reuse techniques.</li>
+<li><strong>Distributed monolith</strong>: a tangle of services and fine-grained shared libraries.</li>
+<li><strong>Versioning, deprecation strategy (custom or global), churn, LATEST</strong>.</li>
+<li><strong>Composition vs inheritance</strong> as the form of shared service code.</li>
+<li><strong>Hexagonal architecture / ports and adapters</strong>: domain logic separated from technical coupling.</li>
+<li><strong>Service mesh, service plane, operational coupling, orthogonal coupling</strong>.</li>
+<li><strong>Rate of change</strong>: the property that makes reuse valuable.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 8: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch08.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch08.html</a></li>
+<li>No other URLs in the page text
+<ul>
+<li>works named in the chapter (Henney and Gee, Cockburn, the Thoughtworks and Fowler articles, the Gang of Four, the JMS book) are cited by title only. Figures 8-1 to 8-19 are redrawn in summary form.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/">Software Architecture: The Hard Parts 7: Service Granularity</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/">Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-03-architectural-modularity/">Software Architecture: The Hard Parts 3: Architectural Modularity</a></li>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-07-service-granularity/">&larr; Software Architecture: The Hard Parts 7: Service Granularity</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/">Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

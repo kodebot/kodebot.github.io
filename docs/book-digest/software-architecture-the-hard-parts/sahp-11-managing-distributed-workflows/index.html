@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture: The Hard Parts 11: Managing Distributed Workflows</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/">Contents</a><span class="ttl">Software Architecture The Hard Parts</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-10-distributed-data-access/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-the-hard-parts/sahp-12-transactional-sagas/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-the-hard-parts-11-managing-distributed-workflows">Software Architecture: The Hard Parts 11: Managing Distributed Workflows</h1>
+<p>Source: Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, 2021), chapter 11. Previous: <a href="/book-digest/software-architecture-the-hard-parts/sahp-10-distributed-data-access/">Software Architecture: The Hard Parts 10: Distributed Data Access</a>. Next: <a href="/book-digest/software-architecture-the-hard-parts/sahp-12-transactional-sagas/">Software Architecture: The Hard Parts 12: Transactional Sagas</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>This chapter covers the <strong>coordination</strong> force of dynamic quantum coupling (with <strong>communication</strong> and <strong>consistency</strong>, chapter 2): combining services to do domain work.</li>
+<li>Two coordination patterns: <strong>orchestration</strong> (an orchestrator, also called a mediator, manages the workflow) and <strong>choreography</strong> (no central coordinator; services react to each other).</li>
+<li>Choreography looks simpler on the happy path; the difficulty lies in <strong>boundary and error conditions</strong>, which add communication links. Orchestration costs responsiveness, scale and a single point of failure, but gives centralised workflow, error handling, recoverability and state.</li>
+<li><strong>Semantic coupling</strong> (the inherent workflow in the problem domain) cannot be reduced by implementation, only made worse. Model the workflow's semantics as closely as possible.</li>
+<li>&quot;Never use absolutes when talking about architecture, except when talking about absolutes.&quot;</li>
+</ul>
+</div></div>
+<h2 id="11-1-the-scene">11.1 The scene</h2>
+<ul>
+<li>Austen wants an ADR saying &quot;only choreography, to keep things decoupled&quot;
+<ul>
+<li>Logan objects: &quot;always&quot; is tricky, and a mentor's maxim is <em>never use absolutes when talking about architecture, except when talking about absolutes</em></li>
+<li>How to decide between the communication patterns is the chapter's question.</li>
+</ul>
+</li>
+<li>The chapter realises the dynamic-coupling patterns named in chapter 2 (the eight sagas)
+<ul>
+<li>the book says its named patterns touch only some of the many possible permutations, so an architect should understand the forces.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-11-topologies.svg" alt="Orchestration versus choreography" loading="lazy" /></p>
+<h2 id="11-2-orchestration-communication-style">11.2 Orchestration communication style</h2>
+<ul>
+<li>An <strong>orchestrator</strong> (mediator) manages workflow state, optional behaviour, error handling, notification and other workflow maintenance, named for the conductor of an orchestra.</li>
+<li>Domain services keep their own bounded context, data and behaviour
+<ul>
+<li>the orchestrator holds <strong>no domain behaviour beyond the workflow it mediates</strong>. Microservices use <strong>one orchestrator per workflow</strong>, not a global component such as an <strong>enterprise service bus (ESB)</strong>, which would be an undesirable coupling point.</li>
+</ul>
+</li>
+<li>Useful for <strong>complex workflows</strong> with alternate paths and error conditions, not just the happy path.</li>
+<li>Example (Penultimate Electronics sells a device online):
+<ul>
+<li>The Place Order request goes to the <strong>Order Placement Orchestrator</strong>, which calls the Order Placement Service synchronously (records the order, returns status), then the Payment Service, then the Fulfillment Service <strong>asynchronously</strong> (no strict timing dependency; if fulfilment happens a few times a day, a synchronous call is overhead), then the Email Service.</li>
+<li><strong>Payment rejected</strong> (for example an expired card): the Payment Service tells the orchestrator, which asynchronously asks Email to notify the customer and updates Order Placement, which still thinks the order is active.</li>
+<li><strong>Back order</strong>:
+<ul>
+<li>Fulfillment reports the item is out of stock</li>
+<li>the orchestrator must <strong>refund the payment</strong> (which is why many online services charge at shipment, not order time) and update the order state.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Each service keeps its own transactional state here, modelling the <strong>Fairy Tale Saga(seo)</strong> pattern (chapter 12).</li>
+<li>Note: <strong>even elaborate error scenarios needed no new communication paths</strong> beyond those of the normal workflow, unlike choreography.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-11-orchestrated-flow.svg" alt="Orchestrated order flow" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Centralised workflow</strong>: a unified component for state and behaviour as complexity rises</td>
+<td><strong>Responsiveness</strong>: all communication goes through the mediator, a potential throughput bottleneck</td>
+</tr>
+<tr>
+<td><strong>Error handling</strong>: a state owner for the workflow</td>
+<td><strong>Fault tolerance</strong>: a potential single point of failure for the workflow (redundancy adds complexity)</td>
+</tr>
+<tr>
+<td><strong>Recoverability</strong>: the orchestrator can retry after a short outage</td>
+<td><strong>Scalability</strong>: more coordination points means less parallelism; choreography-based sagas (Time Travel(sec), Anthology(aec)) scale higher</td>
+</tr>
+<tr>
+<td><strong>State management</strong>: workflow state is queryable</td>
+<td><strong>Service coupling</strong>: higher coupling between orchestrator and domain components, sometimes necessary</td>
+</tr>
+</tbody>
+</table>
+<h2 id="11-3-choreography-communication-style">11.3 Choreography communication style</h2>
+<ul>
+<li>No central coordination; like dance partners, the moves are planned beforehand by the choreographer (architect) but carried out without a coordinator.</li>
+<li>The same purchase:
+<ul>
+<li>the request goes to the first service in the chain (Order Placement), which asynchronously calls Payment, which messages Fulfillment, which messages Email</li>
+<li>Fewer services (no orchestrator) and a simple chain of messages, but the difficulties are in <strong>boundary and error conditions</strong>.</li>
+<li><strong>Payment fails</strong>: Payment messages Email and Order Placement instead of Fulfillment. One new link; not too complex.</li>
+<li><strong>Back order</strong>:
+<ul>
+<li>many steps have already completed</li>
+<li>each service has its own transaction (the <strong>Anthology Saga(aec)</strong> pattern), so on error each must issue <strong>compensating messages</strong>. Fulfillment broadcasts an event that Email, Payment and Order Placement subscribe to.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>The initial workflow looked simpler than the orchestrated one, but error cases keep adding complexity: <strong>each error scenario forces new links between domain services</strong> that the happy path did not need.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-11-choreographed-errors.svg" alt="Choreographed error handling" loading="lazy" /></p>
+<h3 id="semantic-versus-implementation-coupling">Semantic versus implementation coupling</h3>
+<ul>
+<li>Every workflow has <strong>semantic coupling</strong>:
+<ul>
+<li>the inherent coupling of the problem domain (assigning a ticket means: client requests, skills matched, then cross-referenced with schedules and locations)</li>
+<li>The way the architect models it is <strong>implementation coupling</strong>.</li>
+</ul>
+</li>
+<li>Semantic coupling is mandated by domain requirements
+<ul>
+<li>no cleverness reduces it, though implementation choices can increase it. Architects may still push back on impractical business semantics.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">An architect can never reduce semantic coupling via implementation, but they can make it worse.</div><div class="callout-body">
+</div></div>
+<ul>
+<li>Example:
+<ul>
+<li>a <strong>technically partitioned</strong> (layered) monolith smears a domain concept like Catalog Checkout across the layers, while a <strong>domain-partitioned</strong> (modular) monolith keeps it in one component and its database</li>
+<li>Aligning the architecture with the domain keeps the implementation's complexity similar to the workflow's</li>
+<li>Extra layers (for example database-connection-pooling cost savings, a trade-off sometimes worth it) add implementation complexity on top of the semantic complexity.</li>
+</ul>
+</li>
+<li>Lesson of the last decade, in the authors' words:
+<ul>
+<li><strong>model the workflow's semantics as closely as possible with the implementation</strong></li>
+<li>More steps in the workflow mean more potential error and optional paths, so more need for coordination.</li>
+</ul>
+</li>
+</ul>
+<h3 id="workflow-state-management-in-choreography">Workflow state management in choreography</h3>
+<ul>
+<li>Workflows carry transient state (what executed, what is left, order, errors, retries). An orchestrator is the obvious owner; choreography has none. Three common options:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>How</th>
+<th>Advantages</th>
+<th>Disadvantages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Front Controller</strong></td>
+<td>The first service (Order Placement) owns workflow state besides domain behaviour; others call back to update it</td>
+<td>A pseudo-orchestrator inside choreography; order state trivial to query</td>
+<td>More workflow state in a domain service; more communication overhead; worse performance and scale from chatter</td>
+</tr>
+<tr>
+<td><strong>Stateless choreography</strong></td>
+<td>No transient state; query each service and build a snapshot on demand</td>
+<td>High performance and scale; extremely decoupled</td>
+<td>State must be built on the fly; complexity rises swiftly with workflow complexity (trades performance for workflow control)</td>
+</tr>
+<tr>
+<td><strong>Stamp coupling</strong></td>
+<td>Workflow state is carried in the message contract; each service updates its part and passes it on</td>
+<td>No extra queries to a state owner; no front controller</td>
+<td>Larger contracts; no just-in-time status query</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Stamp coupling is a partial solution: there is still no single place to ask the state of an ongoing workflow (chapter 13 discusses contracts and workflow coupling).</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-11-workflow-state.svg" alt="Workflow state options" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Advantages of choreography</th>
+<th>Disadvantages of choreography</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Responsiveness</strong>: fewer choke points, more parallelism</td>
+<td><strong>Distributed workflow</strong>: no owner, so error and boundary management is harder</td>
+</tr>
+<tr>
+<td><strong>Scalability</strong>: no coordination points, more independent scaling</td>
+<td><strong>State management</strong>: no central state holder</td>
+</tr>
+<tr>
+<td><strong>Fault tolerance</strong>: no single orchestrator; multiple instances</td>
+<td><strong>Error handling</strong>: services need more workflow knowledge</td>
+</tr>
+<tr>
+<td><strong>Service decoupling</strong>: no orchestrator</td>
+<td><strong>Recoverability</strong>: no one to attempt retries and remediation</td>
+</tr>
+</tbody>
+</table>
+<h2 id="11-4-trade-offs-between-orchestration-and-choreography">11.4 Trade-offs between orchestration and choreography</h2>
+<ul>
+<li><strong>State owner and coupling</strong>:
+<ul>
+<li>state lives either in a mediator or in a front controller</li>
+<li>Removing the mediator forces more service-to-service communication, which can be a fine trade for a workflow that needs high scale and has few error conditions</li>
+<li><strong>As workflow complexity rises, the need for an orchestrator rises proportionally</strong> (Figure 11-14), and the more semantic complexity, the more useful an orchestrator.</li>
+</ul>
+</li>
+<li><strong>Sweet spot for choreography</strong>:
+<ul>
+<li>workflows that need responsiveness and scalability and either lack complex error scenarios or have infrequent ones. Used by Phone Tag(sac), Time Travel(sec) and Anthology(aec)</li>
+<li>mixed with other forces it can reach the <strong>Horror Story(aac)</strong>.</li>
+</ul>
+</li>
+<li><strong>Orchestration</strong>
+<ul>
+<li>is best for complex workflows with boundary and error conditions: less scale, but far less complexity</li>
+<li>Used by Epic(sao), Fairy Tale(seo), Fantasy Fiction(aao) and Parallel(aeo).</li>
+</ul>
+</li>
+<li>Next force: how coordination intersects with <strong>consistency</strong> (chapter 12).</li>
+</ul>
+<p><img src="/book-digest/software-architecture-the-hard-parts/img/sahp-11-tradeoffs.svg" alt="Trade-offs and the Sysops Squad choice" loading="lazy" /></p>
+<h2 id="11-5-sysops-squad-saga-managing-workflows">11.5 Sysops Squad saga: managing workflows</h2>
+<ul>
+<li>The primary ticket workflow spans four services
+<ul>
+<li>Customer-facing: the customer submits a ticket via the Ticket Management Service and gets a number</li>
+<li>Background: Ticket Assignment finds the expert and routes the ticket to the expert's mobile device</li>
+<li>the Notification Service tells the customer the expert is coming</li>
+<li>the expert marks the ticket complete (sent to Ticket Management)</li>
+<li>Ticket Management tells the Survey Service to invite the customer to a survey.</li>
+</ul>
+</li>
+<li>Austen prefers choreography, Addison orchestration. Logan: no obvious winner, so model likely scenarios and see how each reacts. The team builds a table:
+<ul>
+<li><strong>Lost or misrouted tickets</strong> (a business priority): orchestration, for control of the workflow.</li>
+<li><strong>Status of a ticket at any moment</strong>
+<ul>
+<li>(a business request): both work</li>
+<li>Orchestrator state is queryable, but choreography can query each service or use stamp coupling</li>
+<li>&quot;This isn't a zero-sum game&quot;, so both get credit.</li>
+</ul>
+</li>
+<li><strong>Cancellation and reassignment</strong>
+<ul>
+<li>(customer cancels; expert unavailable, connection lost, delayed at a customer site): <strong>error handling</strong>, orchestration</li>
+<li>&quot;Complex workflows must go somewhere, either in an orchestrator or scattered through services.&quot;</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Orchestration</th>
+<th>Choreography</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Workflow control</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td>State query</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Error handling</td>
+<td>yes</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<div class="callout c-note"><div class="callout-title">ADR: use orchestration for the primary ticket workflow</div><div class="callout-body">
+<ul>
+<li><strong>Context:</strong> the workflow needs easy tracking of lost or mistracked messages, excellent error handling and ticket status tracking; either style would work.</li>
+<li><strong>Decision:</strong> orchestration, based on the trade-offs above.</li>
+<li><strong>Consequences:</strong> a single orchestrator may cause scalability issues for the ticketing workflow; reconsider if scalability requirements change.</li>
+</ul>
+</div></div>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>Pick the coordination style by workflow complexity, error frequency and the need for state and scale; never by a rule like &quot;always choreography&quot;.</li>
+<li>Next: consistency, the transactional sagas that tie communication, consistency and coordination together (chapter 12).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Orchestration, orchestrator (mediator), choreography</strong>.</li>
+<li><strong>Dynamic quantum coupling</strong>: communication, consistency and coordination.</li>
+<li><strong>Semantic coupling vs implementation coupling</strong>.</li>
+<li><strong>Happy path</strong> vs error and boundary conditions.</li>
+<li><strong>Front Controller, stateless choreography, stamp coupling</strong>.</li>
+<li><strong>Technical vs domain partitioning</strong>.</li>
+<li><strong>Compensating message</strong>: a message that reverses an earlier step's effect.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Neal Ford, Mark Richards, Pramod Sadalage and Zhamak Dehghani, <em>Software Architecture: The Hard Parts</em> (O'Reilly, October 2021), chapter 11: <a href="https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch11.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-the/9781492086888/ch11.html</a></li>
+<li>No other URLs in the page text. Figures 11-1 to 11-16 are redrawn in summary form; Table 11-6 to 11-8 are shown merged in the saga table above.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-10-distributed-data-access/">Software Architecture: The Hard Parts 10: Distributed Data Access</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-12-transactional-sagas/">Software Architecture: The Hard Parts 12: Transactional Sagas</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-02-discerning-coupling-in-software-architecture/">Software Architecture: The Hard Parts 2: Discerning Coupling in Software Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-17-orchestration-driven-service-oriented-architecture/">Fundamentals of Software Architecture 17: Orchestration-Driven Service-Oriented Architecture</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-the-hard-parts/sahp-10-distributed-data-access/">&larr; Software Architecture: The Hard Parts 10: Distributed Data Access</a><a href="/book-digest/software-architecture-the-hard-parts/">Contents</a><a href="/book-digest/software-architecture-the-hard-parts/sahp-12-transactional-sagas/">Software Architecture: The Hard Parts 12: Transactional Sagas &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

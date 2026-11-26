@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Principles and Patterns for Distributed Application Architecture 4: Designing Distributed Applications</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/">Contents</a><span class="ttl">Principles And Patterns For Distributed Application Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/" aria-label="Previous">&lsaquo; Prev</a></div>
+<main>
+<h1 id="principles-and-patterns-for-distributed-application-architecture-4-designing-distributed-applications">Principles and Patterns for Distributed Application Architecture 4: Designing Distributed Applications</h1>
+<p>Source: Jonas Bonér, <em>Principles and Patterns for Distributed Application Architecture</em> (O'Reilly, 2025), chapter 4. Previous: <a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>The chapter's answer to &quot;how do we put this into practice&quot;: <strong>event-driven architecture with microservices</strong>, which models the domain in line with how distributed systems work.</li>
+<li>Five microservice principles: <strong>isolation of components</strong>, <strong>autonomous operation</strong>, <strong>single responsibility</strong>, <strong>exclusive state ownership</strong>, <strong>mobility with addressability</strong>.</li>
+<li>Beware <strong>microliths</strong>: single-instance, synchronous, blocking, shared-database &quot;microservices&quot; that are just small monoliths; containers and Kubernetes do not fix that.</li>
+<li><strong>Events-first domain-driven design</strong> (a term from Russell Miles): model the <strong>verbs (events)</strong>, not the nouns; use <strong>commands for intent and events for facts</strong>.</li>
+<li>Define <strong>consistency boundaries</strong> around <strong>entities</strong>, keep the strongly consistent dataset minimal, and <strong>allow protocols to evolve</strong> (Postel's law, anti-corruption layer).</li>
+</ul>
+</div></div>
+<h2 id="4-1-fundamental-principles-of-microservices">4.1 Fundamental principles of microservices</h2>
+<ul>
+<li>Microservices offer speed, efficiency, predictability and safety and help scale organisations: complex applications decompose into decoupled services using well-defined protocols, so teams develop, deploy and evolve them independently.</li>
+<li>Five key principles:</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-04-five-principles.svg" alt="The five principles" loading="lazy" /></p>
+<h3 id="isolation-of-components">Isolation of components</h3>
+<ul>
+<li><strong>Isolation</strong>
+<ul>
+<li>is &quot;the most important trait&quot; and the cornerstone of many higher-level benefits</li>
+<li>It has the biggest design impact, slices the whole architecture and must be considered <strong>from day one</strong>.</li>
+</ul>
+</li>
+<li>It even affects how teams and responsibilities are organised, per <strong>Conway's law</strong> (Melvin Conway, 1967): an organisation that designs a system produces a design that copies its communication structure.</li>
+<li>Six things to isolate:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Isolation</th>
+<th>What it gives</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Code</strong></td>
+<td>Each service has its own codebase as a boundary for state and logic and acts as a bulkhead; teams develop, debug and release independently, often with dedicated CI/CD pipelines</td>
+</tr>
+<tr>
+<td><strong>Packaging (containers)</strong></td>
+<td>A consistent runtime bundling code, dependencies and configuration, isolating each service at the operating-system level; avoids dependency conflicts and gives portability</td>
+</tr>
+<tr>
+<td><strong>Compute (pods)</strong></td>
+<td>In Kubernetes, pods encapsulate containers and give resource isolation (allocated CPU, memory, network) so a hungry service cannot starve others, important in large multi-tenant clouds</td>
+</tr>
+<tr>
+<td><strong>API and event</strong></td>
+<td>Services talk through APIs or asynchronous messaging, separating internals from outside interaction; they handle timeouts and retries without leaking problems to clients; key for eventual consistency</td>
+</tr>
+<tr>
+<td><strong>Database</strong></td>
+<td>A separate database per service stops services affecting each other's data, eases schema changes, and lets each choose the best storage</td>
+</tr>
+<tr>
+<td><strong>Operational and failure</strong></td>
+<td>Metrics, logging and monitoring scoped per service so problems are confined; circuit breakers and load balancing isolate fault domains</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>With isolation across these dimensions services evolve independently, scale as needed and reduce the risk of system-wide failures.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-04-isolation.svg" alt="The dimensions of isolation" loading="lazy" /></p>
+<h3 id="autonomous-operation">Autonomous operation</h3>
+<ul>
+<li>Isolation is a prerequisite for <strong>autonomy</strong>: only truly isolated services can decide and act independently and cooperate with others to solve problems.</li>
+<li>Quote from <strong>Mark Burgess</strong> (promise theory):
+<ul>
+<li>&quot;With a promise model, and a network of autonomous systems, each agent is only concerned with assertions about its own policy</li>
+<li>no external agent can tell it what to do, without its consent.&quot;</li>
+</ul>
+</li>
+<li>Autonomous services give flexibility in orchestration, workflow management, collaborative behaviour, scalability, availability and runtime management, <strong>at the cost of more thoughtful design of well-defined, composable APIs</strong>.</li>
+<li>It extends to teams, who can roll out services and features independently. Autonomy is the foundation for scaling both the system and the development organisation.</li>
+</ul>
+<h3 id="single-responsibility">Single responsibility</h3>
+<ul>
+<li>The <strong>Unix philosophy</strong> (programs with a single, well-defined purpose that compose well) predates **Robert C
+<ul>
+<li>Martin's single responsibility principle (SRP)**: a class or component should &quot;have only one reason to change&quot;.</li>
+</ul>
+</li>
+<li>Debate about microservice size (&quot;What qualifies as micro?&quot;, &quot;How many lines of code?&quot;) misses the point. <strong>Micro refers to the scope of responsibility</strong>: do one thing and do it well.</li>
+<li>A single reason to exist prevents entanglement of business domains, makes each service more generally useful, and the system easier to scale, more resilient, simpler to understand, and easier to extend and maintain.</li>
+<li><strong>Figure 4-1</strong>:
+<ul>
+<li>an ordering system of three services (<strong>orders, payment, inventory</strong>), each with one well-defined function, encapsulated by <strong>bounded contexts</strong></li>
+<li>A bounded context acts as a <strong>complexity bulkhead</strong>, keeping unnecessary complexity from leaking out while keeping one domain model and language inside.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-04-ordering-system.svg" alt="Figure 4-1: an ordering system of three single-purpose services" loading="lazy" /></p>
+<h3 id="exclusive-state-ownership">Exclusive state ownership</h3>
+<ul>
+<li>Microservices are typically <strong>stateful</strong>, encapsulating state and behaviour; isolation extends to state, so state and behaviour are treated as one unit.</li>
+<li>Services must <strong>own their state exclusively</strong> (partition state)
+<ul>
+<li>Consequence: data is strongly consistent <strong>only within</strong> each service</li>
+<li>Between services you rely on <strong>eventual consistency</strong> and forgo traditional transactional semantics.</li>
+</ul>
+</li>
+<li>That means abandoning a single all-encompassing database, <strong>full normalisation and cross-service joins</strong>. Figure 4-2 shows &quot;a monolith disguised as a set of microservices&quot;.</li>
+</ul>
+<h3 id="mobility-with-addressability">Mobility with addressability</h3>
+<ul>
+<li>Containers and virtualisation are wasted if services are locked into a <strong>fixed topology or deployment</strong>. <strong>Mobility</strong> means moving services at runtime
+<ul>
+<li>paired with <strong>location transparency</strong>, services stay agnostic of the current deployment and topology.</li>
+</ul>
+</li>
+<li>Situations where it is essential:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Scaling and load balancing</strong></td>
+<td>A seasonal sales event: new checkout and inventory instances across nodes or regions; location transparency lets balancers and discovery redirect traffic unseen</td>
+</tr>
+<tr>
+<td><strong>Failover and disaster recovery</strong></td>
+<td>A banking application reroutes to a backup instance in another region during a regional outage</td>
+</tr>
+<tr>
+<td><strong>Edge and proximity</strong></td>
+<td>City traffic monitoring: services migrate between edge nodes to handle local spikes or failures while keeping low-latency real-time data for emergency response</td>
+</tr>
+<tr>
+<td><strong>Cluster maintenance and upgrades</strong></td>
+<td>A Kubernetes cluster reschedules pods onto other nodes to apply updates</td>
+</tr>
+<tr>
+<td><strong>Cost optimisation</strong></td>
+<td>Workloads move to cheaper instances or regions automatically</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>In all cases clients and other services need no update when a service moves.</li>
+</ul>
+<h2 id="4-2-slaying-the-monolith">4.2 Slaying the monolith</h2>
+<ul>
+<li>The typical <strong>three-tier monolith</strong> (servlets, EJB, Java Persistence API, SQL database, or modern Spring) couples components inside and across services (Figure 4-3).
+<ul>
+<li><strong>Deep synchronous call chains</strong> entangle services and prevent independent evolution; each service holds its caller hostage until all methods execute.</li>
+<li>All services must be upgraded together; failures are hard to isolate and can cascade through the tiers; try-catch is &quot;a blunt tool&quot;.</li>
+<li>No isolation means you cannot scale one service; you scale the whole monolith.</li>
+<li>Traditional <strong>application servers</strong> bundle services into one instance and manage &quot;isolation&quot; through <strong>class loader magic</strong>, a fragile model where services compete for CPU, memory and storage.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-04-monolith-microliths.svg" alt="Three-tier monolith, microliths and the monolith in disguise" loading="lazy" /></p>
+<h3 id="avoid-microliths">Avoid microliths</h3>
+<ul>
+<li>Refactoring to microservices by the <strong>path of least resistance</strong> (scaffolding tools, containers, synchronous APIs) yields <strong>microliths</strong>: small monoliths (Figure 4-4).</li>
+<li>A <strong>microlith</strong> is a single-instance service that replaces synchronous method calls with <strong>synchronous blocking RPC</strong> while still using <strong>blocking database access</strong> (CRUD through JPA on a SQL database, sometimes still shared). It keeps the monolith's coupling and adds network latency
+<ul>
+<li>a single instance <strong>cannot scale out or stay available</strong> if it fails.</li>
+</ul>
+</li>
+<li>Docker or LXC containers and orchestration like Kubernetes manage and scale instances but do not solve the fundamental distributed-systems challenges of Chapter 1.</li>
+<li>&quot;Real complexity lies in the space in between services&quot;: communication, coordination, consistency, shared state and resources
+<ul>
+<li>These belong to the application's design and cannot easily be added afterwards.</li>
+</ul>
+</li>
+</ul>
+<h3 id="microservices-come-in-systems">Microservices come in systems</h3>
+<ul>
+<li>&quot;One actor is no actor. Actors come in systems&quot; (attributed to Carl Hewitt); likewise &quot;One microservice is no microservice. Microservices come in systems.&quot;</li>
+<li>The real difficulty is <strong>managing the space between services</strong>: how they interact, coordinate and share responsibilities
+<ul>
+<li>It forces you to embrace uncertainty, failure, autonomy, decoupling, asynchronous messaging and data partitioning, and to give up some consistency.</li>
+</ul>
+</li>
+<li>One of the best ways to design such systems is <strong>event-driven architecture and domain-driven design</strong>, in particular <strong>events-first DDD</strong>.</li>
+</ul>
+<h2 id="4-3-events-first-domain-driven-design">4.3 Events-first domain-driven design</h2>
+<ul>
+<li>The term was <strong>coined by Russell Miles</strong>:
+<ul>
+<li>design principles for scalable distributed systems that focus on the <strong>events (verbs)</strong> of the domain, not the domain objects (nouns)</li>
+<li>It clarifies dataflow and communication patterns and leads to scalable event-driven architectures.</li>
+</ul>
+</li>
+</ul>
+<h3 id="focus-on-the-behaviour-of-the-system">Focus on the behaviour of the system</h3>
+<ul>
+<li>OOP and DDD traditionally start with <strong>nouns</strong> to find domain objects and build up from there, which &quot;forces us to focus on structure too early&quot;.</li>
+<li>Focus on <strong>events</strong> to see how changes propagate, including communication patterns, workflows and data ownership
+<ul>
+<li><strong>Greg Young</strong> (creator of CQRS): &quot;When you start modeling events, it forces you to think about the behavior of the system, as opposed to thinking about structure inside the system.&quot;</li>
+</ul>
+</li>
+<li>Events add a <strong>temporal dimension</strong>, so time is a design element and causal relationships between events matter, especially where managing time and change is crucial.</li>
+</ul>
+<h3 id="commands-for-intent-events-for-facts">Commands for intent, events for facts</h3>
+<ul>
+<li><strong>Commands</strong> express an <strong>intent</strong> to act, often with side effects (changing state, triggering processes, sending more commands).</li>
+<li><strong>Events</strong>
+<ul>
+<li>are facts about the domain and part of the <strong>ubiquitous language</strong>, helping define the bounded context</li>
+<li>Facts are immutable, cannot be changed or retracted, knowledge is cumulative (new facts, or facts derived from existing ones), and existing knowledge is invalidated by <strong>adding facts that refute it</strong> (facts are not deleted, only made irrelevant).</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Commands</th>
+<th>Events</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>All about intent</td>
+<td>Intentless</td>
+</tr>
+<tr>
+<td>Directed (sender to receiver)</td>
+<td>Anonymous (no address)</td>
+</tr>
+<tr>
+<td>One clear destination (retaining the server address)</td>
+<td>Just happens, for 0 to N others to observe</td>
+</tr>
+<tr>
+<td>Mimics a conversation (personal one-to-one)</td>
+<td>Mimics broadcast (&quot;speaker's corner&quot;; does not care who is listening)</td>
+</tr>
+<tr>
+<td>Distributed focus (moves across address spaces)</td>
+<td>Local focus (no notion of communication, network or addresses; wrapped in messages to travel)</td>
+</tr>
+<tr>
+<td>Command and control</td>
+<td>Autonomy</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-04-commands-events.svg" alt="Commands versus events (Table 4-1)" loading="lazy" /></p>
+<h3 id="understand-causality-by-mining-the-facts">Understand causality by mining the facts</h3>
+<ul>
+<li>Model causality centrally with an <strong>event log</strong>, or decentrally with <strong>vector clocks or CRDTs</strong>.</li>
+<li><strong>Event storming</strong>
+<ul>
+<li>(Alberto Brandolini's book is the suggested start) gathers stakeholders (domain experts and programmers) in one room with sticky notes to define the language for events and commands</li>
+<li>Three steps:</li>
+</ul>
+<ol>
+<li><strong>Explore the domain</strong> by examining what happens to find events and their causal links.</li>
+<li><strong>Identify the triggers</strong> of those events: command execution, user interactions, requests from other services, external inputs.</li>
+<li><strong>Determine the endpoints for commands</strong>: typically a component that decides whether to execute side effects, possibly creating events that add new facts.</li>
+</ol>
+</li>
+<li>That leads to the components (entities) where events culminate, the source of truth.</li>
+<li>Designing <strong>consistency boundaries</strong> (guided by Pat Helland's &quot;Data on the Outside Versus Data on the Inside&quot;):
+<ol>
+<li>Avoid starting with behaviour; focus on the underlying <strong>data</strong> (the facts) and their coupling and dependencies.</li>
+<li>Identify and model the <strong>integrity constraints</strong>, with domain experts and stakeholders.</li>
+<li>Start with <strong>zero guarantees on the smallest dataset</strong>, adding the minimal guarantees needed while keeping the dataset small.</li>
+<li>Use the <strong>single responsibility principle</strong> as a guide.</li>
+</ol>
+</li>
+<li>The goal is to <strong>minimise the dataset that needs strong consistency</strong>; then define behaviour and protocols with other services, establishing the unit of consistency.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-04-consistency-boundary.svg" alt="Designing consistency boundaries" loading="lazy" /></p>
+<h3 id="localize-mutable-state-and-publish-facts">Localize mutable state and publish facts</h3>
+<ul>
+<li>Opening quote, <strong>John Backus</strong> (1977 Turing Award lecture): &quot;The assignment statement is the von Neumann bottleneck of programming languages.&quot;</li>
+<li>Assignment is destructive and overwrites previous data
+<ul>
+<li>As <strong>Rich Hickey</strong> (creator of Clojure) has discussed, most OO languages (<strong>Java, C++, C#</strong>) treat <strong>value and identity as the same thing</strong>, so an identity cannot evolve without changing its value</li>
+<li>Functional languages (<strong>Scala, Haskell, OCaml</strong>) with pure functions and immutable data give stable values for reasoning.</li>
+</ul>
+</li>
+<li>Mutable state is not inherently bad:
+<ul>
+<li><strong>contain it</strong>, using it only for local computation inside the service instance's safe haven, unobservable by the world</li>
+<li>When done, create an <strong>immutable fact</strong> and publish it</li>
+<li>Others rely on stable values while you keep mutability's simplicity and efficiency.</li>
+</ul>
+</li>
+<li>So many principles can overwhelm; higher-level abstractions and guardrails help, for example <strong>entities and event sourcing</strong>, which naturally guide toward the right architecture.</li>
+</ul>
+<h3 id="model-consistency-boundaries-with-entities">Model consistency boundaries with entities</h3>
+<ul>
+<li>The consistency boundary is both a <strong>unit of consistency and a unit of failure</strong>: updates, relocations and failures occur atomically
+<ul>
+<li>When leaving a monolith's single schema, <strong>denormalise</strong> to split it into several manageable schemas.</li>
+</ul>
+</li>
+<li>Treat each unit of consistency as an <strong>entity</strong>, and have entities reference each other <strong>by identity</strong>, not direct references
+<ul>
+<li>That keeps isolation, cuts memory use (no eager loading) and enables location transparency.</li>
+</ul>
+</li>
+<li>Entities that do not reference each other directly can be repartitioned and moved around the cluster for &quot;almost infinite scalability&quot; (Pat Helland, &quot;Life Beyond Distributed Transactions&quot;).</li>
+<li>Outside an entity's boundary you need <strong>eventual consistency</strong>. Ask: <strong>&quot;Who is responsible for ensuring data consistency?&quot;</strong> If the service executing the business logic, confine it to a single entity for strong consistency
+<ul>
+<li>otherwise eventual consistency is acceptable.</li>
+</ul>
+</li>
+<li><strong>Order management example</strong> from an event-storming session (drastically simplified):
+<ul>
+<li><strong>Commands:</strong> CreateOrder, SubmitPayment, ReserveProducts, ShipProducts</li>
+<li><strong>Events:</strong> OrderCreated, ProductsReserved, PaymentApproved, PaymentDeclined, ProductsShipped</li>
+<li><strong>Entities:</strong> Orders, Payments, Inventory</li>
+<li>Figure 4-5 shows the command flow between a client and the entities (dotted arrows: asynchronous); Figure 4-6 adds the events.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-04-order-flow.svg" alt="Figures 4-5 and 4-6: commands and events in the order example" loading="lazy" /></p>
+<ul>
+<li><strong>Payments and orders (Figure 4-7)</strong>, with event sourcing and CQRS:
+<ol>
+<li>The <strong>SubmitPayment</strong> command is sent to the payments service by an external user of the service, namely orders.</li>
+<li>It crosses the <strong>bounded context boundary</strong> and is received by the <strong>processing layer</strong>, which validates and translates it before the business logic runs.</li>
+<li>A new command, <strong>ApprovePayment</strong>, representing the intent to change state, goes to the <strong>entity</strong>.</li>
+<li>The entity processes it, producing the event <strong>PaymentApproved</strong> and storing it in its <strong>event log</strong>.</li>
+<li>Once saved, the event is pushed to the <strong>event stream</strong> and forwarded to subscribers: the <strong>orders service</strong> and the <strong>payment query database</strong> (the CQRS read side).</li>
+</ol>
+</li>
+<li>The design enhances scalability, resilience and consistency, letting services resume after failures or <strong>replay portions of the event stream</strong>.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-04-payments.svg" alt="Figure 4-7: event sourcing and CQRS in the payments service" loading="lazy" /></p>
+<h3 id="allow-for-protocol-evolution">Allow for protocol evolution</h3>
+<ul>
+<li>A <strong>protocol</strong> defines the rules for exchanging messages:
+<ul>
+<li>relationships between participants, the protocol's current state and the messages allowed at each step</li>
+<li>Unlike a local programming interface it supports <strong>several participants and tracks ongoing state</strong>.</li>
+</ul>
+</li>
+<li>Kinds:
+<ul>
+<li>request-reply, repeated request-reply (like HTTP), publish-subscribe, streaming (push and pull). A protocol defines only <strong>which</strong> messages may be sent</li>
+<li>codecs and transport are implementation details.</li>
+</ul>
+</li>
+<li>Microservices stay independent only if they <strong>evolve autonomously</strong>, so their protocols (HTTP APIs, RPC, events, commands, stored data, and ephemeral data such as sessions, credentials and caches) must tolerate change
+<ul>
+<li>Version interoperability is essential.</li>
+</ul>
+</li>
+<li><strong>Postel's law</strong>
+<ul>
+<li>(the robustness principle, from Jon Postel in RFC 761 on TCP, 1980): &quot;be conservative in what you do, be liberal in what you accept from others&quot;</li>
+<li>It influenced the tolerant reader pattern.</li>
+</ul>
+</li>
+<li>Tasks in managing change:
+<ul>
+<li>select <strong>extensible codecs</strong> for serialisation</li>
+<li>ensure incoming commands are valid</li>
+<li>keep a <strong>translation layer</strong> that upgrades or downgrades events or commands to the current version</li>
+<li>version the service itself (a truly new service differs semantically from a new version of an existing one)</li>
+</ul>
+</li>
+<li>Use an <strong>anti-corruption layer</strong>, inside the service or in an API gateway, to protect the bounded context from changes elsewhere while letting both evolve.</li>
+</ul>
+<h2 id="4-4-conclusion">4.4 Conclusion</h2>
+<ul>
+<li>The author says the guide has &quot;just scratched the surface&quot; and urges readers to try the ideas, read the references in the hyperlinks and footnotes, and learn from past failures and successes.</li>
+<li>Failures worth studying:
+<ul>
+<li><strong>SOA, CORBA, EJB and synchronous RPC</strong></li>
+<li>Successful platforms to learn from: <strong>Tandem Computer's NonStop platform, the Erlang platform and the BitTorrent protocol</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Five principles: isolation, autonomy, single responsibility, exclusive state ownership, mobility with addressability.</li>
+<li>Do not build microliths; microservices come in systems, and the hard part is the space between them.</li>
+<li>Model events (verbs) first, separate commands (intent) from events (facts), and keep strongly consistent datasets minimal inside entity boundaries.</li>
+<li>Let protocols evolve with Postel's law, translation layers and an anti-corruption layer.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Microlith</strong>: a single-instance, synchronous, blocking service that is a small monolith.</li>
+<li><strong>Events-first DDD</strong>: model domain events (verbs) before objects (nouns).</li>
+<li><strong>Command vs event</strong>: intent directed at one recipient vs an anonymous immutable fact.</li>
+<li><strong>Event storming</strong>: workshop to discover events, triggers and command endpoints.</li>
+<li><strong>Consistency boundary / entity</strong>: unit of consistency and failure, referenced by identity.</li>
+<li><strong>Postel's law / anti-corruption layer</strong>: tolerant protocols and protection of the bounded context.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Jonas Bonér, <em>Principles and Patterns for Distributed Application Architecture</em> (O'Reilly, January 2025), chapter 4: <a href="https://learning.oreilly.com/library/view/principles-and-patterns/9781098181260/ch04.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/principles-and-patterns/9781098181260/ch04.html</a></li>
+<li>Cited in the chapter (no URLs in the page text):
+<ul>
+<li>Paul Borrill, Mark Burgess, Todd Craw and Mike Dvorkin, &quot;A Promise Theory Perspective on Data Networks&quot; (2014)</li>
+<li>Eric Steven Raymond, <em>The Art of Unix Programming</em></li>
+<li>Robert C. Martin, &quot;The Principles of OOD&quot;</li>
+<li>Vaughn Vernon, <em>Implementing Domain-Driven Design</em> (Addison-Wesley, 2013)</li>
+<li>Alberto Brandolini, <em>Event Storming</em></li>
+<li>Pat Helland, &quot;Data on the Outside Versus Data on the Inside&quot; and &quot;Life Beyond Distributed Transactions&quot;</li>
+<li>Jon Postel, RFC 761 (1980).</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</a></li>
+<li><a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">Software Architecture Patterns 6: Microservices Architecture</a></li>
+<li><a href="/book-digest/software-architecture-patterns/sap-05-event-driven-architecture/">Software Architecture Patterns 5: Event-Driven Architecture</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/">Learning Domain Driven Design: contents</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/">&larr; Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</a><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/">Contents</a><span></span></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

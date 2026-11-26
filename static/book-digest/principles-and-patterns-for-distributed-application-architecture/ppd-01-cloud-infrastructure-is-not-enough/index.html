@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Principles and Patterns for Distributed Application Architecture 1: Cloud Infrastructure Is Not Enough</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/">Contents</a><span class="ttl">Principles And Patterns For Distributed Application Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="principles-and-patterns-for-distributed-application-architecture-1-cloud-infrastructure-is-not-enough">Principles and Patterns for Distributed Application Architecture 1: Cloud Infrastructure Is Not Enough</h1>
+<p>Source: Jonas Bonér, <em>Principles and Patterns for Distributed Application Architecture</em> (O'Reilly, 2025), chapter 1. Next: <a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Cloud and edge are a <strong>continuum</strong>, not two separate things; distributed applications there must cope with uncertainty, partial failure, and unreliable networks.</li>
+<li><strong>Infrastructure alone is not enough</strong>: Kubernetes manages the &quot;empty boxes&quot; (containers), but what goes inside them and how they are stitched together is the application layer's job.</li>
+<li>The <strong>end-to-end argument</strong> (Saltzer, Reed and Clark, 1984) explains why: some guarantees can only be implemented correctly with the help of the application at the endpoints.</li>
+<li>Stateless design ignores the hardest part of distributed systems, <strong>managing state</strong>; the chapter argues for <strong>data-driven, stateful services</strong>.</li>
+<li>Three things can never be delegated to a platform: <strong>business logic, domain data model, API definition</strong>. The framing for the whole book is the <strong>Reactive Manifesto</strong> (2014).</li>
+</ul>
+</div></div>
+<h2 id="1-1-cloud-and-edge">1.1 Cloud and edge</h2>
+<p>The chapter treats cloud and edge as complementary capabilities.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>What it offers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Cloud computing</strong></td>
+<td>Scalable, on-demand resources over the internet; lower infrastructure cost, flexibility, collaboration; centralised data centres give automatic updates, disaster recovery and global accessibility; large data volumes aggregated centrally enable analytics and machine learning</td>
+</tr>
+<tr>
+<td><strong>Edge computing</strong></td>
+<td>Computation and storage closer to where they are needed: lower latency and faster responses for time-sensitive work, better resilience; suits mobile and IoT devices; less data sent to central servers cuts bandwidth costs and congestion; local processing helps privacy and security (healthcare, manufacturing, autonomous driving)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Embracing both enables rapid time to market, <strong>elasticity and high availability</strong>
+<ul>
+<li>Hybrid applications mix in-house data centres and ephemeral resources, for cost optimisation, ownership and flexibility.</li>
+</ul>
+</li>
+<li>Modern cloud and edge applications are radically different from a <strong>single-machine monolith</strong> and need new tools, practices, design and architecture.</li>
+<li>Their distributed nature brings concerns the book says it will discuss in detail:
+<ul>
+<li>uncertainty and nondeterminism</li>
+<li>distributed state and communication</li>
+<li>failure detection and recovery</li>
+<li>data consistency and correctness</li>
+<li>message loss, partitioning, reordering and corruption</li>
+</ul>
+</li>
+<li><strong>Infrastructure can hide some of the complexity, but only partially.</strong> The application and infrastructure layers must cooperate to give a coherent experience and keep <strong>end-to-end guarantees</strong>.</li>
+<li>You cannot keep the idealistic model of a single node (strong consistency, minimal latency, closed world)
+<ul>
+<li>Local in-process calls become remote, unreliable network calls and parts of the system can fail at any time (<strong>partial failures</strong>), so requirements must be relaxed to stay available and scalable.</li>
+</ul>
+</li>
+<li>The principles and patterns aim to nudge designs <strong>away</strong> from shared mutable state, synchronous communication, blocking I/O and strongly coupled service architectures
+<ul>
+<li>Other benefits listed: services that need less code, shorter time to market, better maintainability and extensibility.</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-2-what-is-a-cloud-application">1.2 What is a cloud application?</h2>
+<ul>
+<li>Like a native species, a cloud application adapts to its environment: the cloud is <strong>harsher</strong> than a dedicated single node, so the application becomes distributed and must be resilient to hardware and network unpredictability, from varying performance to all-out failure.</li>
+<li>The book's framing: ensuring responsiveness and reliability is difficult, but applications built this way better match how the real world works, so users (human or software) get better experiences.</li>
+<li>The <strong>cloud operating model</strong> constraints:
+<ul>
+<li>applications are limited in scaling vertically on commodity hardware, which leads to many isolated, autonomous services (often called <strong>microservices</strong>)</li>
+<li>all interservice communication is over <strong>unreliable networks</strong></li>
+<li>hardware can fail, be restarted or be moved <strong>at any time</strong></li>
+<li>services must detect and manage failures of peers, including <strong>partial failures</strong></li>
+<li><strong>strong consistency and transactions are expensive</strong> because of the coordination required, so it is hard to make data services available, performant and scalable at once</li>
+</ul>
+</li>
+<li>A cloud application is therefore designed to leverage that model: predictable, decoupled from the infrastructure, right-sized for capacity, and enabling tight collaboration between development and operations
+<ul>
+<li>It decomposes into loosely coupled, independently operating services that are resilient to failure, driven by data, and intelligent across geographic regions.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-01-cloud-constraints.svg" alt="The cloud operating model's constraints" loading="lazy" /></p>
+<h2 id="1-3-why-cloud-infrastructure-is-not-enough">1.3 Why cloud infrastructure is not enough</h2>
+<ul>
+<li>Cloud applications need a scalable, available <strong>infrastructure layer</strong> (for example Kubernetes and its tools) <strong>and</strong> a scalable, available <strong>application layer</strong>.</li>
+<li>The infrastructure layer excels at managing, orchestrating, scaling and keeping available the &quot;empty boxes&quot;, the <strong>containers</strong>
+<ul>
+<li>But managing containers &quot;only gets you halfway there&quot;: equally important is what you put inside and how you stitch them into one coherent system.</li>
+</ul>
+</li>
+<li>The chapter quotes <strong>Kelsey Hightower</strong>:
+<ul>
+<li>there is a ton of effort to &quot;modernize&quot; applications at the infrastructure layer, but without equal investment at the application layer (frameworks, application servers) &quot;we're only solving half the problem&quot;</li>
+<li>even with the best orchestration, logging, security and debugging infrastructure, code must be written to make best use of it.</li>
+</ul>
+</li>
+<li>The two layers manage resilience and scalability at different granularities:
+<ul>
+<li>the <strong>application layer</strong>: fine-grained, service-level, working closely with application code</li>
+<li>the <strong>infrastructure layer</strong>: coarse-grained, acting as a <strong>&quot;cloud OS&quot;</strong> where containers are like processes with isolation, resource management and resiliency, offering persistence, I/O, communication, monitoring and deployment</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-01-two-layers.svg" alt="The two layers and their granularity" loading="lazy" /></p>
+<h2 id="1-4-toward-a-holistic-view-of-system-design">1.4 Toward a holistic view of system design</h2>
+<ul>
+<li>A common question: &quot;Now that my application is containerised, I assume I don't need to worry about all that hard distributed systems stuff, since Kubernetes solves my problems around resilience, scalability, stability and safety, right?&quot; The answer: no, it is not that simple.</li>
+<li><strong>End-to-end argument.</strong>
+<ul>
+<li>The 1984 paper &quot;End-To-End Arguments in System Design&quot; by <strong>Saltzer, Reed and Clark</strong> says many infrastructure functions can be completely and correctly implemented <strong>only with the help of the application at the endpoints</strong>. Functions placed at low levels may be redundant or of little value compared with their cost there</li>
+<li>an incomplete low-level version can still help as a performance enhancement.</li>
+<li>This is <strong>not</strong> an argument against tools like Kubernetes, which add a lot of value, but a call for closer collaboration between the layers.</li>
+<li>Correctness, consistency and safety mean different things per service and cannot be fully outsourced
+<ul>
+<li>The chapter quotes <strong>Pat Helland</strong> (&quot;Life Beyond Distributed Transactions&quot;): &quot;The management of uncertainty must be implemented in the business logic.&quot; A holistically stable system is the application's responsibility, not the infrastructure tooling's.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Two examples where application-level semantics matter:
+<ul>
+<li><strong>Message delivery</strong>: is a message delivered when it reaches the destination's network interface card? When it reaches the application's networking library? When the processing callback is invoked? When it completes successfully? When the acknowledgement has gone back and been consumed by the sender? It depends on the use case.</li>
+<li><strong>Flow control</strong>: fast producers must not overload slow consumers; business logic, application libraries and infrastructure must all take part to keep the data flow steady.</li>
+</ul>
+</li>
+<li>The chapter calls for raising the abstraction level with programming models and runtimes that do the heavy lifting, so teams build business value, not network-programming details.</li>
+<li><strong>The hard part is the space between services.</strong>
+<ul>
+<li>A single service is not that useful</li>
+<li>The hard things enter when services collaborate: data consistency guarantees, reliable communication, replication and failover, failure detection and recovery, sharding, routing, consensus algorithms.</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-5-the-unfortunate-trend-of-stateless-protocols">1.5 The unfortunate trend of stateless protocols</h2>
+<ul>
+<li>Most developers building on Kubernetes rely mainly on <strong>stateless protocols and design</strong>, holding on to habits made for monolithic single-node systems on top of &quot;the almighty SQL database&quot;.</li>
+<li>That ignores the hardest part of distributed systems:
+<ul>
+<li><strong>managing the state of your data</strong></li>
+<li>Applications are increasingly data-centric, so owning, processing, transforming and enriching data close to the application matters more than ever.</li>
+</ul>
+</li>
+<li>Many applications cannot afford a round trip to the database for every access and must process data in close to real time from never-ending streams, often in a distributed way before persisting.</li>
+<li><strong>A cache in front of the database</strong> helps latency but brings cache coherency, consistency, invalidation, resilience and operational complexity.
+<ul>
+<li>Example:
+<ul>
+<li>in an online store's <strong>flash sale</strong>, each service caches item stock levels</li>
+<li>One service's updated stock may not immediately sync with the others, risking <strong>overselling</strong></li>
+<li>Invalidation can fail if messages are delayed or lost</li>
+<li>If a cache node fails, other resources take its load</li>
+<li>Managing synchronisation, failover and consistency models adds a heavy operational burden, and small misconfigurations can cause inconsistent data or degraded performance.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>This needs a design that puts <strong>data at the center</strong>, not on the sidelines.</li>
+</ul>
+<h2 id="1-6-data-driven-stateful-services">1.6 Data-driven stateful services</h2>
+<ul>
+<li>Companies try to capture &quot;everything&quot; in data lakes, though the urge must be balanced against legal mandates and users' rights such as <strong>GDPR</strong> and the right to be forgotten.</li>
+<li>Nightly batch jobs over all that data are often too slow; systems need to extract knowledge as data flies by, from thousands of users, in close to real time.</li>
+<li>The move: from <strong>high-latency, stateless, behaviour-driven</strong> services to <strong>low-latency, stateful, data-driven</strong> services, taking back ownership of data.</li>
+</ul>
+<h2 id="1-7-tackling-the-constraints-of-the-edge">1.7 Tackling the constraints of the edge</h2>
+<p>Organisations turn to edge computing for low latency, resilience, performance and data compliance. Edge applications face these constraints:</p>
+<table>
+<thead>
+<tr>
+<th>Constraint</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Limited resources</td>
+<td>Confined to the hosting device; more compute or storage only from locally reachable peers</td>
+</tr>
+<tr>
+<td>Lack of global consistency</td>
+<td>A consistent global view and consensus across large groups is prohibitively expensive</td>
+</tr>
+<tr>
+<td>Lack of stable networks</td>
+<td>Links such as multi-hop mesh networks are unreliable and possibly slow</td>
+</tr>
+<tr>
+<td>Mobile devices</td>
+<td>Devices move and may become unreachable from earlier networks</td>
+</tr>
+<tr>
+<td>Ephemeral devices</td>
+<td>Devices can fail, restart or suspend at any time</td>
+</tr>
+<tr>
+<td>Ephemeral connections</td>
+<td>Because devices are mobile and autonomous, partners are only temporarily connected</td>
+</tr>
+<tr>
+<td>Radically different environment</td>
+<td>Infrastructure, tools and products differ from the cloud</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Edge applications need programming models and runtimes with <strong>decentralisation, location-transparent and mobile services, physical co-location of data and processing, temporal and spatial decoupling of services, and automatic peer-to-peer data replication</strong>
+<ul>
+<li>The core principle: autonomous operation without dependence on central infrastructure or persistent connectivity.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-01-edge-constraints.svg" alt="The edge's constraints" loading="lazy" /></p>
+<h3 id="the-cloud-to-edge-continuum">The cloud-to-edge continuum</h3>
+<ul>
+<li>Cloud and edge are one <strong>continuum</strong> of layers, from centralised cloud to near edge, far edge and devices (Figure 1-1)
+<ul>
+<li>Where a service should run is use-case dependent and may change over an application's life</li>
+<li>Parameters such as latency, throughput, consistency, availability, scalability and compute change drastically along it.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-01-continuum.svg" alt="Figure 1-1: layers of the cloud-to-edge continuum" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Further out, toward the device</th>
+<th>Further in, toward the cloud</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10,000s to 100,000s of points of presence to coordinate (millions of &quot;things&quot; counting devices)</td>
+<td>10s to 1,000s of nodes to coordinate</td>
+</tr>
+<tr>
+<td>Unreliable networks and hardware</td>
+<td>Reasonably reliable network and hardware</td>
+</tr>
+<tr>
+<td>Limited resources and compute power</td>
+<td>Vast resources and compute power</td>
+</tr>
+<tr>
+<td>Local, faster, less accurate decisions</td>
+<td>Global, slower, more knowledgeable decisions</td>
+</tr>
+<tr>
+<td>Low-latency real-time streaming through in-process processing</td>
+<td>Batch-oriented, with high latency to backend services (from the edge user's view)</td>
+</tr>
+<tr>
+<td>Weaker consistency guarantees (eventual or causal)</td>
+<td>Stronger guarantees (ACID and linearizability)</td>
+</tr>
+<tr>
+<td>More resilient and available: data, compute and user co-located</td>
+<td>Less resilient and available: depends on a fast, reliable connection to the backend cloud</td>
+</tr>
+<tr>
+<td>Fine-grained, adaptive, selective data replication and mobility</td>
+<td>Coarse-grained, batch-oriented replication; data can be stationary</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Because users create ever more data, serving them well means managing and processing it where it is created: at the far edge or on the devices
+<ul>
+<li>That cuts latency, improves availability (everything needed is in the user's location) and gives flexibility such as <strong>regional data compliance</strong>.</li>
+</ul>
+</li>
+<li>Ideally where something runs (on prem, cloud, edge or device) should not dictate how it is designed, implemented or deployed
+<ul>
+<li>The principles to rely on: <strong>data and service mobility, location transparency, self-organisation, self-healing, and physical co-location of data, processing and end user</strong>, so the right data is where it is needed for as long as needed, even as the user moves</li>
+<li>This calls for <strong>climbing the ladder of abstraction</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-8-climbing-the-ladder-of-abstraction">1.8 Climbing the ladder of abstraction</h2>
+<ul>
+<li>Cloud infrastructure is &quot;fantastic&quot; and the Kubernetes ecosystem easy to take for granted, but richness has a price: <strong>drowning in complexity</strong>, too many products, decisions and worries
+<ul>
+<li>How to pick, compose, guarantee correctness across product boundaries, observe the whole system, and evolve it?</li>
+</ul>
+</li>
+<li>Businesses need to move and innovate faster at growing user and data volumes, and &quot;we can't just move fast and break things&quot;: changes need predictability, repeatability and reusability.</li>
+<li>The chapter quotes <strong>Alfred North Whitehead</strong>:
+<ul>
+<li>&quot;Civilization advances by extending the number of important operations which we can perform without thinking about them.&quot; We must learn to <strong>let go of control</strong>: we do not need every knob, and delegating frees us for more important work</li>
+<li>It also quotes <strong>Timothy Keller</strong> on &quot;liberating restrictions&quot;: embrace constraints.</li>
+</ul>
+</li>
+<li><strong>Three things we can never delegate</strong> to a product or platform:
+<ol>
+<li><strong>Business logic</strong>: what drives business value; how to act on data (store, query, transform, downsample, relay, mine, trigger side effects).</li>
+<li><strong>Domain data model</strong>: the structure, constraints, guarantees, storage and query model of the business data.</li>
+<li><strong>API definition</strong>: how a service presents itself to the outside world, communicates and coordinates with others, and what data it exposes under what guarantees.</li>
+</ol>
+</li>
+<li>The aim is to free developers to write business logic, model domain data and define APIs, through <strong>unified cloud-and-edge programming models</strong> powered by runtimes and data meshes that hide the underlying infrastructure differences.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-01-never-delegate.svg" alt="The three things never delegated" loading="lazy" /></p>
+<h2 id="1-9-think-reactive">1.9 Think reactive</h2>
+<ul>
+<li>In <strong>2014</strong> the author and friends <strong>Dave Farley, Roland Kuhn and Martin Thompson</strong> wrote <strong>The Reactive Manifesto</strong>, a conceptual framework for thinking, architecting and designing applications for multicore, cloud and edge systems, with a shared vocabulary
+<ul>
+<li>The author calls the initiative immensely successful, saying it inspired tens of thousands of companies (his claim, no source given) <code>(unverified)</code>.</li>
+</ul>
+</li>
+<li>Its tenets (Figure 1-2), best understood as:
+<ul>
+<li><strong>Value</strong>: responsive, maintainable and extensible</li>
+<li><strong>Form</strong>: elastic and resilient</li>
+<li><strong>Means</strong>: message-driven (or event-driven)</li>
+</ul>
+</li>
+<li>This framing underlies the principles and patterns in the rest of the guide, which the next chapter introduces.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-01-reactive-tenets.svg" alt="Figure 1-2: the tenets of the Reactive Manifesto" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Cloud and edge form a continuum; distributed applications must manage uncertainty, partial failure and unreliable networks.</li>
+<li>Containers and Kubernetes cover half the problem; the application layer must cooperate to keep end-to-end guarantees.</li>
+<li>State and data belong at the centre: low-latency, stateful, data-driven services.</li>
+<li>Never delegate business logic, the domain data model or the API definition.</li>
+<li>The Reactive Manifesto (responsive, maintainable, extensible; elastic, resilient; message-driven) frames the rest of the book.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Cloud operating model</strong>: the constraints of the cloud environment (unreliable networks, failing hardware, expensive strong consistency).</li>
+<li><strong>End-to-end argument</strong>: some functions can be completely and correctly provided only with the help of the application at the endpoints.</li>
+<li><strong>Cloud-to-edge continuum</strong>: centralised cloud, near edge, far edge, devices.</li>
+<li><strong>Partial failure</strong>: part of a distributed system fails while the rest keeps running.</li>
+<li><strong>Reactive Manifesto</strong>: value (responsive, maintainable, extensible), form (elastic, resilient), means (message-driven).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Jonas Bonér, <em>Principles and Patterns for Distributed Application Architecture</em> (O'Reilly, January 2025), chapter 1: <a href="https://learning.oreilly.com/library/view/principles-and-patterns/9781098181260/ch01.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/principles-and-patterns/9781098181260/ch01.html</a></li>
+<li>Cited in the chapter:
+<ul>
+<li>J. H. Saltzer, D. P. Reed and D. D. Clark, &quot;End-To-End Arguments in System Design&quot; (1984)</li>
+<li>Pat Helland, &quot;Life Beyond Distributed Transactions&quot;</li>
+<li><em>The Reactive Manifesto</em> (2014)</li>
+<li>Alfred North Whitehead, <em>An Introduction to Mathematics</em> (1911)</li>
+<li>Timothy Keller, <em>The Reason for God</em> (2008). The chapter's footnotes link to a GitHub Gist of latency numbers and a summary of network reliability postmortems</li>
+<li>the URLs are not in the page text.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</a></li>
+<li><a href="/book-digest/software-architecture-patterns/sap-05-event-driven-architecture/">Software Architecture Patterns 5: Event-Driven Architecture</a></li>
+<li><a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a></li>
+</ul>
+<nav class="pager"><span></span><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/">Contents</a><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

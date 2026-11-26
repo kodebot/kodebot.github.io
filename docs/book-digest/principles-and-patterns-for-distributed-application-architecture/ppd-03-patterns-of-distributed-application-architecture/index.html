@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/">Contents</a><span class="ttl">Principles And Patterns For Distributed Application Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-04-designing-distributed-applications/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="principles-and-patterns-for-distributed-application-architecture-3-patterns-of-distributed-application-architecture">Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</h1>
+<p>Source: Jonas Bonér, <em>Principles and Patterns for Distributed Application Architecture</em> (O'Reilly, 2025), chapter 3. Previous: <a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</a>. Next: <a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-04-designing-distributed-applications/">Principles and Patterns for Distributed Application Architecture 4: Designing Distributed Applications</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Twenty patterns, best practices and techniques for elastic, resilient, high-performing, predictable, maintainable distributed applications; the author says they <strong>compose</strong>, so &quot;the sum is greater than the parts&quot;.</li>
+<li>Data and state: <strong>partition state</strong>, <strong>communicate facts</strong> (immutable events), <strong>isolate mutations</strong>, <strong>localize state</strong>, <strong>log events</strong> (event sourcing), <strong>untangle reads and writes</strong> (CQRS).</li>
+<li>Flow and communication: <strong>coordinate dataflow</strong> (backpressure), <strong>go async</strong>, <strong>leverage location transparency</strong>, <strong>observe dynamics</strong>.</li>
+<li>Consistency: <strong>minimize consistency</strong> (ACID 2.0, causal consistency), <strong>compose sagas</strong> instead of distributed transactions.</li>
+<li>Resilience: <strong>guard connections</strong> (timeouts, retries, circuit breakers), <strong>model with actors</strong>, <strong>supervise subordinates</strong>, <strong>protect critical data</strong>, <strong>detect failure</strong>, <strong>replicate for resilience</strong>, <strong>gossip for convergence</strong>, <strong>seek consensus</strong>.</li>
+</ul>
+</div></div>
+<p>The chapter opens: &quot;How can we put these principles into practice?&quot; It dives into twenty patterns; some are &quot;probably more best practices and techniques&quot;, but all are called patterns for simplicity.</p>
+<h2 id="3-1-partition-state">3.1 Partition state</h2>
+<blockquote>
+<p>Divide state into smaller chunks to leverage parallelism of the system.</p>
+</blockquote>
+<ul>
+<li>Distributed applications run in parallel on computers that <strong>do not share memory</strong>, bringing coordination and concurrency control to the multimachine level
+<ul>
+<li>handling state as a monolith becomes inefficient and often impossible.</li>
+</ul>
+</li>
+<li>Partitioning also helps <strong>scalability</strong> (each node stores and processes only a finite dataset; a network of them handles larger problems) and <strong>fault tolerance</strong> (failures are isolated to partitions, using bulkheads).</li>
+<li>Split the monolithic state into smaller partitions managed mostly independently, ideally as &quot;embarrassingly parallel&quot; tasks.</li>
+<li>Some datasets partition naturally (accounts, purchase orders, devices, user sessions); others need care over how to divide and what <strong>partition key</strong> to use.</li>
+<li>For an <strong>aggregated view</strong> across partitions: <strong>event sourcing</strong> (components subscribe to the event stream and build their own aggregated model) and/or <strong>CQRS</strong> to create aggregated read projections (joins) in your database of choice.</li>
+<li>The sacrifice is <strong>consistency</strong>:
+<ul>
+<li>independent partitions go against the coordination needed for guarantees across partition boundaries such as atomicity and isolation</li>
+<li>It is an explicit trade-off of performance, scalability and fault tolerance against consistency and simplicity.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-2-communicate-facts">3.2 Communicate facts</h2>
+<blockquote>
+<p>Choose immutable event streams over mutable state.</p>
+</blockquote>
+<ul>
+<li><strong>Mutable state</strong>
+<ul>
+<li>is not stable through time: it holds only the current value and evolves by destructive in-place updates</li>
+<li>Most languages treat <strong>value and identity as the same thing</strong>, so identity cannot evolve without changing the value, forcing mutexes and similar guards.</li>
+</ul>
+</li>
+<li>Concurrent updates are a &quot;notorious source of data corruption&quot;
+<ul>
+<li>Techniques exist (mutexes, barriers, fork-join; coroutines, actors, futures/promises) but are complex, easy to get wrong as code evolves, and need coordination that caps performance and scalability (Amdahl's law and USL)</li>
+<li>Destructive mistakes lose data that is expensive to detect and recover.</li>
+</ul>
+</li>
+<li>Instead use <strong>immutable values representing facts</strong>, shareable as local or distributed events without locks or transactions.</li>
+<li>A <strong>fact</strong> is immutable and represents something that already happened, which cannot be changed or retracted
+<ul>
+<li>Knowledge is cumulative: gain it by receiving facts or deriving them, and invalidate old knowledge by <strong>adding new facts that refute it</strong></li>
+<li>Facts are never deleted, only made irrelevant.</li>
+</ul>
+</li>
+<li>Facts stored as events in causal order represent a component's full history of state changes (event sourcing) while serving <strong>low-latency reads from memory</strong> (a pattern called <strong>memory image</strong>).</li>
+<li>Share facts by publishing them to the component's <strong>event stream</strong>, which others (components, databases, subsystems) subscribe to for communication, integration and replication
+<ul>
+<li>Implementations: event-sourcing libraries (<strong>Akka, Axon</strong>), message brokers (<strong>Kafka, Pulsar</strong>), optimised append-only storage, or regular databases.</li>
+</ul>
+</li>
+<li>The stream must be <strong>append-only</strong>, made of immutable events, with <strong>no writable side channels</strong>, a <strong>single producer</strong>, and zero to many consumers
+<ul>
+<li>Reading from a <strong>cursor/index</strong> allows replay on failure or network problems and supports <strong>at-least-once or exactly-once</strong> delivery (usually with deduplication).</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-3-isolate-mutations">3.3 Isolate mutations</h2>
+<blockquote>
+<p>Contain and isolate mutable state using bulkheads.</p>
+</blockquote>
+<ul>
+<li>When you must use mutable state, <strong>never share it</strong>:
+<ul>
+<li>contain it with its behaviour in isolated, partitioned compartments separated by bulkheads, a <strong>shared-nothing architecture</strong></li>
+<li>That contains failure, limits its scope, localises it and avoids escalation to cascading failures</li>
+<li>Validation errors are not failures but part of the normal interaction protocol of a stateful component.</li>
+</ul>
+</li>
+<li>Bulkheads are easiest to install with <strong>asynchronous messaging</strong>, which adds a protocol boundary isolating components in time and space, enables observing fluctuating demand (avoiding flooding a bulkhead) and gives a unit of replication.</li>
+<li>Use mutable state only for <strong>local computation inside the consistency boundary</strong>, invisible to the world
+<ul>
+<li>When processing is done, create an immutable value for the result (a fact) and publish it.</li>
+</ul>
+</li>
+<li>Bulkheaded components should ideally use <strong>single-threaded execution</strong>, like Akka actors, avoiding deadlocks, race conditions and corruption.</li>
+<li>Others rely on stable immutable values
+<ul>
+<li>each component internally keeps the benefits of mutability (familiarity, simple coding, efficiency), strong consistency and less contention through the <strong>single writer principle</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-4-coordinate-dataflow">3.4 Coordinate dataflow</h2>
+<blockquote>
+<p>Orchestrate a continuous steady flow of information.</p>
+</blockquote>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-backpressure.svg" alt="Figure 3-1: backpressure uses a backchannel from consumer to producer" loading="lazy" /></p>
+<ul>
+<li>Think in terms of <strong>dataflow</strong>: how data flows through the system, what behaviour it triggers and how components are causally related. This focuses on behaviour, not structure.</li>
+<li>Orchestrate workflow and integration by letting components <strong>subscribe to each other's event streams</strong> and consume published facts on demand.</li>
+<li><strong>Consumers control their rate of consumption</strong>,
+<ul>
+<li>which may be decoupled from the production rate</li>
+<li>A consumer that controls its own rate cannot be overwhelmed</li>
+<li>This is one reason architectures use <strong>message queues</strong>: they absorb extra load so consumers drain it at leisure.</li>
+</ul>
+</li>
+<li>The <strong>poison pill</strong> pattern gracefully shuts down a service by sending a special message saying no more will come.</li>
+<li>A consumer controlling its rate plus an <strong>out-of-band mechanism to halt production</strong> gives <strong>flow control</strong>, which must be managed end to end with every participant cooperating.</li>
+<li><strong>Backpressure</strong>
+<ul>
+<li>forces the producer to slow when the consumer cannot keep up, usually through a <strong>backchannel</strong> upstream on which downstream components signal to slow down or speed up (Figure 3-1)</li>
+<li>All parties must speak the same protocol.</li>
+</ul>
+</li>
+<li>Another scheme: a queue between producer and consumer, reacting to its utilisation by giving the consumer more resources or slowing or degrading the producer.</li>
+<li>Take particular care at the <strong>edges</strong>, where components meet each other or third-party systems
+<ul>
+<li>protocols for graceful degradation and flow control lower the likelihood of failure and give control when it strikes.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-5-localize-state">3.5 Localize state</h2>
+<blockquote>
+<p>Take ownership of data by co-locating state and processing.</p>
+</blockquote>
+<ul>
+<li>In data-intensive use cases, <strong>co-locate state and processing</strong> for locality of reference and a single source of truth, giving low latency, high throughput and more even workloads.</li>
+<li><strong>Locality of reference</strong> has two types: <strong>temporal</strong> (reuse specific data) and <strong>spatial</strong> (keep data close in space).</li>
+<li>Three ways:
+<ol>
+<li><strong>Move the processing to the state</strong>: <strong>cluster sharding</strong> (on the key of the partitioned dataset) of in-memory data, running business logic in-process on each shard and avoiding read and write contention. Ideally the in-memory data is the single source of truth, mapped strongly consistently to storage (event sourcing and memory image).</li>
+<li><strong>Move the state to the processing</strong>: replicate data to all nodes where logic runs (including the edge), with eventually consistent convergence (<strong>CRDTs with gossip</strong>), or use distributed stream processing with pipelines across nodes. This gives high availability without extra storage infrastructure and keeps data consistent across components, nodes, data centres and clients where strong consistency is not required.</li>
+<li><strong>Combine both</strong> inside the consistency boundary of mobile, self-contained, autonomous, location-transparent components (<strong>actors</strong>), physically co-located with the end user. Such a component can lose its backend connection and keep serving, the <strong>local-first</strong> software design.</li>
+</ol>
+</li>
+<li>Co-location is <strong>different from, and complementary to, caching</strong>
+<ul>
+<li>Caching keeps read-only copies close to the processing context, useful for read-heavy cases, but adds complexity staying in sync with the master, so cached data cannot be the single source of truth.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-6-go-async">3.6 Go async</h2>
+<blockquote>
+<p>Embrace asynchronous messaging and nonblocking execution.</p>
+</blockquote>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-async-timing.svg" alt="Figures 3-2 and 3-3: sequential versus asynchronous requests" loading="lazy" /></p>
+<ul>
+<li>An idle component should not hold resources (thread, socket, file)
+<ul>
+<li>Asynchronous nonblocking execution and I/O use resources efficiently and minimise <strong>contention</strong> on shared resources, one of the biggest barriers to elasticity, scalability, low latency and throughput.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>a service making <strong>10 requests of 100 ms</strong> each to 10 other services. Sequentially the total is about <strong>1 second</strong> (Figure 3-2)</li>
+<li>asynchronously it is about <strong>100 ms</strong> (Figure 3-3), an order of magnitude difference.</li>
+</ul>
+</li>
+<li>A blocking call ties up a thread, a limited resource, so it cannot do other work
+<ul>
+<li>Nonblocking calls free the thread (via async callback or message), improving cost, energy and performance (Figure 3-4).</li>
+</ul>
+</li>
+<li>All parts of the request chain must participate, from dispatch through service implementation to data storage and back, within a service boundary as much as between services and clients.</li>
+<li>An <strong>asynchronous boundary</strong> between components decouples them in time (concurrency) and space (distribution, mobility, location transparency, elasticity, resilience via bulkheading)
+<ul>
+<li>Aids: event-driven design, actors, message queues, distributed stream-processing products.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-7-observe-dynamics">3.7 Observe dynamics</h2>
+<blockquote>
+<p>Understand your system by looking at its dynamics.</p>
+</blockquote>
+<ul>
+<li>Distributed systems are complex and issues have many sources (networking, resources, third parties)
+<ul>
+<li>without <strong>observability</strong> root causes are hard to find. It improves reliability and user experience and reduces <strong>MTTR</strong>.</li>
+</ul>
+</li>
+<li>Observability is about answering &quot;how is your system doing?&quot; now and historically. It comprises application metrics, network metrics, health reports, logs and traces, in three categories:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>What and example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Logs</strong></td>
+<td>Structured logs per service with context (user ID, request ID) to track user flows; on failure, the error and its context</td>
+</tr>
+<tr>
+<td><strong>Metrics</strong></td>
+<td>Request latency, success rates, error counts; alert if latency exceeds a threshold</td>
+</tr>
+<tr>
+<td><strong>Traces</strong></td>
+<td>Distributed tracing connecting requests across services, showing where delay occurs</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Centralise the data in a cloud observability platform to derive synthetic metrics and alerts.</li>
+<li>Observe the <strong>communication tissue</strong>, not only applications:
+<ul>
+<li>consumers, producers, exchanges and queue sizes reveal bottlenecks and misbehaving components, and the evolution of the consumed message rate shows what is running behind</li>
+<li>This drives elasticity decisions.</li>
+</ul>
+</li>
+<li>Watch out for: <strong>data overload</strong> (alert fatigue; focus on essential signals), <strong>incomplete traces</strong> (missing spans hide dependencies), and <strong>latency and cost</strong> of telemetry (use sampling or prioritise critical data).</li>
+</ul>
+<h2 id="3-8-leverage-location-transparency">3.8 Leverage location transparency</h2>
+<blockquote>
+<p>One communication abstraction across all dimensions of scale.</p>
+</blockquote>
+<ul>
+<li>Elastic systems must adapt to demand
+<ul>
+<li>Key insight: <strong>we are all doing distributed computing</strong>, even on one node (CPUs communicating over the Intel QuickPath Interconnect, QPI) or a cluster, so there is little conceptual difference between scaling vertically on multicore and horizontally on a cluster.</li>
+</ul>
+</li>
+<li>The traditional way uses different tools for each level (callbacks within a core, threads and locks across cores, pub/sub across nodes and clouds): semantic mismatches, hard-coded communication style and topology.</li>
+<li>Instead unify all communication through <strong>asynchronous messaging</strong>: one programming model and semantics across scale, &quot;from core to socket, from socket to CPU, from CPU to container, from container to server, from server to rack, from rack to data center, from data center to region, from region to multi-cloud, and from multi-cloud to global edge&quot;
+<ul>
+<li>Asynchronous messaging is the only semantically equivalent way.</li>
+</ul>
+</li>
+<li><strong>Location transparency</strong>
+<ul>
+<li>is decoupling in space plus decoupling runtime instances from their references</li>
+<li>It is often <strong>mistaken</strong> for &quot;transparent distributed computing&quot; but is the <strong>opposite</strong>: it embraces the network's constraints (partial failure, network splits, dropped messages) as first-class.</li>
+</ul>
+</li>
+<li>It differs from <strong>transparent remoting or distributed objects</strong>, which Martin Fowler said &quot;sucks like an inverted hurricane&quot;: they hide the network and make everything look local, but local and distributed communication have vastly different semantics and failure modes
+<ul>
+<li>RPC, EJBs, CORBA and distributed transactions are named as leaky abstractions.</li>
+</ul>
+</li>
+<li>If components support location transparency and mobility and local communication is only an optimisation, you need no static topology or deployment model up front
+<ul>
+<li>operations and the runtime can decide.</li>
+</ul>
+</li>
+<li>Asynchronous message passing also shifts focus from low-level plumbing to workflow, communication patterns and collaboration.</li>
+</ul>
+<h2 id="3-9-log-events">3.9 Log events</h2>
+<blockquote>
+<p>Make the event log the backbone for durability, communication and integration.</p>
+</blockquote>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-event-sourcing-cqrs.svg" alt="Figures 3-5 and 3-6: event sourcing with CQRS" loading="lazy" /></p>
+<ul>
+<li>Disk was expensive, which is why most SQL databases <strong>update in place</strong>
+<ul>
+<li>Jim Gray (Turing Award winner) is quoted: &quot;Update-in-place strikes many systems designers as a cardinal sin: it violates traditional accounting practices that have been observed for hundreds of years.&quot; Still, CRUD was born.</li>
+</ul>
+</li>
+<li>Disk is now cheap, so there is little reason to use update-in-place for a system of record. We can store everything ever created
+<ul>
+<li>&quot;CRUD has been distilled to CR&quot;: create new facts, read from any point in history.</li>
+</ul>
+</li>
+<li>This is guidance, not a rule: legal (data retention laws) or moral (account deletion requests) requirements may require physical deletion.</li>
+<li>An <strong>event log</strong> stores facts in causal order:
+<ul>
+<li>not a database of current state but of <strong>everything that ever happened</strong></li>
+<li>Time is a natural index for replay for debugging, auditing, replication and failover</li>
+<li>Pat Helland: &quot;The truth is the log</li>
+<li>The database is a cache of a subset of the log.&quot;</li>
+</ul>
+</li>
+<li><strong>Event sourcing</strong>
+<ul>
+<li>captures state changes triggered by commands as new events stored in arrival order, such as OrderCreated, PaymentAuthorized or PaymentDeclined</li>
+<li>The log is an explicit <strong>transaction log</strong> available for querying, auditing and replay from any time, a &quot;bulletproof failover mechanism and audit log&quot;.</li>
+</ul>
+</li>
+<li>Benefits:
+<ul>
+<li>an always up-to-date in-memory snapshot (<strong>memory image</strong>), a fully durable in-memory database per component</li>
+<li>entities sharded across the cluster with commands routed to shards (Akka)
+<ul>
+<li>in Akka entities can also have <strong>multiple live instances</strong> with primary-primary replication and <strong>CRDTs</strong> merging concurrent writes, enabling multi-region and multi-cloud</li>
+</ul>
+</li>
+<li>no <strong>object-relational impedance mismatch</strong>: use any domain data structures
+<ul>
+<li>master data sits on disk in append-only format, giving the <strong>single writer principle</strong> and &quot;mechanical sympathy&quot; (a quote long attributed to Jackie Stewart)</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Combine with <strong>CQRS</strong> for the query and consistency problems
+<ul>
+<li>Each event-sourced entity publishes an event stream (usually through a message broker) that many parties subscribe to: a query-optimised database, services coordinating workflow, and audit or replication infrastructure.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-10-untangle-reads-and-writes">3.10 Untangle reads and writes</h2>
+<blockquote>
+<p>Scale your reads separately from your writes for better resilience and scalability.</p>
+</blockquote>
+<ul>
+<li><strong>CQRS</strong> (command query responsibility segregation), <strong>coined by Greg Young</strong>, separates the write model from the read model so each can use different techniques.</li>
+<li>The <strong>read model</strong> is better defined as anything that depends on data written by the write model: query models, but also other readers on the event stream (services performing a side effect, downstream systems)
+<ul>
+<li>That broader view underpins reliably orchestrating workflow across services.</li>
+</ul>
+</li>
+<li>It helps each service own its data. Example: <strong>OrderService</strong> needs product information from <strong>InventoryService</strong>
+<ul>
+<li>instead of asking each time, it keeps its own <strong>read-only copy</strong> updated in real time by subscribing to InventoryService's events (Figure 3-6).</li>
+</ul>
+</li>
+<li>Two advantages:
+<ul>
+<li><strong>Resilience</strong>:
+<ul>
+<li>temporal decoupling of writes from the actions taken in response (index updates, stream processing, side effects, cross-service work)</li>
+<li>the services need not be available at the same time, which avoids retries and allows eventual consistency.</li>
+</ul>
+</li>
+<li><strong>Scalability</strong>:
+<ul>
+<li>scale reads and writes independently. A read-mostly system may run <strong>tens or hundreds</strong> of query nodes with <strong>three to five</strong> write nodes for availability</li>
+<li>a write-mostly system (probably sharded) the opposite.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Multiple read models (views)</strong>,
+<ul>
+<li>for example SQL or NoSQL for queries, a search database, a time-series database, and stream processing for trends</li>
+<li>A new model can be added at any time by <strong>replaying the event log</strong>: with the log as the single source of truth you can produce any view (<strong>polyglot persistence</strong>).</li>
+</ul>
+</li>
+<li>CQRS is a general design pattern usable with almost any persistence, but fits event sourcing; each can be used without the other.</li>
+<li><strong>Trade-offs</strong>:
+<ul>
+<li>CQRS with event sourcing forces you to face the <strong>essential complexity</strong> head on; for an MVP, prototype or throwaway you may do better starting with <strong>CRUD and a monolith</strong>.</li>
+<li>Write and read sides take time to become consistent, &quot;often only a matter of milliseconds to a few seconds&quot;, which can have a big design impact.</li>
+<li>To mitigate, write the event and update the read model in the <strong>same database transaction</strong>, but only within a single service (not across services, so each owns its data), and with care because it can create performance and availability problems and reduce CQRS's value.</li>
+</ul>
+</li>
+<li>Embrace reality: the world is seldom strongly consistent, so relaxing consistency raises headroom for resilience, performance and elasticity.</li>
+</ul>
+<h2 id="3-11-minimize-consistency">3.11 Minimize consistency</h2>
+<blockquote>
+<p>Batter the consistency mechanisms down to a minimum.</p>
+</blockquote>
+<ul>
+<li>James Hamilton: &quot;The first principle of successful scalability is to batter the consistency mechanisms down to a minimum.&quot;</li>
+<li><strong>ACID 2.0</strong>, a term coined by Pat Helland, summarises principles for eventually consistent protocol design:
+<ul>
+<li><strong>A</strong>ssociative: grouping and batching of messages does not matter</li>
+<li><strong>C</strong>ommutative: ordering does not matter</li>
+<li><strong>I</strong>dempotent: duplication does not matter</li>
+<li><strong>D</strong>istributed: the environment where it applies</li>
+</ul>
+</li>
+<li>Eventual consistency raises the ceiling on scalability, availability and reduced coupling, but sometimes gives up too much business semantics
+<ul>
+<li>Then use <strong>causal consistency</strong>: what humans find intuitive, scalable and available, and (per the chapter) proven the best achievable in an always-available system.</li>
+</ul>
+</li>
+<li>Implement causal consistency with <strong>logical time</strong> (vector clocks, CRDTs, event logging) rather than wall-clock timestamps, which suffer clock skew and cross-node coordination problems.</li>
+</ul>
+<h2 id="3-12-compose-sagas">3.12 Compose sagas</h2>
+<blockquote>
+<p>Manage long-running business transactions with sagas.</p>
+</blockquote>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-saga.svg" alt="Figure 3-7: a saga with compensating actions" loading="lazy" /></p>
+<ul>
+<li>Transactions are fine <strong>within well-defined consistency boundaries</strong> (a service, entity or actor) using a SQL database, distributed SQL or event sourcing
+<ul>
+<li>What is problematic is <strong>extending transactional semantics across services</strong>.</li>
+</ul>
+</li>
+<li>Transactions try to maintain the illusion of a single, globally strongly consistent present, magnified in distributed transactions (<strong>XA, two-phase commit</strong>)
+<ul>
+<li>Pat Helland: &quot;Developers simply do not implement large scalable applications assuming distributed transactions.&quot; If elasticity, scalability and availability do not matter, 2PC is available.</li>
+</ul>
+</li>
+<li>The <strong>saga pattern</strong> is a failure-management alternative for long-running business transactions using <strong>compensating actions</strong>. <strong>Hector Garcia-Molina</strong> defined it in <strong>1987</strong> to shorten the time a database holds locks
+<ul>
+<li>it was not made for distributed systems but suits them.</li>
+</ul>
+</li>
+<li>One long distributed transaction is a <strong>composition of quick local transactional steps</strong>, each paired with a <strong>compensating action</strong> (reversing in business semantics, not necessarily resetting state) so the whole can be reversed on failure
+<ul>
+<li>Ideally steps are <strong>commutative</strong> so they can run in parallel.</li>
+</ul>
+</li>
+<li>A saga is usually run by a <strong>coordinator</strong>, a single centralised <strong>FSM</strong> made durable, preferably through event logging so it can be replayed on failure.</li>
+<li>It is eventually consistent, event based and fits asynchronous decoupled components (Figure 3-7).</li>
+<li><strong>Limit:</strong>
+<ul>
+<li>sagas give atomicity but <strong>not isolation</strong></li>
+<li>concurrent sagas can affect each other. If that is unacceptable, avoid spanning multiple consistency boundaries or use another pattern.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-13-guard-connections">3.13 Guard connections</h2>
+<blockquote>
+<p>Ensure graceful degradation.</p>
+</blockquote>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-littles-law.svg" alt="Figure 3-8: Little's law" loading="lazy" /></p>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-circuit-breaker.svg" alt="Figure 3-9: circuit breaker states" loading="lazy" /></p>
+<ul>
+<li>Quote from George Candea and Armando Fox (&quot;Recursive Restartability&quot;): components should be able to <strong>deny service</strong> for any request, and apps must be designed to &quot;take No for an answer&quot; and decide whether to give up, wait and retry, or reduce fidelity.</li>
+<li>You may be at the mercy of systems that do not offer asynchronous nonblocking APIs or take part in backpressure
+<ul>
+<li>to be safe you must protect yourself against crashes and spikes and keep providing at least a <strong>degraded service</strong>.</li>
+</ul>
+</li>
+<li><strong>Little's law</strong>,
+<ul>
+<li>L = λ × W, so W = L / λ: W is mean response time (time in the queue), L is mean queue length, λ is the effective arrival rate (Figure 3-8)</li>
+<li>You can measure but not control the arrival rate, but you can <strong>control the queue length</strong>, and so the response time.</li>
+</ul>
+</li>
+<li>Ways to control queue length:
+<ul>
+<li><strong>Drop messages</strong> and make the producer retry after a timeout (load shedding)</li>
+<li><strong>Block the producer or throw exceptions</strong> (for synchronous calls); not both</li>
+<li><strong>Flow control</strong> by negotiation (backpressure)</li>
+<li><strong>Circuit breaker</strong></li>
+</ul>
+</li>
+<li><strong>Timeouts</strong>
+<ul>
+<li>are essential: they bound waiting</li>
+<li>if no response arrives the request is assumed failed, so the system can log, fail gracefully or trigger alternatives. Without them one stalled request can block resources and cascade.</li>
+</ul>
+</li>
+<li><strong>Retries</strong> help with transient issues, but must be managed so they do not overwhelm services: a maximum retry limit, <strong>exponential backoff</strong>, and <strong>idempotent operations</strong> so duplicates do not corrupt data.</li>
+<li>A <strong>circuit breaker</strong> is an FSM with three states:
+<ol>
+<li><strong>Closed</strong> (default): all requests pass.</li>
+<li><strong>Open</strong>: after a failure or a number of failures it trips, lets nothing through and <strong>fails fast</strong>, shielding the component; some implementations register a <strong>fallback</strong> for graceful degradation.</li>
+<li><strong>Half-open</strong>: after a timeout it tries to reset; if the next request fails it returns to open and resets the timeout, if it succeeds it returns to closed (Figure 3-9).</li>
+</ol>
+</li>
+</ul>
+<h2 id="3-14-model-with-actors">3.14 Model with actors</h2>
+<blockquote>
+<p>Model distribution, autonomy, bulkheading, mobility and location transparency with actors.</p>
+</blockquote>
+<ul>
+<li><strong>Carl Hewitt invented the actor model in 1973</strong>,
+<ul>
+<li>&quot;well ahead of his time&quot;: a computational model embracing <strong>nondeterminism</strong>, assuming all communication is asynchronous</li>
+<li>That enables concurrency and, with <strong>long-lived stable addresses</strong> to stateful isolated autonomous actors, decoupling in time and space, so service distribution, location transparency and mobility.</li>
+</ul>
+</li>
+<li>The author says multicore, cloud and edge, IoT and mobile have caught up with it, and that he created <strong>Akka</strong> to put the actor model in every developer's hands.</li>
+<li>An actor combines <strong>processing, storage and communication</strong> in one bulkheaded, autonomous, mobile, location-transparent unit.</li>
+<li>Actors communicate by <strong>asynchronous message passing</strong>
+<ul>
+<li>Each has a <strong>mailbox</strong> (a local dedicated queue, messages processed in arrival order) and a <strong>serialisable, mobile reference</strong> (<strong>ActorRef</strong> in Akka, <strong>PID</strong> in Erlang) decoupled from the runtime instance</li>
+<li>The sender need not know where the actor is or whether it is running (recovering, updating or relocating).</li>
+</ul>
+</li>
+<li>An actor is <strong>single-threaded</strong>, multiplexed on a thread pool, so it is a natural <strong>consistency boundary</strong>: mutable state inside is safe without locks, races or deadlocks
+<ul>
+<li>Concurrency comes from running many actors (&quot;actors always come in systems&quot;)</li>
+<li>They are very light: in Akka you can run <strong>millions of actors on a single GB of RAM</strong>.</li>
+</ul>
+</li>
+<li>Three axioms: on receiving a message an actor can
+<ul>
+<li><strong>create new actors</strong>,</li>
+<li><strong>send a message</strong> to an actor it has a reference to,</li>
+<li><strong>designate how it handles the next message</strong>, so behaviour changes at runtime, making finite-state machines easy</li>
+</ul>
+</li>
+<li>Actors are <strong>natural bulkheads</strong>:
+<ul>
+<li>one failing does not affect others</li>
+<li>with no blocking calls there is no cascading failure</li>
+<li>failures are contained and reified as messages sent to whoever registered interest, so actors can <strong>supervise</strong> each other.</li>
+</ul>
+</li>
+<li>They embody most principles and many patterns here: asynchronous communication, location transparency, autonomy, decoupling, virtual addressing, localised state, consistency boundary, isolated mutations, bulkheading, mobility, decentralisation, message-driven design.</li>
+<li>Akka layers higher-level patterns on top: replication, sharding, cluster membership, leader election, flow control, stream processing, event sourcing, CQRS, sagas and more.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-actors.svg" alt="Figure 3-10: a system of actors communicating by asynchronous messages" loading="lazy" /></p>
+<h2 id="3-15-supervise-subordinates">3.15 Supervise subordinates</h2>
+<blockquote>
+<p>Build self-healing systems using supervisor hierarchies.</p>
+</blockquote>
+<ul>
+<li>If components are bulkheads with asynchronous boundaries and failures are <strong>reified as messages</strong>, systems can heal themselves without human intervention
+<ul>
+<li><strong>Supervisor hierarchies</strong> formalise this, used successfully in actor languages and platforms (<strong>Erlang invented it</strong>, and Akka uses it).</li>
+</ul>
+</li>
+<li><strong>Parents supervise the life cycle of subordinates.</strong>
+<ul>
+<li>A subordinate never manages its own failure: it <strong>crashes and notifies its parent</strong></li>
+<li>This is the <strong>fail fast</strong> philosophy, also &quot;let it crash&quot; or &quot;crash-only software&quot;.</li>
+</ul>
+</li>
+<li>The supervisor chooses a strategy: <strong>resume or restart</strong> the subordinate, <strong>delegate</strong> its work, or <strong>escalate</strong> to its own supervisor.</li>
+<li>Figure 3-11 example:
+<ul>
+<li>a child raises an exception, which is captured and reified as a failure message sent asynchronously to its supervisor. The supervisor decides it is beyond its responsibility and escalates</li>
+<li>the top-level supervisor restarts the whole chain of failed components recursively, restoring a healthy hierarchy: &quot;self-healing in action&quot;.</li>
+</ul>
+</li>
+<li>Paired with location transparency, failures are just events, so the same failure-management model scales across nodes, regions or clouds with the same semantics.</li>
+<li>Failures must be:
+<ul>
+<li><strong>contained</strong> (no cascading)</li>
+<li><strong>reified</strong> as immutable values (facts)</li>
+<li><strong>signalled</strong> asynchronously</li>
+<li><strong>observed</strong> by one to N healthy components</li>
+<li><strong>managed</strong> safely outside the failed context.</li>
+</ul>
+</li>
+<li><strong>Vending machine example</strong>
+<ul>
+<li>(Figures 3-12 to 3-14): on the happy path the customer inserts enough coins and gets coffee, and a short payment returns &quot;insert more coins&quot;</li>
+<li>If the machine is <strong>out of beans</strong>, telling only the customer is of little use; better to notify the <strong>service technician</strong></li>
+<li>Lesson: define who is <strong>responsible</strong> for managing a failure versus who merely benefits from knowing it happened.</li>
+</ul>
+</li>
+<li>In software, <strong>validation errors</strong> (&quot;insert more coins&quot;) go to the user, who can fix them
+<ul>
+<li><strong>internal component errors</strong> have little value to the user. If each failure is a message, other components (the supervisor) subscribe and act from a safe, separate runtime context, for example restarting or relocating the component.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-supervisor.svg" alt="Figure 3-11: a supervisor hierarchy with failure escalation" loading="lazy" /></p>
+<h2 id="3-16-protect-critical-data">3.16 Protect critical data</h2>
+<blockquote>
+<p>Always protect your critical data from failure and uncertainty.</p>
+</blockquote>
+<ul>
+<li>Almost all failures relate to state or data:
+<ul>
+<li><strong>inconsistent</strong> (covered elsewhere)</li>
+<li><strong>partial</strong> (only some of the data you need)</li>
+<li><strong>corrupted</strong> (on the wire or disk)</li>
+<li><strong>lost</strong> (on the wire or disk)</li>
+<li><strong>duplicated</strong> (retransmission after failure).</li>
+</ul>
+</li>
+<li>&quot;Out of the Tar Pit&quot; (the page text spells the authors Ben Mosely and Peter Marks) defines two types of state and two types of complexity:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Input data</strong></td>
+<td>Essential if it must be referred to in the future (critical, protect at all costs); non-essential if only temporary</td>
+</tr>
+<tr>
+<td><strong>Derived data</strong></td>
+<td>Not essential; can always be derived from input data</td>
+</tr>
+<tr>
+<td><strong>Essential complexity</strong></td>
+<td>Addresses the essence of the problem</td>
+</tr>
+<tr>
+<td><strong>Accidental complexity</strong></td>
+<td>All the rest (infrastructure, performance, elasticity, resilience)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The paper's ideal system has <strong>three layers</strong> (Figure 3-15):
+<ol>
+<li><strong>Essential state</strong>: the foundation, self-contained, holds essential input data, references nothing else.</li>
+<li><strong>Essential logic</strong>: the heart, the &quot;business logic&quot;; depends on essential state and nothing else.</li>
+<li><strong>Accidental state and control</strong>: least important for data; control is the order of things; changes here can never affect essential logic or state, but can be affected by them.</li>
+</ol>
+</li>
+<li>In practice use supervisor hierarchies to create a <strong>hierarchy of dependency</strong> with protective layers: the <strong>error kernel pattern</strong> (credited to Roland Kuhn's <em>Reactive Design Patterns</em>), an onion-like design.
+<ul>
+<li>Instead of scattering critical state across services, define a <strong>minimal error kernel</strong> holding the &quot;not recomputable&quot; input data you cannot lose
+<ul>
+<li>push risky behaviour out to the leaves of the process tree.</li>
+</ul>
+</li>
+<li>The kernel <strong>never does dangerous operations itself</strong>:
+<ul>
+<li>it never talks to external resources and never takes user input directly, always delegating to a subordinate</li>
+<li>So when it receives a message you can assume correctness and safety.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>It builds on: partition state, communicate facts, isolate mutations, go async, bulkheads, detect failure, guard connections, model with actors, supervise subordinates.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-error-kernel.svg" alt="Figures 3-15 and 3-16: essential state and the error kernel" loading="lazy" /></p>
+<h2 id="3-17-detect-failure">3.17 Detect failure</h2>
+<blockquote>
+<p>Employ failure detection for more resilient systems.</p>
+</blockquote>
+<ul>
+<li>A distributed system is discrete parts bridged by an unreliable network
+<ul>
+<li>accurately detecting that a peer is down is important but <strong>there is no perfect failure detector</strong>
+<ul>
+<li>Failure detection was introduced in <strong>1996</strong> by <strong>Tushar Deepak Chandra and Sam Toueg</strong> (&quot;Unreliable Failure Detectors for Reliable Distributed Systems&quot;)</li>
+</ul>
+</li>
+<li>it is &quot;almost like science mixed with art&quot;: educated guesses.</li>
+</ul>
+</li>
+<li>Things that can go wrong even with a healthy peer:
+<ul>
+<li>the request is dropped</li>
+<li>the response is dropped</li>
+<li>the request is not successfully executed</li>
+<li>the request is queued</li>
+<li>the receiver is struggling with load or garbage collection</li>
+<li>network congestion delays the request or response.</li>
+</ul>
+</li>
+<li>A detector has two properties on two axes, <strong>completeness</strong> and <strong>accuracy</strong>:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Strong completeness</strong></td>
+<td>Every crashed process is eventually suspected by <strong>every</strong> correct process (&quot;everyone knows&quot;)</td>
+</tr>
+<tr>
+<td><strong>Weak completeness</strong></td>
+<td>Every crashed process is eventually suspected by <strong>some</strong> correct process (&quot;someone knows&quot;)</td>
+</tr>
+<tr>
+<td><strong>Strong accuracy</strong></td>
+<td>No correct process is ever suspected (&quot;no false positives&quot;)</td>
+</tr>
+<tr>
+<td><strong>Weak accuracy</strong></td>
+<td>Some correct process is never suspected (&quot;some false positives&quot;)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Ideally both strong, but every guarantee has a cost: how many false positives can you accept, how fast must detection be? <strong>Lower detection latency causes more false positives</strong>, for example during a garbage-collection pause.</li>
+<li><strong>Phi accrual failure detector</strong>
+<ul>
+<li>(Naohiro Hayashibara and colleagues), used in Akka: the suspicion level is a value <strong>phi</strong> on a scale dynamically adjusted to network conditions, using heartbeat history statistics, and decoupling monitoring from interpretation</li>
+<li>It never answers yes or no, only a <strong>likelihood</strong></li>
+<li>phi = -log10(1 - F(timeSinceLastHeartbeat)), where F is the cumulative distribution function of a normal distribution with mean and standard deviation estimated from historical heartbeat inter-arrival times (Figure 3-17).</li>
+</ul>
+</li>
+<li><strong>SWIM</strong>
+<ul>
+<li>(Das and colleagues, 2002): separates cluster dissemination from heartbeats and adds a <strong>quarantine</strong> for suspected nodes, marking them faulty after a grace period</li>
+<li>It combines failure detection with group-membership dissemination and uses <strong>delegated heartbeats</strong> to bridge network splits, where a node unreachable from one node may be reachable from others:</li>
+</ul>
+<ol>
+<li>Node N1 picks a random member N2 and sends PING(N2).</li>
+<li>Either N2 replies ACK(N2), or there is a timeout.</li>
+<li>On timeout, N1 sends PING(N2) requests to a set of random members RN.</li>
+<li>Each RN pings N2; on ACK(N2), RN forwards it to N1.</li>
+</ol>
+</li>
+<li>Good failure detection lets the system reroute requests, restart processes or reallocate resources
+<ul>
+<li>without it a slow or unreachable component may be treated as operational, causing delays, resource lockups or inconsistencies.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-swim.svg" alt="Figure 3-18: delegated heartbeats in SWIM" loading="lazy" /></p>
+<h2 id="3-18-replicate-for-resilience">3.18 Replicate for resilience</h2>
+<blockquote>
+<p>Replicate data for resilience, elasticity and performance.</p>
+</blockquote>
+<ul>
+<li><strong>Replication</strong>: sharing data between multiple discrete parties (services, nodes, data centres) while ensuring consistency, to raise availability, resilience and elasticity.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Choice</th>
+<th>Options</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Synchronous vs asynchronous</strong></td>
+<td>Synchronous writes the primary and replica together, strongly consistent. Asynchronous decouples writing from sending to replicas, enabling asynchronous I/O and messaging, batching, and decoupling in space and time for availability, resilience, scalability and elasticity.</td>
+</tr>
+<tr>
+<td><strong>Push vs pull</strong></td>
+<td>Push: continuously send data to replicas as written. Pull (passive): replicas fetch at their convenience, from the primary or from peers; works well with timeout-based caches.</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Sharding</strong>
+<ul>
+<li>splits a large dataset into <strong>shards</strong> across servers</li>
+<li>each holds a subset and can operate independently, improving scalability and performance and allowing horizontal scaling (elasticity).</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>a user dataset indexed by user name, sharded across <strong>four nodes</strong>, each holding part of the keyspace (Figure 3-19)</li>
+<li>For redundancy, replicate each partition to at least one other shard node so each holds its own data plus backups of others' (Figure 3-20).</li>
+</ul>
+</li>
+<li>Four replication strategies:
+<ul>
+<li><strong>Primary-replica</strong> (active-passive): one primary serves reads and writes; two or more replicas serve only reads; the primary replicates each write (Figure 3-21).</li>
+<li><strong>Primary-primary</strong>
+<ul>
+<li>(active-active, multi-master): two or more primaries serve reads and writes concurrently, always &quot;hot&quot;, replicating bidirectionally
+<ul>
+<li>The key is <strong>conflicting concurrent updates</strong> to the same record (Figure 3-22)</li>
+<li>Options: <strong>last write wins</strong> (brute force, possible data loss, no application help)</li>
+</ul>
+</li>
+<li><strong>store tuples of both writes</strong> so the client reconciles on read (leaks complexity to the application)</li>
+<li><strong>CRDTs</strong> (automatic intelligent merging that understands application semantics, guaranteed to converge, but the application must model data as CRDTs; the approach Akka takes).</li>
+</ul>
+</li>
+<li><strong>Buddy replication</strong>: each instance picks one or more <strong>buddies</strong> and replicates only to them, often in gossip-based systems (Figure 3-23).</li>
+<li><strong>Quorum replication</strong>: an update completes only after a quorum of copies processed it; better balance of consistency with availability, scalability and performance.</li>
+</ul>
+</li>
+<li><strong>Do not replicate everything everywhere</strong>; decide the guarantees per dataset.</li>
+<li><strong>Gifford's parameters (1979)</strong>: <strong>N</strong> = nodes storing replicas; <strong>W</strong> = replicas that must acknowledge an update before it completes; <strong>R</strong> = replicas contacted for a read.
+<ul>
+<li><strong>W + R &gt; N and W &gt; N/2</strong>: strong consistency.</li>
+<li><strong>W + R &lt;= N</strong>: eventual consistency; risk of reading nodes not yet updated (quorum reads help).</li>
+<li><strong>W &lt; (N + 1)/2</strong>: conflicting writes possible if write sets do not overlap.</li>
+</ul>
+</li>
+<li>Ryan Barrett's talk &quot;Transactions Across Datacenters&quot; compares replication and consensus strategies (Figure 3-24)
+<ul>
+<li>Not covered here: hinted handoff, strict and sloppy quorum, anti-entropy using Merkle trees, read repair.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-sharding.svg" alt="Figures 3-19 and 3-20: sharding with peer replicas" loading="lazy" /></p>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-replication.svg" alt="The four replication strategies" loading="lazy" /></p>
+<h2 id="3-19-gossip-for-convergence">3.19 Gossip for convergence</h2>
+<blockquote>
+<p>Use epidemic gossiping for elastic cluster membership and data convergence.</p>
+</blockquote>
+<ul>
+<li>The industry moves towards <strong>decentralisation</strong>: masterless peer-to-peer meshes that distribute logic and data together. Listed advantages:
+<ul>
+<li><strong>scalability</strong> (distribute data and work across nodes)</li>
+<li><strong>resilience and high availability</strong> (no single point of failure)</li>
+<li><strong>performance</strong> (less bottleneck, more parallelism)</li>
+<li><strong>data locality</strong> (closer to where data is made or used, lower latency)</li>
+<li><strong>security and privacy</strong> (breaching many nodes is harder; data can stay in a region for compliance)</li>
+<li><strong>cost optimisation</strong></li>
+<li><strong>reduced vendor lock-in</strong> (open source, standard interfaces, multi-cloud and edge)</li>
+</ul>
+</li>
+<li>The key problem is making many nodes act as one and disseminating information automatically
+<ul>
+<li>Many systems use <strong>gossip (epidemic) protocols</strong>: information spreads randomly between pairs of nodes until it reaches the whole network, like gossip or a virus.</li>
+</ul>
+</li>
+<li>Two classes: <strong>anti-entropy</strong> (gossip until superseded by newer information; reliable sharing) and <strong>rumour-mongering</strong> (gossip for long enough that all nodes very likely have it).</li>
+<li>Key features:
+<ul>
+<li><strong>decentralisation</strong> (no central authority)</li>
+<li><strong>scalability</strong> (probabilistic, evenly spread load)</li>
+<li><strong>fault tolerance</strong> (redundant dissemination survives node failures)</li>
+<li><strong>convergence</strong> (nodes eventually agree; exact guarantees depend on the implementation).</li>
+</ul>
+</li>
+<li>Gossip makes these easy:
+<ul>
+<li><strong>Cluster membership</strong>: gossip the membership so nodes join, leave or go temporarily unavailable seamlessly (Akka uses <strong>push/pull gossip</strong>).</li>
+<li><strong>Failure detection</strong>: gossip heartbeats at a set cadence.</li>
+<li><strong>Leader election</strong>:
+<ul>
+<li>gossip who is leader</li>
+<li>In Akka the leader is not elected but decided <strong>deterministically</strong>, the first node in a sorted ring, after cluster convergence (a gossip is seen where all nodes are in the &quot;seen set&quot;).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Peer-to-peer systems rely on a <strong>semantic-free index</strong>:
+<ul>
+<li>each data item has a key</li>
+<li>each node takes an identifier from the same hash space and stores a subset of keys, giving a <strong>distributed hash table (DHT)</strong>. <strong>Chord</strong> (Stoica, Morris, Karger, Kaashoek and Balakrishnan, 2001) arranges nodes in a <strong>node ring</strong> and guarantees finding data in <strong>O(log N)</strong> jumps (Figure 3-25).</li>
+</ul>
+</li>
+<li><strong>Consistent hashing</strong>
+<ul>
+<li>(Karger and colleagues) spreads K objects across N buckets (about K/N each) and, when N changes, moves only about <strong>K/N</strong> objects, using a base hash function such as <strong>SHA-1</strong></li>
+<li>hash(key) = P in 0..m-1, on a ring where key is the bucket ID, P the position on the ring and m the ring size</li>
+<li>Buckets and incoming request keys are hashed with the same function onto the ring.</li>
+</ul>
+</li>
+<li>Buckets are <strong>replicated to more than one node</strong> so requests can go to a replica if nodes are lost
+<ul>
+<li>Reading from several replicas allows stronger consistency: usually a <strong>quorum read</strong> with an odd replication factor (3, 5 or 7) (Figure 3-26).</li>
+</ul>
+</li>
+<li>Gossip can be inefficient with many nodes
+<ul>
+<li>mitigations are separating failure-detection heartbeats from data dissemination (as in SWIM) and <strong>push/pull gossip</strong> (Khambatti and colleagues, 2003).</li>
+</ul>
+</li>
+<li>Used successfully in <strong>Amazon's Dynamo, Apache Cassandra and Akka Cluster</strong> (Akka uses Dynamo-style gossiping, biased gossip, push/pull gossip, CRDTs for gossip state and leader election).</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-hash-ring.svg" alt="Figures 3-25 and 3-26: the Chord ring and consistent hashing" loading="lazy" /></p>
+<h2 id="3-20-seek-consensus">3.20 Seek consensus</h2>
+<blockquote>
+<p>Leverage consensus algorithms for coordination and consensus.</p>
+</blockquote>
+<ul>
+<li>Sometimes you need strongly consistent <strong>consensus</strong> across components.</li>
+<li>The <strong>FLP impossibility result</strong> (Fischer, Lynch and Paterson, 1985): in a fully asynchronous system where at least one process can fail, a <strong>deterministic consensus algorithm is impossible</strong> (it cannot always terminate)
+<ul>
+<li>It rests on worst-case scheduling, rare in practice except in adversarial cases such as a targeted denial-of-service attack.</li>
+</ul>
+</li>
+<li>Four properties a consensus protocol needs:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Termination</strong></td>
+<td>Every process eventually decides a value V</td>
+</tr>
+<tr>
+<td><strong>Validity</strong></td>
+<td>If a process decides V, some process proposed V</td>
+</tr>
+<tr>
+<td><strong>Integrity</strong></td>
+<td>No process decides twice</td>
+</tr>
+<tr>
+<td><strong>Agreement</strong></td>
+<td>No two correct processes decide differently</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Paxos</strong>
+<ul>
+<li>and <strong>Raft</strong> are designed with FLP in mind and work in practice</li>
+<li>Others: <strong>Zab</strong> (used by Zookeeper) and <strong>Viewstamped Replication</strong> (predates Paxos, similar to Raft in some ways).</li>
+<li><strong>Paxos</strong> (Leslie Lamport): phases with quorum-based voting; progress even if some processes fail or messages are delayed.</li>
+<li><strong>Raft</strong> (Diego Ongaro and John Ousterhout): simpler and easier to implement; leader election, log replication, strong leader.</li>
+</ul>
+</li>
+<li>Two categories:
+<ul>
+<li><strong>Single-value consensus</strong> (agree on one value, often database transaction metadata; <strong>binary consensus</strong> limits it to {0,1}): Paxos.</li>
+<li><strong>Multivalued consensus</strong> (agree on a growing sequence of values, with optimisations and reconfiguration support): Multi-Paxos and Raft.</li>
+</ul>
+</li>
+<li><strong>Raft</strong> works in a cluster with one <strong>leader</strong> and <strong>followers</strong>. The leader manages the replicated log of commands; followers passively replicate and respond.
+<ul>
+<li><strong>Leader election</strong>: a server hearing nothing from a leader within a timeout becomes a <strong>candidate</strong> and requests votes; a <strong>majority</strong> makes it leader (Figure 3-27).</li>
+<li><strong>Log replication</strong>:
+<ul>
+<li>the leader appends each command to its log and replicates to followers</li>
+<li>once a <strong>majority acknowledge</strong>, the entry is <strong>committed</strong>, applied to its state machine, and followers are told to apply it.</li>
+</ul>
+</li>
+<li><strong>Safety</strong>: all servers eventually agree on the same entries in the same order even through crashes; leaders commit only entries safely replicated to a majority.</li>
+<li>It also supports <strong>dynamic reconfiguration</strong> and <strong>log compaction</strong>.</li>
+</ul>
+</li>
+<li>Why it matters:
+<ul>
+<li>nodes must agree to avoid conflicts. Example: two users simultaneously try to withdraw the <strong>last $100</strong> from the same account on different nodes</li>
+<li>a protocol like Raft agrees which transaction comes first so the balance is updated consistently and double spending is prevented.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-03-raft.svg" alt="Figure 3-27: Raft leader election, redrawn from the chapter's description" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Treat state as partitioned, immutable facts and event logs; keep mutation inside bulkheaded consistency boundaries.</li>
+<li>Communicate asynchronously with flow control and location transparency; observe dynamics.</li>
+<li>Use CQRS, minimal consistency, causal consistency and sagas instead of distributed transactions.</li>
+<li>Build resilience with guarded connections, actors, supervisor hierarchies, error kernels, failure detection, replication, gossip and, where required, consensus.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Fact / event log / event sourcing</strong>: immutable events as the source of truth.</li>
+<li><strong>CQRS</strong>: separate write and read models.</li>
+<li><strong>Backpressure</strong>: consumer-driven flow control.</li>
+<li><strong>Saga</strong>: local steps with compensating actions.</li>
+<li><strong>Circuit breaker</strong>: closed, open, half-open FSM.</li>
+<li><strong>Actor / supervisor hierarchy / error kernel</strong>: isolated unit, parent-managed failure, minimal protected core.</li>
+<li><strong>Phi accrual / SWIM</strong>: failure detection approaches.</li>
+<li><strong>N, W, R</strong>: replica count, write acknowledgements, read contacts.</li>
+<li><strong>Consistent hashing / Chord</strong>: balanced key placement and ring lookup.</li>
+<li><strong>FLP / Paxos / Raft</strong>: consensus impossibility and practical protocols.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Jonas Bonér, <em>Principles and Patterns for Distributed Application Architecture</em> (O'Reilly, January 2025), chapter 3: <a href="https://learning.oreilly.com/library/view/principles-and-patterns/9781098181260/ch03.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/principles-and-patterns/9781098181260/ch03.html</a></li>
+<li>Cited in the chapter (titles and authors as the page gives them, no URLs in the page text): Jim Gray, &quot;The Transaction Concept: Virtues and Limitations&quot; (1981)
+<ul>
+<li>Pat Helland, &quot;Immutability Changes Everything&quot; and &quot;Building on Quicksand&quot;</li>
+<li>Hector Garcia-Molina and Kenneth Salem, &quot;Sagas&quot;</li>
+<li>Chandra and Toueg (1996)</li>
+<li>Das, Gupta and Motivala, &quot;SWIM&quot;</li>
+<li>Stoica and others, &quot;Chord&quot;</li>
+<li>Karger and others on consistent hashing</li>
+<li>DeCandia and others, &quot;Dynamo&quot;</li>
+<li>Fischer, Lynch and Paterson (1985)</li>
+<li>Gul Agha's dissertation on the actor model</li>
+<li>Joe Armstrong's thesis</li>
+<li>Candea and Fox on crash-only software and recursive restartability</li>
+<li>Roland Kuhn, <em>Reactive Design Patterns</em></li>
+<li>Werner Vogels, &quot;Eventually Consistent - Revisited&quot;</li>
+<li>Ryan Barrett, &quot;Transactions Across Datacenters&quot;</li>
+<li>Mahajan and others, &quot;Consistency, Availability, and Convergence&quot;</li>
+<li>Peter Bailis and others, &quot;Coordination Avoidance in Database Systems&quot;.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</a></li>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-04-designing-distributed-applications/">Principles and Patterns for Distributed Application Architecture 4: Designing Distributed Applications</a></li>
+<li><a href="/book-digest/software-architecture-patterns/sap-05-event-driven-architecture/">Software Architecture Patterns 5: Event-Driven Architecture</a></li>
+<li><a href="/book-digest/understanding-distributed-systems/uds-10-replication/">Understanding Distributed Systems 10: Replication</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/">&larr; Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</a><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/">Contents</a><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-04-designing-distributed-applications/">Principles and Patterns for Distributed Application Architecture 4: Designing Distributed Applications &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

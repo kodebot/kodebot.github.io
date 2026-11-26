@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture Patterns 5: Event-Driven Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-patterns/">Contents</a><span class="ttl">Software Architecture Patterns</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-patterns/sap-04-microkernel-architecture/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-patterns-5-event-driven-architecture">Software Architecture Patterns 5: Event-Driven Architecture</h1>
+<p>Source: Mark Richards, <em>Software Architecture Patterns</em>, 2nd edition (O'Reilly, 2022), chapter 5. Previous: <a href="/book-digest/software-architecture-patterns/sap-04-microkernel-architecture/">Software Architecture Patterns 4: Microkernel Architecture</a>. Next: <a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">Software Architecture Patterns 6: Microservices Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Asynchronous</strong> processing with highly decoupled <strong>event processors</strong> (services) that trigger events and respond to events.</li>
+<li>Four components: <strong>event processor</strong>, <strong>initiating event</strong>, <strong>processing event</strong> (also called a derived event) and <strong>event channel</strong>.</li>
+<li>Services should <strong>always advertise their state changes</strong>, even if no one listens yet: that is the hook for future extension.</li>
+<li><strong>Events versus messages</strong>: an event says what happened and the sender owns the channel and contract; a message is a command to a known service and the receiver owns them.</li>
+<li>Excels at <strong>fault tolerance, scalability, performance and extensibility</strong>; avoid it for request-based processing, high data consistency, tight control of workflow and timing, and when error handling must be simple.</li>
+</ul>
+</div></div>
+<h2 id="5-1-topology">5.1 Topology</h2>
+<ul>
+<li>An <strong>architecture style that relies on asynchronous processing</strong> using highly decoupled event processors that trigger events and respond to events happening in the system.</li>
+<li>The chapter says its popularity has grown so much that even the way we think about it has changed
+<ul>
+<li>It solves hard problems such as <strong>complex nondeterministic workflows</strong> and <strong>highly reactive and responsive systems</strong>, and new techniques, tools, frameworks and cloud services make it more accessible.</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Event processor</strong> (today usually called a <strong>service</strong>)</td>
+<td>The main deployment unit. Ranges from a single-purpose function (validating an order) to a large process (executing or settling a financial trade). It can trigger events and respond to them; usually both.</td>
+</tr>
+<tr>
+<td><strong>Initiating event</strong></td>
+<td>Usually comes from <strong>outside</strong> the system and starts an asynchronous workflow: placing an order, buying Apple stock, bidding in an auction, filing an insurance claim. Usually received by <strong>one</strong> service, but not always: an auction bid might be picked up by both a Bid Capture and a Bid Tracker service.</td>
+</tr>
+<tr>
+<td><strong>Processing event</strong> (today usually a <strong>derived event</strong>)</td>
+<td>Generated when a service's state changes and it advertises that change. One initiating event spawns <strong>many</strong> processing events: Place Order may lead to Order Placed, Payment Applied, Inventory Updated. Initiating events are usually <strong>noun-verb</strong> (Place Order); processing events usually <strong>verb-noun</strong> (Order Placed).</td>
+</tr>
+<tr>
+<td><strong>Event channel</strong></td>
+<td>The physical messaging artifact (queue or topic) that stores triggered events and delivers them to responders. Initiating events usually use <strong>point-to-point</strong> channels (queues, messaging services); processing events usually use <strong>publish-and-subscribe</strong> channels (topics, notification services).</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-05-components.svg" alt="Figure 5-1: the main components of event-driven architecture, redrawn from the chapter's description" loading="lazy" /></p>
+<h2 id="5-2-example-ordering-a-book">5.2 Example: ordering a book</h2>
+<p>A customer orders a copy of <em>Fundamentals of Software Architecture</em> (Mark Richards and Neal Ford, O'Reilly).</p>
+<ol>
+<li>The initiating event is <strong>Place Order</strong>, received by the <strong>Order Placement</strong> service, which places the order.</li>
+<li>It advertises what it did with an <strong>Order Placed</strong> processing event. It does not know which other services, if any, respond: this shows the <strong>highly decoupled, nondeterministic</strong> nature of the style.</li>
+<li>Three services respond: <strong>Payment</strong>, <strong>Inventory Management</strong> and <strong>Notification</strong>. Each does its business function and advertises what it did through further processing events.</li>
+<li>The Notification service generates a <strong>Notified Customer</strong> event that no other service responds to.
+<ul>
+<li>Why trigger an event nobody cares about? <strong>Architectural extensibility</strong>: it is a hook a future service (such as a notification-tracking service) can respond to without any other change to the system.</li>
+<li><strong>Rule of thumb:</strong>
+<ul>
+<li>always have services advertise their state changes, whether or not others respond</li>
+<li>An unheard event simply disappears from the topic, or is saved for later processing, depending on the messaging technology.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ol>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-05-book-order.svg" alt="Figure 5-2: processing a book order with event-driven architecture" loading="lazy" /></p>
+<h2 id="5-3-event-driven-versus-message-driven">5.3 Event-driven versus message-driven</h2>
+<p>The chapter calls the difference &quot;subtle&quot; but important: event-driven systems process <strong>events</strong>, message-driven systems process <strong>messages</strong>.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Event</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What it is</td>
+<td>Tells others about a state change or something you did: &quot;I just placed an order&quot;, &quot;I just submitted a bid&quot;</td>
+<td>A command or request to a specific service: &quot;apply a payment to this order&quot;, &quot;ship this item to this address&quot;, &quot;give me the customer's email address&quot;</td>
+</tr>
+<tr>
+<td>Who responds</td>
+<td>The sender has no idea which services, or how many</td>
+<td>Usually directed to a single known service (for example Payment)</td>
+</tr>
+<tr>
+<td>Channel and contract owner</td>
+<td>The <strong>sender</strong> owns the event channel and contract</td>
+<td>The <strong>receiver</strong> owns the message channel and contract</td>
+</tr>
+<tr>
+<td>Typical channel</td>
+<td>Publish-and-subscribe: topics, notification services</td>
+<td>Point-to-point: queues, messaging services</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-05-event-vs-message.svg" alt="Events versus messages" loading="lazy" /></p>
+<ul>
+<li><strong>Figure 5-3 (events):</strong>
+<ul>
+<li>Order Placement sends Order Placed, answered by Payment</li>
+<li>The sender owns the channel and contract, so contract changes start with Order Placement and Payment (and every other responder) must conform.</li>
+</ul>
+</li>
+<li><strong>Figure 5-4 (messages):</strong> Order Placement commands Payment to apply the payment. Payment owns the queue and the contract, so Order Placement must conform to changes Payment initiates.</li>
+<li>Event-driven systems <strong>can</strong> use point-to-point messaging: sometimes it is needed to retrieve specific information from another service or to control the order or timing of events.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-05-ownership.svg" alt="Figures 5-3 and 5-4: who owns the channel and the contract" loading="lazy" /></p>
+<h2 id="5-4-considerations-and-analysis">5.4 Considerations and analysis</h2>
+<p>Because it is asynchronous and decoupled, it excels at <strong>fault tolerance, scalability and high performance</strong>, and gives excellent <strong>extensibility</strong> when adding features. The chapter then lists reasons to be cautious.</p>
+<h3 id="when-to-consider-this-style">When to consider this style</h3>
+<ul>
+<li>It is the architecture of choice for systems that need <strong>high performance, high scalability and high fault tolerance</strong>.</li>
+<li>The business processing is <strong>reacting to things happening in and around the system</strong>, not responding to a user request.
+<ul>
+<li>Listen to stakeholders: do they say &quot;event&quot;, &quot;triggers&quot;, &quot;react to something happening&quot;?</li>
+<li>Ask: am I responding to a user request, or reacting to something the user did?</li>
+</ul>
+</li>
+<li><strong>Complex, nondeterministic workflows</strong>
+<ul>
+<li>that are hard to model</li>
+<li>The chapter says developers have spent decades building complex decision trees for every outcome, &quot;only to continually fail at this fool's errand&quot;</li>
+<li>Such systems are sometimes classed as <strong>CEP</strong> (complex event processing), which event-driven architecture manages natively.</li>
+</ul>
+</li>
+</ul>
+<h3 id="when-not-to-consider-this-style">When not to consider this style</h3>
+<ol>
+<li><strong>Mostly request-based processing</strong>: a user requesting data (a customer profile) or basic CRUD on entities. Also when most processing is <strong>synchronous</strong> and the user must wait for completion.</li>
+<li><strong>High data consistency needs.</strong> All processing is <strong>eventually consistent</strong>, with little or no guarantee of when processing occurs. If you expect data at a certain time, look elsewhere, for example <strong>service-based</strong>, which helps preserve consistency.</li>
+<li><strong>Control over workflow and timing.</strong> Example: Event A and Event B must complete before Event C; D and E must wait for C; D must start before E. The chapter says you are better off with <strong>orchestrated service-oriented architecture or orchestrated microservices</strong> for that coordination.</li>
+<li><strong>Error handling.</strong> There is usually <strong>no central orchestrator</strong>, so a failing service must try to repair the error itself, and everything is asynchronous so other actions may already have happened.
+<ul>
+<li>Example: Order Placed triggers Notification, Payment and Inventory at the same time. Notification and Payment complete, but Inventory fails because there are no books left.</li>
+<li>The customer is already notified and charged. Should payment be reversed? Another notification sent? Processing wait for stock? <strong>Which service</strong> does this?</li>
+<li>The chapter calls error handling &quot;one of the more complex aspects&quot; of the style.</li>
+</ul>
+</li>
+</ol>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-05-error-handling.svg" alt="The error-handling scenario from the chapter" loading="lazy" /></p>
+<h2 id="5-5-architecture-characteristics">5.5 Architecture characteristics</h2>
+<p>Figure 5-5 rates the style from one star (not well supported) to five (well suited).</p>
+<table>
+<thead>
+<tr>
+<th>Characteristic</th>
+<th>Rating</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Partitioning type</td>
+<td>Technical</td>
+</tr>
+<tr>
+<td>Overall cost</td>
+<td>$$$</td>
+</tr>
+<tr>
+<td>Agility</td>
+<td>3 stars</td>
+</tr>
+<tr>
+<td>Simplicity</td>
+<td>1 star</td>
+</tr>
+<tr>
+<td>Scalability</td>
+<td>5 stars</td>
+</tr>
+<tr>
+<td>Fault tolerance</td>
+<td>5 stars</td>
+</tr>
+<tr>
+<td>Performance</td>
+<td>5 stars</td>
+</tr>
+<tr>
+<td>Extensibility</td>
+<td>5 stars</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-05-ratings.svg" alt="Figure 5-5: star ratings for event-driven architecture" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Asynchronous, decoupled event processors; initiating events from outside, processing events advertised by services.</li>
+<li>Advertise every state change: unheard events are cheap hooks for future features.</li>
+<li>Events (sender owns channel) differ from messages (receiver owns channel).</li>
+<li>Strong on scalability, fault tolerance, performance and extensibility; weak on simplicity, with eventual consistency and hard error handling.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Event processor</strong>: a service, the main deployment unit.</li>
+<li><strong>Initiating event / processing (derived) event</strong>: the external trigger / the advertised state change.</li>
+<li><strong>Event channel</strong>: queue or topic that stores and delivers events.</li>
+<li><strong>Event-driven vs message-driven</strong>: events inform; messages command.</li>
+<li><strong>CEP</strong>: complex event processing.</li>
+<li><strong>Eventual consistency</strong>: no guarantee when processing happens.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards, <em>Software Architecture Patterns</em>, 2nd edition (O'Reilly, July 2022), chapter 5: <a href="https://learning.oreilly.com/library/view/software-architecture-patterns/9781098134280/ch05.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-patterns/9781098134280/ch05.html</a></li>
+<li>No other URLs in the chapter.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-patterns/sap-04-microkernel-architecture/">Software Architecture Patterns 4: Microkernel Architecture</a></li>
+<li><a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">Software Architecture Patterns 6: Microservices Architecture</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-15-event-driven-architecture-style/">Fundamentals of Software Architecture 15: Event-Driven Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-patterns/sap-04-microkernel-architecture/">&larr; Software Architecture Patterns 4: Microkernel Architecture</a><a href="/book-digest/software-architecture-patterns/">Contents</a><a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">Software Architecture Patterns 6: Microservices Architecture &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/">Contents</a><span class="ttl">Principles And Patterns For Distributed Application Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-01-cloud-infrastructure-is-not-enough/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="principles-and-patterns-for-distributed-application-architecture-2-principles-of-distributed-application-architecture">Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</h1>
+<p>Source: Jonas Bonér, <em>Principles and Patterns for Distributed Application Architecture</em> (O'Reilly, 2025), chapter 2. Previous: <a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-01-cloud-infrastructure-is-not-enough/">Principles and Patterns for Distributed Application Architecture 1: Cloud Infrastructure Is Not Enough</a>. Next: <a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Eight principles: <strong>stay responsive</strong>, <strong>accept uncertainty</strong>, <strong>embrace failure</strong>, <strong>assert autonomy</strong>, <strong>tailor consistency</strong>, <strong>decouple in time</strong>, <strong>decouple in space</strong>, <strong>handle dynamics</strong>.</li>
+<li><strong>Responsiveness</strong> is the foundational concept that motivates all the others.</li>
+<li>There is <strong>no global &quot;now&quot;</strong>: manage uncertainty in the architecture with logical time, idempotent messages, CRDTs, and a protocol of <strong>guess, apologise, compensate</strong>.</li>
+<li><strong>Failures are values</strong> and first-class: contain them with <strong>bulkheads</strong>, represent them as events, expect partial failure.</li>
+<li>Give each component <strong>only the consistency it needs</strong>; strong consistency costs availability and scalability (Amdahl's law, universal scalability law).</li>
+<li><strong>Asynchronous messaging</strong> is the common thread: it decouples in time and space and makes the network explicit.</li>
+</ul>
+</div></div>
+<h2 id="2-0-why-principles">2.0 Why principles</h2>
+<ul>
+<li>Sidney Dekker (<em>Drift into Failure</em>) is quoted on how hard modelling the world is: connections proliferate, interactions multiply and complexities &quot;mushroom&quot;.</li>
+<li>The principles and patterns are <strong>not new</strong>:
+<ul>
+<li>they trace to the 1970s to 1990s and the work of <strong>Jim Gray and Pat Helland</strong> (Tandem system), <strong>Joe Armstrong and Robert Virding</strong> (Erlang), and researchers including **Leslie Lamport, Barbara Liskov, Nancy Lynch, Ken Birman, Michael J</li>
+<li>Fischer, John Ousterhout, Carl Hewitt and Marc Shapiro**</li>
+<li>The chapter says the industry has only in the past decade been forced to rethink practice and apply them to multicore, cloud and edge.</li>
+</ul>
+</li>
+<li>The eight principles are described as highly complementary to the cloud-native philosophy and the Kubernetes ecosystem.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-02-eight-principles.svg" alt="The eight principles" loading="lazy" /></p>
+<h2 id="2-1-stay-responsive">2.1 Stay responsive</h2>
+<blockquote>
+<p>Always try to respond in a timely manner.</p>
+</blockquote>
+<ul>
+<li>Responsiveness is the face of your business and its quality of service, &quot;the last link in the chain&quot;.</li>
+<li>Easy in &quot;blue sky&quot; scenarios
+<ul>
+<li>equally important but harder under <strong>unexpected failures, communication outages and unpredictable workloads</strong>. To users, correctness does not matter if the system cannot respond within their time constraints.</li>
+</ul>
+</li>
+<li>It is not just low latency: it also means <strong>managing change</strong> in data, usage patterns, context and environment, represented in the data model up to the end-user interaction, so responses are interpreted in the right context.</li>
+<li>Responsive applications detect and deal with failures, giving rapid and <strong>consistent response times</strong>
+<ul>
+<li>At worst they return an error or a <strong>degraded but useful</strong> service</li>
+<li>This sets mutually understood upper bounds on latency, which simplifies error handling, builds user confidence and encourages interaction.</li>
+</ul>
+</li>
+<li>Responsiveness is &quot;nowhere and everywhere&quot;, influenced by contention, coordination, coupling, dataflow, communication patterns, resource management, failure handling and uncertainty.</li>
+</ul>
+<h2 id="2-2-accept-uncertainty">2.2 Accept uncertainty</h2>
+<blockquote>
+<p>Build reliability despite unreliable foundations.</p>
+</blockquote>
+<ul>
+<li>Beyond the local machine or container lies &quot;a vast and endless ocean of nondeterminism&quot;: information is lost, reordered and corrupted, and failure detection is a guessing game.</li>
+<li><strong>There is no globally consistent &quot;now&quot;.</strong>
+<ul>
+<li>Without consistent shared memory we cannot know what is happening on another node now</li>
+<li>we cannot wait indefinitely for information, so data is out of date by the time it is acknowledged.</li>
+</ul>
+</li>
+<li>Consensus protocols (<strong>Paxos, Raft</strong>) and <strong>two-phase commit (2PC)</strong> can give a strongly consistent view, but tend to have poor performance and scalability and imply <strong>unavailability during network partitions</strong>
+<ul>
+<li>So systems accept weaker consistency (causal, eventual) to stay responsive.</li>
+</ul>
+</li>
+<li>Consequences:
+<ul>
+<li>do not trust clocks and timestamps, and order (causality) may not even exist</li>
+<li><strong>Manage uncertainty directly in the application architecture</strong>: resilient autonomous components that publish protocols stating what they promise, what commands and events they accept and what behaviour results, and that expose the timeliness and assessed accuracy of their information.</li>
+</ul>
+</li>
+</ul>
+<h3 id="logical-time">Logical time</h3>
+<ul>
+<li>Wall-clock time is often indeterministic; logical time is firmer ground.</li>
+<li><strong>Lamport clocks</strong>
+<ul>
+<li>(Lamport, 1978, &quot;Time, Clocks, and the Ordering of Events in a Distributed System&quot;): increment a counter when work is done</li>
+<li>include it when sending</li>
+<li>on receipt set it to max(local, received) + 1.</li>
+</ul>
+</li>
+<li><strong>Vector clocks</strong>
+<ul>
+<li>(Colin Fidge, 1988): each node owns and increments its own Lamport clock (a hashmap node to clock), keeps the full history, and merges by max (monotonic merge)</li>
+<li>A cornerstone of most distributed algorithms dealing with time and ordering.</li>
+</ul>
+</li>
+<li>Vector clocks (and CRDTs) have unbounded history growth; <strong>dotted version vectors</strong> (Nuno Preguiça and colleagues) can prune it.</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-02-logical-clocks.svg" alt="Lamport and vector clocks" loading="lazy" /></p>
+<h3 id="guess-apologise-compensate">Guess, apologise, compensate</h3>
+<ul>
+<li>Real life copes with partial information:
+<ul>
+<li>in a noisy bar you wait a little, then ask for clarification</li>
+<li>People use <strong>at-least-once delivery and idempotent messages</strong> instead of guaranteed delivery, make educated guesses, and take compensating actions when wrong.</li>
+</ul>
+</li>
+<li><strong>At-least-once delivery</strong>: the message arrives one or more times, never fewer; retries until acknowledged, so duplicates are possible if an acknowledgement is lost.</li>
+<li><strong>Idempotent messages</strong>: processing them several times has the same outcome as once, which makes duplicates safe.</li>
+<li>Examples of the protocol <strong>guess; apologise; compensate</strong>:
+<ul>
+<li><strong>ATMs</strong> allow withdrawals during a network outage, &quot;taking a bet&quot; that funds exist; if wrong the bank shows a negative balance and, in the worst case, uses collection agencies.</li>
+<li><strong>Airlines</strong> deliberately overbook, betting that not everyone shows up; if wrong they issue vouchers.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-02-guess-apologise-compensate.svg" alt="Guess, apologise, compensate" loading="lazy" /></p>
+<h3 id="coping-tools">Coping tools</h3>
+<ul>
+<li>Use logical clocks, eventual consistency (event-first design, certain NoSQL databases, CRDTs) and protocols that are:
+<ul>
+<li><strong>Associative</strong>: grouping does not matter, a + (b + c) = (a + b) + c</li>
+<li><strong>Commutative</strong>: order does not matter, a + b = b + a</li>
+<li><strong>Idempotent</strong>: duplication does not matter, a + a = a</li>
+</ul>
+</li>
+<li><strong>CRDTs</strong> (conflict-free replicated data types) give composable structures (counters, registers, maps, sets) guaranteed to converge without explicit coordination. Two kinds:
+<ul>
+<li><strong>Convergent / state-based (CvRDT)</strong>:
+<ul>
+<li>self-contained, keep the state-change history in the type, converge if all changes eventually reach all replicas (usually by gossip)</li>
+<li>Reads can be from local data (maybe inconsistent), a <strong>quorum</strong> (usually good enough) or <strong>all replicas</strong> (strongest).</li>
+</ul>
+</li>
+<li><strong>Commutative / operation-based (CmRDT)</strong>:
+<ul>
+<li>replicate the state-changing operations, preserving their order</li>
+<li>need a reliable broadcast channel with <strong>exactly-once</strong> delivery, much like event sourcing.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>CRDTs do not fit all use cases. References: Marc Shapiro and colleagues, &quot;A Comprehensive Study of Convergent and Commutative Replicated Data Types&quot;
+<ul>
+<li>the production library <strong>Akka Distributed Data</strong>.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-02-crdts.svg" alt="CRDT kinds" loading="lazy" /></p>
+<h2 id="2-3-embrace-failure">2.3 Embrace failure</h2>
+<blockquote>
+<p>Expect things to go wrong and design for resilience.</p>
+</blockquote>
+<ul>
+<li>Failure is inevitable. Do not work hard to prevent it; make it <strong>first-class</strong>, part of the component's finite state machine (FSM) and workflow of events.</li>
+<li><strong>Contain and compartmentalise</strong>
+<ul>
+<li>failures to avoid cascading</li>
+<li><strong>Bulkheading</strong> comes from ship construction: isolated watertight compartments so a leak is contained</li>
+<li>In software it stops failures propagating outside the failed component.</li>
+</ul>
+</li>
+<li>The <strong>Titanic</strong> note:
+<ul>
+<li>it did have bulkheads, but the walls did not reach the ceiling</li>
+<li>When <strong>6 of its 16 compartments</strong> were ripped open and the ship tilted, water spilled over from one compartment to the next and sank it (the chapter says killing 1,500 people)</li>
+<li>It is a study in missing isolation.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-02-bulkheads.svg" alt="Figure 2-1: bulkheads help ships avoid cascading failures" loading="lazy" /></p>
+<ul>
+<li><strong>Asynchronous messaging</strong> between components is the foundation of resilient, self-healing systems: it gives loose coupling (decoupling in space and time) and full isolation.</li>
+<li>Failures are best <strong>represented as values</strong>, wrapped in events and communicated like any other event: stored, monitored, replayed, subscribed to, and location transparent
+<ul>
+<li>An explicit failure lets a component <strong>degrade service</strong> on purpose rather than fail silently, and supports self-healing with <strong>supervisor hierarchies</strong> and &quot;let it crash&quot; (fail fast, kill and restart), as in actor implementations such as <strong>Erlang and Akka</strong>.</li>
+</ul>
+</li>
+<li><strong>Availability needs redundancy</strong>: a single component, service, node or region is by definition not available (100% unavailability if it fails), so you need replicas.</li>
+<li><strong>Partial failures</strong>
+<ul>
+<li>are among the hardest things: independent things fail independently</li>
+<li>If a request times out, did it succeed and the acknowledgement drop? Did it never arrive? Is the other node just slow (garbage collection pauses, queue pile-up)? Or is it down? There is <strong>no perfect failure detector</strong>.</li>
+</ul>
+</li>
+<li>Manage this by making the <strong>network first-class</strong> in design and programming model: asynchronous communication, retries with exponential backoff, circuit breakers, and flow control such as backpressure.</li>
+<li>Complex systems &quot;usually fail in their composition, in the space in between&quot;
+<ul>
+<li>Quotes: Richard Cook, &quot;Complex systems run as broken systems&quot;; Sidney Dekker, &quot;Accidents come from relationships, not broken parts&quot;</li>
+<li>So combine graceful degradation with bulkheading, guarded connections (circuit breakers) and flow control (backpressure).</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Complicated system</th>
+<th>Complex system</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Many small parts, all different, each with a precise role</td>
+<td>Many similar, interacting parts obeying simple individual rules, giving emergent properties</td>
+</tr>
+<tr>
+<td>Usually possible (but hard) to fully understand</td>
+<td>Impossible to fully understand; only the underlying rules can be understood</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>A nontrivial distributed system is <strong>complex</strong>. The chapter quotes Donella Meadows (&quot;Leverage Points&quot;) on leverage points being counterintuitive and intuitively used backward.</li>
+</ul>
+<h2 id="2-4-assert-autonomy">2.4 Assert autonomy</h2>
+<blockquote>
+<p>Design components that act independently and interact collaboratively.</p>
+</blockquote>
+<ul>
+<li>Autonomy is a prerequisite to certainty, elasticity and resilience
+<ul>
+<li>Mark Burgess (<em>In Search of Certainty</em>): &quot;Autonomy makes information local, leading to greater certainty and stability.&quot;</li>
+</ul>
+</li>
+<li>Components stay responsive only relative to their autonomy
+<ul>
+<li>Achieve it by <strong>clearly defining boundaries</strong>: who owns what data and how the owner exposes it, giving each party freedom to decide.</li>
+</ul>
+</li>
+<li>A called component must be able to send back <strong>momentary degradations</strong> (overload, faulty dependencies) and be free <strong>not to respond</strong> when appropriate, notably when <strong>shedding heavy load</strong>.</li>
+<li>Asynchronous, event-based protocols reduce temporal and spatial coupling and make components easier to bulkhead, preventing cascading failures (which would violate autonomy).</li>
+<li>The boundary is crossed <strong>only via documented protocols, with no side channels</strong>
+<ul>
+<li>only then can the collaboration be reasoned about and possibly formally verified. A protocol may be trivial (request-response) or involve backpressure or consensus, but must be fully specified.</li>
+</ul>
+</li>
+<li>An autonomous component can <strong>only promise its own behaviour</strong>
+<ul>
+<li>Then everything needed to resolve a data conflict or repair data under failure is in the service itself, removing needless coordination.</li>
+</ul>
+</li>
+<li>Patterns that foster autonomy: <strong>actors, domain-driven design (events-first), event sourcing, CQRS</strong>, and communicating <strong>fully self-contained facts</strong> (immutable values) modelled on the business domain, so recipients decide without asking again.</li>
+</ul>
+<h2 id="2-5-tailor-consistency">2.5 Tailor consistency</h2>
+<blockquote>
+<p>Individualise consistency per component to balance availability and performance.</p>
+</blockquote>
+<ul>
+<li>More consistency than you need adds no value and lowers availability, elasticity, efficiency and performance. &quot;Being correct doesn't matter if you can't serve your customers reliably.&quot;</li>
+<li><strong>Strong consistency</strong>
+<ul>
+<li>(here strict serializability: observers see behaviour as if interacting with one local system) is intuitive but needs synchronous communication and coordination and ultimately <strong>all participants available</strong>, which can halt progress under failure and slow it even when healthy</li>
+<li>Pat Helland: &quot;Two-phase commit is the anti-availability protocol.&quot;</li>
+</ul>
+</li>
+<li>Communication has <strong>latency</strong>:
+<ul>
+<li>information cannot travel faster than light</li>
+<li>It is always from the past (you see the sun as it was 8 minutes 20 seconds ago)</li>
+<li>Reality is not strongly consistent but <strong>eventually consistent</strong>; &quot;now&quot; is in the eye of the beholder</li>
+<li>We keep up the illusion of a single global &quot;now&quot; because humans are bad at thinking concurrently.</li>
+</ul>
+</li>
+<li>The cost of that illusion, in three terms:
+<ul>
+<li><strong>Serial dependencies</strong>: the nonparallelizable parts of your code</li>
+<li><strong>Contention</strong>: waiting for shared resources</li>
+<li><strong>Coherency</strong>: coordination delays before data becomes consistent</li>
+</ul>
+</li>
+<li><strong>Amdahl's law</strong>
+<ul>
+<li>(Gene Amdahl): serial fractions put a ceiling on scalability with diminishing returns</li>
+<li>If <strong>80%</strong> of a process can be parallelised and <strong>20%</strong> stays serial, maximum speedup is capped at <strong>5x</strong> however many processors you add.</li>
+</ul>
+</li>
+<li><strong>Universal scalability law (USL)</strong>,
+<ul>
+<li>Neil Gunther: adds contention and coherency, and can give <strong>negative</strong> returns</li>
+<li>past a point more resources make things worse. Example: a web app where each added server must sync session data with every other server</li>
+<li>performance plateaus and then declines as coordination grows.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-02-amdahl-usl.svg" alt="Figures 2-2 and 2-3: Amdahl's law and the USL" loading="lazy" /></p>
+<ul>
+<li>Higher latency (distance) cracks the illusion more
+<ul>
+<li>A distributed system is always converging but never fully catches up globally, so define <strong>consistency boundaries</strong>: &quot;small islands of strong consistency in a river of constant change and uncertainty&quot;.</li>
+</ul>
+</li>
+<li>Design for <strong>eventual or causal consistency</strong> with asynchronous messaging where possible (event-driven architecture, certain NoSQL databases, CRDTs), so the system stays available, converges and recovers automatically.</li>
+<li>If strong consistency is required for correctness, apply it <strong>judiciously and selectively</strong>, with the <strong>unit of consistency as small as possible</strong>.</li>
+<li>Flavours of eventual consistency (Werner Vogels, &quot;Eventually Consistent - Revisited&quot;):</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-02-eventual-flavours.svg" alt="The flavours of eventual consistency" loading="lazy" /></p>
+<h2 id="2-6-decouple-in-time">2.6 Decouple in time</h2>
+<blockquote>
+<p>Process and communicate asynchronously to avoid coordination and waiting.</p>
+</blockquote>
+<ul>
+<li>Amdahl's law and the USL show we can lift the scalability ceiling by avoiding needless communication, coordination and waiting.</li>
+<li><strong>Blocking</strong> (I/O or calling another service) holds the caller, and its thread, hostage; that component is unavailable for other requests meanwhile.</li>
+<li><strong>Temporal decoupling</strong>
+<ul>
+<li>breaks the time availability dependency</li>
+<li>Synchronous exchange presumes all parties are available and reachable for its duration, &quot;a fragile assumption&quot;</li>
+<li>Techniques: <strong>durable message queues, append-only journals, publish-subscribe topics with retention</strong>.</li>
+</ul>
+</li>
+<li>The caller can queue the request, register a callback, return immediately and continue (nonblocking I/O). Callbacks can be orchestrated with an <strong>FSM</strong>
+<ul>
+<li>other techniques are actors, futures/promises, dataflow variables, async/await, coroutines and asynchronous functional combinators in streaming libraries.</li>
+</ul>
+</li>
+<li>It gives components freedom to process in their own time and priority, which also gives <strong>autonomy</strong>.</li>
+<li>Example:
+<ul>
+<li>a cloud e-commerce platform processes orders asynchronously so inventory checks, payments and notifications run independently, and one slow or down service does not stall the process</li>
+<li>queuing lets processing continue as resources free up.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-7-decouple-in-space">2.7 Decouple in space</h2>
+<blockquote>
+<p>Create flexibility by embracing the network.</p>
+</blockquote>
+<ul>
+<li>An elastic, resilient system must live in <strong>multiple locations</strong>; autonomous components then collaborate as loosely coupled as the use case allows.</li>
+<li>Spatial decoupling uses <strong>network communication</strong> (message passing) to reconnect remote pieces
+<ul>
+<li>Asynchronous messaging and APIs make the network and its constraints <strong>explicit and first-class</strong>, forcing design for failure and uncertainty instead of hiding the network behind a leaky local abstraction.</li>
+</ul>
+</li>
+<li>It enables <strong>location transparency</strong>:
+<ul>
+<li>one abstraction for all interactions whether components are on the same machine, another rack or another data centre</li>
+<li>Asynchronous APIs let discovery services and load balancers route to wherever the container or VM runs, with one programming model whatever the topology.</li>
+</ul>
+</li>
+<li>It enables <strong>replication</strong>: multiple instances share load, the rest of the system need not know where they are, capacity grows on demand, and if one instance fails the others continue (failover).</li>
+<li>Example:
+<ul>
+<li>a payment service sends a <strong>PaymentProcessed</strong> event through a message broker</li>
+<li>the shipping service does not need the payment service's address, region or availability. If demand spikes, shipping instances can launch in several regions with the broker routing events to them.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/principles-and-patterns-for-distributed-application-architecture/img/ppd-02-decoupling.svg" alt="Decoupling in time and in space" loading="lazy" /></p>
+<h2 id="2-8-handle-dynamics">2.8 Handle dynamics</h2>
+<blockquote>
+<p>Continuously adapt to varying demand and resources.</p>
+</blockquote>
+<ul>
+<li>Applications must stay responsive under drastically varying workloads and during maintenance (upgrades, schema changes), matching supply to demand without overallocating: be <strong>elastic</strong>, scaling resources up and down with the input rate.</li>
+<li>Where resources are <strong>fixed</strong>, adjust the scope of what is processed and signal the degradation outside: <strong>load shedding</strong> (discard requests and let clients retry) or discarding less relevant input, for example older sensor data at the edge, or shrinking the horizon or quality of forecasts in autonomous vehicles
+<ul>
+<li>This trades efficiency for the continued ability to function.</li>
+</ul>
+</li>
+<li>Requirements:
+<ol>
+<li><strong>Autonomous components</strong>, ideally decoupled in space and time and exposing only well-designed protocols, so sharding and replication can change transparently.</li>
+<li><strong>Educated guesses</strong>: track live usage metrics and feed predictive or reactive scaling algorithms for <strong>auto-scaling</strong>.</li>
+<li>Accept that topology and service availability evolve: topology change reinforces spatial decoupling; services coming and going reinforces temporal decoupling.</li>
+</ol>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Responsiveness is the foundation; the other seven principles serve it.</li>
+<li>Accept uncertainty (logical time, idempotence, CRDTs, compensation) and embrace failure (bulkheads, failures as values).</li>
+<li>Autonomy and tailored consistency keep components independent; unnecessary strong consistency costs availability and scale.</li>
+<li>Decouple in time and space via asynchronous messaging; handle dynamics through elasticity and load shedding.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Bulkhead</strong>: isolation that stops a failure spreading.</li>
+<li><strong>Lamport / vector clock</strong>: logical time and ordering.</li>
+<li><strong>CRDT</strong>: conflict-free replicated data type (state-based or operation-based).</li>
+<li><strong>At-least-once delivery / idempotent message</strong>: retry until acknowledged / safe to process repeatedly.</li>
+<li><strong>Amdahl's law / USL</strong>: limits on scaling from serial work, contention and coherency.</li>
+<li><strong>Temporal and spatial decoupling</strong>: not needing the other side available now / not needing to know where it is.</li>
+<li><strong>Load shedding</strong>: discarding requests to stay functional.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Jonas Bonér, <em>Principles and Patterns for Distributed Application Architecture</em> (O'Reilly, January 2025), chapter 2: <a href="https://learning.oreilly.com/library/view/principles-and-patterns/9781098181260/ch02.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/principles-and-patterns/9781098181260/ch02.html</a></li>
+<li>Cited in the chapter:
+<ul>
+<li>Sidney Dekker, <em>Drift into Failure</em></li>
+<li>Leslie Lamport (1978)</li>
+<li>Colin Fidge (1988)</li>
+<li>Preguiça and others, &quot;Dotted Version Vectors&quot;</li>
+<li>Marc Shapiro and others on CRDTs</li>
+<li>Werner Vogels, &quot;Eventually Consistent - Revisited&quot;</li>
+<li>Richard Cook, &quot;How Complex Systems Fail&quot;</li>
+<li>Donella Meadows, &quot;Leverage Points: Places to Intervene in a System&quot;</li>
+<li>Mark Burgess, <em>In Search of Certainty</em></li>
+<li>Justin Sheehy, &quot;There Is No Now&quot;</li>
+<li>L. Peter Deutsch's fallacies of distributed computing. The page text gives no URLs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-01-cloud-infrastructure-is-not-enough/">Principles and Patterns for Distributed Application Architecture 1: Cloud Infrastructure Is Not Enough</a></li>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture</a></li>
+<li><a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-01-cloud-infrastructure-is-not-enough/">&larr; Principles and Patterns for Distributed Application Architecture 1: Cloud Infrastructure Is Not Enough</a><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/">Contents</a><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-03-patterns-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 3: Patterns of Distributed Application Architecture &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

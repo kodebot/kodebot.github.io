@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Software Architecture Patterns 7: Space-Based Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/software-architecture-patterns/">Contents</a><span class="ttl">Software Architecture Patterns</span><span class="sp"></span><a class="btn" href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/software-architecture-patterns/sap-08-style-analysis-summary/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="software-architecture-patterns-7-space-based-architecture">Software Architecture Patterns 7: Space-Based Architecture</h1>
+<p>Source: Mark Richards, <em>Software Architecture Patterns</em>, 2nd edition (O'Reilly, 2022), chapter 7. Previous: <a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">Software Architecture Patterns 6: Microservices Architecture</a>. Next: <a href="/book-digest/software-architecture-patterns/sap-08-style-analysis-summary/">Software Architecture Patterns A: Style Analysis Summary</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Built for <strong>extreme scalability and concurrency</strong> and for <strong>elastic</strong> systems with variable, unpredictable user volumes.</li>
+<li>It <strong>removes the database from transactional processing</strong>: data lives in <strong>replicated in-memory data grids</strong> inside the <strong>processing units</strong>, and is synchronised to a database asynchronously through <strong>data pumps</strong>.</li>
+<li><strong>Virtualized middleware</strong> manages the complexity: messaging grid, data grid, processing grid (optional) and deployment manager.</li>
+<li>Complex and expensive, so <strong>not a general-purpose style</strong>; large data volumes, tight budgets and high consistency needs rule it out.</li>
+<li>Technically partitioned. Top ratings for scalability and performance; low simplicity and agility.</li>
+</ul>
+</div></div>
+<h2 id="7-1-the-problem-it-solves">7.1 The problem it solves</h2>
+<ul>
+<li>A typical web request flows from browser to <strong>web server</strong>, then <strong>application server</strong>, then <strong>database server</strong>
+<ul>
+<li>This is fine for few users, but as load grows bottlenecks appear first at the web server, then the application server, then the database.</li>
+</ul>
+</li>
+<li>The usual answer is to <strong>scale out web servers</strong>:
+<ul>
+<li>relatively easy and inexpensive, but it usually just <strong>moves the bottleneck</strong> to the application servers</li>
+<li>Scaling those is more complex and costly and moves the bottleneck down to the <strong>database</strong>, which is hardest and most expensive to scale.</li>
+</ul>
+</li>
+<li>The result is a <strong>triangle</strong>: widest at the web servers (easiest to scale), narrowest at the database (hardest).</li>
+<li>In any high-volume application with an extremely large concurrent user load, the database is usually the final limit on concurrent transactions
+<ul>
+<li>Caching, scaling and sharding products help, but scaling for extreme loads is &quot;a very difficult proposition&quot; at the database.</li>
+</ul>
+</li>
+<li>Space-based architecture is designed for these <strong>high scalability and concurrency</strong> problems, and for <strong>elastic systems</strong> with variable and unpredictable concurrent users.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-07-bottleneck.svg" alt="Figure 7-1: the database is usually the ultimate bottleneck" loading="lazy" /></p>
+<h2 id="7-2-topology-and-components">7.2 Topology and components</h2>
+<ul>
+<li>The style removes the <strong>database from transactional processing</strong>, hence the name
+<ul>
+<li>It takes its name from the computer-science term <strong>tuple space</strong>: multiple parallel processors with shared memory.</li>
+</ul>
+</li>
+<li>High scalability comes from replacing the database with <strong>replicated in-memory data grids</strong> during transactional processing
+<ul>
+<li>Data is kept in memory, replicated among all active processing units, and synchronised with a background database <strong>asynchronously</strong> through <strong>data pumps</strong>.</li>
+</ul>
+</li>
+<li><strong>Processing units</strong>
+<ul>
+<li>start and stop dynamically as load rises and falls, which handles variable scalability</li>
+<li>With no database in transactional processing, the bottleneck is removed, giving &quot;near-infinite scalability within the application&quot;.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-07-topology.svg" alt="Figure 7-2: the space-based topology, redrawn from the chapter's description" loading="lazy" /></p>
+<h3 id="processing-unit">Processing unit</h3>
+<ul>
+<li>What the style calls a <strong>service</strong>. It holds the business functionality and ranges from a <strong>single-purpose function to the whole application</strong>.</li>
+<li>Each contains <strong>business logic</strong>, an <strong>in-memory data grid</strong> with transactional data, and optionally <strong>web-based components</strong>.</li>
+<li>Units may communicate directly with each other or through the <strong>processing grid</strong> of the virtualized middleware.</li>
+</ul>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-07-processing-unit.svg" alt="Figure 7-3: a processing unit holds application functionality and an in-memory data grid" loading="lazy" /></p>
+<h3 id="virtualized-middleware">Virtualized middleware</h3>
+<p>The middleware manages request and session handling, data synchronisation, communication and orchestration between processing units, and the dynamic starting and stopping of units for elasticity. It has four main components:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Job</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Messaging grid</strong></td>
+<td>Manages input request and session information. It finds which active processing units can take a request and forwards it to one. Its complexity ranges from a simple <strong>round-robin</strong> algorithm to a <strong>next-available</strong> algorithm that tracks which unit is processing which request. Typically implemented by a traditional <strong>web server</strong>.</td>
+</tr>
+<tr>
+<td><strong>Data grid</strong></td>
+<td>&quot;Perhaps the most important and crucial component&quot;. It works with each unit's <strong>data-replication engine</strong> to replicate updates between units. Because the messaging grid can send a request to <strong>any</strong> unit, every unit must hold <strong>exactly the same data</strong>. Typically implemented with caching products such as <strong>Hazelcast, Apache Ignite and Oracle Coherence</strong>; synchronisation is usually asynchronous behind the scenes.</td>
+</tr>
+<tr>
+<td><strong>Processing grid</strong> (optional)</td>
+<td>Manages <strong>distributed processing</strong> for requests needing coordination or orchestration between processing-unit types. Orchestration can run through the grid or directly between units in a <strong>choreographed</strong> fashion.</td>
+</tr>
+<tr>
+<td><strong>Deployment manager</strong></td>
+<td>Starts and stops processing units based on load, continually monitoring <strong>response times and user loads</strong>; critical for variable scalability. Usually implemented with container orchestration such as <strong>Kubernetes</strong>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="data-pumps-writers-and-readers">Data pumps, writers and readers</h3>
+<ul>
+<li>A <strong>data pump</strong> asynchronously sends updates to a database. It is typically implemented with <strong>persistent queues</strong> using messaging or streaming.</li>
+<li><strong>Data writers</strong>
+<ul>
+<li>listen asynchronously for those updates and update the database</li>
+<li>They range from <strong>application-level custom writers or data hubs</strong> to dedicated writers per processing-unit type.</li>
+</ul>
+</li>
+<li>On a <strong>cold start</strong> after a crash or deployment, <strong>data readers</strong> use a <strong>reverse data pump</strong> to fetch data from the database into a processing unit
+<ul>
+<li>Once at least one unit with the same in-memory grid is populated, further units can start and be populated <strong>without</strong> going to the database.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-07-data-grid.svg" alt="Figure 7-4: the data grid with in-memory grids, data pumps, writers and readers" loading="lazy" /></p>
+<h2 id="7-3-examples">7.3 Examples</h2>
+<p>The chapter calls it &quot;very complicated and specialized&quot;, used mainly for <strong>high-volume, highly elastic systems needing very fast performance</strong>.</p>
+<ul>
+<li><strong>Concert ticketing.</strong>
+<ul>
+<li>When tickets for a favourite band's show go on sale, concurrency jumps from a few dozen to <strong>tens of thousands within seconds</strong>, all wanting the same seats</li>
+<li>continuous database reads and writes &quot;simply isn't feasible&quot;.</li>
+</ul>
+</li>
+<li><strong>Online auctions and bidding.</strong> Sellers do not know how many will bid, and bidding gets &quot;fast and furious&quot; near the end, then falls to a minimum before the cycle repeats.</li>
+<li><strong>High-volume social media.</strong>
+<ul>
+<li>Hundreds of thousands, even millions, of posts, likes, dislikes and responses within seconds</li>
+<li>the database gets in the way regardless of elasticity, so removing it from transactions and persisting eventually is one possible solution.</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-4-considerations-and-analysis">7.4 Considerations and analysis</h2>
+<ul>
+<li>A <strong>complex and expensive</strong> style, so not suitable as a general-purpose architecture like the others in the report; it is for <strong>high scalability, elasticity and performance</strong>.</li>
+<li><strong>Unique deployment model</strong>: the whole architecture can be cloud only, on prem only, or <strong>split</strong>.
+<ul>
+<li>The split model suits cloud-based processing where the <strong>data must stay on prem</strong>: data writers and readers sit on prem with the database, and asynchronous data pumps send data from cloud processing units to them.</li>
+</ul>
+</li>
+<li>It is <strong>technically partitioned</strong>:
+<ul>
+<li>domain functionality is spread across processing units, in-memory grids, data pumps, writers and readers</li>
+<li>A domain change, particularly one involving data, usually affects <strong>all</strong> of these.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-07-deployment.svg" alt="Deployment models" loading="lazy" /></p>
+<h3 id="when-to-consider-this-style">When to consider this style</h3>
+<ul>
+<li><strong>Very high concurrent scalability or elasticity</strong>: processing tens of thousands of concurrent requests or more is a big challenge with a database, and this style takes the database out of the equation.</li>
+<li><strong>Very high performance and responsiveness</strong>: it relies on in-memory caching, so data update and retrieval are usually measured in <strong>nanoseconds</strong>, which the chapter calls the most responsive and highest-performing of all the styles in the report.</li>
+</ul>
+<h3 id="when-not-to-consider-this-style">When not to consider this style</h3>
+<ul>
+<li><strong>Large data volumes.</strong> All transactional data sits in memory, so data size is a limit. The chapter's image: &quot;a 45-terabyte relational database&quot; cannot fit in memory.</li>
+<li><strong>Tight budget and time</strong>:
+<ul>
+<li>it is technically complex</li>
+<li>Reproducing very high user loads in a test environment is expensive and slow, so testing scalability is hard, and <strong>agility is fairly low</strong>.</li>
+</ul>
+</li>
+<li><strong>High data consistency</strong>: it is <strong>always eventually consistent</strong>, and updates to the in-memory grids may take a long time to reach the database.</li>
+</ul>
+<h2 id="7-5-architecture-characteristics">7.5 Architecture characteristics</h2>
+<p>Figure 7-5 rates the style from one star (not well supported) to five (well suited).</p>
+<table>
+<thead>
+<tr>
+<th>Characteristic</th>
+<th>Rating</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Partitioning type</td>
+<td>Technical</td>
+</tr>
+<tr>
+<td>Overall cost</td>
+<td>$$$$$</td>
+</tr>
+<tr>
+<td>Agility</td>
+<td>2 stars</td>
+</tr>
+<tr>
+<td>Simplicity</td>
+<td>1 star</td>
+</tr>
+<tr>
+<td>Scalability</td>
+<td>5 stars</td>
+</tr>
+<tr>
+<td>Fault tolerance</td>
+<td>3 stars</td>
+</tr>
+<tr>
+<td>Performance</td>
+<td>5 stars</td>
+</tr>
+<tr>
+<td>Extensibility</td>
+<td>3 stars</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/software-architecture-patterns/img/sap-07-ratings.svg" alt="Figure 7-5: star ratings for space-based architecture" loading="lazy" /></p>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Processing units with replicated in-memory data grids replace the database in transactional processing; data pumps persist updates asynchronously.</li>
+<li>Virtualized middleware (messaging grid, data grid, processing grid, deployment manager) manages routing, replication, orchestration and elasticity.</li>
+<li>Right for extreme, elastic concurrency (ticketing, auctions, social media); wrong for big data volumes, tight budgets or high consistency.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Tuple space</strong>: multiple parallel processors with shared memory; the origin of the style's name.</li>
+<li><strong>Processing unit</strong>: the style's service: logic plus in-memory data grid (plus optional web components).</li>
+<li><strong>Virtualized middleware</strong>: messaging grid, data grid, processing grid, deployment manager.</li>
+<li><strong>Data pump / data writer / data reader</strong>: asynchronous persistence and cold-start reload.</li>
+<li><strong>Elastic system</strong>: variable and unpredictable concurrent user volume.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Mark Richards, <em>Software Architecture Patterns</em>, 2nd edition (O'Reilly, July 2022), chapter 7: <a href="https://learning.oreilly.com/library/view/software-architecture-patterns/9781098134280/ch07.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/software-architecture-patterns/9781098134280/ch07.html</a></li>
+<li>No other URLs in the chapter.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">Software Architecture Patterns 6: Microservices Architecture</a></li>
+<li><a href="/book-digest/software-architecture-patterns/sap-08-style-analysis-summary/">Software Architecture Patterns A: Style Analysis Summary</a></li>
+<li><a href="/book-digest/fundamentals-of-software-architecture/fsa-16-space-based-architecture-style/">Fundamentals of Software Architecture 16: Space-Based Architecture Style</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/software-architecture-patterns/sap-06-microservices-architecture/">&larr; Software Architecture Patterns 6: Microservices Architecture</a><a href="/book-digest/software-architecture-patterns/">Contents</a><a href="/book-digest/software-architecture-patterns/sap-08-style-analysis-summary/">Software Architecture Patterns A: Style Analysis Summary &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

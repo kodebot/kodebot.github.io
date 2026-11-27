@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Monolith to Microservices 3: Splitting the Monolith</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/monolith-to-microservices/">Contents</a><span class="ttl">Monolith to Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/monolith-to-microservices/m2m-02-planning-a-migration/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="monolith-to-microservices-3-splitting-the-monolith">Monolith to Microservices 3: Splitting the Monolith</h1>
+<p>Source: Sam Newman, <em>Monolith to Microservices</em> (O'Reilly, 2019), chapter 3. Previous: <a href="/book-digest/monolith-to-microservices/m2m-02-planning-a-migration/">Monolith to Microservices 2: Planning a Migration</a>. Next: <a href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/">Monolith to Microservices 4: Decomposing the Database</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>First decide whether you can change the monolith. The patterns split into those that <strong>intercept calls at the edge</strong> (strangler fig, UI composition), those that <strong>change the code inside</strong> (branch by abstraction), those that <strong>verify</strong> (parallel run) and those that <strong>react to events or data</strong> (decorating collaborator, change data capture).</li>
+<li><strong>Strangler fig</strong> is Newman's first port of call: put a proxy in front, build the new service, redirect calls, roll back by redirecting again. <strong>Separate deployment from release.</strong></li>
+<li><strong>Branch by abstraction</strong> replaces long-lived branches for functionality deep inside the monolith. <strong>Parallel run</strong> compares old and new before trusting the new.</li>
+<li>When migrating functionality, <strong>freeze its behaviour</strong> (no new features or bug fixes) to keep rollback possible.</li>
+<li>Most teams mix several patterns; none is universally right.</li>
+</ul>
+</div></div>
+<h2 id="3-1-to-change-the-monolith-or-not">3.1 To change the monolith, or not?</h2>
+<ul>
+<li>If you can change the code you have the most options
+<ul>
+<li>A hard constraint can deny it: vendor software without source, or a technology you lack skills for</li>
+<li>Softer drivers: the monolith is so bad you want to start again (Newman worries people reach that conclusion too easily), or many others work in it and you would get in their way (branch by abstraction can mitigate, but you may still judge the impact too great).</li>
+</ul>
+</li>
+<li>Anecdote:
+<ul>
+<li>a heavy-computation C library full of memory leaks and a poor API; the team asked for months for the source and was refused</li>
+<li>Years later the sponsor admitted they had lost the source and were too embarrassed to say</li>
+<li>Several patterns here work without changing the monolith.</li>
+</ul>
+</li>
+</ul>
+<h3 id="cut-copy-or-reimplement">Cut, copy or reimplement?</h3>
+<ul>
+<li>If the code is well factored you may move it, but <strong>copy it and leave it in the monolith</strong> at first: it gives a rollback point or a parallel run
+<ul>
+<li>Remove it later once the migration succeeds.</li>
+</ul>
+</li>
+<li><strong>Refactoring the monolith:</strong>
+<ul>
+<li>the main barrier is that code is organised by technology (model, view, controller packages) not business domain, so even finding the code is hard</li>
+<li>Recommended:
+<ul>
+<li>Michael Feathers, <em>Working Effectively with Legacy Code</em> (2004), whose <strong>seam</strong> is a place to change behaviour without editing existing behaviour</li>
+<li>define a seam, build a new implementation, swap it in</li>
+</ul>
+</li>
+<li>Seams fit bounded contexts well.</li>
+</ul>
+</li>
+<li><strong>A modular monolith?</strong>
+<ul>
+<li>Extract seams as modules (Java JAR files, Ruby gems): still one deployment, many benefits, can be the sweet spot</li>
+<li>some teams found it solved most of their problems.</li>
+</ul>
+</li>
+<li><strong>Incremental rewrites:</strong>
+<ul>
+<li>Newman prefers salvaging code first, but few teams do</li>
+<li>most do a clean-room reimplementation of each new service. That is safe if you rewrite only small pieces and ship regularly: a few days or weeks is fine, months means re-examine.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-warning"><div class="callout-title">Caution</div><div class="callout-body">
+<p>Each pattern has pros and cons; none is universally the right way. Understand them before choosing.</p>
+</div></div>
+<h2 id="3-2-pattern-strangler-fig-application">3.2 Pattern: strangler fig application</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-strangler-overview.svg" alt="Overview" loading="lazy" /></p>
+<ul>
+<li>Captured by Martin Fowler, inspired by figs that seed in a tree's upper branches and descend to root, enveloping the host, which may die and rot away
+<ul>
+<li>Here the new system is initially supported by and wraps the old; both coexist so the new can grow and possibly replace the old</li>
+<li>Benefit: incremental migration, and the ability to <strong>pause or stop</strong> while keeping what has been delivered</li>
+<li>Each step is easily reversible.</li>
+</ul>
+</li>
+<li><strong>How it works:</strong>
+<ul>
+<li>identify what to migrate (use the Chapter 2 trade-off thinking),</li>
+<li>implement it in a new microservice (copying or reimplementing; migrate state if needed, Chapter 4),</li>
+<li>reroute calls (Figure 3-1)
+<ul>
+<li>Until the redirect, the new functionality is not live even if deployed, so you can take your time, deploy to production safely and use <strong>parallel run</strong> for confidence</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Deployment is not release</div><div class="callout-body">
+<p>Software deployed to an environment is not necessarily used by customers. Separating the two lets you validate in the real production environment first. Strangler fig, parallel run and canary release all use this.</p>
+</div></div>
+<ul>
+<li>If other functionality in the monolith also uses what you extract, change those calls too (later techniques).</li>
+<li><strong>Where to use it:</strong>
+<ul>
+<li>no change to the monolith, so it suits monoliths others are working on and <strong>black-box or SaaS</strong> systems. Sometimes an entire end-to-end slice moves (Inventory Management, Figure 3-2)</li>
+<li>extracting larger groups simplifies integration but is more work
+<ul>
+<li>Smaller bites mean &quot;shallow&quot; extractions (Payroll, Figure 3-3) that still use monolith functionality (User Notifications), which then must be exposed by the monolith (a change to it)</li>
+<li>It fails when the functionality is deep inside and fired by many inbound calls (Notifications, Figure 3-4)</li>
+<li>HTTP has transparent redirection built in</li>
+</ul>
+</li>
+<li>some RPC protocols are harder. Despite limits, it is Newman's usual first choice.</li>
+</ul>
+</li>
+</ul>
+<h3 id="example-http-reverse-proxy">Example: HTTP reverse proxy</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-http-proxy.svg" alt="HTTP proxy" loading="lazy" /></p>
+<ul>
+<li>Insert an HTTP reverse proxy between upstream callers (a UI or headless) and the monolith (Figure 3-5).</li>
+<li><strong>Step 1, insert the proxy</strong>
+<ul>
+<li>(Figure 3-6): pass everything through unchanged</li>
+<li>Check the extra hop (a few milliseconds for a decent proxy and network), set up monitoring, let it settle</li>
+<li>If you already have a proxy, still experiment with redirection first so there is no nasty surprise before going live.</li>
+</ul>
+</li>
+<li><strong>Step 2, migrate functionality</strong>
+<ul>
+<li>(Figure 3-7), in stages: first a basic service that returns <strong>501 Not Implemented</strong>, deployed to production to get comfortable with deployment (deployed, not released)</li>
+<li>then add behaviour.</li>
+</ul>
+</li>
+<li><strong>Step 3, redirect</strong>
+<ul>
+<li>(Figure 3-8) only when all the functionality has moved</li>
+<li>revert the redirection for fast rollback. A feature toggle makes the state clear</li>
+<li>the proxy is also the place for a canary rollout or parallel run.</li>
+</ul>
+</li>
+<li><strong>Data:</strong> if the Payroll service needs data in the monolith's database, see Chapter 4.</li>
+<li><strong>Proxy options:</strong>
+<ul>
+<li>with HTTP, a dedicated proxy such as <strong>NGINX</strong> is the choice. Redirection by URI path or REST resource is easy (Figure 3-9: the whole Invoice resource)</li>
+<li>switching on a POST body parameter is harder but possible. Newman wrote two hand-built proxies (Java and Python) and both were inefficient and laggy</li>
+<li>instead extend a proxy (NGINX allows Lua).</li>
+</ul>
+</li>
+<li><strong>Incremental rollout</strong>
+<ul>
+<li>(Figures 3-10, 3-11): slice smaller if needed, even splitting Payroll between monolith and service, though both seeing the same data implies a shared database</li>
+<li>No stop-the-line re-platforming: stop dividing the backlog into &quot;feature&quot; and &quot;technical&quot; stories and get good at architectural change alongside features.</li>
+</ul>
+</li>
+</ul>
+<h3 id="changing-protocols">Changing protocols</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-protocols-mesh.svg" alt="Protocols and service mesh" loading="lazy" /></p>
+<ul>
+<li>A proxy could transform a SOAP interface into gRPC (Figure 3-12), but logic accumulates in a shared layer that multiple teams edit, adding contention against independent deployability
+<ul>
+<li>Remember <strong>&quot;keep the pipes dumb, the endpoints smart&quot;</strong>.</li>
+</ul>
+</li>
+<li>Better:
+<ul>
+<li>have the service support both the old and new protocol and map internally (Figure 3-13): the service controls its own change, and consumers have time to move before the old API retires</li>
+<li>A microservice is a collection of functionality on a network endpoint, exposed in different ways to different consumers.</li>
+</ul>
+</li>
+<li><strong>Service meshes</strong>
+<ul>
+<li>(Figure 3-14): each instance talks through its own local proxy, with central control and monitoring through a control plane, so there is no shared smart pipe</li>
+<li>At <strong>Square</strong> they moved from a homegrown RPC mechanism to gRPC and, because of how their architecture evolved, built their own mesh on the Envoy proxy rather than using Linkerd or Istio</li>
+<li>The idea is &quot;spot on&quot;, but tooling took long to stabilise (Istio leading); give it time if you can.</li>
+</ul>
+</li>
+</ul>
+<h3 id="example-ftp-and-messaging">Example: FTP and messaging</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-ftp-messaging.svg" alt="FTP and messaging" loading="lazy" /></p>
+<ul>
+<li><strong>FTP (Homegate, Swiss real estate):</strong>
+<ul>
+<li>customers upload listings by FTP, handled by the monolith</li>
+<li>They wanted a new REST upload standard without changing the customer experience, so they detected uploads from the FTP server log and sent the files through an adapter to the new REST-based listings service (Figure 3-15)</li>
+<li>Listings went live faster; both paths ran together (a parallel run).</li>
+</ul>
+</li>
+<li><strong>Message interception:</strong> the same idea with a broker.
+<ul>
+<li><strong>Content-based router</strong>
+<ul>
+<li>(Figures 3-16, 3-17, from <em>Enterprise Integration Patterns</em>): intercept all messages and forward them to monolith or service</li>
+<li>The monolith is untouched but there is another queue on the path (latency, management) and arguably a &quot;smart pipe&quot;.</li>
+</ul>
+</li>
+<li><strong>Selective consumption</strong>
+<ul>
+<li>(Figure 3-18): monolith and service share one queue and each filters (a JMS message selector)</li>
+<li>No extra queue, but the technology must allow it, and cut-over and rollback each need <strong>two coordinated changes</strong></li>
+<li>Overlapping rules can deliver a message twice or drop it, so use it with few consumers and simple rules; routing suits more consumer types.</li>
+</ul>
+</li>
+<li>Asynchronous request-response also needs a route back to the client.</li>
+</ul>
+</li>
+<li><strong>Other protocols:</strong>
+<ul>
+<li>for batch uploads, intercept the file, pull out the calls you want and forward the rest. The pattern was used long before Fowler wrote it up in 2004</li>
+<li>ThoughtWorks used it often (Paul Hammant lists projects: a trading blotter, an airline booking application, a rail ticketing system, a classified ad portal).</li>
+</ul>
+</li>
+</ul>
+<h3 id="changing-behaviour-while-migrating">Changing behaviour while migrating</h3>
+<div class="callout c-warning"><div class="callout-title">Freeze behaviour</div><div class="callout-body">
+<p>If the migrated service gets bug fixes or new features that the monolith version lacks, a rollback reintroduces the bugs or removes features. Try to <strong>eliminate changes to the behaviour being moved</strong> until the migration is done. The longer it takes, the harder the freeze, so keep migrations small.</p>
+</div></div>
+<h2 id="3-3-pattern-ui-composition">3.3 Pattern: UI composition</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-ui-composition.svg" alt="UI composition" loading="lazy" /></p>
+<ul>
+<li>Splice functionality served by the old and new systems in the user interface
+<ul>
+<li>At <strong>The Guardian</strong> (a content management system moved to a custom Java platform), the cut-over was phased by vertical (travel, news, culture), starting with Travel.</li>
+</ul>
+</li>
+<li><strong>Page composition:</strong>
+<ul>
+<li>different look and feel per section, with old links redirected</li>
+<li>Later, when The Guardian left the Java monolith, they migrated a vertical at a time again and used the Fastly CDN as the routing layer (the &quot;new&quot; system lasted almost 10 years)</li>
+<li><strong>REA Group</strong> (Australian property listings) has teams owning whole commercial or residential channels with different branding, which suits page composition.</li>
+</ul>
+</li>
+<li><strong>Widget composition:</strong>
+<ul>
+<li>the first Guardian release was a single top-10 travel destinations widget spliced into old pages with <strong>Edge-Side Includes</strong> on Apache (Figure 3-19), a low-key, low-risk release
+<ul>
+<li>Today it is more often done in the browser, which has the benefit that one failed widget degrades only part of the page</li>
+<li><strong>Orbitz</strong> had UI modules (search form, booking form, map) served from one <strong>Content Orchestration</strong> service, a monolith causing delivery contention (Figure 3-20)</li>
+</ul>
+</li>
+<li>they delegated modules one at a time to new services, starting with editorial (Figure 3-21). Already-decomposed UIs with clear ownership make this easier</li>
+<li>not every UI splits into widgets.</li>
+</ul>
+</li>
+<li><strong>Mobile:</strong>
+<ul>
+<li>both major app stores vet each release, and a native app is itself a monolith users must download</li>
+<li>Fix: change things server-side (embedded web views; <strong>Spotify</strong> defines layout declaratively on the server, with components backed by microservices, so views change without store submissions).</li>
+</ul>
+</li>
+<li><strong>Micro frontends:</strong>
+<ul>
+<li>single-page apps (Vue, Angular, React) cannot use page composition</li>
+<li>Web Components was slow to gain traction</li>
+<li>people explore how to combine bits of different frameworks without dependency clashes. Out of scope for the book.</li>
+</ul>
+</li>
+<li><strong>Where to use:</strong> migrates whole vertical slices, but you must be able to change the existing UI. Websites are easy; single-page apps add complexity.</li>
+</ul>
+<h2 id="3-4-pattern-branch-by-abstraction">3.4 Pattern: branch by abstraction</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-branch-by-abstraction.svg" alt="Branch by abstraction" loading="lazy" /></p>
+<ul>
+<li>Strangler fig needs calls at the edge
+<ul>
+<li>For functionality deeper inside (Notification, Figure 3-4) you must change the monolith, and doing it on a long-lived branch causes painful merges and runs against continuous integration (the 2017 State of DevOps Report links trunk-based development and short-lived branches to higher performance)</li>
+<li><strong>Branch by abstraction</strong> lets old and new implementations coexist in the same version of the code.</li>
+</ul>
+</li>
+<li><strong>Five steps</strong>, shown with Notification:
+<ol>
+<li><strong>Create an abstraction</strong> for the functionality (Figure 3-22): an Extract Interface refactoring if well factored, otherwise a seam; search for code that sends emails or SMSs.</li>
+<li><strong>Use the abstraction:</strong> change clients incrementally (Figure 3-23), usually by tracking inbound calls manually; no functional change.</li>
+<li><strong>Create the new implementation</strong> (Figure 3-24), which calls the new service; it is dormant (it can return Not Implemented) while the service grows, and the service can be deployed to production. This can last long: Jez Humble described a months-long iBatis to Hibernate switch in GoCD (then Cruise) while shipping twice weekly.</li>
+<li><strong>Switch the implementation</strong> (Figure 3-25) with an easily toggled mechanism, commonly a <strong>feature toggle</strong> (Figure 3-26, configuration file; Pete Hodgson has a write-up) so you can switch back. Both implementations exist, so you can compare them with tests or in production (parallel run).</li>
+<li><strong>Clean up:</strong> remove the old implementation (Figure 3-27) and the toggle (leftover feature flags are a real problem), and optionally the abstraction (Figure 3-28), which may have improved the code.</li>
+</ol>
+</li>
+<li><strong>As a fallback mechanism:</strong>
+<ul>
+<li>Steve Smith's <strong>verify branch by abstraction</strong> (Figure 3-29) uses the old implementation if calls to the new one fail</li>
+<li>Costs: more code, harder reasoning (both may be active), and consistent shared data if either is stateful, since you can switch per request.</li>
+</ul>
+</li>
+<li><strong>Where to use:</strong>
+<ul>
+<li>changes that take time without disrupting colleagues</li>
+<li>better than long-lived branches nearly always. Prefer strangler fig first, and note it requires changing the existing code.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-5-pattern-parallel-run">3.5 Pattern: parallel run</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-parallel-run.svg" alt="Parallel run" loading="lazy" /></p>
+<ul>
+<li>Pre-release testing cannot cover everything
+<ul>
+<li>Strangler fig and branch by abstraction run old or new; <strong>parallel run calls both and compares</strong>, with one as the source of truth (the old, until the new is trusted)</li>
+<li>It verifies correct answers and acceptable non-functional behaviour (latency, time-outs).</li>
+</ul>
+</li>
+<li><strong>Credit derivative pricing:</strong>
+<ul>
+<li>at a bank, a replacement for the calculation platform ran side by side with daily reconciliation (a program and an Excel report)</li>
+<li>A few real issues were found, plus many discrepancies caused by bugs in the old system, which meant explaining the correct results from first principles</li>
+<li>After a month they switched the source of truth, and kept the old system a few months for audits</li>
+<li>(Newman notes the financial industry was &quot;terrible at this&quot; and expresses regret about his part in it.) Homegate ran both listing importers together, then disabled the monolith's FTP import.</li>
+</ul>
+</li>
+<li><strong>N-version programming:</strong> fly-by-wire aircraft use several implementations and pick the answer by quorum; unlike migration the aim is to keep them all.</li>
+<li><strong>Verification:</strong>
+<ul>
+<li>compare functional equivalence like pure functions, and check non-functional aspects</li>
+<li><strong>Spies</strong> (a testing pattern) stand in for a side effect such as sending an email so it is not done twice and can be verified afterwards (Figure 3-31)</li>
+<li>A spy inside the monolith skips testing the remote call; an out-of-process spy complicates when you can verify (record interactions and verify out of band, perhaps daily)</li>
+<li>The more you replace with a spy, the less you test</li>
+<li><strong>GitHub Scientist</strong> (Ruby, with ports to Java, .NET, Python, Node.js and others) helps run implementations side by side.</li>
+</ul>
+</li>
+<li><strong>Dark launching and canary releasing:</strong>
+<ul>
+<li>a <strong>canary release</strong> sends some users to the new functionality</li>
+<li>a <strong>dark launch</strong> deploys it invisibly</li>
+<li>a parallel run is a way of dark launching. They are part of <strong>progressive delivery</strong> (James Governor's umbrella term).</li>
+</ul>
+</li>
+<li><strong>Where to use:</strong> rarely trivial, so reserve it for high-risk functionality (Chapter 4 has a medical records example). Newman has used it once or twice.</li>
+</ul>
+<h2 id="3-6-pattern-decorating-collaborator">3.6 Pattern: decorating collaborator</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-decorating-collaborator.svg" alt="Decorating collaborator" loading="lazy" /></p>
+<ul>
+<li>To trigger behaviour on something that happens inside the monolith without changing it, let the call through and then, based on the result, call your microservices: the decorator pattern, so the monolith appears to call the services.</li>
+<li><strong>Loyalty programme at Music Corp:</strong>
+<ul>
+<li>earn points when an order is placed. The monolith's order placement stays</li>
+<li>a proxy intercepts, and on success calls the Loyalty service to add points (Figure 3-32). The proxy now has &quot;smarts&quot; and tunnels responses back</li>
+<li>watch the complexity, because the more code, the more it becomes a technical microservice.</li>
+</ul>
+</li>
+<li>It needs enough information in the request or response. If the order value is not there, the service may call back into the monolith (Figure 3-33): extra load and a circular dependency
+<ul>
+<li>better to change the monolith to supply it, or use change data capture.</li>
+</ul>
+</li>
+<li><strong>Where to use:</strong> keep it simple; it is more elegant and less coupled than change data capture when request or response has the data. If not, think hard.</li>
+</ul>
+<h2 id="3-7-pattern-change-data-capture">3.7 Pattern: change data capture</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-03-change-data-capture.svg" alt="Change data capture" loading="lazy" /></p>
+<ul>
+<li>React to <strong>changes in the datastore</strong> instead of calls. The capture system must be coupled to the monolith's datastore, which is unavoidable.</li>
+<li><strong>Loyalty cards:</strong>
+<ul>
+<li>at enrolment the monolith returns little (Figure 3-34), but a card needs more customer details, so detect inserts into the LoyaltyAccount table and fire a Loyalty Account Created event to the printing service (Figure 3-35)</li>
+<li>printing works best in batch, so events queue in a broker.</li>
+</ul>
+</li>
+<li><strong>Implementations</strong> (trade-offs in complexity, reliability, timeliness):
+<ul>
+<li><strong>Database triggers</strong>
+<ul>
+<li>(Figure 3-36): custom behaviour on change (for example a call on INSERT)</li>
+<li>no new software, but like stored procedures a slippery slope. Randy Shoup: one or two triggers is not terrible</li>
+<li>building a whole system from them is. Tooling and change management suffer</li>
+<li>use sparingly.</li>
+</ul>
+</li>
+<li><strong>Transaction log pollers</strong>
+<ul>
+<li>(Figure 3-37): a separate process reads the database transaction log</li>
+<li>only committed changes appear</li>
+<li>no need to work out what changed</li>
+<li>can run off a replica</li>
+<li>but tools depend on the log format of each database. Many tools exist, some mapping log changes to messages. Generally the neatest.</li>
+</ul>
+</li>
+<li><strong>Batch delta copier:</strong> a scheduled job (cron) scans for changed data and copies it. The hard part is knowing what changed (table-level metadata only, or you add timestamps).</li>
+</ul>
+</li>
+<li><strong>Where to use:</strong>
+<ul>
+<li>useful for replicating data (Chapter 4)</li>
+<li>In migration, the sweet spot is reacting to monolith data changes when you cannot intercept at the edge or change the code</li>
+<li>Keep use minimal because trigger and log-based implementations add complexity.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Combine patterns; most migrations need several.</li>
+<li>Prefer the least invasive pattern that works: strangler fig, then branch by abstraction, with parallel run for risky parts.</li>
+<li>Keep rollbacks possible: freeze behaviour, separate deploy from release, remove toggles afterwards.</li>
+<li>Data was glossed over; Chapter 4 tackles it.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Strangler fig</strong>, <strong>branch by abstraction</strong>, <strong>parallel run</strong>, <strong>decorating collaborator</strong>, <strong>change data capture</strong>, <strong>UI composition</strong>.</li>
+<li><strong>Seam</strong>; <strong>feature toggle</strong>; <strong>service mesh</strong>; <strong>content-based router</strong>; <strong>selective consumption</strong>.</li>
+<li><strong>Spy</strong>; <strong>canary release</strong>; <strong>dark launch</strong>; <strong>progressive delivery</strong>; <strong>N-version programming</strong>.</li>
+<li><strong>Deployment versus release</strong>; <strong>smart endpoints, dumb pipes</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Monolith to Microservices</em>, O'Reilly 2019, chapter 3: <a href="https://learning.oreilly.com/library/view/monolith-to-microservices/9781492047834/ch03.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/monolith-to-microservices/9781492047834/ch03.html</a></li>
+<li>Cited in the chapter:
+<ul>
+<li>Michael Feathers, <em>Working Effectively with Legacy Code</em> (Prentice Hall, 2004)</li>
+<li>Bobby Woolf and Gregor Hohpe, <em>Enterprise Integration Patterns</em> (Addison-Wesley, 2003)</li>
+<li>Snow Pettersen, &quot;The Road to an Envoy Service Mesh&quot; (Square developer blog)</li>
+<li>Steve Hoffman and Rick Fast, &quot;Enabling Microservices at Orbitz&quot; (YouTube, 2016)</li>
+<li>John Sundell, &quot;Building Component-Driven UIs at Spotify&quot; (2016)</li>
+<li>Liming Chen and Algirdas Avizienis, &quot;N-Version Programming&quot; (1995)</li>
+<li>Pete Hodgson on feature toggles</li>
+<li>Paul Hammant's list of strangler projects. Figures 3-1 to 3-37 are redrawn in grouped summary diagrams.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/monolith-to-microservices/m2m-02-planning-a-migration/">Monolith to Microservices 2: Planning a Migration</a></li>
+<li><a href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/">Monolith to Microservices 4: Decomposing the Database</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-04-architectural-decomposition/">Software Architecture: The Hard Parts 4: Architectural Decomposition</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-05-component-based-decomposition-patterns/">Software Architecture: The Hard Parts 5: Component-Based Decomposition Patterns</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/monolith-to-microservices/m2m-02-planning-a-migration/">&larr; Monolith to Microservices 2: Planning a Migration</a><a href="/book-digest/monolith-to-microservices/">Contents</a><a href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/">Monolith to Microservices 4: Decomposing the Database &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

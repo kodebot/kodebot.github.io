@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Monolith to Microservices 2: Planning a Migration</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/monolith-to-microservices/">Contents</a><span class="ttl">Monolith to Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/monolith-to-microservices/m2m-01-just-enough-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/monolith-to-microservices/m2m-03-splitting-the-monolith/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="monolith-to-microservices-2-planning-a-migration">Monolith to Microservices 2: Planning a Migration</h1>
+<p>Source: Sam Newman, <em>Monolith to Microservices</em> (O'Reilly, 2019), chapter 2. Previous: <a href="/book-digest/monolith-to-microservices/m2m-01-just-enough-microservices/">Monolith to Microservices 1: Just Enough Microservices</a>. Next: <a href="/book-digest/monolith-to-microservices/m2m-03-splitting-the-monolith/">Monolith to Microservices 3: Splitting the Monolith</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Microservices are not the goal.</strong> Decide what you want to achieve that your current architecture cannot give you, check the alternatives, and decide how you will know it is working.</li>
+<li>Common reasons (autonomy, time to market, scaling, robustness, more developers, new technology) each have <strong>simpler alternatives</strong> worth trying first.</li>
+<li>Bad ideas: an <strong>unclear domain</strong>, a real <strong>startup</strong>, <strong>customer-installed software</strong>, or having <strong>no good reason</strong>.</li>
+<li>Migrate <strong>incrementally</strong>, extract one service at a time, and treat extraction as done only <strong>in production</strong>. Use domain modelling and a <strong>value versus difficulty quadrant</strong> to choose where to start.</li>
+<li>Manage the people side (Kotter's eight steps, team structure, skills) and review progress with checkpoints and measures; beware the sunk cost fallacy.</li>
+</ul>
+</div></div>
+<h2 id="2-1-understanding-the-goal">2.1 Understanding the goal</h2>
+<ul>
+<li>You do not &quot;win&quot; by having microservices. Adopt them as a conscious, rational decision to achieve something your current architecture cannot.</li>
+<li>Knowing the goal drives where you focus, avoids analysis paralysis, and avoids cargo cult thinking (&quot;if it is good for Netflix it is good for us&quot;).</li>
+<li><strong>A common failing:</strong>
+<ul>
+<li>at a workshop, an attendee did not know why they had come (&quot;our boss told us&quot;)</li>
+<li>the boss said &quot;our CTO said we're doing microservices&quot;. Without a clear why, transitions cost money and people and can run a year before anyone remembers the reason (not just sunk cost: they literally do not know why).</li>
+</ul>
+</li>
+<li>Asked for <strong>ROI figures</strong>:
+<ul>
+<li>studies are few, and rarely transferable between contexts</li>
+<li>In their absence, apply critical thinking and an experimental frame of mind</li>
+<li>ROI needs an assessment of the return you want</li>
+<li>Focus on outcomes, not one approach, even if it means ditching work or going back to the boring approach.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-02-questions-sliders.svg" alt="Three questions and sliders" loading="lazy" /></p>
+<h3 id="three-key-questions">Three key questions</h3>
+<ol>
+<li><strong>What are you hoping to achieve?</strong> Outcomes aligned with the business and describable as benefits to end users.</li>
+<li><strong>Have you considered alternatives to microservices?</strong> Often a more boring technique gives the same benefit.</li>
+<li><strong>How will you know if the transition is working?</strong> (See 2.9.)</li>
+</ol>
+<p>Asking these is sometimes enough for a company to think again.</p>
+<h2 id="2-2-why-you-might-choose-microservices-and-the-alternatives">2.2 Why you might choose microservices, and the alternatives</h2>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>How microservices help</th>
+<th>Alternatives to try</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Improve team autonomy</strong></td>
+<td>teams that own services have more control; small units (Gore keeps units under 150; Timpsons cut internal rules to two: look the part and put the money in the till)</td>
+<td>give teams ownership of parts of the codebase (a modular monolith), name decision makers by expertise, self-service provisioning so central operations need not field tickets</td>
+</tr>
+<tr>
+<td><strong>Reduce time to market</strong></td>
+<td>change and deploy individual services without coordinated releases; more people can work in parallel</td>
+<td><strong>path-to-production modelling</strong>: at an investment bank, Kief Morris mapped the stages and found about six weeks from developer start to production but <strong>over 40 weeks</strong> from the idea to developers starting; fixing that mattered more</td>
+</tr>
+<tr>
+<td><strong>Scale cost-effectively for load</strong></td>
+<td>scale only the constrained services; scale down or off others (why many SaaS firms use them)</td>
+<td>a bigger box (vertical scaling); run several copies of the monolith behind a load balancer or queue (horizontal scaling; limited if the database is the bottleneck); replace technology (non-trivial)</td>
+</tr>
+<tr>
+<td><strong>Improve robustness</strong></td>
+<td>impact on one area need not bring down everything; focus effort on critical parts</td>
+<td>multiple monolith copies across failure planes (racks, data centres); more reliable hardware and software; investigate past outage causes (reliance on manual processes; the 2017 British Airways outage was triggered by one person's action)</td>
+</tr>
+<tr>
+<td><strong>Scale the number of developers</strong></td>
+<td>independent pieces reduce delivery contention (Brooks, <em>The Mythical Man-Month</em>: more people help only if work partitions with limited interaction)</td>
+<td>a modular monolith with team-owned modules, though deployment still needs coordination</td>
+</tr>
+<tr>
+<td><strong>Embrace new technology</strong></td>
+<td>vary language, platform or database per service; isolate a risky technology</td>
+<td>new languages on the same runtime (the JVM); a &quot;burning platform&quot; can be replaced incrementally by the strangler fig pattern (Chapter 3)</td>
+</tr>
+</tbody>
+</table>
+<div class="callout c-note"><div class="callout-title">Resilience versus robustness</div><div class="callout-body">
+<p>John Allspaw (a colleague of David Woods, who pioneered the resilience model): <strong>robustness</strong> is reacting to expected variations (a machine may die, so load balance an instance); <strong>resilience</strong> is an organisation able to adapt to what it did not anticipate (a culture of experimentation, such as chaos engineering). Microservices do not give robustness for free: spreading functionality over processes can just enlarge the failure surface.</p>
+</div></div>
+<div class="callout c-warning"><div class="callout-title">Reuse is a poor goal</div><div class="callout-body">
+<p>Reuse is not what people actually want; it is a means to faster delivery or lower cost, so track those instead. Example: Music Corp's Customer Services team needs invoice PDFs, and the warehouse already generates PDFs for packing slips. Reusing it means coordinating with another team; writing their own may be faster. Optimising for reuse can slow time to market.</p>
+</div></div>
+<h2 id="2-3-when-microservices-might-be-a-bad-idea">2.3 When microservices might be a bad idea</h2>
+<ul>
+<li><strong>Unclear domain:</strong>
+<ul>
+<li>wrong boundaries cost a lot (many cross-service changes, coupling)
+<ul>
+<li>Example: ThoughtWorks' SnapCI team knew continuous integration well, yet their first service boundaries were subtly wrong</li>
+</ul>
+</li>
+<li>after months of high change cost they merged the services into one application, and a year later split it again with stable boundaries. Prematurely decomposing is costly</li>
+<li><strong>decomposing an existing codebase is easier than starting with microservices</strong>.</li>
+</ul>
+</li>
+<li><strong>Startups:</strong>
+<ul>
+<li>real startups experiment and their domain shifts</li>
+<li>Netflix, Airbnb and others moved to microservices later; they suit <strong>scale-ups</strong> with product-market fit</li>
+<li>Brownfield systems are easier to partition: code to examine, people to ask, a known baseline for performance</li>
+<li>Newman does not say never, but split only on clear boundaries, and if you struggle with two services, ten will be hard.</li>
+</ul>
+</li>
+<li><strong>Customer-installed and managed software:</strong>
+<ul>
+<li>microservices push complexity into operations</li>
+<li>you cannot expect customers to have the skills or platform (Kubernetes installs vary widely), when they are used to one process on a known platform.</li>
+</ul>
+</li>
+<li><strong>No good reason:</strong> doing it because everyone else does is terrible.</li>
+</ul>
+<h2 id="2-4-trade-offs-between-goals">2.4 Trade-offs between goals</h2>
+<ul>
+<li>People try to change many things at once (scale, team autonomy, Kotlin), locking microservices in as the approach even if horizontal scaling would do. <strong>Separate the core driver from secondary benefits</strong>
+<ul>
+<li>secondary goals must not detract from the main one.</li>
+</ul>
+</li>
+<li>Exercise:
+<ul>
+<li>treat each desired outcome as a <strong>slider</strong> starting in the middle (Figure 2-1)</li>
+<li>Raising one lowers another, which gives a ranking (for example polyglot programming matters less than resilience)</li>
+<li>Priorities change as you learn, and the ranking guides local decisions in autonomous teams.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-5-taking-people-on-the-journey">2.5 Taking people on the journey</h2>
+<ul>
+<li>Disagreements often come from different views of the goal; first share the goal. To sell the idea, use Kotter's model.</li>
+</ul>
+<h3 id="kotter-s-eight-steps">Kotter's eight steps</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-02-kotter.svg" alt="Kotter" loading="lazy" /></p>
+<ul>
+<li>Used for large organisational shifts, possibly overkill for a team of 10, but the early steps still help (Figure 2-2).</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Applied to microservices</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Establish a sense of urgency</strong></td>
+<td>your idea is one of many; look for &quot;teachable moments&quot; after a crisis; share urgency about the goal, not &quot;do microservices now&quot;</td>
+</tr>
+<tr>
+<td><strong>Create the guiding coalition</strong></td>
+<td>enough people to make it happen: colleagues, a tech lead or architect, maybe a CIO or CTO; trust is earned through smaller wins; include people <strong>outside IT</strong>, since trade-offs (for example caching reduces latency but users may see stale data) need the people who represent users</td>
+</tr>
+<tr>
+<td><strong>Develop a vision and strategy</strong></td>
+<td>vision is the goal (realistic yet aspirational), strategy the how; stay committed to the vision, not rigidly to a strategy (sunk cost)</td>
+</tr>
+<tr>
+<td><strong>Communicate the change vision</strong></td>
+<td>not too big to believe (a CEO's &quot;reduce costs and deliver faster by moving to microservices in 12 months&quot; was not believed); start small (Google's &quot;Test Mercenaries&quot; and one-page &quot;Testing on the Toilet&quot; articles); do as much face to face as possible before broadcasting</td>
+</tr>
+<tr>
+<td><strong>Empower employees for broad-based action</strong></td>
+<td>remove roadblocks: lack of bandwidth (bring in people), provisioning that takes months (on-demand virtual machines, containers or public cloud); do not spend a year designing &quot;the perfect microservice platform&quot; before you have problems; Google's testing effort started with a few teams and grew tools (test frameworks, test visibility in code review, a company-wide CI tool)</td>
+</tr>
+<tr>
+<td><strong>Generate short-term wins</strong></td>
+<td>extract easy functionality first, balanced against benefit; a hard &quot;easy&quot; task is valuable insight</td>
+</tr>
+<tr>
+<td><strong>Consolidate gains and produce more change</strong></td>
+<td>pause and reflect; deeper cuts get harder (database decomposition cannot be put off forever); a technique that worked in one area may not work elsewhere</td>
+</tr>
+<tr>
+<td><strong>Anchor new approaches in the culture</strong></td>
+<td>share stories of success and failure until it is the normal way; then leave space for better approaches to displace it</td>
+</tr>
+</tbody>
+</table>
+<h2 id="2-6-the-importance-of-incremental-migration">2.6 The importance of incremental migration</h2>
+<blockquote>
+<p>&quot;If you do a big-bang rewrite, the only thing you're guaranteed of is a big bang.&quot; (Martin Fowler)</p>
+</blockquote>
+<ul>
+<li>Chip away at the monolith like a block of marble rather than blowing it up. The cost of a large experiment is high and feedback unclear
+<ul>
+<li>small steps are analysed and learned from</li>
+<li>a retrograde step is only a small one</li>
+<li>you unlock each service's value incrementally. Stock advice: start somewhere small, deploy one or two services to production and reflect.</li>
+</ul>
+</li>
+</ul>
+<h3 id="it-is-production-that-counts">It is production that counts</h3>
+<ul>
+<li>Extraction is not complete until the service is <strong>in production and actively used</strong>
+<ul>
+<li>Most lessons (troubleshooting, tracing, latency, referential integrity, cascading failures) appear only there</li>
+<li>The next chapters show techniques to deploy while limiting the impact of problems.</li>
+</ul>
+</li>
+</ul>
+<h3 id="cost-of-change">Cost of change</h3>
+<ul>
+<li>Small steps let you see the effect of each change and change course.</li>
+<li><strong>Reversible and irreversible decisions</strong>
+<ul>
+<li>(Jeff Bezos, 2015 shareholder letter): one-way doors (Type 1) need method, care and consultation</li>
+<li>two-way doors (Type 2) can be made quickly by high-judgement people or small groups
+<ul>
+<li>Treating Type 2 as Type 1 makes everything life or death</li>
+<li>Newman prefers the names Irreversible and Reversible (a nod to Martin Fowler) and sees a <strong>spectrum</strong> (Figure 2-3)</li>
+</ul>
+</li>
+<li>most microservice decisions are towards the reversible end, since software can often be rolled back. Assess the impact of changing your mind later.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-02-reversible.svg" alt="Reversibility" loading="lazy" /></p>
+<ul>
+<li><strong>Easier places to experiment:</strong>
+<ul>
+<li>moving code in a codebase is cheap</li>
+<li>splitting a database, untangling a coupled integration, or rewriting an API with many consumers is costly
+<ul>
+<li>Make mistakes where the impact is lowest: the <strong>whiteboard</strong></li>
+<li>Sketch the design and run use cases (search for a record, register, buy an album) across the proposed boundaries</li>
+</ul>
+</li>
+<li>look for circular references and chatty services that should be one.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-7-where-to-start">2.7 Where to start</h2>
+<h3 id="domain-driven-design">Domain-driven design</h3>
+<ul>
+<li>A domain model gives a logical decomposition and helps prioritise. Figure 2-4 shows Music Corp's bounded contexts and relationships
+<ul>
+<li>each is a potential decomposition unit. Newman calls a domain model a near-essential step.</li>
+</ul>
+</li>
+<li><strong>How far do you go?</strong>
+<ul>
+<li>Just enough to choose where to start: perhaps high-level groupings and a deeper dive into the parts that most need attention. You may miss systemic issues, but do not obsess</li>
+<li>refine as you learn.</li>
+</ul>
+</li>
+</ul>
+<h3 id="event-storming">Event Storming</h3>
+<ul>
+<li>Created by Alberto Brandolini:
+<ul>
+<li>technical and non-technical stakeholders build a shared domain model <strong>bottom up</strong>: define domain events (things that happen), group them into aggregates, then into bounded contexts</li>
+<li>It does not mean building an event-driven system</li>
+<li>The output is the shared understanding; the hard part is getting the right people in the room</li>
+<li>Further reading: <em>Introducing EventStorming</em> (in progress at publication).</li>
+</ul>
+</li>
+</ul>
+<h3 id="using-a-model-for-prioritisation">Using a model for prioritisation</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-02-domain-prioritisation.svg" alt="Prioritisation" loading="lazy" /></p>
+<ul>
+<li>Count upstream and downstream dependencies
+<ul>
+<li>Notification has many inbound dependencies (Figure 2-5), so extracting it means changing many local calls to service calls: likely harder</li>
+<li>Invoicing has none (Figure 2-6): easier; the <strong>strangler fig</strong> pattern can proxy inbound calls before they reach the monolith.</li>
+</ul>
+</li>
+<li>Caveats:
+<ul>
+<li>the model is logical, so the code may be more entangled</li>
+<li>it does not show database ownership (Invoicing might manage lots of data, implying database decomposition, Chapter 4, which you may avoid for the first services). Weigh ease against benefit: if the goal is time to market and Invoicing rarely changes, it may not be worth starting there.</li>
+</ul>
+</li>
+</ul>
+<h3 id="a-combined-model">A combined model</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-02-quadrant.svg" alt="Quadrant" loading="lazy" /></p>
+<ul>
+<li>Place each candidate on two axes (Figure 2-7):
+<ul>
+<li><strong>value</strong> of decomposing (x) and <strong>difficulty</strong> (y)</li>
+<li>Do it as a team</li>
+<li>The wanted corner (Figure 2-8) is easy and valuable; pick one or two services from it (Invoicing in the example)</li>
+<li>Re-run it as you learn: things thought easy turn out hard and vice versa (Notifications might prove easier than expected).</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-8-reorganising-teams">2.8 Reorganising teams</h2>
+<ul>
+<li><strong>Shifting structures:</strong>
+<ul>
+<li>IT used to group by competency (Java developers, testers, DBAs) with hand-offs (analyst, developer, test, operations)</li>
+<li>Like layered architectures, more teams involved means slower change</li>
+<li>Silos are breaking down:
+<ul>
+<li>testers join delivery teams</li>
+<li>DevOps moves operational responsibility to delivery teams, and central teams shift from <strong>doing to enabling</strong> (embedded specialists, self-service tooling, training)</li>
+</ul>
+</li>
+<li>The shift is a trend, not universal or quick.</li>
+</ul>
+</li>
+<li><strong>Not one size fits all:</strong>
+<ul>
+<li>do not copy others</li>
+<li>The Spotify model came from the 2012 paper &quot;Scaling Agile @ Spotify&quot; (Henrik Kniberg and Anders Ivarsson); Spotify never called it a model and no longer uses it</li>
+<li>Jessica Kerr: <strong>&quot;Copy the questions, not the answers.&quot;</strong></li>
+</ul>
+</li>
+<li>Telling delivery teams &quot;now you deploy and run 24/7 support&quot; can alienate people who have never done it. Present it as an aspiration with reasons and craft the journey
+<ul>
+<li>if teams will own the whole life cycle, their skills must grow (help, training, embed operations people), and it can be done incrementally.</li>
+</ul>
+</li>
+<li><strong>DevOps does not mean NoOps:</strong>
+<ul>
+<li>it is a cultural movement breaking barriers between development and operations</li>
+<li>specialists may still exist. Recommended: <em>Team Topologies</em> (Manuel Pais and Matthew Skelton, 2019) and <em>The DevOps Handbook</em> (Gene Kim, Jez Humble, Patrick Debois, 2016).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-02-team-responsibilities.svg" alt="Team responsibilities" loading="lazy" /></p>
+<h3 id="making-a-change">Making a change</h3>
+<ol>
+<li>List all activities and responsibilities in delivering software, with stakeholders from every role; map them to current teams, optionally over a path-to-production model (Figure 2-9). This shared &quot;as-is&quot; picture helps silos understand each other, and shows that some teams already do a lot (deploying their own test environments makes the step to production smaller, though tier-1 support and diagnosis are skills built over years).</li>
+<li>Redraw for a sensible horizon (six months to a year). In the example (Figure 2-10) frontend and backend responsibilities merge, teams provision their own test environments using a self-service platform from operations, and the delivery team handles all incidents during working hours while operations coach them.</li>
+<li>Check feasibility with people on the ground; split into specific responsibilities to go incrementally (first removing operations' provisioning of test environments).</li>
+</ol>
+<h3 id="changing-skills">Changing skills</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-02-skills.svg" alt="Skills" loading="lazy" /></p>
+<ul>
+<li>Have people <strong>self-assess privately</strong>
+<ul>
+<li>At The Guardian (rebuilt online by ThoughtWorks), developers rated themselves from 1 (&quot;this means nothing to me&quot;) to 5 (&quot;I could write a book&quot;) against a list of core skills</li>
+<li>only the mentor saw scores</li>
+<li>the aim was personal targets, not 5 everywhere
+<ul>
+<li>Coaches ensured chances to grow (stories using that technology, videos, courses, conferences)</li>
+<li>Figure 2-11 shows a personal chart (author's wish to grow Kubernetes and Lambda; content with Go)</li>
+<li>Keep it private, or people will fear a low mark affecting reviews.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Anonymised ratings form a <strong>team skill map</strong> (Figure 2-12:
+<ul>
+<li>the team wants to improve Kafka, Kubernetes and PACT testing) to justify group learning or a course</li>
+<li>The answer may also be to <strong>hire</strong> (for example a Kafka expert) who then helps colleagues</li>
+<li>Start with your own people, culture and users' needs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-9-how-will-you-know-the-transition-is-working">2.9 How will you know the transition is working?</h2>
+<ul>
+<li>Define measures from your outcomes, <strong>quantitative and qualitative</strong>, and review them regularly. Ask not just &quot;is this working?&quot; but &quot;should we try something else?&quot;</li>
+</ul>
+<h3 id="regular-checkpoints">Regular checkpoints</h3>
+<ul>
+<li>Informal for small teams (retrospectives), explicit and regular (for example monthly leadership sessions) for large programmes
+<ul>
+<li>Cover: restate what the transition should achieve (stop if business direction changed)</li>
+<li>review quantitative measures</li>
+<li>ask for qualitative feedback</li>
+<li>decide what to change.</li>
+</ul>
+</li>
+</ul>
+<h3 id="quantitative-and-qualitative-measures">Quantitative and qualitative measures</h3>
+<ul>
+<li>Quantitative examples:
+<ul>
+<li>for time to market, cycle time, number of deployments and failure rates; for scale, performance test results</li>
+<li>&quot;You get what you measure&quot;: measures can be gamed (a vendor paid by tickets closed closed tickets unresolved, prompting reopening)</li>
+<li>Some measures change slowly or worsen first: expect <strong>cycle time to get worse in the first months</strong> because change reduces productivity before it improves, which is another reason for small steps.</li>
+</ul>
+</li>
+<li>Qualitative:
+<ul>
+<li>&quot;software is made of feelings&quot; (Astrid Atkinson)</li>
+<li>Are people enjoying it, empowered, supported, or overwhelmed? Include this in scorecards to management and do not rely on numbers alone.</li>
+</ul>
+</li>
+</ul>
+<h3 id="avoiding-the-sunk-cost-fallacy">Avoiding the sunk cost fallacy</h3>
+<ul>
+<li>Continuing because you have invested, despite evidence
+<ul>
+<li>The bigger the bet and fanfare, the harder to pull out</li>
+<li>Also called the <strong>Concorde fallacy</strong> (the supersonic airliner that never became financially viable)</li>
+<li>Small steps and checkpoints make changing direction easier; you need not quit at the first sign of trouble, but ignore evidence at your peril.</li>
+</ul>
+</li>
+</ul>
+<h3 id="being-open-to-new-approaches">Being open to new approaches</h3>
+<ul>
+<li>Expect to revert changes, try things, and sometimes pause to see the effect. Build constant improvement into everything; treating change as one-off projects leaves you years behind.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Ask: what to achieve, what alternatives, how will I know. Rank goals with sliders.</li>
+<li>Move incrementally; extraction is done only in production; pick candidates by value and difficulty from a domain model.</li>
+<li>Look after people (urgency, coalition, vision, wins), skills and structure; measure, review, and avoid sunk cost.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Cargo cult thinking</strong>; <strong>path-to-production modelling</strong>; <strong>burning platform</strong>.</li>
+<li><strong>Robustness vs resilience</strong>; <strong>competing consumers</strong> (queue-fed monolith copies).</li>
+<li><strong>Type 1 and Type 2 decisions</strong> (irreversible, reversible).</li>
+<li><strong>Event Storming</strong>; <strong>strangler fig</strong> (preview of Chapter 3).</li>
+<li><strong>Sunk cost (Concorde) fallacy</strong>; <strong>Kotter's eight steps</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Monolith to Microservices</em>, O'Reilly 2019, chapter 2: <a href="https://learning.oreilly.com/library/view/monolith-to-microservices/9781492047834/ch02.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/monolith-to-microservices/9781492047834/ch02.html</a></li>
+<li>Cited in the chapter:
+<ul>
+<li>Kotter, <em>Leading Change</em> (Harvard Business Review Press, 1996)</li>
+<li>Brooks, <em>The Mythical Man-Month</em> (Addison-Wesley, 20th anniversary edition 1995)</li>
+<li>David Woods, &quot;Four Concepts for Resilience and the Implications for the Future of Resilience Engineering&quot; (Reliability Engineering &amp; System Safety 141, 2015)</li>
+<li>Kniberg and Ivarsson, &quot;Scaling Agile @ Spotify&quot; (2012)</li>
+<li>Mike Bland's write-up of the testing initiative at Google. Figures 2-1 to 2-12 are redrawn in grouped summary diagrams</li>
+<li>where the chapter's figures contain content the text does not describe (the Music Corp context map, the skills charts), the diagrams show only what the text states.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/monolith-to-microservices/m2m-01-just-enough-microservices/">Monolith to Microservices 1: Just Enough Microservices</a></li>
+<li><a href="/book-digest/monolith-to-microservices/m2m-03-splitting-the-monolith/">Monolith to Microservices 3: Splitting the Monolith</a></li>
+<li><a href="/book-digest/building-microservices/bm-00-preface/">Building Microservices 0: Preface</a></li>
+<li><a href="/book-digest/lead-developer-career-guide/">Lead Developer Career Guide: contents</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/monolith-to-microservices/m2m-01-just-enough-microservices/">&larr; Monolith to Microservices 1: Just Enough Microservices</a><a href="/book-digest/monolith-to-microservices/">Contents</a><a href="/book-digest/monolith-to-microservices/m2m-03-splitting-the-monolith/">Monolith to Microservices 3: Splitting the Monolith &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

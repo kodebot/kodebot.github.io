@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Monolith to Microservices 5: Growing Pains</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/monolith-to-microservices/">Contents</a><span class="ttl">Monolith to Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/monolith-to-microservices/m2m-06-closing-words/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="monolith-to-microservices-5-growing-pains">Monolith to Microservices 5: Growing Pains</h1>
+<p>Source: Sam Newman, <em>Monolith to Microservices</em> (O'Reilly, 2019), chapter 5. Previous: <a href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/">Monolith to Microservices 4: Decomposing the Database</a>. Next: <a href="/book-digest/monolith-to-microservices/m2m-06-closing-words/">Monolith to Microservices 6: Closing Words</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Different problems appear at ten services than at hundreds. Think of microservices as <strong>turning a dial</strong>, not flipping a switch: each turn brings new pain points that need new skills, techniques or tools.</li>
+<li>Ten pains: <strong>ownership at scale, breaking changes, reporting, monitoring and troubleshooting, local developer experience, running too many things, end-to-end testing, global versus local optimisation, robustness and resiliency, orphaned services.</strong></li>
+<li>Do first: <strong>log aggregation</strong> (before you start), then <strong>correlation IDs</strong>, tracing and synthetic transactions; <strong>stop accidental breaking changes</strong>; give reporting its own database.</li>
+<li>Use <strong>strong ownership</strong> at scale, <strong>consumer-driven contracts</strong> and <strong>progressive delivery</strong> instead of huge end-to-end suites, and a <strong>service registry</strong> against orphans.</li>
+<li>Do not fix problems you will never have: build feedback mechanisms and watch for the warning signs.</li>
+</ul>
+</div></div>
+<h2 id="5-1-more-services-more-pain">5.1 More services, more pain</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-05-pain-points.svg" alt="Pain points" loading="lazy" /></p>
+<ul>
+<li>When problems appear depends on service interaction complexity, organisation size, number of services, technology, latency and uptime needs
+<ul>
+<li>&quot;Services&quot; means logical services (each may run as several instances).</li>
+</ul>
+</li>
+<li>Figure 5-1 maps the pains against service growth (&quot;deeply unscientific&quot;, anecdotal)
+<ul>
+<li>A more <strong>coupled</strong> architecture brings robustness, testing and tracing problems earlier</li>
+<li>Use the map as an indicator and build feedback mechanisms to look for the signs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-2-ownership-at-scale">5.2 Ownership at scale</h2>
+<ul>
+<li><strong>Types of ownership</strong> (Martin Fowler's, applied to services; about making code changes, not deployments or support):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Strong</strong></td>
+<td>every service has owners; outsiders submit changes (a pull request) and owners decide</td>
+</tr>
+<tr>
+<td><strong>Weak</strong></td>
+<td>most services have owners but anyone can change anything directly, expecting to talk to the owner first</td>
+</tr>
+<tr>
+<td><strong>Collective</strong></td>
+<td>no one owns anything; anyone changes anything</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Signs:</strong>
+<ul>
+<li>collective ownership at scale</li>
+<li>A fintech grew from 30 to 40 developers to over 100 with no ownership (&quot;people know what is right&quot;), ending with no clear architecture vision and a tangled <strong>distributed monolith</strong>, nicknamed <strong>&quot;colander architecture&quot;</strong> (people punched holes by exposing data or making point-to-point calls)</li>
+<li>Detangling a distributed monolith costs far more than a monolith.</li>
+</ul>
+</li>
+<li><strong>When:</strong> about 20 co-located developers can use collective ownership. It needs time for consensus, which fast hiring or distribution destroys.</li>
+<li><strong>Solution:</strong>
+<ul>
+<li><strong>strong code ownership</strong> is almost universal in large multi-team microservice organisations (over about 100 developers)</li>
+<li>Each team practises collective ownership locally and sets its own rules for a good change</li>
+<li>It also supports product-oriented, domain-focused teams with embedded product owners.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-3-breaking-changes">5.3 Breaking changes</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-05-ownership-breaking-changes.svg" alt="Ownership and breaking changes" loading="lazy" /></p>
+<ul>
+<li>A service's contract is not just the data returned but the <strong>expected behaviour</strong>, explicit or not. Independent deployability needs you not to break consumers.</li>
+<li><strong>Signs:</strong>
+<ul>
+<li>production outages from new versions breaking compatibility (catastrophic without fast rollback; usually visible quickly unless the changed part is rarely used)</li>
+<li>people orchestrating <strong>lock-step releases</strong> (occasionally fine within a team, a problem if common).</li>
+</ul>
+</li>
+<li><strong>When:</strong> a fairly early pain, especially when more than one team is involved; within a team developers know both sides.</li>
+<li><strong>Newman's rules</strong> (&quot;Don't break contracts. See rule 1.&quot; and then the real ones):
+<ol>
+<li><strong>Eliminate accidental breaking changes.</strong> An explicit schema detects structural breaks quickly (a method that took two integers now takes one) and makes developers pause; <strong>protolock</strong> forbids incompatible protocol buffer changes. Schema-less JSON is the default and explicit JSON schemas are rarely used; developers curse formal schemas until they have faced breakage, and typed formats can also deserialise faster. <strong>Semantic</strong> breaks (a method that adds now multiplies) are best caught by tests. Make contract changes obvious: avoid technology that magically serialises data or generates schemas from code. Making a contract hard to change beats constantly breaking consumers.</li>
+<li><strong>Think twice before a breaking change.</strong> Prefer <strong>expansion</strong> changes (add methods, resources or topics; keep the old).</li>
+<li><strong>Give consumers time to migrate.</strong> Two ways: <strong>run two versions</strong> of the service (Figure 5-2; more infrastructure, data compatibility, bug fixes in both so branching; only for short periods) or, preferred, <strong>one version supporting both contracts</strong> (Figure 5-3, for example two APIs on different ports; more complexity inside the service but no coexisting versions). Some teams still support three or more old contracts years later because external consumers cannot change. A lock-step release is possible within one team but should not be a habit.</li>
+</ol>
+</li>
+<li>Changes are easier inside a team; breaking APIs exposed to third parties is painful. Treat consumers like customers and keep on good terms.</li>
+</ul>
+<div class="callout c-warning"><div class="callout-title">Get this sorted, fast</div><div class="callout-body">
+<p>Organisations with growing numbers of microservices eventually nearly eliminate accidental breaks and manage purposeful ones, or the impact makes the architecture untenable. Small microservice organisations that do not sort this out will probably not last to become large ones.</p>
+</div></div>
+<h2 id="5-4-reporting">5.4 Reporting</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-05-reporting.svg" alt="Reporting" loading="lazy" /></p>
+<ul>
+<li>A monolith's single database is a ready-made schema for stakeholders' reports (maybe on a read replica; Figure 5-4)
+<ul>
+<li>With microservices the data is spread over isolated schemas, so cross-data reporting is harder.</li>
+</ul>
+</li>
+<li><strong>When:</strong>
+<ul>
+<li>it bites early, often discovered halfway through because reporting is outside normal software development (&quot;out of sight, out of mind&quot;)</li>
+<li>If you already report from a data warehouse or lake, just have the services copy data to it.</li>
+</ul>
+</li>
+<li><strong>Solution:</strong>
+<ul>
+<li>stakeholders have SQL tool chains tied to the old schema, so provide a single database for reporting, separated from the services' databases and designed for reporting (possibly matching the old schema to limit impact)</li>
+<li>Services <strong>push</strong> data into it (Figure 5-5) using Chapter 4 techniques: change data capture, views across schemas, programmatic copying in the services, or intermediaries listening to events</li>
+<li>See Chapter 5 of <em>Building Microservices</em>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-5-monitoring-and-troubleshooting">5.5 Monitoring and troubleshooting</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-05-monitoring.svg" alt="Monitoring" loading="lazy" /></p>
+<ul>
+<li>The epigraph (from the Honest Status Page account): &quot;We replaced our monolith with microservices so that every outage could be more like a murder mystery.&quot;</li>
+<li>A monolith is mostly all up or all down
+<ul>
+<li>with tens or hundreds of processes you must detect a single failing instance, and decide whether one process at 100% CPU merits waking someone at 3 a.m.</li>
+</ul>
+</li>
+<li><strong>When:</strong>
+<ul>
+<li>hard to predict; perhaps the first production failure, a couple of services, or 20 or more</li>
+<li><strong>Signs:</strong> unexplained production issues, alerts when the system seems healthy, difficulty answering &quot;is everything OK?&quot;</li>
+<li>Prioritise basic improvements ahead of time.</li>
+</ul>
+</li>
+<li><strong>Log aggregation:</strong>
+<ul>
+<li>forward all logs to a central searchable place (ELK stack: Elasticsearch, Logstash or Fluentd, Kibana; Newman's favourite is <strong>Humio</strong>)</li>
+<li>some can alert. <strong>Do this first, before implementing a microservice architecture</strong>: it is useful immediately and a test of whether your organisation can change operations</li>
+<li>if it struggles, microservices are probably a step too far.</li>
+</ul>
+</li>
+<li><strong>Tracing:</strong>
+<ul>
+<li>Generate a <strong>correlation ID</strong> for every inbound call (ideally by an API gateway or service mesh), pass it on (HTTP header or message field), and log with it in a standard place so you can query all logs for one chain (Figure 5-6)
+<ul>
+<li>Correlation IDs also help manage sagas.</li>
+</ul>
+</li>
+<li>Log aggregation batches logs, so it cannot give accurate timing: use a <strong>distributed tracing</strong> system such as <strong>Jaeger</strong> (Figure 5-7)
+<ul>
+<li>The more latency sensitive you are, the sooner</li>
+<li>If correlation IDs are in place you already have the hooks; a service mesh can handle inbound and outbound tracing, though not inside services.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Test in production:</strong>
+<ul>
+<li>keep getting feedback after deployment, as later changes can break things</li>
+<li><strong>Synthetic transactions</strong> inject fake user behaviour and alert on deviation</li>
+<li>At <strong>Atomist</strong> a scripted fake-customer enrolment (authorising GitHub and Slack) caught problems such as GitHub rate limits before real users did
+<ul>
+<li>accounts were controlled and cleaned up afterwards</li>
+</ul>
+</li>
+<li>Start from existing end-to-end tests reworked for production, but beware side effects (a company accidentally ordered 200 washing machines to its head office).</li>
+</ul>
+</li>
+<li><strong>Toward observability:</strong>
+<ul>
+<li>traditional monitoring handles known causes (disk space, an unresponsive instance, a latency spike)
+<ul>
+<li>Complex systems fail in ways you cannot predict, so gather lots of information (tracing, logs) and be able to ask <strong>open-ended questions after the fact</strong></li>
+</ul>
+</li>
+<li>expect to be surprised</li>
+<li>use toolchains that allow ad hoc queries. Recommended: Cindy Sridharan, <em>Distributed Systems Observability</em> (O'Reilly, 2018).</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-6-local-developer-experience">5.6 Local developer experience</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-05-scaling-issues.svg" alt="Scaling issues" loading="lazy" /></p>
+<ul>
+<li>With many services, running them all locally stops scaling (four or five JVM services on a laptop, not twenty)
+<ul>
+<li><strong>Signs:</strong> slower local builds and runs, requests for bigger machines (only buys time).</li>
+</ul>
+</li>
+<li><strong>When:</strong>
+<ul>
+<li>depends on the number and footprint of services (Go, Node or Python may go further than the JVM). Teams with collective ownership of several services suffer more</li>
+<li>teams with strong ownership of few focus on their own and stub the rest.</li>
+</ul>
+</li>
+<li><strong>Solutions:</strong>
+<ul>
+<li>stub the services you do not run, or point at instances elsewhere</li>
+<li>A fully remote setup brings connectivity needs, slower feedback and resource cost</li>
+<li><strong>Telepresence</strong> gives a hybrid local and remote workflow for Kubernetes; Azure's cloud functions can run locally against remote resources</li>
+<li>Watch developer experience as the count grows, with feedback mechanisms and continued investment.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-7-running-too-many-things">5.7 Running too many things</h2>
+<ul>
+<li>More services and instances mean more to deploy, configure and manage. <strong>Desired state management</strong> (specify how many instances where, and keep it so) becomes essential
+<ul>
+<li>manual processes and traditional configuration tools (Chef, Puppet) strain. <strong>Signs:</strong> growing time on deployments and their troubleshooting</li>
+<li>more operations staff</li>
+<li>mistakes from manual steps. It is a matter of scale.</li>
+</ul>
+</li>
+<li><strong>Solutions:</strong>
+<ul>
+<li>high automation with developer self-service provisioning and automatic desired-state management
+<ul>
+<li><strong>Kubernetes</strong> is the tool of choice (needs containers) but is not developer-friendly alone</li>
+</ul>
+</li>
+<li>higher-level abstractions are emerging (larger organisations often use packaged versions such as Red Hat <strong>OpenShift</strong>)</li>
+<li>public clouds offer managed Kubernetes. Newman likes <strong>Function-as-a-Service</strong> (serverless) and is <strong>serverless-first</strong> on a public cloud, using other options only when it does not fit.</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-warning"><div class="callout-title">Do not reach for Kubernetes too early</div><div class="callout-body">
+<p>It is not a prerequisite. Wait until you have enough processes that your current approach strains; five microservices may be fine with what you have. Do not adopt it just because everyone else does (the same as microservices).</p>
+</div></div>
+<h2 id="5-8-end-to-end-testing">5.8 End-to-end testing</h2>
+<ul>
+<li>Wider test scope gives more confidence but slower runs and harder diagnosis
+<ul>
+<li>With microservices the scope is huge: many services deployed and configured, plus false negatives from environment problems (dying instances, time-outs).</li>
+</ul>
+</li>
+<li><strong>Signs:</strong>
+<ul>
+<li>the suite grows (teams unsure what is covered add scenarios &quot;just in case&quot;), failures not pointing to code issues (people re-run), time growing, pressure for more testers or a separate test team</li>
+<li><strong>When:</strong> it sneaks up, worst with cross-team user journeys.</li>
+</ul>
+</li>
+<li><strong>Solutions:</strong>
+<ul>
+<li><strong>Limit the scope</strong> of tests spanning services and keep them inside one team.</li>
+<li><strong>Consumer-driven contracts</strong>
+<ul>
+<li>(the consumer writes an executable specification the provider must pass; <strong>Pact</strong>) in place of cross-service tests</li>
+<li>some teams have huge success, others struggle</li>
+<li>Newman calls it a poorly underused practice.</li>
+</ul>
+</li>
+<li><strong>Automated release remediation and progressive delivery:</strong>
+<ul>
+<li>roll out in stages (canary), define thresholds such as 95th percentile latency and error rates, continue only if met, otherwise roll back automatically (Netflix built <strong>Spinnaker</strong>). Not a replacement for testing but a place to spend effort</li>
+<li>even manually controlled progressive delivery is a big step up.</li>
+</ul>
+</li>
+<li><strong>Continually refine quality feedback cycles:</strong> people with context should add tests where defects rise and also <strong>remove</strong> tests that duplicate coverage, balancing fast feedback with safety.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-9-global-versus-local-optimisation">5.9 Global versus local optimisation</h2>
+<ul>
+<li>Teams with local decision-making can each choose sensibly yet collectively inefficiently: Invoicing picks Oracle, Notifications MongoDB, Fulfillment PostgreSQL
+<ul>
+<li>Do you want skills and licences for three similar databases?</li>
+</ul>
+</li>
+<li><strong>Signs:</strong>
+<ul>
+<li>discovering by accident (a lunch comment) that several teams solved the same problem differently. <strong>REA</strong> (Australian real estate) found many ways to deploy</li>
+<li>moving between teams was hard and duplicated effort justified a common approach. <strong>When:</strong> over time in multi-team organisations with freedom, often after rapid scaling</li>
+<li>collective ownership forces consistency (if you want it, you must solve this).</li>
+</ul>
+</li>
+<li><strong>Solutions:</strong>
+<ul>
+<li>the <strong>irreversible and reversible decisions</strong> spectrum (Figure 5-8, from Chapter 2): the higher the cost of change, the broader the consensus
+<ul>
+<li>teams need to understand the bigger picture and have a network to raise issues</li>
+</ul>
+</li>
+<li>A <strong>technical cross-cutting group</strong> with a technical leader from each team (chaired by the CTO or chief architect) works both ways</li>
+<li>An informal option is <strong>Monzo's &quot;proposals&quot;</strong>: free-form documents published to a shared space with a Slack alert, open to change</li>
+<li>Balance autonomy against consistency and keep gathering information to adjust it.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-10-robustness-and-resiliency">5.10 Robustness and resiliency</h2>
+<ul>
+<li>Packets get lost, calls time out, machines die; rare events become common as services multiply
+<ul>
+<li>They mostly appear in production</li>
+<li><strong>When:</strong> as services and calls grow, with cascading failures and back pressure more likely when interconnected.</li>
+</ul>
+</li>
+<li><strong>Solutions:</strong>
+<ul>
+<li>for each call ask how it might fail and what to do if it does</li>
+<li>isolate services (asynchronous communication avoids temporal coupling)</li>
+<li>sensible <strong>time-outs</strong> and <strong>circuit breakers</strong> to fail fast and avoid back pressure</li>
+<li>multiple copies and desired state management for dying instances
+<ul>
+<li>Resiliency is a way of working: <strong>document production issues and what you learned</strong> so they do not recur</li>
+<li>Further reading: <em>Building Microservices</em> chapter 11 and <em>Release It!</em> (Michael Nygard, Pragmatic Bookshelf, 2018).</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-11-orphaned-services">5.11 Orphaned services</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-05-orphans.svg" alt="Orphans" loading="lazy" /></p>
+<ul>
+<li>Many organisations still struggle to know what they have, where it is and who owns it
+<ul>
+<li>Stable services running for years unchanged are what independent deployability promises, but if no one owns them they are <strong>orphaned</strong>
+<ul>
+<li>people fear changing them (like servers found walled up in old offices) and some teams could not find the source code</li>
+</ul>
+</li>
+<li><strong>When:</strong> after long use, when collective memory fades.</li>
+</ul>
+</li>
+<li><strong>Solutions:</strong>
+<ul>
+<li>a hypothesis, untested: collective ownership may reduce it (mechanisms to move between services, limited technology choice, common tooling), unless practices changed since the service was last touched</li>
+<li>In-house <strong>service registries</strong> crawl source repositories for metadata files, merged with service discovery data (Consul, etcd)</li>
+<li>The <strong>Financial Times Biz Ops</strong> tool (Figure 5-9; several hundred services; a graph database also covering networks and file servers) computes a <strong>System Operability Score</strong> (Figure 5-10: registry information supplied, health checks present)</li>
+<li>Then bring orphans in line: assign to a team (strong ownership) or raise work items (collective).</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Watch for these pains and build feedback to see them, but do not solve problems you will never have.</li>
+<li>Early moves: log aggregation, correlation IDs, contract discipline, a reporting database.</li>
+<li>Later: ownership, platform, testing strategy, cross-team governance, registries.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Strong, weak, collective code ownership</strong>; <strong>colander architecture</strong>; <strong>lock-step release</strong>.</li>
+<li><strong>Expansion change</strong>; <strong>semantic break</strong>; <strong>protolock</strong>; <strong>consumer-driven contract</strong>.</li>
+<li><strong>Log aggregation</strong>; <strong>correlation ID</strong>; <strong>distributed tracing</strong>; <strong>synthetic transaction</strong>; <strong>observability</strong>.</li>
+<li><strong>Desired state management</strong>; <strong>serverless-first</strong>; <strong>progressive delivery</strong>; <strong>automated release remediation</strong>.</li>
+<li><strong>Service registry</strong>; <strong>orphaned service</strong>; <strong>System Operability Score</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Monolith to Microservices</em>, O'Reilly 2019, chapter 5: <a href="https://learning.oreilly.com/library/view/monolith-to-microservices/9781492047834/ch05.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/monolith-to-microservices/9781492047834/ch05.html</a></li>
+<li>Cited in the chapter:
+<ul>
+<li>Martin Fowler on code ownership</li>
+<li>Cindy Sridharan, <em>Distributed Systems Observability</em> (O'Reilly, 2018)</li>
+<li>Michael Nygard, <em>Release It!</em> (Pragmatic Bookshelf, 2018)</li>
+<li><em>Building Microservices</em> chapters 5 and 11</li>
+<li>tools named: protolock, Pact, Jaeger, Humio, ELK, Telepresence, OpenShift, Spinnaker, Consul, etcd. Figures 5-1 to 5-10 are redrawn in grouped summary diagrams</li>
+<li>the positions in Figure 5-1 are not described in the text.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/">Monolith to Microservices 4: Decomposing the Database</a></li>
+<li><a href="/book-digest/monolith-to-microservices/m2m-06-closing-words/">Monolith to Microservices 6: Closing Words</a></li>
+<li><a href="/book-digest/building-microservices/bm-00-preface/">Building Microservices 0: Preface</a></li>
+<li><a href="/book-digest/practical-test-pyramid/ptp-02-integration-contract-and-end-to-end-tests/">The Practical Test Pyramid 2: Integration, Contract and End-to-End Tests</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/">&larr; Monolith to Microservices 4: Decomposing the Database</a><a href="/book-digest/monolith-to-microservices/">Contents</a><a href="/book-digest/monolith-to-microservices/m2m-06-closing-words/">Monolith to Microservices 6: Closing Words &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

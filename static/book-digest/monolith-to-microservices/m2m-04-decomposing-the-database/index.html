@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Monolith to Microservices 4: Decomposing the Database</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/monolith-to-microservices/">Contents</a><span class="ttl">Monolith to Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/monolith-to-microservices/m2m-03-splitting-the-monolith/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/monolith-to-microservices/m2m-05-growing-pains/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="monolith-to-microservices-4-decomposing-the-database">Monolith to Microservices 4: Decomposing the Database</h1>
+<p>Source: Sam Newman, <em>Monolith to Microservices</em> (O'Reilly, 2019), chapter 4. Previous: <a href="/book-digest/monolith-to-microservices/m2m-03-splitting-the-monolith/">Monolith to Microservices 3: Splitting the Monolith</a>. Next: <a href="/book-digest/monolith-to-microservices/m2m-05-growing-pains/">Monolith to Microservices 5: Growing Pains</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Microservices work best when they <strong>own their data</strong>, so you generally need to split the monolith's database. It is hard: synchronisation, logical versus physical separation, <strong>transactional integrity</strong>, joins and latency.</li>
+<li>If you cannot split yet, <strong>cope</strong> without making it worse: a <strong>database view</strong>, a <strong>database wrapping service</strong>, or a <strong>database-as-a-service interface</strong>. Sharing a database directly is right only for read-only static reference data or a deliberately managed endpoint.</li>
+<li>Move data with <strong>synchronize data in application</strong> or a <strong>tracer write</strong> (two sources of truth, eventual consistency, reconcile).</li>
+<li>Splitting a table or foreign key means <strong>moving joins into code</strong> and deciding how to handle deletion; keep aggregates together.</li>
+<li><strong>Avoid distributed transactions</strong> (two-phase commit). Use <strong>sagas</strong>: a sequence of local transactions with compensating transactions, orchestrated or choreographed.</li>
+</ul>
+</div></div>
+<h2 id="4-1-pattern-the-shared-database">4.1 Pattern: the shared database</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-shared-database-patterns.svg" alt="Shared database patterns" loading="lazy" /></p>
+<ul>
+<li>Of the coupling types from Chapter 1, <strong>implementation coupling</strong> dominates when services share a database (Figure 4-1)
+<ul>
+<li>The major problem:
+<ul>
+<li>you cannot decide what is shared and what is hidden, so you do not know what is safe to change, and it is unclear who <strong>controls</strong> the data and where the business logic lives</li>
+<li>logic spreads across services, giving low cohesion</li>
+</ul>
+</li>
+<li>If three services can change order information inconsistently, changes must be applied everywhere.</li>
+</ul>
+</li>
+<li><strong>Where sharing is appropriate:</strong> only
+<ul>
+<li>read-only static reference data (currency codes, postal code tables) with change control as an admin task, and</li>
+<li>a service deliberately exposing a database as a defined endpoint for many consumers</li>
+</ul>
+</li>
+<li><strong>But it cannot be done:</strong>
+<ul>
+<li>splitting is nearly always preferred but not always feasible at first (too long, or too sensitive)</li>
+<li>Use coping patterns that stop things getting worse and act as stepping stones.</li>
+</ul>
+</li>
+<li><strong>Schemas and databases:</strong>
+<ul>
+<li>a schema is a logically separated set of tables; several schemas can sit on one engine (Figure 4-2)</li>
+<li>In this chapter &quot;database&quot; means a logically isolated schema</li>
+<li>NoSQL stores may lack the concept (DynamoDB has only tables, with role-based access control).</li>
+</ul>
+</li>
+</ul>
+<div class="callout c-tip"><div class="callout-title">Agree to fix it</div><div class="callout-body">
+<p>You will meet problems that seem impossible now. Agree with the team that it is a problem to fix, and start doing the right thing from now on; with new skills and experience they become easier.</p>
+</div></div>
+<h2 id="4-2-pattern-database-view">4.2 Pattern: database view</h2>
+<ul>
+<li>A view gives a service a limited projection of the underlying schema, hiding what it should not see.</li>
+<li><strong>The database as a public contract:</strong>
+<ul>
+<li>on a bank re-platforming project (credit derivatives) a restructured schema would have increased write throughput, but more than 20 applications (estimated from network calls) used shared credentials with read or even read/write access, so no one knew who they were</li>
+<li>They disabled the shared account and waited for complaints</li>
+<li>Most of those applications were not maintained, so the schema had become a contract that could not change.</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>give each actor its own credentials so you can restrict, revoke and rotate per party and know what each does</li>
+<li>dedicated secret stores such as HashiCorp Vault can generate short-lived, scoped per-actor database credentials.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Views to present:</strong>
+<ul>
+<li>first remove external writers</li>
+<li>for readers, create a dedicated schema hosting views that look like the old schema (many stored procedures), and move clients to it (Figure 4-3). A simple use (Figure 4-4): a view exposing only customer ID and loyalty ID for the Loyalty service, hiding the rest of the Customer table.</li>
+</ul>
+</li>
+<li><strong>Materialised views</strong> are precomputed (cached), faster but possibly stale.</li>
+<li><strong>Limitations:</strong>
+<ul>
+<li>usually read-only (a query result)</li>
+<li>not all databases support them (Cassandra and Mongo do)</li>
+<li>source and views often must be on the same engine (physical deployment coupling, possible single point of failure).</li>
+</ul>
+</li>
+<li><strong>Ownership:</strong> treat published views like a service interface, kept up to date by the team owning the source schema.</li>
+<li><strong>Where to use:</strong> when full decomposition is impractical; try to avoid needing one if the goal is a service interface. It is a step in the right direction.</li>
+</ul>
+<h2 id="4-3-pattern-database-wrapping-service">4.3 Pattern: database wrapping service</h2>
+<ul>
+<li>Hide the mess behind a thin service, so database dependencies become service dependencies (Figure 4-5).</li>
+<li><strong>Bank entitlements example:</strong>
+<ul>
+<li>a 30-year-old business banking system managed <strong>entitlements</strong> (which individuals may view or move how much in which companies' accounts) almost entirely in stored procedures</li>
+<li>the database was buckling (&quot;we've given all the money it's possible to give to Oracle&quot;) and untangling it was too risky (a wrong step could block access or grant access to the wrong person)
+<ul>
+<li>Plan: stop making it worse by introducing an <strong>Entitlements service</strong> (little behaviour at first, since stored procedures held the logic) so other teams treat the schema as someone else's and store their own data locally (Figure 4-6)</li>
+</ul>
+</li>
+<li>then extract the easier parts to reduce load.</li>
+</ul>
+</li>
+<li>Like a view, it controls what is shared
+<ul>
+<li><strong>Advantages over a view:</strong> richer projections, code, and <strong>writes through the API</strong></li>
+<li>Cost: consumers must change from direct access to API calls</li>
+<li>Works best when one team owns both schema and service layer</li>
+<li>It makes stubbing in tests easier</li>
+<li>Ideally a stepping stone; it could be called a bandage, but incremental improvement is the point.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-4-pattern-database-as-a-service-interface">4.4 Pattern: database as a service interface</h2>
+<ul>
+<li>Sometimes clients need a database to query (large amounts of data, or tools such as Tableau that need a SQL endpoint)
+<ul>
+<li>Keep the exposed database <strong>separate</strong> from the internal one: a dedicated read-only database populated when the internal data changes (Figure 4-7, the Orders service with a read/write API and a read-only database), fed by a <strong>mapping engine</strong> that works out what to change.</li>
+</ul>
+</li>
+<li>Fowler calls it the <strong>reporting database pattern</strong>; Newman uses a different name because reporting is only one use, and ad hoc queries have wider scope.</li>
+<li><strong>Mapping engine options:</strong>
+<ul>
+<li>change data capture (most robust and current, for example Debezium; Newman has been bitten by batch jobs not running or taking too long), a batch copy (longer lag, hard to know what to copy), or listening to events the service fires. It will lag behind writes, so consumers may see stale data</li>
+<li>consider exposing when it was last updated.</li>
+</ul>
+</li>
+<li><strong>Compared to views:</strong>
+<ul>
+<li>the exposed database can be a different technology (Cassandra inside, SQL outside); more flexible, more work</li>
+<li>Start with a view and move later if needed</li>
+<li>Fits reporting that joins large datasets, and can feed a data warehouse (see <em>Building Microservices</em>, Chapter 5)</li>
+<li>Keeping it up to date can be complex.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-5-transferring-ownership">4.5 Transferring ownership</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-ownership.svg" alt="Ownership patterns" loading="lazy" /></p>
+<ul>
+<li>So far we only bandaged. Decide where each piece of data should live: data for aggregates a service manages moves with it
+<ul>
+<li>data it only needs from the monolith is accessed through a well-defined interface.</li>
+</ul>
+</li>
+<li><strong>Pattern: aggregate exposing monolith:</strong>
+<ul>
+<li>the new Invoicing service needs Employee data held in the monolith (Figure 4-8)</li>
+<li>Expose it from the monolith via an API or event stream, which makes the need explicit</li>
+<li>Treat the monolith as owning allowed state changes, exposing operations to query state and request transitions (not just a database wrapper)</li>
+<li>It can reveal future boundaries: here an Employee service next (Figure 4-9)</li>
+<li>Prefer this to a database view unless the monolith cannot change (then a view, change data capture or a wrapping service).</li>
+</ul>
+</li>
+<li><strong>Pattern: change data ownership:</strong>
+<ul>
+<li>invoice data should move into the Invoice service, with the monolith calling it as the source of truth (Figure 4-10)</li>
+<li>Untangling means breaking foreign keys and transaction boundaries</li>
+<li>If the monolith only reads invoice data, you could project a view from the service's database (Figure 4-11), but calling the service is greatly preferred</li>
+<li>Clear-cut: if the new service holds the logic that changes the data, the data should move.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-6-data-synchronisation-and-migration-patterns">4.6 Data synchronisation and migration patterns</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-sync-in-application.svg" alt="Synchronise in application" loading="lazy" /></p>
+<ul>
+<li>The strangler fig lets you switch back, but if the service manages data that both the monolith and service use (Figure 4-12), both must see it consistently
+<ul>
+<li>If either needs total consistency, keep the data in one place: the service reads the monolith data directly for a <strong>very short time</strong> (perhaps via a view), then migrate with change data ownership</li>
+<li>A big-bang batch copy loses state on fallback.</li>
+</ul>
+</li>
+</ul>
+<h3 id="pattern-synchronize-data-in-application">Pattern: synchronize data in application</h3>
+<ul>
+<li><strong>Trifork and Danish medical records:</strong>
+<ul>
+<li>a consolidated view of Danish citizens' medical records moved from MySQL to Riak for scale and resilience, with little tolerated downtime and no data loss</li>
+<li>The application itself kept the two in sync:</li>
+</ul>
+<ol>
+<li><strong>Bulk synchronise</strong> a snapshot (the source kept running), then apply changes since the import with change data capture (Figure 4-13).</li>
+<li><strong>Synchronise on write, read from the old schema</strong> (Figure 4-14): write to both, read from MySQL, so a Riak failure loses nothing.</li>
+<li><strong>Synchronise on write, read from the new</strong> (Figure 4-15): Riak is the source of truth, still writing to both for fallback.</li>
+<li>Once it has bedded in, remove the old schema.</li>
+</ol>
+</li>
+<li>For monolith and microservice, it suits splitting the <strong>schema before the code</strong> (Figure 4-16: the monolith writes to two schemas), with fast switching for rollback
+<ul>
+<li>If both the monolith and the service must keep both schemas in sync (Figure 4-17) it gets complex: workable if only one writes at a time (simple switchover), not if requests can hit either (a canary).</li>
+</ul>
+</li>
+</ul>
+<h3 id="pattern-tracer-write">Pattern: tracer write</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-tracer-write.svg" alt="Tracer write" loading="lazy" /></p>
+<ul>
+<li>Arguably a variation of the above
+<ul>
+<li><strong>Move the source of truth incrementally, tolerating two sources during migration</strong> (Figure 4-18)</li>
+<li>The old system keeps a local copy and also writes through the new service's interface</li>
+<li>consumers move over</li>
+<li>then the old source is retired
+<ul>
+<li>Newman values a single source of truth but notes insisting on it forces a big-bang switchover</li>
+<li>It is called a &quot;tracer&quot; because you start with a small set of data and grow it and its consumers: basic invoice data, then contact information, then payment records (Figure 4-19)</li>
+<li>In Figure 4-20 the monolith starts reading from the service for more and more data.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Synchronisation options:</strong>
+<ul>
+<li>write to one source and synchronise afterwards</li>
+<li>send writes to both (client calls both, or an intermediary broadcasts)</li>
+<li>or accept writes at either with two-way sync, which <strong>should be avoided</strong> because it is very hard
+<ul>
+<li>There is always a window of inconsistency: a nightly batch can be 24 hours stale, streaming change data capture seconds or less</li>
+<li>This is <strong>eventual consistency</strong></li>
+</ul>
+</li>
+<li>choose the tolerable window.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> keep a <strong>reconciliation process</strong> (even a couple of SQL queries on each side); run the new source with no consumers for a while (as Square did).</li>
+<li><strong>Square orders:</strong>
+<ul>
+<li>one Order concept bound three workflows (customer, restaurant, delivery driver) causing delivery contention
+<ul>
+<li>They created a <strong>Fulfillments service</strong> for restaurant and delivery data (Figure 4-21)</li>
+</ul>
+</li>
+<li>a background worker copied existing data via the service's API (not direct inserts), controlled by a feature flag removed once trusted
+<ul>
+<li>Updates then went to both systems through API calls (Figure 4-22)</li>
+</ul>
+</li>
+<li>callers handle partial failure, creating a brief eventual consistency window that did not matter here (only changes delivery or restaurant clients care about are copied)
+<ul>
+<li>With an event-driven system both could subscribe to the same events (Figure 4-23), still eventually consistent</li>
+<li>Consumers then migrated, which was &quot;pretty much a non-event&quot;</li>
+</ul>
+</li>
+<li>more functionality was added as needed
+<ul>
+<li>Derek Hammer (who shared this) would ideally split Fulfillments further (restaurants and delivery drivers are different bounded contexts)</li>
+<li>Square kept the duplicated data so restaurant and delivery information stays visible if the Fulfillments service is down</li>
+</ul>
+</li>
+<li>this may be revisited.</li>
+</ul>
+</li>
+<li><strong>Where to use:</strong>
+<ul>
+<li>the synchronisation is most of the work</li>
+<li>avoid two-way sync</li>
+<li>existing event-driven systems or change data capture make it easier</li>
+<li>the shorter the tolerated inconsistency the harder.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-7-splitting-apart-the-database">4.7 Splitting apart the database</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-sequencing.svg" alt="Sequencing" loading="lazy" /></p>
+<ul>
+<li><strong>Physical versus logical separation</strong>
+<ul>
+<li>(Figures 4-24, 4-25): logical decomposition gives independent change and information hiding; physical gives robustness and less resource contention</li>
+<li>Several schemas on one engine is a single point of failure, though clusters, multi-primary modes and warm failover exist, and one resilient cluster may be cheaper than many (licence fees)</li>
+<li>Views need the same engine</li>
+<li>You need logical decomposition first.</li>
+</ul>
+</li>
+<li><strong>Sequencing:</strong>
+<ul>
+<li>an extraction is not done until the code runs in its own service and its data is in its own isolated database</li>
+<li>Options: split the database first, split the code first, or both at once.</li>
+<li><strong>Split the database first</strong>
+<ul>
+<li>(Figure 4-26): more calls (joins in memory), lost transactional integrity</li>
+<li>but you can revert or tweak without affecting consumers and spot performance and consistency problems early. Little short-term benefit (a pain felt over time)</li>
+<li>not available for black-box monoliths.</li>
+</ul>
+</li>
+<li><strong>Split the code first</strong>
+<ul>
+<li>(Figure 4-29): what most teams do</li>
+<li>short-term improvement and clearer data needs</li>
+<li>but teams may stop and leave a shared database (&quot;storing up trouble&quot;; JustSocial finished the job), and nasty join surprises are delayed.</li>
+</ul>
+</li>
+<li><strong>Both at once</strong> (Figure 4-33): a bigger step, slower feedback; avoid.</li>
+<li><strong>Newman's hot take:</strong>
+<ul>
+<li>if you can change the monolith and worry about performance or data consistency, split the schema first</li>
+<li>otherwise split the code and use that to learn data ownership.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>A note on tooling:</strong>
+<ul>
+<li>databases lack refactoring tools and are stateful. Newman co-created <strong>DBDeploy</strong> (now defunct) with Nick Ashley and Graham Tackley (versioned SQL delta scripts with a tracking table)</li>
+<li>now use <strong>Flyway</strong> or similar, capturing each change as a version-controlled delta script.</li>
+</ul>
+</li>
+</ul>
+<h3 id="preparation-patterns">Preparation patterns</h3>
+<ul>
+<li><strong>Repository per bounded context</strong>
+<ul>
+<li>(Figure 4-27): split repository (Hibernate-style) code by bounded context so you can see which context touches which tables. It misses database-level constraints such as foreign keys</li>
+<li><strong>SchemaSpy</strong> draws table relationships.</li>
+</ul>
+</li>
+<li><strong>Database per bounded context</strong>
+<ul>
+<li>(Figure 4-28): give each context its own schema even within one deployable
+<ul>
+<li>ThoughtWorks' revenue forecasting (Peter Gillard-Moss) built three isolated contexts as JAR files with separate databases</li>
+</ul>
+</li>
+<li>it was never split and stays a modular monolith. It hedges your bets</li>
+<li>Newman nearly always recommends it for <strong>new systems</strong>, and avoids microservices for startups because the domain is not understood yet.</li>
+</ul>
+</li>
+<li><strong>Monolith as data access layer</strong>
+<ul>
+<li>(Figure 4-30, from Susanne Kaiser of JustSocial): add an API in the monolith (Employee API) so the Invoice service does not bind to its data</li>
+<li>avoids data decomposition for now, and may reveal an Employee service (Figure 4-31). Use it when the code managing that data should stay in the monolith</li>
+<li>if the data should be owned by the service, split the data instead. It is under-used because people think of the monolith as dead.</li>
+</ul>
+</li>
+<li><strong>Multischema storage</strong>
+<ul>
+<li>(Figure 4-32): do not make things worse: new data a service needs (for example invoice reviewers) goes into the service's own schema while the old data stays in the monolith, then migrate table by table</li>
+<li>Combine with monolith as data access layer for data you never plan to move</li>
+<li>A foreign key now spans schemas (next).</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-8-schema-separation-examples">4.8 Schema separation examples</h2>
+<ul>
+<li>Relational examples are used; the ideas mostly apply to NoSQL too, perhaps with fewer constraints.</li>
+</ul>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-split-table-and-joins.svg" alt="Tables and joins" loading="lazy" /></p>
+<h3 id="pattern-split-table">Pattern: split table</h3>
+<ul>
+<li>A table spanning two bounded contexts (Item holding catalogue data and stock levels, Figure 4-34) is split into two tables, first inside the schema, then across schemas (a foreign key between them would not be enforced across databases).</li>
+<li>A column updated by several code areas (Customer Status:
+<ul>
+<li>NOT_VERIFIED to VERIFIED at sign-up, SUSPENDED by finance
+<ul>
+<li>Figure 4-35): it belongs to the customer's state machine, so the Customer service owns it and the Finance service calls it (Figure 4-36)</li>
+</ul>
+</li>
+<li>You lose database transactions</li>
+<li>Decide who owns shared data by the domain concept.</li>
+</ul>
+</li>
+</ul>
+<h3 id="pattern-move-foreign-key-relationship-to-code">Pattern: move foreign-key relationship to code</h3>
+<ul>
+<li>Ledger rows reference Albums by SKU (Figure 4-37); the monthly best-seller report joins them, and the database enforces consistency and optimises the join. After the split:
+<ul>
+<li><strong>Moving the join</strong>
+<ul>
+<li>(Figure 4-38): Finance queries its Ledger for SKUs and sales, then asks Catalog for details (bulk lookup, or cached locally)</li>
+<li>Latency will rise; it may be acceptable (monthly report, cacheable)</li>
+<li>Measure with tracing (Jaeger) against what is acceptable.</li>
+</ul>
+</li>
+<li><strong>Data consistency:</strong> the schema no longer prevents deleting an album still referenced.
+<ul>
+<li><strong>Check before deletion:</strong> racy (a reference appears during deletion), needs locks, and creates a reverse dependency on every consumer. Newman urges you not to.</li>
+<li><strong>Handle deletion gracefully:</strong>
+<ul>
+<li>Finance shows &quot;Album Information Not Available&quot;</li>
+<li>Catalog returns <strong>410 GONE</strong> (it existed) rather than 404</li>
+<li>or Finance subscribes to deletion events and copies the data.</li>
+</ul>
+</li>
+<li><strong>Do not allow deletion:</strong> soft delete with a status column, or move rows to a &quot;graveyard&quot; table (event sourcing if you have heavy historical needs).</li>
+</ul>
+</li>
+<li>Newman would do both of the last two, because a Catalog restored from an earlier state could lose a record and Finance should not fall over.</li>
+</ul>
+</li>
+<li><strong>Where to use:</strong>
+<ul>
+<li>first make sure you are not breaking an aggregate in two: Order and Order Line should move together (the lines are part of the order)</li>
+<li>Sometimes a bigger bite lets you take both sides of the foreign key.</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-deletion-options.svg" alt="Deletion options" loading="lazy" /></p>
+<h3 id="example-shared-static-data">Example: shared static data</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-reference-data.svg" alt="Reference data" loading="lazy" /></p>
+<ul>
+<li>Country codes (Figure 4-39) show up in many databases; there are options:
+<ul>
+<li><strong>Duplicate the data</strong>
+<ul>
+<li>(Figure 4-40): each service has its own copy</li>
+<li>Concerns: changing many places (the last new country was South Sudan, code SSD, in 2011) and inconsistency</li>
+<li>It matters only if the data is part of communication between services; for local use inconsistency is fine</li>
+<li>Duplication may be the lesser evil if it avoids coupling</li>
+<li>Use rarely (maybe large volumes such as UK postal code files).</li>
+</ul>
+</li>
+<li><strong>Dedicated reference data schema</strong>
+<ul>
+<li>(Figure 4-41): one source of truth, a versioned interface, joins possible on one engine (extra mapping and single point of failure concerns)</li>
+<li>breaking changes hurt.</li>
+</ul>
+</li>
+<li><strong>Static reference data library</strong>
+<ul>
+<li>(Figure 4-42): small, rarely changing data (249 ISO country entries) in a shared library or config file</li>
+<li>Stitch Fix does this for things like clothing sizes (Randy Shoup: the sweet spot is small volume and infrequent change with warning)</li>
+<li>Drawbacks: mixed technology stacks, and updating means redeploying all services (lock-step release); accept that versions can differ in production (Figure 4-43), which is visible.</li>
+</ul>
+</li>
+<li><strong>Static reference data service</strong>
+<ul>
+<li>(Figure 4-44): splits rooms: those who find creating a service cheap say yes
+<ul>
+<li>where a new service takes days or weeks (Kief Morris's UK bank needed nearly a year and over 10 teams to approve a first release) it looks like overkill</li>
+</ul>
+</li>
+<li>249 entries can be held in memory without a datastore, fit a function-as-a-service platform (Azure Functions, AWS Lambda), and be cached client-side or refreshed by update events (Figure 4-45)</li>
+<li>Use it when you manage the data's life cycle in code (an update API, events) or want a stub-friendly contract.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Newman's choice:</strong>
+<ul>
+<li>a shared library if consistency at all times is not needed</li>
+<li>larger or more complex data in each service's local database</li>
+<li>a dedicated service if the data must be consistent</li>
+<li>a dedicated schema only if a service is hard to justify. See <em>Refactoring Databases</em> (Scott J. Ambler and Pramod J. Sadalage).</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-9-transactions">4.9 Transactions</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-acid-two-phase-commit.svg" alt="ACID and 2PC" loading="lazy" /></p>
+<ul>
+<li>Splitting databases breaks referential integrity, adds latency and complicates reporting, and loses the <strong>transaction</strong>.</li>
+<li><strong>ACID:</strong>
+<ul>
+<li><strong>atomicity</strong> (all or nothing), <strong>consistency</strong> (valid state), <strong>isolation</strong> (interim states invisible to other transactions), <strong>durability</strong> (completed work survives failure)</li>
+<li>Not all databases provide it (relational ones do, Neo4j does; MongoDB supported it only for a single document for years, and added multi-document ACID transactions in 4.0)</li>
+<li>Recommended: <em>Designing Data-Intensive Applications</em></li>
+<li>The chapter focuses on atomicity.</li>
+</ul>
+</li>
+<li><strong>Still ACID, but lacking atomicity:</strong>
+<ul>
+<li>in one database, setting a customer's status to VERIFIED and deleting the PendingEnrollments row is one transaction (Figure 4-46)</li>
+<li>Across two databases they are two independent transactions (Figure 4-47)</li>
+<li>Sequencing helps but the whole operation is no longer atomic</li>
+<li>Reordering steps will matter for sagas.</li>
+</ul>
+</li>
+</ul>
+<h3 id="two-phase-commits">Two-phase commits</h3>
+<ul>
+<li>A <strong>voting phase</strong> (the coordinator asks all workers if the change can be made; Figure 4-48) and a <strong>commit phase</strong> (Figure 4-49)
+<ul>
+<li>A yes is a promise to make the change later, usually by locking the record</li>
+<li>If any vote no, a rollback is sent so workers release locks.</li>
+</ul>
+</li>
+<li>Problems:
+<ul>
+<li>commits are not simultaneous, so you can see one change before the other (isolation lost)</li>
+<li>it is essentially <strong>coordinating distributed locks</strong></li>
+<li>many failure modes (a worker votes yes then does not respond to the commit) can need manual unpicking</li>
+<li>more participants and latency mean more trouble</li>
+<li>used only for short operations because resources stay locked.</li>
+</ul>
+</li>
+<li><strong>Distributed transactions, just say no:</strong>
+<ul>
+<li>avoid them</li>
+<li>First option: do not split data that needs atomicity yet (keep it in one database and one service, and work on another area)</li>
+<li>Otherwise, sagas.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-10-sagas">4.10 Sagas</h2>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-sagas.svg" alt="Sagas" loading="lazy" /></p>
+<ul>
+<li>A saga coordinates several state changes <strong>without locking resources for long</strong>, by modelling the steps as discrete independently executed activities, and it forces you to model the business process explicitly
+<ul>
+<li>Originally from <strong>Hector Garcia-Molina and Kenneth Salem</strong> (1987) for <strong>long-lived transactions</strong> (minutes, hours, days): split into a sequence of shorter transactions that each touch part of the data, reducing lock contention</li>
+<li>It works for coordinating several services too.</li>
+</ul>
+</li>
+<li><strong>A saga does not give ACID atomicity</strong>
+<ul>
+<li>for the whole. Each step can be a local ACID transaction (the Warehouse service creates a Reservation row in its own transaction, Figure 4-50), and the saga gives enough information to know what state it is in</li>
+<li>handling the implications is up to you.</li>
+</ul>
+</li>
+<li><strong>Failure modes:</strong>
+<ul>
+<li><strong>backward recovery</strong> (roll back with <strong>compensating actions</strong>) and <strong>forward recovery</strong> (retry from the failure point, needing persisted state)</li>
+<li>Mix as the process requires.</li>
+</ul>
+</li>
+<li><strong>Rollbacks:</strong>
+<ul>
+<li>if packaging finds the item missing after payment and points were awarded (Figure 4-51), there is no simple rollback
+<ul>
+<li>trigger a <strong>compensating transaction</strong> for each committed step (Figure 4-52)</li>
+</ul>
+</li>
+<li>These are <strong>semantic rollbacks</strong>: the originals did happen (you cannot unsend an email, so send a second email saying the order was cancelled)</li>
+<li>Keeping a record of the aborted order is appropriate.</li>
+</ul>
+</li>
+<li><strong>Reordering steps:</strong> award points only at dispatch (Figure 4-53); pull forward steps likely to fail so later compensations are not needed.</li>
+<li><strong>Mixing:</strong> once money is taken and the item packed, rolling back for a dispatch failure is odd; retry, then human intervention.</li>
+</ul>
+<h3 id="implementing-sagas">Implementing sagas</h3>
+<p><img src="/book-digest/monolith-to-microservices/img/m2m-04-orchestration-choreography.svg" alt="Orchestration and choreography" loading="lazy" /></p>
+<ul>
+<li><strong>Orchestrated sagas:</strong>
+<ul>
+<li>a central <strong>orchestrator</strong> defines the order and triggers compensations (command and control), usually with request and response calls
+<ul>
+<li>in the order example an <strong>Order Processor</strong> (Figure 4-54) calls Payment Gateway, Warehouse and others</li>
+</ul>
+</li>
+<li>Benefits: the process is explicit in one place, easier onboarding and tracking</li>
+<li>Downsides: domain coupling (it must know all the services) and logic being absorbed into the orchestrator, leaving <strong>anaemic</strong> services</li>
+<li>&quot;If logic has a place where it can be centralized, it will become centralized!&quot; Mitigate by using different orchestrating services for different flows (Order Processor, Returns, Goods Receiving), all reusing Warehouse.</li>
+<li><strong>BPM tools:</strong>
+<ul>
+<li>Newman dislikes them: the central conceit that non-developers define the process is almost never true; GUI-based flows are hard to version or test</li>
+<li>Let developers write code and project a visual view from it</li>
+<li>Open source developer-oriented orchestration frameworks: <strong>Camunda</strong> and <strong>Zeebe</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Choreographed sagas:</strong>
+<ul>
+<li>responsibility is spread (trust but verify)</li>
+<li>services react to <strong>events</strong> broadcast through a message broker topic (Figure 4-55: Order Placed, then Warehouse reserves stock and fires an event; Insufficient Stock aborts the order)
+<ul>
+<li>Many services (a Recommendation service) can react to the same event</li>
+<li>No service knows another, so it is loosely coupled with no central logic</li>
+</ul>
+</li>
+<li>but the process is implicit and saga state is hard to know
+<ul>
+<li>Fix: a <strong>correlation ID</strong> (the saga's unique ID) in every event and a service that consumes the events and projects each order's state, perhaps acting to resolve issues.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Mixing styles</strong> is fine (an orchestrated flow inside Warehouse within a larger choreographed saga), but keep a clear way to understand what happened.</li>
+<li><strong>Which?</strong>
+<ul>
+<li>Newman finds the extra tracking complexity of choreography almost always outweighed by looser coupling. General advice: relaxed about <strong>orchestration when one team owns the whole saga</strong></li>
+<li>prefer <strong>choreography with several teams</strong>, so responsibility can be distributed.</li>
+</ul>
+</li>
+<li><strong>Sagas versus distributed transactions:</strong>
+<ul>
+<li>Pat Helland (&quot;Life Beyond Distributed Transactions&quot;):
+<ul>
+<li>in most distributed transaction systems the failure of one node stalls the commit, so the larger the system the more likely it is down</li>
+<li>like adding an engine to a plane that needs all engines</li>
+</ul>
+</li>
+<li>Modelling processes as sagas avoids this and makes processes first class</li>
+<li>Further reading: <em>Building Microservices</em> chapter 4 and <em>Enterprise Integration Patterns</em> (sagas are not named in either)</li>
+<li>Nested sagas (Garcia-Molina et al, 1991) are out of scope.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Find seams along which boundaries emerge; the work is painstaking but can be incremental.</li>
+<li>Cope first (view, wrapper, exposed database), then move ownership, then sync with tracer writes or application sync, with reconciliation.</li>
+<li>Replace joins and foreign keys with calls and graceful handling; replace transactions with sagas.</li>
+<li>Next: the problems that appear once you have many services (Chapter 5).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Database view</strong>, <strong>database wrapping service</strong>, <strong>database as a service interface</strong>, <strong>mapping engine</strong>.</li>
+<li><strong>Aggregate exposing monolith</strong>, <strong>change data ownership</strong>, <strong>synchronize data in application</strong>, <strong>tracer write</strong>.</li>
+<li><strong>Repository per bounded context</strong>, <strong>database per bounded context</strong>, <strong>monolith as data access layer</strong>, <strong>multischema storage</strong>.</li>
+<li><strong>Split table</strong>, <strong>move foreign key to code</strong>, <strong>soft delete</strong>, <strong>410 GONE</strong>.</li>
+<li><strong>ACID</strong>, <strong>two-phase commit</strong>, <strong>saga</strong>, <strong>compensating (semantic) transaction</strong>, <strong>backward and forward recovery</strong>, <strong>orchestration</strong>, <strong>choreography</strong>, <strong>correlation ID</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Sam Newman, <em>Monolith to Microservices</em>, O'Reilly 2019, chapter 4: <a href="https://learning.oreilly.com/library/view/monolith-to-microservices/9781492047834/ch04.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/monolith-to-microservices/9781492047834/ch04.html</a></li>
+<li>Cited in the chapter:
+<ul>
+<li>Hector Garcia-Molina and Kenneth Salem, &quot;Sagas&quot; (ACM SIGMOD Record 16, no. 3, 1987)</li>
+<li>Hector Garcia-Molina et al, &quot;Modeling Long-Running Activities as Nested Sagas&quot; (Data Engineering 14, no. 1, 1991)</li>
+<li>Pat Helland, &quot;Life Beyond Distributed Transactions&quot; (acmqueue 14, no. 5)</li>
+<li>Kresten Krab Thorup, &quot;Riak on Drugs (and the Other Way Around)&quot;</li>
+<li>Sangeeta Handa (Netflix, QCon SF) and Daniel Bryant's write-up</li>
+<li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em> (O'Reilly, 2017)</li>
+<li>Scott J. Ambler and Pramod J. Sadalage, <em>Refactoring Databases</em> (Addison-Wesley)</li>
+<li>Kief Morris, <em>Infrastructure as Code</em> (O'Reilly, 2016)</li>
+<li>tools named: Debezium, Flyway, SchemaSpy, Jaeger, HashiCorp Vault, Camunda, Zeebe. Figures 4-1 to 4-55 are redrawn in grouped summary diagrams.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/monolith-to-microservices/m2m-03-splitting-the-monolith/">Monolith to Microservices 3: Splitting the Monolith</a></li>
+<li><a href="/book-digest/monolith-to-microservices/m2m-05-growing-pains/">Monolith to Microservices 5: Growing Pains</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-09-data-ownership-and-distributed-transactions/">Software Architecture: The Hard Parts 9: Data Ownership and Distributed Transactions</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-12-transactional-sagas/">Software Architecture: The Hard Parts 12: Transactional Sagas</a></li>
+<li><a href="/book-digest/understanding-distributed-systems/uds-01-introduction/">Understanding Distributed Systems 1: Preface and introduction</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/monolith-to-microservices/m2m-03-splitting-the-monolith/">&larr; Monolith to Microservices 3: Splitting the Monolith</a><a href="/book-digest/monolith-to-microservices/">Contents</a><a href="/book-digest/monolith-to-microservices/m2m-05-growing-pains/">Monolith to Microservices 5: Growing Pains &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

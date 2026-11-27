@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Site Reliability Engineering 2: Emergency Response</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/site-reliability-engineering/">Contents</a><span class="ttl">Site Reliability Engineering (incident chapters)</span><span class="sp"></span><a class="btn" href="/book-digest/site-reliability-engineering/sre-01-being-on-call/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/site-reliability-engineering/sre-03-managing-incidents/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="site-reliability-engineering-2-emergency-response">Site Reliability Engineering 2: Emergency Response</h1>
+<p>Source: Corey Adam Baye, &quot;Emergency Response&quot; (chapter 13), in <em>Site Reliability Engineering</em> (Copyright 2017 Google, Inc., published by O'Reilly Media; licensed CC BY-NC-ND 4.0). Own-words summary for personal study; published to the website. Previous: <a href="/book-digest/site-reliability-engineering/sre-01-being-on-call/">Site Reliability Engineering 1: Being On-Call</a>. Next: <a href="/book-digest/site-reliability-engineering/sre-03-managing-incidents/">Site Reliability Engineering 3: Managing Incidents</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>First: <strong>do not panic</strong>; pull in more people if you feel overwhelmed and follow the incident process.</li>
+<li>Three real Google emergencies, each triggered differently (a test, a configuration change, an automation run), were handled with the same habits: stay calm, escalate, communicate, then fix the system.</li>
+<li>Lessons recur: <strong>test your rollbacks</strong>, canary even changes that look safe, put sanity checks in automation, keep out-of-band communications and tools.</li>
+<li>Keep a history of outages, ask &quot;what if&quot; questions, and test failures on purpose.</li>
+</ul>
+</div></div>
+<h2 id="2-1-what-to-do-when-systems-break">2.1 What to do when systems break</h2>
+<ul>
+<li>Do not panic:
+<ul>
+<li>you are trained, and usually only electrons are in peril</li>
+<li>If overwhelmed, pull in more people, even the whole company if necessary, and use your incident response process (<a href="/book-digest/site-reliability-engineering/sre-03-managing-incidents/">Site Reliability Engineering 3: Managing Incidents</a>).</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/site-reliability-engineering/img/sre-02-three-emergencies.svg" alt="Three emergencies" loading="lazy" /></p>
+<h2 id="2-2-test-induced-emergency">2.2 Test-induced emergency</h2>
+<ul>
+<li><strong>What happened:</strong>
+<ul>
+<li>SREs wanted to flush out hidden dependencies by blocking access to one test database out of a hundred in a large distributed MySQL system</li>
+<li>Within minutes, many services reported users unable to reach key systems, some intermittently.</li>
+</ul>
+</li>
+<li><strong>Response:</strong>
+<ul>
+<li>SRE assumed the test was responsible and aborted it</li>
+<li>Rolling back the permissions change failed, so they restored permissions to replicas and failovers by an already tested method, while reaching out to developers to fix the flaw in a database application-layer library</li>
+<li>Access was fully restored within an hour of the decision.</li>
+</ul>
+</li>
+<li><strong>What went well:</strong>
+<ul>
+<li>dependent services escalated immediately</li>
+<li>the test was aborted at once</li>
+<li>parallel efforts (some teams reconfigured to avoid the database) helped</li>
+<li>follow-up fixes were quick and periodic retesting was set up.</li>
+</ul>
+</li>
+<li><strong>What was learned:</strong>
+<ul>
+<li>A well-reviewed test still missed an interaction among dependent systems.</li>
+<li>The incident response process, only weeks old, had not been disseminated and was not followed.</li>
+<li><strong>Rollback procedures had not been tested</strong>, which lengthened the outage. Now they must be tested before such large tests.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-3-change-induced-emergency">2.3 Change-induced emergency</h2>
+<ul>
+<li><strong>What happened:</strong>
+<ul>
+<li>a configuration change to infrastructure that protects services from abuse was pushed globally on a Friday. It triggered a crash-loop bug across essentially all externally facing systems</li>
+<li>because Google's internal tools depend on its own services, many internal tools broke too.</li>
+</ul>
+</li>
+<li><strong>Response:</strong>
+<ul>
+<li>alerts fired within seconds</li>
+<li>Some on-call engineers moved to dedicated secure rooms with backup production access</li>
+<li>Within five minutes the pusher rolled the change back and services began to recover; within ten minutes the on-callers declared an incident and notified the company</li>
+<li>A few services had unrelated bugs triggered by the incident and needed more work.</li>
+</ul>
+</li>
+<li><strong>What went well:</strong>
+<ul>
+<li>monitoring detected it immediately (though alerts were so loud they overwhelmed on-callers)</li>
+<li>incident updates were clear and frequent</li>
+<li><strong>out-of-band communication and alternative access tools</strong> kept people working</li>
+<li>a rate limit on full updates to new clients throttled the crash loop</li>
+<li>and some luck (the pusher happened to be watching live complaints).</li>
+</ul>
+</li>
+<li><strong>What was learned:</strong>
+<ul>
+<li>An earlier <strong>canary</strong> of the feature was thorough but did not hit a rare keyword combination
+<ul>
+<li>this change was judged not risky, so it got a weaker canary. Canarying and automation moved up in priority: <strong>canary thoroughly regardless of perceived risk</strong>.</li>
+</ul>
+</li>
+<li>Alert storms disrupt real work and communication.</li>
+<li>Debugging tools themselves sat behind crash-looping jobs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-4-process-induced-emergency">2.4 Process-induced emergency</h2>
+<ul>
+<li><strong>What happened:</strong>
+<ul>
+<li>during routine automation testing, two consecutive turndown requests for the same soon-to-be-decommissioned installation were submitted</li>
+<li>A subtle bug made the second request send <strong>all machines in all such installations worldwide</strong> to the queue for disk wiping.</li>
+</ul>
+</li>
+<li><strong>Response:</strong>
+<ul>
+<li>on-callers drained traffic from the first location, then saw pages everywhere and disabled all team automation to stop further damage</li>
+<li>Within an hour traffic was diverted to larger installations (some network links needed mitigation)</li>
+<li>The first rebuilt installation was back within three hours
+<ul>
+<li>hand-offs between US and European teams and a streamlined manual reinstall (split into three stages) restored most capacity in three days.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>What went well:</strong> large installations were unaffected; incident response protocols, matured over a year, produced excellent company-wide collaboration.</li>
+<li><strong>What was learned:</strong>
+<ul>
+<li>The automation lacked sanity checks: an <strong>empty rack filter was passed on as &quot;all machines&quot;</strong>. The chapter notes that sometimes zero does mean all.</li>
+<li>Reinstallation was slow and unreliable: low-priority TFTP transfers from distant locations, BIOS behaviour on failures, and infrastructure that could not set up thousands of machines at once (a regression limited tasks per worker).</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-5-all-problems-have-solutions">2.5 All problems have solutions</h2>
+<ul>
+<li>A solution exists even if not obvious. If you cannot think of one, widen the net and involve teammates
+<ul>
+<li>the first priority is resolving the issue quickly, then cleaning up and writing it up.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-6-learn-from-the-past">2.6 Learn from the past</h2>
+<ul>
+<li><strong>Keep a history of outages</strong>: be thorough and honest, publish postmortems, and hold people accountable for follow-ups so a near-identical outage does not recur.</li>
+<li><strong>Ask the big &quot;what if&quot; questions</strong>: power failure, flooded racks, primary datacentre dark, a compromised web server. Who do you call, who pays, is there a plan?</li>
+<li><strong>Test proactively</strong>: until a system fails you do not know how it, its dependencies and users will react. Better a planned test with your best people at hand than a failure at 2 a.m.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Panic costs time; escalate early.</li>
+<li>Test rollbacks and canaries; automation needs sanity checks.</li>
+<li>Learn from every outage and rehearse before one happens.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Canary</strong>: release to a small slice first to catch problems.</li>
+<li><strong>Out-of-band communication</strong>: a path that works when your normal tools do not.</li>
+<li><strong>Sanity check</strong>: a guard that rejects impossible or empty inputs.</li>
+<li><strong>Test-, change-, process-induced emergency</strong>: three triggers named in the chapter.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Baye, &quot;Emergency Response&quot;, <em>Site Reliability Engineering</em>: <a href="https://sre.google/sre-book/emergency-response/" target="_blank" rel="noopener noreferrer">https://sre.google/sre-book/emergency-response/</a> (Copyright 2017 Google, Inc., published by O'Reilly Media, Inc.; licensed CC BY-NC-ND 4.0).</li>
+<li>Own-words summary. The diagram is a summary drawn here.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/site-reliability-engineering/sre-01-being-on-call/">Site Reliability Engineering 1: Being On-Call</a></li>
+<li><a href="/book-digest/site-reliability-engineering/sre-03-managing-incidents/">Site Reliability Engineering 3: Managing Incidents</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-07-incident-response/">AWS Security Pillar 7: Incident Response</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/site-reliability-engineering/sre-01-being-on-call/">&larr; Site Reliability Engineering 1: Being On-Call</a><a href="/book-digest/site-reliability-engineering/">Contents</a><a href="/book-digest/site-reliability-engineering/sre-03-managing-incidents/">Site Reliability Engineering 3: Managing Incidents &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>AWS Security Pillar 4: Detection</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/aws-security-pillar/">Contents</a><span class="ttl">Aws Security Pillar</span><span class="sp"></span><a class="btn" href="/book-digest/aws-security-pillar/awsp-03-permissions-management/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="aws-security-pillar-4-detection">AWS Security Pillar 4: Detection</h1>
+<p>Source: AWS Well-Architected Framework, Security Pillar, &quot;Detection&quot;, SEC04. Own-words summary, much shorter than the source. Previous: <a href="/book-digest/aws-security-pillar/awsp-03-permissions-management/">AWS Security Pillar 3: Permissions Management</a>. Next: <a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">AWS Security Pillar 5: Infrastructure Protection</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Detection finds misconfigurations, threats and unexpected behaviour. It supports quality, legal and compliance needs and feeds incident response.</li>
+<li>Collect logs <strong>before</strong> you need them: you cannot reconstruct activity from logs you never kept.</li>
+<li>Gather logs and findings in <strong>standard places</strong> (a Log Archive account, S3, Security Lake) so alerts from different sources can be joined.</li>
+<li>Automated remediation is useful only if it is tested and overseen.</li>
+</ul>
+</div></div>
+<h2 id="4-1-the-idea">4.1 The idea</h2>
+<ul>
+<li>Watch for unexpected or unauthorised activity (GuardDuty), for mutating API calls your workload should not make, and for API calls that change the security posture.</li>
+<li>Review the detection mechanisms regularly against internal and external policies, and alert automatically on defined conditions so people or tools can investigate.</li>
+</ul>
+<p><img src="/book-digest/aws-security-pillar/img/awsp-04-detection-flow.svg" alt="Detection flow" loading="lazy" /></p>
+<h2 id="4-2-sec04-bp01-configure-service-and-application-logging-risk-high">4.2 SEC04-BP01 Configure service and application logging (risk: high)</h2>
+<ul>
+<li>Keep security event logs from services and applications. They serve audit, investigation and operational uses and are often required by governance, risk and compliance standards.</li>
+<li><strong>Anti-patterns:</strong> logs kept forever or deleted too soon; everyone can read them; log governance done manually.</li>
+<li>Choose sources for your use cases:
+<ul>
+<li><strong>CloudTrail</strong>:
+<ul>
+<li>API calls. Management events are on by default with 90-day history</li>
+<li>create a trail (to S3, optionally CloudWatch Logs) for longer retention and data events</li>
+<li>or use <strong>CloudTrail Lake</strong> (up to seven years, SQL queries).</li>
+</ul>
+</li>
+<li><strong>VPC Flow Logs</strong> (network traffic) and <strong>Route 53 resolver query logs</strong> (DNS): AWS recommends them for VPC users; scope flow logs to control cost.</li>
+<li>These three are the basic sources for investigations. <strong>Security Lake</strong> can collect and normalise them (Parquet, OCSF).</li>
+<li>Others: load balancer logs, WAF logs, Config recorder, GuardDuty findings, EKS audit logs, EC2 OS and application logs, RDS logs, Network Firewall logs.</li>
+</ul>
+</li>
+<li>Storage and query:
+<ul>
+<li><strong>S3</strong> is cheap and durable with lifecycle rules; query with Athena or OpenSearch.</li>
+<li><strong>CloudWatch Logs</strong> has built-in Logs Insights; archive older logs to S3.</li>
+<li>Typical practice: three months to a year readily queryable, up to seven years retained, driven by statutory, regulatory and business needs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-3-sec04-bp02-capture-logs-findings-and-metrics-in-standardised-locations-risk-medium">4.3 SEC04-BP02 Capture logs, findings and metrics in standardised locations (risk: medium)</h2>
+<ul>
+<li><strong>Anti-pattern:</strong> teams each own their logging and metrics, so nothing lines up.</li>
+<li>Steps:
+<ol>
+<li>Create <strong>Log Archive</strong> and <strong>Security Tooling</strong> accounts under a security OU (Control Tower makes them for you).</li>
+<li>Choose the standard data location: a data lake approach, a third-party product or Amazon Security Lake. Capture data from every opted-in Region, even unused ones.</li>
+<li>Configure every source to publish there, in a consistent format.</li>
+</ol>
+</li>
+</ul>
+<h2 id="4-4-sec04-bp03-correlate-and-enrich-security-alerts-risk-low">4.4 SEC04-BP03 Correlate and enrich security alerts (risk: low)</h2>
+<ul>
+<li>One incident often triggers alerts in several systems; joining them shows the full picture.</li>
+<li><strong>Anti-pattern:</strong> different groups investigate different systems' alerts separately.</li>
+<li>Steps:
+<ul>
+<li>list alert sources and how each describes identity, action and resource</li>
+<li>collect alerts with Security Hub CSPM, EventBridge or CloudWatch</li>
+<li>enrich with CloudTrail, VPC Flow Logs, Route 53 resolver logs and application logs (one Security Lake integration can serve several)</li>
+<li>use Amazon Detective, a SIEM, or a Lambda that runs Athena queries.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-5-sec04-bp04-initiate-remediation-for-non-compliant-resources-risk-medium">4.5 SEC04-BP04 Initiate remediation for non-compliant resources (risk: medium)</h2>
+<ul>
+<li>Define remediations in code so the response is quick and consistent, manual or automatic.</li>
+<li><strong>Anti-pattern:</strong> automation that was never thoroughly tested and validated.</li>
+<li>Steps:
+<ol>
+<li>Consolidate alerts in Security Hub CSPM and prioritise.</li>
+<li>Build remediations with Systems Manager and Lambda.</li>
+<li>Trigger via Systems Manager custom actions publishing to EventBridge (manual or automatic); use SNS to notify the security or incident team where a human must decide.</li>
+<li>Review remediation logs (CloudWatch Logs; outcomes as Security Hub finding notes) and improve.</li>
+</ol>
+</li>
+<li>Keep oversight: automated responses must be effective, accurate and in line with policy and risk appetite.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Turn on CloudTrail, VPC Flow Logs and DNS logs everywhere first.</li>
+<li>Put the logs in an account the workload teams cannot change.</li>
+<li>Correlate before you escalate; remediate by code, but test it.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>CloudTrail</strong>: record of AWS API calls; <strong>CloudTrail Lake</strong> adds long retention and SQL.</li>
+<li><strong>Security Lake</strong>: collects and normalises security logs (OCSF, Parquet).</li>
+<li><strong>GuardDuty</strong>, <strong>Detective</strong>, <strong>Security Hub CSPM</strong>: threat detection, investigation graph, findings hub.</li>
+<li><strong>SIEM</strong>: security information and event management tool.</li>
+<li><strong>Log Archive account</strong>: separate account holding logs.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>AWS Well-Architected Framework, Security Pillar: <a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html</a> (Framework page: <a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/sec04.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/framework/sec04.html</a>)</li>
+<li>Own-words summary; the diagram is a summary drawn here, not an AWS figure.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/aws-security-pillar/awsp-03-permissions-management/">AWS Security Pillar 3: Permissions Management</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">AWS Security Pillar 5: Infrastructure Protection</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-07-incident-response/">AWS Security Pillar 7: Incident Response</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/aws-security-pillar/awsp-03-permissions-management/">&larr; AWS Security Pillar 3: Permissions Management</a><a href="/book-digest/aws-security-pillar/">Contents</a><a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">AWS Security Pillar 5: Infrastructure Protection &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

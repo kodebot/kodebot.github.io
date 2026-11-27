@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>AWS Security Pillar 5: Infrastructure Protection</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/aws-security-pillar/">Contents</a><span class="ttl">Aws Security Pillar</span><span class="sp"></span><a class="btn" href="/book-digest/aws-security-pillar/awsp-04-detection/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/aws-security-pillar/awsp-06-data-protection/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="aws-security-pillar-5-infrastructure-protection">AWS Security Pillar 5: Infrastructure Protection</h1>
+<p>Source: AWS Well-Architected Framework, Security Pillar, &quot;Infrastructure protection&quot;, SEC05 (network) and SEC06 (compute). Own-words summary, much shorter than the source. Previous: <a href="/book-digest/aws-security-pillar/awsp-04-detection/">AWS Security Pillar 4: Detection</a>. Next: <a href="/book-digest/aws-security-pillar/awsp-06-data-protection/">AWS Security Pillar 6: Data Protection</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Defence in depth on the network: <strong>layers by data sensitivity</strong>, then <strong>traffic controls</strong> inside each layer, then <strong>inspection</strong>, all deployed as code.</li>
+<li>Compute is protected by <strong>hardened, verified images</strong>, scanning and patching by automation, and <strong>no interactive access</strong> where a runbook will do.</li>
+<li>Seven practices: SEC05-BP01 and BP02 and SEC06-BP01 and BP02 are high risk; the rest are medium.</li>
+</ul>
+</div></div>
+<h2 id="5-1-sec05-network-protection">5.1 SEC05: network protection</h2>
+<p><img src="/book-digest/aws-security-pillar/img/awsp-05-network-layers.svg" alt="Network layers" loading="lazy" /></p>
+<h3 id="sec05-bp01-create-network-layers-risk-high">SEC05-BP01 Create network layers (risk: high)</h3>
+<ul>
+<li>Group components by function, data sensitivity and behaviour; separate what needs internet access (public web endpoints) from what is internal only (databases).</li>
+<li><strong>Anti-patterns:</strong> everything in one VPC or subnet; layers drawn with no thought for data sensitivity.</li>
+<li>Steps:
+<ul>
+<li>Put public endpoints behind load balancers or proxies, and consider managed edge services (CloudFront, API Gateway, Elastic Load Balancing, Amplify) to shift controls to AWS.</li>
+<li>Run EC2, Fargate and Lambda in <strong>private subnets</strong> matched to the groups.</li>
+<li>For managed services (DynamoDB, Kinesis, SQS) use <strong>VPC endpoints</strong> as the default path over private IP addresses.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec05-bp02-control-traffic-flow-within-your-network-layers-risk-high">SEC05-BP02 Control traffic flow within your network layers (risk: high)</h3>
+<ul>
+<li>Restrict each layer to the flows the workload needs. Start with <strong>north-south</strong> (internet or external systems to your environment), then <strong>east-west</strong> (between your components).</li>
+<li><strong>Anti-pattern:</strong> a perimeter-only approach that controls traffic at the edge and nowhere else.</li>
+<li>Steps:
+<ul>
+<li>map the required flows</li>
+<li>apply several controls for inbound and outbound traffic (security groups, route tables)</li>
+<li>use firewalls for fine-grained control (Route 53 Resolver DNS Firewall, AWS Network Firewall, AWS WAF) and AWS Firewall Manager to manage rules centrally.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec05-bp03-implement-inspection-based-protection-risk-medium">SEC05-BP03 Implement inspection-based protection (risk: medium)</h3>
+<ul>
+<li>Put inspection points between layers to confirm traffic matches expected patterns, and analyse flows and metadata.</li>
+<li><strong>Anti-pattern:</strong> rules that only look at ports and protocols.</li>
+<li>Options:
+<ul>
+<li>a central <strong>inspection VPC</strong> or per-VPC inspection</li>
+<li>inline with AWS Network Firewall or a third-party appliance behind a <strong>Gateway Load Balancer</strong></li>
+<li>out of band with <strong>VPC Traffic Mirroring</strong> (EventBridge plus Lambda can switch mirroring on for new resources)</li>
+<li>and web-traffic protection with WAF.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec05-bp04-automate-network-protection-risk-medium">SEC05-BP04 Automate network protection (risk: medium)</h3>
+<ul>
+<li>Use infrastructure as code and CI/CD so changes are tracked, quick to deploy and drift is detectable.</li>
+<li><strong>Anti-pattern:</strong> each workload team defines its whole network stack and protections alone.</li>
+<li>Steps:
+<ul>
+<li>decide what is central and what teams own</li>
+<li>use separate test and production network accounts</li>
+<li>keep central templates in a repository distinct from workload repositories</li>
+<li>build pipelines with misconfiguration tests.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-2-sec06-compute-protection">5.2 SEC06: compute protection</h2>
+<p><img src="/book-digest/aws-security-pillar/img/awsp-05-compute-loop.svg" alt="Compute loop" loading="lazy" /></p>
+<h3 id="sec06-bp01-perform-vulnerability-management-risk-high">SEC06-BP01 Perform vulnerability management (risk: high)</h3>
+<ul>
+<li>Scan and patch code, dependencies and infrastructure often.</li>
+<li><strong>Anti-patterns:</strong> no programme; patching with no regard to severity or risk; running software past vendor end of life.</li>
+<li>Steps:
+<ul>
+<li>understand the shared model</li>
+<li>configure scanning (<strong>Amazon Inspector</strong> covers instances, containers and functions for vulnerabilities and unintended network exposure)</li>
+<li>define identification, prioritisation and remediation timelines by severity</li>
+<li>automate OS and application patching with a patch management service.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec06-bp02-provision-compute-from-hardened-images-risk-high">SEC06-BP02 Provision compute from hardened images (risk: high)</h3>
+<ul>
+<li>Fewer opportunities for unintended access come from hardened images
+<ul>
+<li>Acquire container images and libraries only from trusted registries, <strong>verify signatures</strong>, and keep your own private registries for trusted artefacts.</li>
+</ul>
+</li>
+<li><strong>Anti-pattern:</strong> trusting registries but not verifying signatures.</li>
+<li>Per compute type:
+<ul>
+<li><strong>OS:</strong> hardened AMIs built from trusted base images with EC2 Image Builder.</li>
+<li><strong>Containers:</strong> follow container best practice and scan images in the pipeline and regularly in the repository (ECR image scanning).</li>
+<li><strong>Lambda:</strong> use layers to separate function code from shared libraries and turn on code signing.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec06-bp03-reduce-manual-management-and-interactive-access-risk-medium">SEC06-BP03 Reduce manual management and interactive access (risk: medium)</h3>
+<ul>
+<li>Automate deployment, configuration, maintenance and investigation. Allow manual access only for emergencies or safe sandbox environments.</li>
+<li><strong>Anti-patterns:</strong> SSH or RDP into EC2; individual user logins on instances; sharing a password or private key.</li>
+<li>Steps:
+<ol>
+<li>Install and start SSM Agent (check your base AMI).</li>
+<li>Give instance profile roles the <code>AmazonSSMManagedInstanceCore</code> policy.</li>
+<li>Disable SSH, RDP and similar services (user data or custom AMIs).</li>
+<li>Make sure security groups do not allow port 22 or 3389, and alert on mistakes (AWS Config).</li>
+<li>Write Systems Manager automations, runbooks and run commands; control who may run them with IAM; test in non-production and invoke them instead of logging in.</li>
+</ol>
+</li>
+</ul>
+<h3 id="sec06-bp04-validate-software-integrity-risk-medium">SEC06-BP04 Validate software integrity (risk: medium)</h3>
+<ul>
+<li>Use <strong>cryptographic verification</strong> and signing on OS images, container images and code artefacts.</li>
+<li><strong>Anti-pattern:</strong> trusting a reputable vendor website and ignoring certificate or signature validation.</li>
+<li>A hash or digest shows the payload was not tampered with but does <strong>not prove who produced it</strong>
+<ul>
+<li>provenance needs a certificate from a trusted authority signing the artefact. Check whether a provider publishes a public key, and build signature checks into image acquisition and hardening.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec06-bp05-automate-compute-protection-risk-medium">SEC06-BP05 Automate compute protection (risk: medium)</h3>
+<ul>
+<li><strong>Anti-pattern:</strong> immutable infrastructure with no way to patch or replace it.</li>
+<li>Steps:
+<ul>
+<li>build compliant hardened AMIs automatically (CIS Benchmarks or STIG)</li>
+<li>automate configuration management (AWS Config, Security Hub CSPM)</li>
+<li>automate patching or replacing instances (Systems Manager Patch Manager)</li>
+<li>automate scanning for CVEs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Place the workload in layers, restrict traffic in each, inspect between them, and define it all as code.</li>
+<li>Build images once, verify them, and replace instead of logging in.</li>
+<li>A matching hash is not proof of origin.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>North-south and east-west traffic</strong>: into and out of the environment versus between its components.</li>
+<li><strong>VPC endpoint</strong>: private access to an AWS service from inside a VPC.</li>
+<li><strong>Gateway Load Balancer (GWLB)</strong>: routes traffic through third-party inspection appliances.</li>
+<li><strong>Hardened image</strong>: a base image reduced and configured to benchmark standards (CIS, STIG).</li>
+<li><strong>Provenance</strong>: proof of where an artefact came from.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>AWS Well-Architected Framework, Security Pillar: <a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html</a> (Framework pages: <a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/sec05.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/framework/sec05.html</a> and .../sec06.html)</li>
+<li>Own-words summary; diagrams are summaries drawn here, not AWS figures.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/aws-security-pillar/awsp-04-detection/">AWS Security Pillar 4: Detection</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-06-data-protection/">AWS Security Pillar 6: Data Protection</a></li>
+<li><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book: contents</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/aws-security-pillar/awsp-04-detection/">&larr; AWS Security Pillar 4: Detection</a><a href="/book-digest/aws-security-pillar/">Contents</a><a href="/book-digest/aws-security-pillar/awsp-06-data-protection/">AWS Security Pillar 6: Data Protection &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

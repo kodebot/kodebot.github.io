@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>AWS Security Pillar 6: Data Protection</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/aws-security-pillar/">Contents</a><span class="ttl">Aws Security Pillar</span><span class="sp"></span><a class="btn" href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/aws-security-pillar/awsp-07-incident-response/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="aws-security-pillar-6-data-protection">AWS Security Pillar 6: Data Protection</h1>
+<p>Source: AWS Well-Architected Framework, Security Pillar, &quot;Data protection&quot;, SEC07 (classification), SEC08 (at rest) and SEC09 (in transit). Own-words summary, much shorter than the source. Previous: <a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">AWS Security Pillar 5: Infrastructure Protection</a>. Next: <a href="/book-digest/aws-security-pillar/awsp-07-incident-response/">AWS Security Pillar 7: Incident Response</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>You cannot protect data you have not classified. Classification drives isolation, encryption, retention and who may read it.</li>
+<li>Different data deserves different controls; one level for everything wastes effort and leaves the sensitive items under-protected.</li>
+<li>At rest: <strong>encrypt by default, guard the keys</strong>. In transit: <strong>current TLS, managed certificates, authenticated calls</strong>.</li>
+<li>Eleven practices; classification, lifecycle, key management, encryption at rest, access control, certificate management and encryption in transit are rated high risk.</li>
+</ul>
+</div></div>
+<p><img src="/book-digest/aws-security-pillar/img/awsp-06-data-protection-map.svg" alt="Data protection map" loading="lazy" /></p>
+<h2 id="6-1-sec07-data-classification">6.1 SEC07: data classification</h2>
+<h3 id="sec07-bp01-understand-your-data-classification-scheme-risk-high">SEC07-BP01 Understand your data classification scheme (risk: high)</h3>
+<ul>
+<li>Know what data the workload handles, its handling requirements, who owns it, where it is stored, and the legal and compliance rules that apply.</li>
+<li><strong>Anti-pattern:</strong> no formal policy defining sensitivity levels and their handling.</li>
+<li>Steps:
+<ul>
+<li>learn the organisation's scheme</li>
+<li>identify sensitive data types</li>
+<li>record them in a <strong>data catalogue</strong></li>
+<li>tag data with its sensitivity (AWS Organizations tag policies can enforce tagging standards).</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec07-bp02-apply-data-protection-controls-based-on-data-sensitivity-risk-high">SEC07-BP02 Apply data protection controls based on data sensitivity (risk: high)</h3>
+<ul>
+<li><strong>Anti-pattern:</strong> the same controls for all data, which over-provisions for some and under-protects others.</li>
+<li>Steps:
+<ul>
+<li>set isolation boundaries per level</li>
+<li>decide access, encryption, auditing and retention controls per class</li>
+<li>reduce sensitivity where possible (<strong>tokenisation or anonymisation</strong>)</li>
+<li>verify with automated testing and monitoring.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec07-bp03-automate-identification-and-classification-risk-medium">SEC07-BP03 Automate identification and classification (risk: medium)</h3>
+<ul>
+<li><strong>Anti-pattern:</strong> relying on manual identification, which is error-prone.</li>
+<li>Run an initial scan, or sample if a full scan is too costly
+<ul>
+<li><strong>Amazon Macie</strong> can run broad, sampled discovery across S3 buckets, then deeper discovery jobs; other stores can be exported to S3 to be scanned</li>
+<li>Apply the SEC07-BP02 controls to what is found, and keep scanning for unexpected sensitive data.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec07-bp04-define-scalable-data-lifecycle-management-risk-high">SEC07-BP04 Define scalable data lifecycle management (risk: high)</h3>
+<ul>
+<li><strong>Anti-pattern:</strong> one-size-fits-all lifecycle handling.</li>
+<li>Define how data is handled on entry, transformation and destruction: retention periods, access, auditing and provenance
+<ul>
+<li>Implement retention and automated destruction that match legal, regulatory and organisational needs, review as rules change, and use AWS Config to find resources without automated lifecycle management.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-2-sec08-protecting-data-at-rest">6.2 SEC08: protecting data at rest</h2>
+<h3 id="sec08-bp01-implement-secure-key-management-risk-high">SEC08-BP01 Implement secure key management (risk: high)</h3>
+<ul>
+<li>Key management covers storage, rotation, access control and monitoring of key material.</li>
+<li><strong>Anti-patterns:</strong> people handling unencrypted key material; inventing custom cryptographic algorithms; overly broad key permissions.</li>
+<li>Choose <strong>AWS owned or managed keys</strong> (no key policies to maintain) or <strong>customer managed keys</strong> in KMS. The default key store balances agility, security, data sovereignty and availability
+<ul>
+<li>custom key stores with CloudHSM or an external key store suit special cases.</li>
+</ul>
+</li>
+<li>Check how each service integrates with KMS. Example: EC2 uses encrypted EBS volumes, and snapshots from them should also be encrypted with a customer managed key.</li>
+</ul>
+<h3 id="sec08-bp02-enforce-encryption-at-rest-risk-high">SEC08-BP02 Enforce encryption at rest (risk: high)</h3>
+<ul>
+<li><strong>Anti-patterns:</strong> not using encrypt-by-default; overly permissive decryption access; not monitoring key use.</li>
+<li>Configure default encryption for new EBS volumes; copy AMIs with encryption on (root volumes and snapshots follow); turn on RDS encryption for clusters and snapshots.</li>
+<li>Use KMS key policies that limit access by data class. Example from the source: one key for production data and another for development or test data
+<ul>
+<li>if production must decrypt development artefacts, adjust the development key's policy to allow the production account.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec08-bp03-automate-data-at-rest-protection-risk-medium">SEC08-BP03 Automate data at rest protection (risk: medium)</h3>
+<ul>
+<li><strong>Anti-patterns:</strong> not enabling encryption defaults where supported; planning only for operational events and ignoring security events.</li>
+<li>Capture storage settings (such as S3 encryption) in infrastructure-as-code, check templates in the pipeline with <strong>CloudFormation Guard</strong>, run AWS Config rules in proactive mode before creation, monitor drift with Config, remediate automatically, and let IAM Access Analyzer flag permissions that can be reduced
+<ul>
+<li>Use backups (the pillar points to the reliability pillar) because recovery matters for security events too.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec08-bp04-enforce-access-control-risk-high">SEC08-BP04 Enforce access control (risk: high)</h3>
+<ul>
+<li><strong>Anti-patterns:</strong> mixing data of different sensitivity; over-permissive decryption-key permissions; misclassifying data.</li>
+<li>Steps:
+<ul>
+<li>least privilege for users, services and KMS key policies</li>
+<li><strong>separate accounts per classification level</strong> managed through Organizations</li>
+<li>review S3 bucket and object permissions regularly, avoid public readable or writable buckets, detect them with Config, serve public content through CloudFront, and verify buckets that must be private block public access.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-3-sec09-protecting-data-in-transit">6.3 SEC09: protecting data in transit</h2>
+<h3 id="sec09-bp01-implement-secure-key-and-certificate-management-risk-high">SEC09-BP01 Implement secure key and certificate management (risk: high)</h3>
+<ul>
+<li><strong>Anti-patterns:</strong> manual certificate deployment or renewal; not thinking through the CA hierarchy for a private CA; self-signed certificates on public resources.</li>
+<li>Use <strong>AWS Certificate Manager (ACM)</strong> for publicly trusted TLS certificates on web servers and load balancers
+<ul>
+<li><strong>AWS Private CA</strong> for your own hierarchy or exportable certificates</li>
+<li>AWS IoT Core for certificates at device scale</li>
+<li>native mutual TLS on API Gateway or Application Load Balancer. Rely on ACM managed renewal.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec09-bp02-enforce-encryption-in-transit-risk-high">SEC09-BP02 Enforce encryption in transit (risk: high)</h3>
+<ul>
+<li>Use only encrypted protocols for sensitive data leaving your VPC.</li>
+<li><strong>Anti-pattern:</strong> deprecated SSL and TLS versions and cipher suites (for example SSL 3.0).</li>
+<li>Examples:
+<ul>
+<li>a security group that allows only HTTPS to a load balancer or instance</li>
+<li>HTTPS on CloudFront with a suitable security profile</li>
+<li>an IPsec VPN for point-to-point or network-to-network links</li>
+<li>strongest supported cipher policy on an HTTPS listener</li>
+<li>require SSL or TLS in Redshift</li>
+<li>check each service's documentation.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sec09-bp03-authenticate-network-communications-risk-low">SEC09-BP03 Authenticate network communications (risk: low)</h3>
+<ul>
+<li>Use protocols that verify identity (TLS, IPsec) between services, applications and users.</li>
+<li><strong>Anti-patterns:</strong> unencrypted or unauthenticated flows inside the workload; reusing credentials across entities; relying on network controls alone for access control.</li>
+<li>Steps:
+<ul>
+<li>document and diagram your data flows (the same diagram helps threat modelling) and check against runtime behaviour</li>
+<li>add network controls aligned to the flows (security groups, AWS PrivateLink) as one layer, not the only one</li>
+<li>authenticate the calls themselves.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Classify first; everything else follows from the class.</li>
+<li>Keep the keys safer than the data: narrow key policies, separate keys per environment, no custom crypto.</li>
+<li>Automate certificates and encryption defaults so nobody has to remember them.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Data catalogue</strong>: single view of where data lives and how sensitive it is.</li>
+<li><strong>Tokenisation</strong>: replacing a sensitive value with a stand-in.</li>
+<li><strong>KMS</strong>, <strong>CloudHSM</strong>: key management service and hardware security module.</li>
+<li><strong>ACM</strong> and <strong>Private CA</strong>: public and private certificate authorities.</li>
+<li><strong>mTLS</strong>: both ends present certificates.</li>
+<li><strong>PrivateLink</strong>: private connectivity to services without public internet.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>AWS Well-Architected Framework, Security Pillar: <a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html</a> (Framework pages: <a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/sec07.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/framework/sec07.html</a>, .../sec08.html and .../sec09.html)</li>
+<li>Own-words summary; the diagram is a summary drawn here, not an AWS figure.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">AWS Security Pillar 5: Infrastructure Protection</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-07-incident-response/">AWS Security Pillar 7: Incident Response</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-03-permissions-management/">AWS Security Pillar 3: Permissions Management</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">&larr; AWS Security Pillar 5: Infrastructure Protection</a><a href="/book-digest/aws-security-pillar/">Contents</a><a href="/book-digest/aws-security-pillar/awsp-07-incident-response/">AWS Security Pillar 7: Incident Response &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>AWS Security Pillar 2: Identity Management</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/aws-security-pillar/">Contents</a><span class="ttl">Aws Security Pillar</span><span class="sp"></span><a class="btn" href="/book-digest/aws-security-pillar/awsp-01-security-foundations/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/aws-security-pillar/awsp-03-permissions-management/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="aws-security-pillar-2-identity-management">AWS Security Pillar 2: Identity Management</h1>
+<p>Source: AWS Well-Architected Framework, Security Pillar, &quot;Identity and access management&quot;, SEC02. Own-words summary, much shorter than the source. Previous: <a href="/book-digest/aws-security-pillar/awsp-01-security-foundations/">AWS Security Pillar 1: Security Foundations</a>. Next: <a href="/book-digest/aws-security-pillar/awsp-03-permissions-management/">AWS Security Pillar 3: Permissions Management</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Two kinds of identity need managing: <strong>human</strong> (workforce, third parties, application users) and <strong>machine</strong> (workloads, tools, devices).</li>
+<li>Aim for <strong>no long-term credentials</strong>: federate people, give workloads IAM roles, and treat IAM users and access keys as the exception.</li>
+<li>Where a secret must exist, apply <strong>remove, replace, rotate</strong> and keep it in a secrets service, never in code.</li>
+<li>Five of the six practices are rated high risk if missing; groups and attributes (SEC02-BP06) are medium.</li>
+</ul>
+</div></div>
+<h2 id="2-1-two-kinds-of-identity">2.1 Two kinds of identity</h2>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Who</th>
+<th>How they reach AWS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Workforce</td>
+<td>admins, developers, operators</td>
+<td>central identity provider, then temporary credentials</td>
+</tr>
+<tr>
+<td>Third parties</td>
+<td>contractors, vendors, SaaS partners</td>
+<td>cross-account roles, resource-based policies</td>
+</tr>
+<tr>
+<td>Application users</td>
+<td>customers using web or mobile apps</td>
+<td>Amazon Cognito user and identity pools</td>
+</tr>
+<tr>
+<td>Machines</td>
+<td>EC2, Lambda, IoT devices, on-premises systems</td>
+<td>IAM roles and temporary credentials</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/book-digest/aws-security-pillar/img/awsp-02-credential-ladder.svg" alt="Order of preference for credentials" loading="lazy" /></p>
+<h2 id="2-2-sec02-bp01-use-strong-sign-in-mechanisms-risk-high">2.2 SEC02-BP01 Use strong sign-in mechanisms (risk: high)</h2>
+<ul>
+<li>Require MFA for human identities and workloads (IAM best practice), a minimum password length and complexity, and let users change their own passwords.</li>
+<li>Give each person an <strong>individual identity</strong>, not shared credentials, so activity is auditable.</li>
+<li><strong>Anti-pattern:</strong> no strong password policy.</li>
+<li>Set exact values from company policy or a standard such as NIST 800-63.</li>
+</ul>
+<h2 id="2-3-sec02-bp02-use-temporary-credentials-risk-high">2.3 SEC02-BP02 Use temporary credentials (risk: high)</h2>
+<ul>
+<li>Long-term access keys exist only for IAM users and the root user. Federation or assuming a role always yields temporary credentials, even for the console.</li>
+<li><strong>Anti-pattern:</strong> developers use long-term access keys from IAM users instead of getting temporary credentials from the command line.</li>
+<li><strong>Workforce:</strong> federate to a central identity provider (IAM Identity Center or direct federation); few cases still need IAM users.</li>
+<li><strong>Third parties:</strong> cross-account roles and resource-based policies; Cognito's OAuth 2.0 client-credentials grant for B2B partners.</li>
+<li><strong>Application users:</strong> Cognito identity pools give temporary credentials; define a separate low-privilege role for guests.</li>
+<li><strong>Machines:</strong> roles for EC2, Lambda execution roles, the IoT Core credential provider, <strong>IAM Roles Anywhere</strong> for systems outside AWS.</li>
+<li>When long-term keys are unavoidable:
+<ul>
+<li>Grant highly restricted permissions (specific actions, resources, conditions).</li>
+<li>Consider letting the IAM user only call <code>AssumeRole</code> for one role.</li>
+<li>Limit source IP addresses in the role trust policy.</li>
+<li>Alert on misuse with CloudWatch Logs metric filters.</li>
+<li>Add permission boundaries, which complement coarse SCPs with fine-grained limits.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-4-sec02-bp03-store-and-use-secrets-securely-risk-high">2.4 SEC02-BP03 Store and use secrets securely (risk: high)</h2>
+<ul>
+<li>A workload proves its identity to databases and third parties with API keys, passwords and OAuth tokens. Use a purpose-built service to store, manage and rotate them.</li>
+<li><strong>Anti-patterns:</strong> not rotating; long-term credentials in source code or config files; unencrypted storage at rest.</li>
+<li>The approach is <strong>remove, replace, rotate</strong>:
+<ol>
+<li><strong>Remove</strong> credentials the workload no longer needs.</li>
+<li><strong>Replace</strong> long-term credentials with temporary ones (IAM roles for EC2 and Lambda, IAM Roles Anywhere or Systems Manager Hybrid Activations outside AWS, Cognito identity pools for mobile).</li>
+<li><strong>Rotate</strong> what remains using AWS Secrets Manager, retrieved at runtime.</li>
+</ol>
+</li>
+<li>Find hard-coded secrets by scanning repositories (the pillar names Amazon CodeGuru, filtering on Type=Secrets).</li>
+</ul>
+<h2 id="2-5-sec02-bp04-rely-on-a-centralised-identity-provider-risk-high">2.5 SEC02-BP04 Rely on a centralised identity provider (risk: high)</h2>
+<ul>
+<li>Manage workforce identities in one place so you can create, assign, revoke and audit access from a single location.</li>
+<li><strong>Anti-pattern:</strong> separate user accounts per application with no federation or single sign-on.</li>
+<li><strong>Workforce:</strong>
+<ul>
+<li>IAM Identity Center for single sign-on across the accounts in your organisation, or direct IAM federation into each account</li>
+<li>then remove IAM users replaced by federated identities.</li>
+</ul>
+</li>
+<li><strong>Application users:</strong> Amazon Cognito (OpenID Connect and OAuth; Amplify libraries for custom apps).</li>
+</ul>
+<h2 id="2-6-sec02-bp05-audit-and-rotate-credentials-periodically-risk-high">2.6 SEC02-BP05 Audit and rotate credentials periodically (risk: high)</h2>
+<ul>
+<li><strong>Anti-patterns:</strong> not auditing credential use; unnecessary long-term credentials; never rotating them.</li>
+<li><strong>Audit:</strong>
+<ul>
+<li>remove leavers and unused cross-account roles</li>
+<li>use credential reports and IAM Access Analyzer</li>
+<li>alarm on specific API calls with CloudWatch</li>
+<li>GuardDuty flags unexpected credential use.</li>
+</ul>
+</li>
+<li><strong>Rotate:</strong> when temporary credentials are impossible, rotate keys on a schedule and automate where possible (Secrets Manager rotation).</li>
+</ul>
+<h2 id="2-7-sec02-bp06-employ-user-groups-and-attributes-risk-medium">2.7 SEC02-BP06 Employ user groups and attributes (risk: medium)</h2>
+<ul>
+<li>Define permissions by <strong>group</strong> (the function someone performs) and <strong>attributes</strong> (department, project, location), so there are fewer, simpler policies.</li>
+<li><strong>Anti-patterns:</strong> copying permissions per person; groups too broad (over-permissive) or too narrow (duplicated, confusing membership).</li>
+<li>Decide where groups live (identity provider, IAM Identity Center, IAM groups). With IAM Identity Center, attach permission sets to groups
+<ul>
+<li>if the external provider supports <strong>SCIM</strong>, turn on automatic provisioning so groups and memberships sync.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Everyone and everything gets an individual identity with MFA where a person is involved.</li>
+<li>Prefer federation and roles over IAM users; prefer no secret over a rotated secret.</li>
+<li>Audit identities on a schedule: people leave, roles go stale.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Federation</strong>: signing in through an external identity provider and receiving temporary AWS credentials.</li>
+<li><strong>IAM Identity Center</strong>: AWS's single sign-on service for multiple accounts.</li>
+<li><strong>IAM Roles Anywhere</strong>: temporary credentials for workloads outside AWS.</li>
+<li><strong>Remove, replace, rotate</strong>: the order of work for any secret.</li>
+<li><strong>SCIM</strong>: protocol that syncs users and groups between an identity provider and a service.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>AWS Well-Architected Framework, Security Pillar: <a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html</a> (pages sec02 in the Framework: <a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/sec02.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/framework/sec02.html</a>)</li>
+<li>Own-words summary; the diagram is drawn here to summarise the practices, not an AWS figure.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/aws-security-pillar/awsp-01-security-foundations/">AWS Security Pillar 1: Security Foundations</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-03-permissions-management/">AWS Security Pillar 3: Permissions Management</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/aws-security-pillar/awsp-01-security-foundations/">&larr; AWS Security Pillar 1: Security Foundations</a><a href="/book-digest/aws-security-pillar/">Contents</a><a href="/book-digest/aws-security-pillar/awsp-03-permissions-management/">AWS Security Pillar 3: Permissions Management &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

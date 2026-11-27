@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>AWS Security Pillar 3: Permissions Management</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/aws-security-pillar/">Contents</a><span class="ttl">Aws Security Pillar</span><span class="sp"></span><a class="btn" href="/book-digest/aws-security-pillar/awsp-02-identity-management/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/aws-security-pillar/awsp-04-detection/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="aws-security-pillar-3-permissions-management">AWS Security Pillar 3: Permissions Management</h1>
+<p>Source: AWS Well-Architected Framework, Security Pillar, &quot;Permissions management&quot;, SEC03. Own-words summary, much shorter than the source. Previous: <a href="/book-digest/aws-security-pillar/awsp-02-identity-management/">AWS Security Pillar 2: Identity Management</a>. Next: <a href="/book-digest/aws-security-pillar/awsp-04-detection/">AWS Security Pillar 4: Detection</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Permissions say <strong>who can do what, to which resource, under which conditions</strong>. Some policy types grant; others only limit.</li>
+<li>Aim for least privilege that <strong>shrinks over time</strong>: start from what people actually use (CloudTrail, Access Analyzer), then remove what is unused.</li>
+<li>Put guardrails (SCPs, permission boundaries, session policies) above everything so that mistakes in individual policies cannot exceed them.</li>
+<li>Plan the unusual cases too: emergency access, leavers, public and cross-account sharing, third parties.</li>
+</ul>
+</div></div>
+<h2 id="3-1-policy-types">3.1 Policy types</h2>
+<p><img src="/book-digest/aws-security-pillar/img/awsp-03-policy-types.svg" alt="Policy types" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Policy type</th>
+<th>Attached to</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Identity-based (AWS-managed, customer-managed, inline)</td>
+<td>users, groups, roles</td>
+<td>grants; customer-managed policies are the usual choice for least privilege</td>
+</tr>
+<tr>
+<td>Resource-based</td>
+<td>a resource (an S3 bucket policy)</td>
+<td>grants to a principal in the same or another account</td>
+</tr>
+<tr>
+<td>Permissions boundary</td>
+<td>a user or role</td>
+<td>the most a delegated admin can grant, so developers cannot escalate by creating roles</td>
+</tr>
+<tr>
+<td>ABAC (attribute-based access control)</td>
+<td>tags on principals and resources</td>
+<td>one reusable policy grants access where tags match</td>
+</tr>
+<tr>
+<td>Service control policy (SCP)</td>
+<td>account, OU or organisation</td>
+<td>maximum permissions for members; limits, does not grant</td>
+</tr>
+<tr>
+<td>Session policy</td>
+<td>one assumed-role or federated session</td>
+<td>limits that session; does not grant</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>ABAC example from the source:
+<ul>
+<li>one IAM policy lets developers manage resources that carry their project's tag, so new resources are covered without policy edits</li>
+<li>Role chaining from IAM Identity Center does not carry <code>source-identity</code> or principal tags forward.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-2-sec03-bp01-define-access-requirements-risk-high">3.2 SEC03-BP01 Define access requirements (risk: high)</h2>
+<ul>
+<li>For every component, decide who or what needs access, with which identity type and method.</li>
+<li><strong>Anti-patterns:</strong> hard-coded secrets; custom permissions per user; long-lived credentials.</li>
+<li>Workforce access uses federation and follows the employee lifecycle (a job change changes group membership).</li>
+<li>Non-human access uses IAM roles built for least privilege; AWS managed policies cover common cases. Secrets Manager and Systems Manager Parameter Store keep secrets out of applications.</li>
+</ul>
+<h2 id="3-3-sec03-bp02-grant-least-privilege-access-risk-high">3.3 SEC03-BP02 Grant least privilege access (risk: high)</h2>
+<ul>
+<li>Grant only the actions needed, on named resources, under stated conditions, and use group and identity attributes so access follows project membership automatically.</li>
+<li><strong>Anti-patterns:</strong> administrator by default; root for daily work; over-broad policies.</li>
+<li>Techniques:
+<ul>
+<li>Separate dev and prod into different accounts and control the boundary with SCPs, resource policies and identity policies.</li>
+<li>Base policies on real API usage from CloudTrail; IAM Access Analyzer can generate a policy from activity; IAM Access Advisor shows last-accessed data.</li>
+<li>Start with AWS managed job-function policies (billing, database administrator, data scientist) while you write finer ones.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-4-sec03-bp03-establish-emergency-access-process-risk-medium">3.4 SEC03-BP03 Establish emergency access process (risk: medium)</h2>
+<p><img src="/book-digest/aws-security-pillar/img/awsp-03-emergency-access.svg" alt="Emergency access" loading="lazy" /></p>
+<ul>
+<li>Needed when the central identity provider fails or federation is misconfigured and nobody can sign in.</li>
+<li><strong>Anti-pattern:</strong> no documented, tested emergency process.</li>
+<li>Common steps for every failure mode:
+<ul>
+<li>A dedicated emergency-access account with pre-created IAM roles (optionally identity providers).</li>
+<li>Cross-account roles in the workload accounts that trust those roles, pushed with CloudFormation StackSets.</li>
+<li>SCPs that deny deleting or changing those roles.</li>
+<li>CloudTrail on the emergency account, sent to the central log archive.</li>
+</ul>
+</li>
+<li>Document each failure mode and its assumptions, use the account only in emergencies, and <strong>test the process regularly</strong>.</li>
+</ul>
+<h2 id="3-5-sec03-bp04-reduce-permissions-continuously-risk-medium">3.5 SEC03-BP04 Reduce permissions continuously (risk: medium)</h2>
+<ul>
+<li><strong>Anti-patterns:</strong> administrator by default; policies kept after they are needed; permissive but not quite admin.</li>
+<li>Use IAM Access Analyzer (shared-resource findings and policy generation).</li>
+<li>Test permissions in lower environments first, tighten progressively through test and staging, and let SCPs cap the maximum while lower environments stay looser.</li>
+<li>Use last-accessed timestamps to find unused users, roles and actions, and set an agreed timeframe for removing them.</li>
+</ul>
+<h2 id="3-6-sec03-bp05-define-permission-guardrails-for-your-organisation-risk-medium">3.6 SEC03-BP05 Define permission guardrails for your organisation (risk: medium)</h2>
+<ul>
+<li><strong>Anti-pattern:</strong> creating member accounts but not using SCPs to restrict them.</li>
+<li>Steps: isolate workloads into accounts; use SCPs for the maximum permissions; use resource policies and trust-policy conditions to narrow further.</li>
+<li>Two SCP strategies, both with trade-offs:
+<ul>
+<li>an <strong>allow list</strong> (name what is permitted, block the rest) or a <strong>deny list</strong> (name what is forbidden, allow the rest)</li>
+<li>The choice depends on your risk model.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-7-sec03-bp06-manage-access-based-on-lifecycle-risk-medium">3.7 SEC03-BP06 Manage access based on lifecycle (risk: medium)</h2>
+<ul>
+<li>Adjust access at joining, role change and leaving.</li>
+<li>Steps:
+<ul>
+<li>document grant, review and offboarding</li>
+<li>use IAM roles, groups and boundaries</li>
+<li>make the identity provider (Active Directory, Okta, Ping Identity) the source of truth for IAM Identity Center</li>
+<li>sync with SCIM</li>
+<li>create permission sets per job role</li>
+<li>run regular access reviews and train staff.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-8-sec03-bp07-analyse-public-and-cross-account-access-risk-low">3.8 SEC03-BP07 Analyse public and cross-account access (risk: low)</h2>
+<ul>
+<li><strong>Anti-patterns:</strong> no inventory of shared resources; no approval process for cross-account or public access.</li>
+<li>Tools: AWS Config aggregated across the organisation to a delegated administrator, IAM Access Analyzer findings, Config auto-remediation that re-enables S3 Block Public Access, alerts when Block Public Access is turned off, and an SCP that prevents changing it.</li>
+</ul>
+<h2 id="3-9-sec03-bp08-share-resources-securely-within-your-organisation-risk-medium">3.9 SEC03-BP08 Share resources securely within your organisation (risk: medium)</h2>
+<ul>
+<li>Sharing overlapping components avoids recreating them in every account.</li>
+<li><strong>Anti-patterns:</strong> no monitoring or alerts for unexpected external shares; no baseline of what may be shared; defaulting to broad policies.</li>
+<li>Steps:
+<ul>
+<li>use AWS Organizations</li>
+<li>use trusted access for integrated services (service-linked roles are created in member accounts)</li>
+<li>establish a <strong>data perimeter</strong>, a clear boundary of trust and ownership.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-10-sec03-bp09-share-resources-securely-with-a-third-party-risk-medium">3.10 SEC03-BP09 Share resources securely with a third party (risk: medium)</h2>
+<ul>
+<li>Use just-in-time, least-privilege access with temporary credentials.</li>
+<li><strong>Anti-patterns:</strong> the default trust policy without conditions; long-term keys; reusing external IDs.</li>
+<li>Use <strong>cross-account roles</strong> rather than access keys; IAM Roles Anywhere for third-party workloads; do due diligence on SaaS providers, including their shared responsibility model.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Grants live in identity and resource policies; limits live in SCPs, boundaries and session policies.</li>
+<li>Reduce permissions by evidence, not by guessing.</li>
+<li>Test the break-glass process before you need it.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Permissions boundary</strong>, <strong>SCP</strong>, <strong>session policy</strong>: the three limits.</li>
+<li><strong>ABAC</strong>: access by matching tags on principal and resource.</li>
+<li><strong>IAM Access Analyzer</strong>: finds external sharing and generates policies from activity.</li>
+<li><strong>Data perimeter</strong>: boundary of trusted identities, resources and networks.</li>
+<li><strong>Break-glass</strong>: emergency access path used only when normal sign-in fails.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>AWS Well-Architected Framework, Security Pillar: <a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html</a> (Framework page: <a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/sec03.html" target="_blank" rel="noopener noreferrer">https://docs.aws.amazon.com/wellarchitected/latest/framework/sec03.html</a>)</li>
+<li>Own-words summary; diagrams are summaries, not AWS figures.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/aws-security-pillar/awsp-02-identity-management/">AWS Security Pillar 2: Identity Management</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-04-detection/">AWS Security Pillar 4: Detection</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/aws-security-pillar/awsp-02-identity-management/">&larr; AWS Security Pillar 2: Identity Management</a><a href="/book-digest/aws-security-pillar/">Contents</a><a href="/book-digest/aws-security-pillar/awsp-04-detection/">AWS Security Pillar 4: Detection &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

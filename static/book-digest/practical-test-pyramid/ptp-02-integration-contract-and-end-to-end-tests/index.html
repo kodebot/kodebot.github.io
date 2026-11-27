@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>The Practical Test Pyramid 2: Integration, Contract and End-to-End Tests</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/practical-test-pyramid/">Contents</a><span class="ttl">Practical Test Pyramid</span><span class="sp"></span><a class="btn" href="/book-digest/practical-test-pyramid/ptp-01-the-pyramid-and-unit-tests/" aria-label="Previous">&lsaquo; Prev</a></div>
+<main>
+<h1 id="the-practical-test-pyramid-2-integration-contract-and-end-to-end-tests">The Practical Test Pyramid 2: Integration, Contract and End-to-End Tests</h1>
+<p>Source: Ham Vocke, &quot;The Practical Test Pyramid&quot;, <a href="http://martinfowler.com" target="_blank" rel="noopener noreferrer">martinfowler.com</a>, 26 February 2018. Own-words summary, much shorter than the source; the article's code listings are not reproduced. Previous: <a href="/book-digest/practical-test-pyramid/ptp-01-the-pyramid-and-unit-tests/">The Practical Test Pyramid 1: The Pyramid and Unit Tests</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Integration tests</strong> check your code against the parts outside it (database, file system, other services), one integration point at a time; replace other teams' services with fakes.</li>
+<li><strong>Consumer-driven contract (CDC) tests</strong> let the team that consumes an API specify what it needs, and the provider runs those tests continuously.</li>
+<li><strong>End-to-end tests</strong> give the most confidence but are slow, flaky and costly: keep only the few most valuable user journeys.</li>
+<li>Put tests in the pipeline by <strong>speed and scope</strong>, push each test as low in the pyramid as it can go, and keep test code as clean as production code.</li>
+</ul>
+</div></div>
+<h2 id="2-1-integration-tests">2.1 Integration tests</h2>
+<p><img src="/book-digest/practical-test-pyramid/img/ptp-02-cdc.svg" alt="Contract and integration tests" loading="lazy" /></p>
+<ul>
+<li>Non-trivial applications talk to databases, file systems and other applications
+<ul>
+<li>unit tests leave those out, so <strong>integration tests</strong> cover them. Your tests must run the real component you integrate with (a database for database tests; a real file written and read for file tests).</li>
+</ul>
+</li>
+<li>&quot;Integration test&quot; is vague
+<ul>
+<li>The author uses it <strong>narrowly</strong>: test <strong>one integration point at a time</strong>, replacing other services and databases with test doubles</li>
+<li>Combined with contract tests, this gives faster, more independent, easier-to-reason-about tests than a wide one through the whole stack.</li>
+</ul>
+</li>
+<li>Narrow integration tests sit at your service's boundary and trigger an action that crosses it.</li>
+</ul>
+<h3 id="database-integration">Database integration</h3>
+<ul>
+<li>Pattern: start a database, connect the application, trigger code that writes, read the data back and check it.</li>
+<li>In the sample, the repository has almost no hand-written code (Spring Data derives it from a method name), yet the author still writes a database test to check the behaviour
+<ul>
+<li>The tests use an in-memory database instead of production PostgreSQL.</li>
+</ul>
+</li>
+</ul>
+<h3 id="integration-with-separate-services">Integration with separate services</h3>
+<ul>
+<li>The sample calls a third-party weather REST API
+<ul>
+<li>Tests should not hit the real servers: quota limits are one reason, but the main one is <strong>decoupling</strong> from the other party's outages and changes.</li>
+</ul>
+</li>
+<li>Run a <strong>fake server</strong> (the article uses Wiremock) with canned responses, call the code that talks to the service, and check the response is parsed correctly.</li>
+<li>A fake only proves your code against <strong>your assumptions</strong> about the real service, which is the gap contract tests close.</li>
+</ul>
+<h2 id="2-2-contract-tests">2.2 Contract tests</h2>
+<ul>
+<li>When services are built by different teams, the interface between <strong>provider</strong> (serves data; or <strong>publisher</strong> in event-driven systems) and <strong>consumer</strong> (uses the data; or <strong>subscriber</strong>) is a <strong>contract</strong>
+<ul>
+<li>Interfaces include REST with JSON, RPC such as gRPC, and queues.</li>
+</ul>
+</li>
+<li>The traditional route:
+<ul>
+<li>write a long specification, build the provider, throw the specification to the consumer team, wait, run a big manual system test, hope nobody deviates</li>
+<li>Automated contract tests replace the last steps.</li>
+</ul>
+</li>
+<li><strong>Consumer-driven contract (CDC) tests</strong> go further:
+<ol>
+<li>The consuming team writes automated tests of exactly the data it needs from the interface.</li>
+<li>It publishes them for the providing team.</li>
+<li>The providing team runs them continuously in its pipeline and keeps them green.</li>
+<li>When a CDC test breaks, the two teams talk.</li>
+</ol>
+</li>
+<li>Benefits:
+<ul>
+<li>the provider builds only what is needed</li>
+<li>as long as tests stay green the provider can change things without worrying about other teams</li>
+<li>breaking changes are caught before release
+<ul>
+<li>The article ties this to autonomous teams in microservice organisations, and calls failing CDC tests a prompt to go and talk to the other team.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>A naive CDC test just fires requests and checks responses, packaged and shared through an artifact repository
+<ul>
+<li><strong>Pact</strong> is the best-known tool, with consumer-side and provider-side testing, ready-made stubs and support for JVM languages, Ruby, .NET, JavaScript and more</li>
+<li>Its documentation can feel overwhelming at first.</li>
+</ul>
+</li>
+<li>The sample shows three roles: a consumer test (our team consuming another team's API), a provider test for the other team, and a provider test for our own API.</li>
+</ul>
+<h2 id="2-3-ui-tests">2.3 UI tests</h2>
+<ul>
+<li>A UI is any interface users touch: a web page, a REST API or a command-line tool. UI tests check that input triggers the right actions and the display changes as expected.</li>
+<li>The article separates <strong>UI tests</strong> from <strong>end-to-end tests</strong> (Cohn treats them as the same)
+<ul>
+<li>End-to-end tests often go through the UI, but UI tests need not be end to end: frontend code can be unit tested with the backend stubbed</li>
+<li>A REST API's &quot;UI&quot; is covered by integration tests around it.</li>
+</ul>
+</li>
+<li>With traditional web applications use tools such as Selenium. Behaviour is simple to test; layout, usability and corporate design are other aspects worth separate attention.</li>
+</ul>
+<h2 id="2-4-end-to-end-tests">2.4 End-to-end tests</h2>
+<ul>
+<li>Testing the deployed, fully integrated system through the UI (also called <strong>broad stack tests</strong>) gives the <strong>most confidence</strong> that the software works
+<ul>
+<li>Selenium and the WebDriver protocol drive a headless browser against deployed services.</li>
+</ul>
+</li>
+<li>Costs:
+<ul>
+<li><strong>Flaky</strong>: browser quirks, timing, animations and unexpected dialogs cause false positives; the more complex the UI, the worse.</li>
+<li><strong>Ownership</strong>:
+<ul>
+<li>in a microservice world no single team owns a test that spans the system. A central QA team is, the article says, an anti-pattern in DevOps</li>
+<li>maybe a community of practice or quality guild.</li>
+</ul>
+</li>
+<li><strong>Slow and hard to run locally</strong>: you cannot start hundreds of services on a laptop.</li>
+</ul>
+</li>
+<li>Therefore keep them to a bare minimum:
+<ul>
+<li>translate the most valuable <strong>user journeys</strong> into tests</li>
+<li>For a shop, searching for a product, adding it to the basket and checking out may be the only one needed.</li>
+</ul>
+</li>
+<li>Do not repeat at this level the edge cases tested lower down.</li>
+</ul>
+<h2 id="2-5-acceptance-tests-and-exploratory-testing">2.5 Acceptance tests and exploratory testing</h2>
+<ul>
+<li><strong>Acceptance (functional) tests</strong>
+<ul>
+<li>check that a feature works from the user's perspective rather than the technical one, in given-when-then terms (given a logged-in user and an article, when they click &quot;add to basket&quot;, then it is in the basket)</li>
+<li>The names are debated; the article says pick a term and write the tests</li>
+<li>BDD style can help shift the thinking.</li>
+</ul>
+</li>
+<li><strong>Exploratory testing</strong>
+<ul>
+<li>is manual testing with creativity: regularly try to break the running application with a destructive mindset and note bugs, design issues, slow responses and misleading errors</li>
+<li>Automate what you find so it cannot regress, and treat what slipped through as feedback on the pipeline.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-6-terminology">2.6 Terminology</h2>
+<ul>
+<li>There is no settled vocabulary: &quot;integration test&quot;, &quot;component test&quot; and &quot;service test&quot; overlap. Agree names and scope within your team and stick to them; do not argue about labels.</li>
+</ul>
+<h2 id="2-7-tests-in-the-pipeline">2.7 Tests in the pipeline</h2>
+<p><img src="/book-digest/practical-test-pyramid/img/ptp-02-pipeline.svg" alt="Pipeline stages" loading="lazy" /></p>
+<ul>
+<li>The principle is <strong>fast feedback</strong>: fast tests in early stages so you learn in seconds or minutes that you broke something; slower, broader tests in later stages.</li>
+<li>Stages are decided by <strong>speed and scope, not test type</strong>. A fast, narrow integration test can sit beside unit tests.</li>
+</ul>
+<h2 id="2-8-avoiding-duplication">2.8 Avoiding duplication</h2>
+<ul>
+<li>Every test costs writing, reading, maintenance and run time, so there can be too many.</li>
+<li>Two rules:
+<ol>
+<li>If a higher-level test finds an error and no lower-level test fails, <strong>write a lower-level test</strong> (it pinpoints and replicates the fault and becomes a regression test).</li>
+<li><strong>Push tests as far down the pyramid as you can.</strong></li>
+</ol>
+</li>
+<li>A higher-level test is worth having when it adds confidence the lower ones cannot: a controller unit test does not prove the REST endpoint answers HTTP, so add a test for that only, not for the logic again.</li>
+<li>The author deletes or replaces redundant high-level tests and warns about the <strong>sunk cost fallacy</strong>.</li>
+</ul>
+<h2 id="2-9-clean-test-code">2.9 Clean test code</h2>
+<ul>
+<li>Test code is as important as production code.</li>
+<li>Test <strong>one condition per test</strong>; use arrange-act-assert or given-when-then.</li>
+<li>Readability beats strict <strong>DRY</strong>; accept some duplication (<strong>DAMP</strong>).</li>
+<li>When unsure, use the <strong>Rule of Three</strong>: use before reuse.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Integration tests: one boundary at a time, fakes for other teams' services.</li>
+<li>CDC tests keep teams' APIs compatible without big system tests.</li>
+<li>Few end-to-end tests, chosen by user value; push everything else down.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Narrow integration test</strong>: one integration point, other parts faked.</li>
+<li><strong>Contract / CDC test</strong>: consumer-written tests of an interface; run by the provider.</li>
+<li><strong>Broad stack (end-to-end) test</strong>: the whole deployed system through the UI.</li>
+<li><strong>Acceptance test</strong>: feature checked from the user's perspective.</li>
+<li><strong>Exploratory testing</strong>: unscripted manual probing.</li>
+<li><strong>DAMP vs DRY</strong>: favour readable tests over eliminating all repetition.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Ham Vocke, &quot;The Practical Test Pyramid&quot;, <a href="http://martinfowler.com" target="_blank" rel="noopener noreferrer">martinfowler.com</a>, 26 February 2018: <a href="https://martinfowler.com/articles/practical-test-pyramid.html" target="_blank" rel="noopener noreferrer">https://martinfowler.com/articles/practical-test-pyramid.html</a> (sample code: <a href="https://github.com/hamvocke/spring-testing" target="_blank" rel="noopener noreferrer">https://github.com/hamvocke/spring-testing</a> and consumer example <a href="https://github.com/hamvocke/spring-testing-consumer" target="_blank" rel="noopener noreferrer">https://github.com/hamvocke/spring-testing-consumer</a>; Pact JVM: <a href="https://github.com/DiUS/pact-jvm" target="_blank" rel="noopener noreferrer">https://github.com/DiUS/pact-jvm</a>)</li>
+<li>Own-words summary; diagrams are summaries drawn here, not the article's figures.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/practical-test-pyramid/ptp-01-the-pyramid-and-unit-tests/">The Practical Test Pyramid 1: The Pyramid and Unit Tests</a></li>
+<li><a href="/book-digest/software-architecture-the-hard-parts/sahp-13-contracts/">Software Architecture: The Hard Parts 13: Contracts</a></li>
+<li><a href="/book-digest/building-microservices/bm-09-testing/">Building Microservices 9: Testing</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/practical-test-pyramid/ptp-01-the-pyramid-and-unit-tests/">&larr; The Practical Test Pyramid 1: The Pyramid and Unit Tests</a><a href="/book-digest/practical-test-pyramid/">Contents</a><span></span></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Kubernetes Security Checklists 1: Cluster Operator and Application Developer Checklists</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/kubernetes-security-checklists/">Contents</a><span class="ttl">Kubernetes Security Checklists</span><span class="sp"></span></div>
+<main>
+<h1 id="kubernetes-security-checklists-1-cluster-operator-and-application-developer-checklists">Kubernetes Security Checklists 1: Cluster Operator and Application Developer Checklists</h1>
+<p>Source: Kubernetes documentation, &quot;Security Checklist&quot; and &quot;Application Security Checklist&quot; (<a href="http://kubernetes.io" target="_blank" rel="noopener noreferrer">kubernetes.io</a>, Kubernetes project, content licensed CC BY 4.0). Own-words summary. The OWASP Kubernetes Security Cheat Sheet is queued separately and not covered here. Related reading list item 16.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Both checklists say they are a <strong>first step, not a guarantee</strong>: items may be too strict or too lax for you, and the order is not a priority order.</li>
+<li>For cluster operators, the big areas are authentication and authorisation, network security, pod security, secrets, images and admission controllers.</li>
+<li>For developers: your own ServiceAccount, a restricted <code>securityContext</code>, minimal RBAC, NetworkPolicies and scanned, signed images.</li>
+<li>Defaults often favour convenience: many managed clusters expose the API server publicly, and the kubelet's default settings are overly permissive without a config file.</li>
+</ul>
+</div></div>
+<p><img src="/book-digest/kubernetes-security-checklists/img/ksc-01-layers.svg" alt="Three layers" loading="lazy" /></p>
+<h2 id="1-1-the-cluster-operator-checklist">1.1 The cluster operator checklist</h2>
+<h3 id="authentication-and-authorisation">Authentication and authorisation</h3>
+<ul>
+<li>Do not use the <code>system:masters</code> group for user or component authentication after bootstrapping, and do not run kube-controller-manager as it
+<ul>
+<li>Reserve it as a <strong>break-glass</strong> mechanism, not an admin user.</li>
+</ul>
+</li>
+<li>Run kube-controller-manager with <code>--use-service-account-credentials</code>.</li>
+<li>Protect the root certificate (an offline CA or a managed online CA with effective access control); give intermediate and leaf certificates expiries no more than 3 years ahead.</li>
+<li>Review access periodically, no more than 24 months apart; follow the RBAC good practices.</li>
+</ul>
+<h3 id="network-security">Network security</h3>
+<p><img src="/book-digest/kubernetes-security-checklists/img/ksc-01-key-items.svg" alt="Key items" loading="lazy" /></p>
+<ul>
+<li>Use CNI plugins that support <strong>network policies</strong>
+<ul>
+<li>apply ingress and egress policies to all workloads, starting with a <strong>default deny</strong> policy in each namespace so no workload is missed (an allow-list approach).</li>
+</ul>
+</li>
+<li>Use a service mesh to encrypt in-cluster traffic if the CNI does not provide encryption in transit.</li>
+<li>Do not expose the <strong>API server, kubelet API or etcd</strong> publicly. Use mutual TLS for etcd with a CA unique to etcd; consider a bastion host for the API server.</li>
+<li>Filter workloads' access to the cloud metadata API (<code>169.254.169.254</code>) because it can leak information.</li>
+<li>Restrict LoadBalancer and ExternalIPs use (the checklist cites CVE-2020-8554 and the <code>DenyServiceExternalIPs</code> admission controller).</li>
+</ul>
+<h3 id="pod-security">Pod security</h3>
+<ul>
+<li>Grant RBAC rights to create, update, patch and delete workloads only when necessary
+<ul>
+<li>RBAC cannot restrict what is inside a Pod spec, so without admission controls, the right to create pods can give unrestricted access to schedulable nodes.</li>
+</ul>
+</li>
+<li>Apply and enforce the <strong>Pod Security Standards</strong> (privileged, baseline, restricted) in each namespace via Pod Security admission, which has <code>warn</code>, <code>audit</code> and <code>enforce</code> modes so you can tighten gradually
+<ul>
+<li>It replaces the removed PodSecurityPolicy.</li>
+</ul>
+</li>
+<li>Set a memory limit no higher than the request (a higher limit can expose the node to out-of-memory problems)
+<ul>
+<li>a CPU limit may suit sensitive workloads but throttles usage and can disturb autoscaling.</li>
+</ul>
+</li>
+<li><strong>Seccomp</strong>
+<ul>
+<li>restricts the system calls a process may make (Linux only; since Kubernetes 1.27 <code>RuntimeDefault</code> can be the default profile)</li>
+<li><strong>AppArmor</strong> and <strong>SELinux</strong> provide mandatory access control through profiles or labels (Linux only, distribution-dependent).</li>
+</ul>
+</li>
+</ul>
+<h3 id="logs-placement-secrets-images-admission">Logs, placement, secrets, images, admission</h3>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Items</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Logs and auditing</td>
+<td>audit logs, if enabled, are protected from general access</td>
+</tr>
+<tr>
+<td>Pod placement</td>
+<td>place pods by sensitivity tier; run sensitive apps on isolated nodes or sandboxed runtimes (node selectors, PodTolerationRestriction, RuntimeClass)</td>
+</tr>
+<tr>
+<td>Secrets</td>
+<td>no confidential data in ConfigMaps; encryption at rest for the Secret API; consider injecting from third-party stores (Secrets Store CSI Driver); do not mount service account tokens that pods do not need (<code>automountServiceAccountToken: false</code>); use bound, time-limited service account tokens; mount secrets as files rather than environment variables, which are more prone to leaking in crash dumps</td>
+</tr>
+<tr>
+<td>Images</td>
+<td>only what the program needs (no shells or debug tools in production images; use ephemeral debug containers); run as an unprivileged user (<code>USER</code>, <code>runAsUser</code>); refer to images by <strong>sha256 digest</strong> not tag, or verify signatures at deploy time; scan during build and deployment</td>
+</tr>
+<tr>
+<td>Admission controllers</td>
+<td>enable an appropriate set, secure the webhooks themselves</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Admission controllers mentioned:
+<ul>
+<li>those on by default (CertificateApproval, CertificateSigning, CertificateSubjectRestriction, LimitRanger, MutatingAdmissionWebhook, PodSecurity, ResourceQuota, ValidatingAdmissionWebhook)</li>
+<li>recommended but off by default (<strong>DenyServiceExternalIPs</strong>, <strong>NodeRestriction</strong>, which limits a kubelet to its own pods and node)</li>
+<li>and optional ones (AlwaysPullImages, ImagePolicyWebhook).</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-2-the-application-developer-checklist">1.2 The application developer checklist</h2>
+<p>Assumes the developer is a cluster user working with namespaced objects.</p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Items</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Design</td>
+<td>follow sound security principles; set resource requests and limits (memory limit: this list says equal to or greater than the request, while the cluster operator list says equal to or lower, so decide which you follow; CPU limit for sensitive workloads)</td>
+</tr>
+<tr>
+<td>Service account</td>
+<td>do not use the <code>default</code> ServiceAccount; one per workload or microservice; <code>automountServiceAccountToken: false</code> unless the pod needs the API</td>
+</tr>
+<tr>
+<td>Pod <code>securityContext</code></td>
+<td><code>runAsNonRoot: true</code>; a less privileged <code>runAsUser</code> and <code>runAsGroup</code> with matching file permissions; optional <code>fsGroup</code> for persistent volumes; deploy into a namespace that enforces a Pod Security Standard (document or add defence in depth if you do not control that)</td>
+</tr>
+<tr>
+<td>Container <code>securityContext</code></td>
+<td><code>allowPrivilegeEscalation: false</code>; <code>readOnlyRootFilesystem: true</code>; <code>privileged: false</code>; drop all capabilities and add back only what is needed</td>
+</tr>
+<tr>
+<td>RBAC</td>
+<td>create, patch, update, delete only if necessary; do not grant rights to create or update roles (privilege escalation); review bindings to <code>system:unauthenticated</code>; patch on a Namespace can let users relabel it and widen attack surface</td>
+</tr>
+<tr>
+<td>Images</td>
+<td>scan before deploying; verify signatures</td>
+</tr>
+<tr>
+<td>Network policies</td>
+<td>allow only expected ingress and egress; check whether the cluster actually enforces NetworkPolicy</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Advanced:</strong>
+<ul>
+<li>seccomp, AppArmor and SELinux settings per container</li>
+<li><strong>runtime classes</strong> for different isolation (gVisor, kata-containers; confidential virtual machines in high-trust settings).</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Defaults are not hardened: deny by default and open what you need.</li>
+<li>Pod creation rights are powerful; admission controls and Pod Security Standards close the gap.</li>
+<li>Treat images like code: minimal, pinned by digest, scanned, signed.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Pod Security Standards</strong>: privileged, baseline and restricted policies for pods.</li>
+<li><strong>Network policy</strong>: a namespaced allow-list of pod traffic.</li>
+<li><strong>Admission controller</strong>: a gate on API requests before objects are stored.</li>
+<li><strong>Seccomp, AppArmor, SELinux</strong>: Linux kernel mechanisms limiting what processes can do.</li>
+<li><strong>Bound service account token</strong>: a time-limited token for a pod.</li>
+<li><strong>Break-glass</strong>: emergency-only use of a powerful identity.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Kubernetes documentation, Security Checklist: <a href="https://kubernetes.io/docs/concepts/security/security-checklist/" target="_blank" rel="noopener noreferrer">https://kubernetes.io/docs/concepts/security/security-checklist/</a> and Application Security Checklist: <a href="https://kubernetes.io/docs/concepts/security/application-security-checklist/" target="_blank" rel="noopener noreferrer">https://kubernetes.io/docs/concepts/security/application-security-checklist/</a> (sources read from <a href="https://github.com/kubernetes/website" target="_blank" rel="noopener noreferrer">https://github.com/kubernetes/website</a>; the repository's LICENSE file is Creative Commons Attribution 4.0 International).</li>
+<li>Own-words summary; diagrams are summaries drawn here.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">AWS Security Pillar 5: Infrastructure Protection</a></li>
+<li><a href="/book-digest/the-kubernetes-book/">The Kubernetes Book: contents</a></li>
+</ul>
+<nav class="pager"><span></span><a href="/book-digest/kubernetes-security-checklists/">Contents</a><span></span></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

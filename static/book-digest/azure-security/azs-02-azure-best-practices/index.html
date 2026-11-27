@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Azure Security 2: Identity, Network, Data and Secrets Best Practices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/azure-security/">Contents</a><span class="ttl">Azure Security</span><span class="sp"></span><a class="btn" href="/book-digest/azure-security/azs-01-cloud-security-benchmark/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/azure-security/azs-03-sql-checklist-and-well-architected/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="azure-security-2-identity-network-data-and-secrets-best-practices">Azure Security 2: Identity, Network, Data and Secrets Best Practices</h1>
+<p>Source: Microsoft Learn, Azure security fundamentals articles: &quot;Azure identity management and access control security best practices&quot;, &quot;Azure network security best practices&quot;, &quot;Azure data security and encryption best practices&quot; and &quot;Best practices for protecting secrets&quot;, <a href="http://learn.microsoft.com" target="_blank" rel="noopener noreferrer">learn.microsoft.com</a>. Microsoft content, own-words summary, much shorter than the source. Previous: <a href="/book-digest/azure-security/azs-01-cloud-security-benchmark/">Azure Security 1: The Microsoft Cloud Security Benchmark and Secure Future Initiative</a>. Next: <a href="/book-digest/azure-security/azs-03-sql-checklist-and-well-architected/">Azure Security 3: The Azure SQL Security Checklist and Well-Architected Security Principles</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Identity is the primary perimeter</strong> (Zero Trust): one Entra directory, MFA, Conditional Access, RBAC, and Privileged Identity Management for admin roles.</li>
+<li><strong>Network:</strong> segment, avoid broad allow rules, disable direct RDP and SSH from the internet, reach PaaS through Private Link, protect against DDoS.</li>
+<li><strong>Data and keys:</strong> encrypt at rest and in transit, use Key Vault, and on suspected key compromise rotate before disabling.</li>
+<li><strong>Secrets:</strong> never hard-code, scan for them, store in Key Vault, use managed identities, rotate, log access.</li>
+<li>Compare with <a href="/book-digest/aws-security-pillar/awsp-02-identity-management/">AWS Security Pillar 2: Identity Management</a>, <a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">AWS Security Pillar 5: Infrastructure Protection</a> and <a href="/book-digest/aws-security-pillar/awsp-06-data-protection/">AWS Security Pillar 6: Data Protection</a>.</li>
+</ul>
+</div></div>
+<p><img src="/book-digest/azure-security/img/azs-02-practice-areas.svg" alt="Four areas" loading="lazy" /></p>
+<h2 id="2-1-identity-management-and-access-control">2.1 Identity management and access control</h2>
+<ul>
+<li>The articles align with Zero Trust:
+<ul>
+<li>identity is the primary security perimeter because network perimeters are porous (BYOD devices and cloud apps)</li>
+<li>Microsoft Entra ID is the identity and access service.</li>
+</ul>
+</li>
+<li>Twelve practices:
+<ol>
+<li>Treat identity as the primary perimeter; centre controls and detections on user and service identities.</li>
+<li><strong>Centralise identity management:</strong>
+<ul>
+<li>one Entra directory as the authoritative source;</li>
+<li>synchronise on-premises directories with Entra Connect, but <strong>do not synchronise highly privileged on-premises accounts</strong> (Domain Admins, Enterprise Admins), using OU or attribute filtering, so attackers cannot pivot from cloud to on-premises;</li>
+<li>turn on <strong>password hash synchronisation</strong> (it also lets Identity Protection detect leaked credentials), even as a backup if you use federation;</li>
+<li>use Entra ID for new applications (Entra B2B for guests and partners; Entra External ID for customer sign-up and sign-in).</li>
+</ul>
+</li>
+<li>Manage connected tenants (security needs visibility across them).</li>
+<li>Enable single sign-on.</li>
+<li>Turn on <strong>Conditional Access</strong>: policies by group, location and app sensitivity; <strong>block legacy authentication protocols</strong>, which attackers use for password spray.</li>
+<li>Plan routine improvements, using Identity Secure Score to rank them.</li>
+<li>Enable password management: self-service password reset, monitor registration, extend cloud password policies on-premises with Entra password protection.</li>
+<li><strong>Enforce multifactor verification</strong> for users.</li>
+<li>Use <strong>role-based access control</strong>: for example give security teams the Security Reader role at an appropriate management-group scope; use built-in roles before custom ones.</li>
+<li><strong>Lower exposure of privileged accounts:</strong>
+<ul>
+<li>turn on <strong>Privileged Identity Management</strong> (time-limited elevation and notifications);</li>
+<li>keep critical admin accounts as managed Entra accounts, not consumer accounts;</li>
+<li>define <strong>at least two emergency (break-glass) access accounts</strong>, not tied to individuals, with a documented process;</li>
+<li>make critical admin accounts passwordless (preferred) or MFA;</li>
+<li>deprovision admin accounts when staff leave;</li>
+<li>test admin accounts with realistic attack simulations.</li>
+</ul>
+</li>
+<li>Control where resources are created.</li>
+<li>Use Entra ID for storage authentication; actively monitor for suspicious sign-ins (untraceable attempts, brute force, many locations, infected devices, suspicious IP addresses).</li>
+</ol>
+</li>
+</ul>
+<h2 id="2-2-network-security">2.2 Network security</h2>
+<ul>
+<li><strong>Centralise</strong>
+<ul>
+<li>core network functions (ExpressRoute, virtual network and subnet provisioning, IP addressing) and governance of security elements such as network virtual appliances</li>
+<li>use a common set of tools for visibility.</li>
+</ul>
+</li>
+<li><strong>Segment subnets:</strong>
+<ul>
+<li>use CIDR subnetting inside the private address space, put access controls between subnets, and <strong>never allow broad ranges</strong> (such as 0.0.0.0 to 255.255.255.255), which give a false sense of security and are found by red teams</li>
+<li>make troubleshooting procedures forbid such rules.</li>
+</ul>
+</li>
+<li><strong>Zero Trust:</strong> assume an attacker can compromise one endpoint inside the trusted boundary and spread, so do not rely on a trusted network.</li>
+<li><strong>Control routing:</strong> default system routes let VMs in a virtual network talk to each other and out to the internet; use user-defined routes to send traffic through a security appliance.</li>
+<li><strong>Virtual network appliances</strong> (from partners) add firewalling, intrusion detection and prevention, application control, anomaly detection, web filtering, anti-malware and botnet protection above what security groups give.</li>
+<li><strong>Perimeter networks (DMZ)</strong> concentrate access control, monitoring and logging at the edge, with DDoS protection, IDS/IPS, firewall policies and web filtering.</li>
+<li><strong>DDoS protection:</strong> enable it on virtual networks with public resources; choose Network Protection (many public IPs) or IP Protection (few); layer with a web application firewall.</li>
+<li><strong>Avoid internet exposure for hybrid links:</strong>
+<ul>
+<li>site-to-site VPN runs over the internet (the page cites a bandwidth of about 1.25 Gbps)</li>
+<li><strong>ExpressRoute</strong> is a dedicated link that avoids the public internet.</li>
+</ul>
+</li>
+<li><strong>Disable direct RDP and SSH from the internet</strong>,
+<ul>
+<li>because brute-force attacks turn a compromised VM into a launch point</li>
+<li>use other access options (for example point-to-site VPN for one user, site-to-site VPN for a network, ExpressRoute).</li>
+</ul>
+</li>
+<li><strong>Use Private Link</strong>
+<ul>
+<li>so PaaS services (Storage, SQL Database) are reached through a private endpoint in your virtual network</li>
+<li>traffic stays on the Microsoft backbone and public exposure is no longer needed.</li>
+</ul>
+</li>
+<li>Also: load balancing (Application Gateway with TLS termination, external and internal load balancers, Traffic Manager) for availability.</li>
+</ul>
+<h2 id="2-3-data-security-and-encryption">2.3 Data security and encryption</h2>
+<ul>
+<li><strong>Choose a key management solution</strong>, with keys outside the data they protect.</li>
+<li><strong>Secure workstations:</strong> use privileged access workstations for sensitive tasks, and enforce endpoint protection wherever data is consumed.</li>
+<li><strong>At rest:</strong>
+<ul>
+<li>encrypt at host for VMs</li>
+<li>encrypt before writing sensitive data</li>
+<li>know key rotation behaviour (rotating a key encryption key re-wraps the data encryption keys without re-encrypting the data, and both old and new versions must remain available)</li>
+<li><strong>if a customer-managed key may be compromised, rotate and reconfigure dependent services before disabling or deleting the old key</strong></li>
+<li>use <strong>RSA-OAEP-256</strong> for key wrapping (plain RSA-OAEP uses SHA-1 and is legacy).</li>
+</ul>
+</li>
+<li><strong>In transit:</strong>
+<ul>
+<li>site-to-site VPN for multiple on-premises workstations</li>
+<li>point-to-site VPN for one</li>
+<li>ExpressRoute for large data sets, with application-level TLS on top if desired</li>
+<li>HTTPS for storage access.</li>
+</ul>
+</li>
+<li><strong>In use:</strong>
+<ul>
+<li>confidential computing protects data while processed, so you need not fully trust app vendors, hardware vendors or infrastructure providers</li>
+<li>scenarios include preventing unauthorised access, meeting regulations, trusted multi-party collaboration and isolated processing.</li>
+</ul>
+</li>
+<li>Protect email, documents and sensitive data with classification and labelling.</li>
+</ul>
+<h2 id="2-4-protecting-secrets">2.4 Protecting secrets</h2>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Practice</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Discovery</td>
+<td>audit for passwords, API keys, connection strings; do not hard-code secrets; scan code (Azure DevOps credential scanner, GitHub secret scanning)</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td><strong>Azure Key Vault</strong> with envelope encryption; encrypt in transit; restrict access with firewalls and network security groups</td>
+</tr>
+<tr>
+<td>Access</td>
+<td><strong>managed identities</strong> for applications; least-privilege Azure RBAC on secrets</td>
+</tr>
+<tr>
+<td>Lifecycle</td>
+<td>rotate regularly; distribute secrets safely and include recovery in disaster recovery plans</td>
+</tr>
+<tr>
+<td>Monitoring</td>
+<td>log access with Key Vault logging, Azure Monitor or Event Grid</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The article closes with a long list of service-specific guidance (App Service Key Vault references, Pipelines, Data Factory, Cosmos DB customer-managed keys and so on).</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Strong identity (MFA, Conditional Access, PIM) before anything else.</li>
+<li>Close the doors (no public RDP or SSH, Private Link) and segment the rest.</li>
+<li>Keys and secrets live in Key Vault; applications use managed identities.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Entra ID</strong>: Microsoft's cloud identity service (formerly Azure Active Directory).</li>
+<li><strong>Conditional Access</strong>: policy-based sign-in decisions.</li>
+<li><strong>PIM</strong>: Privileged Identity Management, just-in-time elevation.</li>
+<li><strong>Private Link / private endpoint</strong>: private access to PaaS services.</li>
+<li><strong>Key Vault</strong>, <strong>managed identity</strong>: key and secret store; credential-free identity for apps.</li>
+<li><strong>Confidential computing</strong>: protecting data in use.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Microsoft Learn: <a href="https://learn.microsoft.com/azure/security/fundamentals/identity-management-best-practices" target="_blank" rel="noopener noreferrer">https://learn.microsoft.com/azure/security/fundamentals/identity-management-best-practices</a> , .../network-best-practices , .../data-encryption-best-practices , .../secrets-best-practices .</li>
+<li>Microsoft content, own-words summary; the diagram is a summary drawn here. For the identity page, the final sections were read through headings and key statements.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/azure-security/azs-01-cloud-security-benchmark/">Azure Security 1: The Microsoft Cloud Security Benchmark and Secure Future Initiative</a></li>
+<li><a href="/book-digest/azure-security/azs-03-sql-checklist-and-well-architected/">Azure Security 3: The Azure SQL Security Checklist and Well-Architected Security Principles</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-02-identity-management/">AWS Security Pillar 2: Identity Management</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-05-infrastructure-protection/">AWS Security Pillar 5: Infrastructure Protection</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/azure-security/azs-01-cloud-security-benchmark/">&larr; Azure Security 1: The Microsoft Cloud Security Benchmark and Secure Future Initiative</a><a href="/book-digest/azure-security/">Contents</a><a href="/book-digest/azure-security/azs-03-sql-checklist-and-well-architected/">Azure Security 3: The Azure SQL Security Checklist and Well-Architected Security Principles &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

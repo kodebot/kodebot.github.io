@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Database Security 2: SQL Injection Prevention and Query Parameterisation</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/database-security/">Contents</a><span class="ttl">Database Security (OWASP cheat sheets)</span><span class="sp"></span><a class="btn" href="/book-digest/database-security/dbs-01-database-security-cheat-sheet/" aria-label="Previous">&lsaquo; Prev</a></div>
+<main>
+<h1 id="database-security-2-sql-injection-prevention-and-query-parameterisation">Database Security 2: SQL Injection Prevention and Query Parameterisation</h1>
+<p>Source: OWASP Cheat Sheet Series, &quot;SQL Injection Prevention Cheat Sheet&quot; and &quot;Query Parameterization Cheat Sheet&quot; (<a href="http://cheatsheetseries.owasp.org" target="_blank" rel="noopener noreferrer">cheatsheetseries.owasp.org</a>), licensed CC BY-SA 4.0 (the repository's LICENSE file). Own-words summary, much shorter than the source; code listings are not reproduced; as an adaptation it is shared under the same licence. Previous: <a href="/book-digest/database-security/dbs-01-database-security-cheat-sheet/">Database Security 1: The OWASP Database Security Cheat Sheet</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>SQL injection happens when <strong>untrusted data becomes part of the query's syntax</strong>. The data can come from an HTTP request, an LDAP directory, an email, a third-party API or even the database itself.</li>
+<li>The fix: define the <strong>SQL structure separately from the data values</strong> and bind values through the database API (<strong>parameterised queries</strong>).</li>
+<li>Table names, column names and sort direction cannot be parameters: pick them from a <strong>fixed application-owned allow-list</strong>.</li>
+<li>Hardening (least privilege, views) limits damage; validation complements binding and never replaces it. Manual escaping is strongly discouraged.</li>
+</ul>
+</div></div>
+<p><img src="/book-digest/database-security/img/dbs-02-injection-defences.svg" alt="Defences" loading="lazy" /></p>
+<h2 id="2-1-the-problem">2.1 The problem</h2>
+<ul>
+<li>Impact, depending on features and privileges:
+<ul>
+<li>read data</li>
+<li>modify data</li>
+<li>run administration operations (even shut the DBMS down)</li>
+<li>read files from or write files to the DBMS file system</li>
+<li>in some cases execute operating system commands.</li>
+</ul>
+</li>
+<li>It applies to ORM query languages too (JPQL in JPA, HQL in Hibernate).</li>
+<li>The same controls apply whether data arrives in an HTTP request, from another service or from previously stored data.</li>
+<li>Binding stops a value changing the query's syntax
+<ul>
+<li>The sheet's example: an input like <code>tom' or '1'='1</code> is treated as the literal name to match</li>
+<li>Binding does <strong>not</strong> decide whether the caller may access the matching account; that is access control (OWASP A01).</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-2-primary-defences">2.2 Primary defences</h2>
+<h3 id="parameterised-queries">Parameterised queries</h3>
+<ul>
+<li>Write the SQL with placeholders (such as <code>?</code>), then bind the values through the driver. Concatenating untrusted values into the query before preparing it defeats the protection.</li>
+<li>Do it <strong>server-side</strong>
+<ul>
+<li>Many client-side libraries only build the query by string concatenation before sending raw SQL to a server, so check that parameterisation really happens on the server.</li>
+</ul>
+</li>
+<li>The query parameterisation sheet shows prepared statements for Java (built-in and JPA/Hibernate), .NET, <a href="http://ASP.NET" target="_blank" rel="noopener noreferrer">ASP.NET</a>, Ruby (ActiveRecord and built-in), PHP (PDO), ColdFusion, Perl (DBI) and Rust (SQLx).</li>
+</ul>
+<h3 id="stored-procedures">Stored procedures</h3>
+<ul>
+<li>Binding the arguments of the call protects the call, <strong>not dynamic SQL built inside the procedure</strong>
+<ul>
+<li>A procedure that concatenates data into SQL text and runs it (for example with <code>EXECUTE IMMEDIATE</code> or <code>exec</code>) can still be injectable.</li>
+</ul>
+</li>
+<li>Use static SQL with parameters, or bind values in internal dynamic SQL: Oracle PL/SQL uses bind variables with <code>EXECUTE</code>, SQL Server uses parameterised <code>EXEC</code>, PostgreSQL has <code>EXECUTE ... USING</code> for values and <code>format('%I', ...)</code> for quoting identifiers
+<ul>
+<li>Quoting an identifier protects syntax but does not limit which tables the application may select.</li>
+</ul>
+</li>
+</ul>
+<h3 id="allow-list-for-structure">Allow-list for structure</h3>
+<ul>
+<li>Parameter markers stand for <strong>data values</strong>, not for table names, column names or keywords such as <code>ASC</code> and <code>DESC</code>.</li>
+<li>Keep these choices fixed in code
+<ul>
+<li>When users must choose, map their choice to a small set of values allowed for that query and reject everything else (for a sort direction map to the literal <code>ASC</code> or <code>DESC</code> rather than appending supplied text).</li>
+</ul>
+</li>
+</ul>
+<h3 id="manual-escaping-strongly-discouraged">Manual escaping: strongly discouraged</h3>
+<ul>
+<li>It is error-prone:
+<ul>
+<li>escaping rules are not simple, differ between SQL dialects, and can depend on database settings (the sheet cites MySQL <code>NO_BACKSLASH_ESCAPES</code>)</li>
+<li>Replace it with parameter binding.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-3-hardening-defence-in-depth">2.3 Hardening (defence in depth)</h2>
+<ul>
+<li><strong>Least privilege:</strong>
+<ul>
+<li>start from what each account needs rather than trimming a powerful default</li>
+<li>Read-only functions get read-only rights on only the tables they need</li>
+<li><strong>Do not give application accounts DBA or admin rights</strong>: it is easy and &quot;just works&quot; but is very dangerous.</li>
+</ul>
+</li>
+<li>Minimise privileges beyond SQL injection too:
+<ul>
+<li>an attacker may simply change a parameter to a value they are not allowed but the application is</li>
+<li>Also run the DBMS under a restricted operating-system account, not root or system (the sheet notes MySQL runs as system on Windows by default).</li>
+</ul>
+</li>
+<li>If an account needs only part of a table, give it a <strong>view</strong> (for example product names and prices without supplier costs) and <code>SELECT</code> only on that view
+<ul>
+<li>Verify your database's view privilege rules (PostgreSQL normally checks underlying table access using the view's owner)</li>
+<li>Queries against views still need parameterisation.</li>
+</ul>
+</li>
+<li>If you use stored procedures everywhere, grant application accounts only the right to execute them, with no direct table rights. Rarely if ever grant create or delete rights.</li>
+<li><strong>Different accounts per application</strong>, and ideally per function: a login page needs read access to the username and password fields and no write access, while a sign-up page needs insert rights, which can only be enforced with different database users.</li>
+<li><strong>Input validation</strong>
+<ul>
+<li>complements parameter binding</li>
+<li>it does not replace it. Keep binding every value even if it passes type, length or format checks, because a check safe in one dialect may be unsafe in another.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-4-testing-and-detection">2.4 Testing and detection</h2>
+<ul>
+<li>Review query construction in application code and stored procedures: untrusted values bound rather than concatenated
+<ul>
+<li>dynamic identifiers and sort directions taken from a fixed mapping. Preparing the outer call is no evidence that a procedure's internal SQL is safe.</li>
+</ul>
+</li>
+<li>Use the OWASP Web Security Testing Guide's SQL injection tests, including blind and out-of-band techniques.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Separate command from data: parameters for values, allow-lists for structure.</li>
+<li>Never rely on escaping or validation alone.</li>
+<li>Assume a bug will occur and limit what the application account can do.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Parameterised (prepared) query</strong>: SQL with placeholders; values bound separately.</li>
+<li><strong>Bind variable</strong>: the parameter used in dynamic SQL inside a procedure.</li>
+<li><strong>Allow-list</strong>: only values you list are accepted.</li>
+<li><strong>HQL / JPQL injection</strong>: injection into an ORM's query language.</li>
+<li><strong>Blind injection</strong>: inferring data from behaviour, with no visible output.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>OWASP Cheat Sheet Series:
+<ul>
+<li>SQL Injection Prevention (<a href="https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html" target="_blank" rel="noopener noreferrer">https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html</a>) and Query Parameterization (<a href="https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html" target="_blank" rel="noopener noreferrer">https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html</a>)</li>
+<li>source <a href="https://github.com/OWASP/CheatSheetSeries" target="_blank" rel="noopener noreferrer">https://github.com/OWASP/CheatSheetSeries</a>. Licence: CC BY-SA 4.0 per the repository's LICENSE file. Own-words summary</li>
+<li>the diagram is a summary drawn here.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/database-security/dbs-01-database-security-cheat-sheet/">Database Security 1: The OWASP Database Security Cheat Sheet</a></li>
+<li><a href="/book-digest/owasp-top-10-2025/ot10-02-a04-to-a06/">OWASP Top 10:2025 2: A04 to A06</a></li>
+<li><a href="/book-digest/aws-security-pillar/awsp-03-permissions-management/">AWS Security Pillar 3: Permissions Management</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/database-security/dbs-01-database-security-cheat-sheet/">&larr; Database Security 1: The OWASP Database Security Cheat Sheet</a><a href="/book-digest/database-security/">Contents</a><span></span></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

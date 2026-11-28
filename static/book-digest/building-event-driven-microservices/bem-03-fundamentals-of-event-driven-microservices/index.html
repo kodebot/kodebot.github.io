@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-3-fundamentals-of-event-driven-microservices">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 3. Previous: <a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/">Building Event-Driven Microservices 4: Schemas and Data Contracts</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>An event-driven microservice is an ordinary application that is <strong>driven by events</strong>: it reads from streams, does work, and outputs events, API calls or other work. Idle without events (or a timer).</li>
+<li>Four ways to build one: a <strong>basic producer/consumer</strong>, a <strong>stream-processing framework</strong>, a <strong>streaming SQL query</strong>, and <strong>connectors</strong> for legacy systems.</li>
+<li>Every microservice has shared responsibilities: boundaries, scalability, <strong>state</strong>, <strong>stream progress</strong>, <strong>failure recovery</strong>, the <strong>single writer per stream</strong> principle, keys and partitioning, and <strong>schemas</strong>.</li>
+<li>Keep services small enough for one person to hold in their head, and <strong>do not maximise the count</strong>. Budget for the <strong>microservice tax</strong>.</li>
+<li>Containers dominate; microVMs offer stronger isolation. Service contracts still matter for request-response APIs, alongside data contracts for streams.</li>
+</ul>
+</div></div>
+<h2 id="3-1-the-basics">3.1 The basics</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-03-event-driven-basics.svg" alt="Basics" loading="lazy" /></p>
+<ul>
+<li>It needs the same compute, storage and network as any application, plus source storage, build and deploy tools, monitoring and logging.</li>
+<li><strong>Event-driven</strong> means events drive the business logic, as water turns a mill wheel (Figure 3-1). Work happens only when events arrive (or a timer expires, which is also an event).</li>
+<li>A consumer reads events and <strong>tracks its own offset</strong> (position from the start of the stream) so many consumers progress independently
+<ul>
+<li>A <strong>consumer group</strong> presents several instances as one logical entity and allows horizontal scaling (Figure 3-2)</li>
+<li>When an instance joins, partitions are redistributed (<strong>rebalancing</strong>); instances receive events only from their partitions</li>
+<li>Local state may also need rebalancing (Chapter 8).</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-2-the-basic-producer-consumer">3.2 The basic producer/consumer</h2>
+<ul>
+<li>You write the operations that stitch the business logic together (Chapter 11)
+<ul>
+<li>Example 3-1 consumes events from the topic <code>input_topic</code>, tallies a sum per key and emits the total to a new stream when it exceeds 1000</li>
+<li>Steps</li>
+<li>create the <code>KafkaConsumer</code> (plain-text keys, JSON values),</li>
+<li>create the <code>KafkaProducer</code>,</li>
+<li>a state store (here an in-memory dictionary),</li>
+<li>the endless polling loop,</li>
+<li>poll a batch,</li>
+<li>process per partition,</li>
+<li>update the sum,</li>
+<li>check the threshold,</li>
+<li>write to <code>key_sums</code>,</li>
+<li>flush</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1"># Example 3-1: a basic producer consumer application that tallies a sum per key</span>
+<span class="c1"># and emits it if the sum is greater than 1000</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">kafka</span><span class="w"> </span><span class="kn">import</span> <span class="n">KafkaConsumer</span><span class="p">,</span> <span class="n">KafkaProducer</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+
+<span class="c1"># 1) Initialize Kafka consumer</span>
+<span class="n">consumer</span> <span class="o">=</span> <span class="n">KafkaConsumer</span><span class="p">(</span>
+    <span class="s1">'input_topic'</span><span class="p">,</span>
+    <span class="n">bootstrap_servers</span><span class="o">=</span><span class="p">[</span><span class="s1">'localhost:9092'</span><span class="p">],</span>
+    <span class="n">value_deserializer</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">'utf-8'</span><span class="p">)),</span>
+    <span class="n">key_deserializer</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">'utf-8'</span><span class="p">),</span>
+    <span class="n">group_id</span><span class="o">=</span><span class="s1">'ch03_python_example_consumer_group_name'</span><span class="p">,</span>
+    <span class="n">auto_offset_reset</span><span class="o">=</span><span class="s1">'earliest'</span>
+<span class="p">)</span>
+
+<span class="c1"># 2) Initialize Kafka producer</span>
+<span class="n">producer</span> <span class="o">=</span> <span class="n">KafkaProducer</span><span class="p">(</span>
+    <span class="n">bootstrap_servers</span><span class="o">=</span><span class="p">[</span><span class="s1">'localhost:9092'</span><span class="p">],</span>
+    <span class="n">value_serializer</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s1">'utf-8'</span><span class="p">),</span>
+    <span class="n">key_serializer</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s1">'utf-8'</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="c1"># 3) The state store is a simple dictionary</span>
+<span class="n">key_sums</span> <span class="o">=</span> <span class="p">{}</span>
+
+<span class="c1"># 4) Polling loop</span>
+<span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+    <span class="c1"># 5) Poll for new events</span>
+    <span class="n">event_batch</span> <span class="o">=</span> <span class="n">consumer</span><span class="o">.</span><span class="n">poll</span><span class="p">(</span><span class="n">timeout_ms</span><span class="o">=</span><span class="mi">1000</span><span class="p">)</span>
+
+    <span class="c1"># 6) Process each partition's events</span>
+    <span class="k">for</span> <span class="n">partition_batch</span> <span class="ow">in</span> <span class="n">event_batch</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">partition_batch</span><span class="p">:</span>
+            <span class="n">key</span> <span class="o">=</span> <span class="n">event</span><span class="o">.</span><span class="n">key</span>
+            <span class="n">number</span> <span class="o">=</span> <span class="n">event</span><span class="o">.</span><span class="n">value</span><span class="p">[</span><span class="s1">'number'</span><span class="p">]</span>
+
+            <span class="c1"># 7) Update sum for this key</span>
+            <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">key_sums</span><span class="p">:</span>
+                <span class="n">key_sums</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="n">key_sums</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">+=</span> <span class="n">number</span>
+
+            <span class="c1"># 8) Check if sum exceeds 1000</span>
+            <span class="k">if</span> <span class="n">key_sums</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1000</span><span class="p">:</span>
+                <span class="c1"># Prepare and send new event</span>
+                <span class="n">output_event</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="s1">'key'</span><span class="p">:</span> <span class="n">key</span><span class="p">,</span>
+                    <span class="s1">'total_sum'</span><span class="p">:</span> <span class="n">key_sums</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+                <span class="p">}</span>
+                <span class="c1"># 9) Write to topic named "key_sums"</span>
+                <span class="n">producer</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="s1">'key_sums'</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">output_event</span><span class="p">)</span>
+                <span class="c1"># 10) Flushes the events to the broker</span>
+                <span class="n">producer</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
+</code></pre>
+<ul>
+<li>In real use pick a state store suited to the case instead of a dictionary: an RDBMS, a managed key-value store, graph or document store.</li>
+<li>The example shows what nearly all event-driven microservices share: <strong>consumers, producers, state stores and a continual loop driven by arriving events</strong>, with business logic embedded in the loop.</li>
+</ul>
+<h2 id="3-3-the-stream-processing-microservice">3.3 The stream-processing microservice</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-03-implementation-styles.svg" alt="Implementation styles" loading="lazy" /></p>
+<ul>
+<li>Built on a stream-processing framework:
+<ul>
+<li><strong>Apache Kafka Streams, Apache Flink, Apache Spark</strong> (the first edition also cited Storm and Samza, now less common)</li>
+<li>They integrate tightly with the broker and give higher-level constructs (join streams and materialised tables easily).</li>
+</ul>
+</li>
+<li>Difference from a basic consumer: a framework needs <strong>a separate cluster</strong> (Flink, Spark: their own proprietary clusters for state, scaling, durability and routing) or <strong>a tight tie to a broker</strong> (Kafka Streams relies on the Kafka cluster for durable state, repartitioning and scaling).</li>
+<li><strong>Tip:</strong> frameworks often use a MapReduce, functional style: declare map, reduce, aggregate, join and filter. Chapters 12 and 13 cover them.</li>
+<li>The Flink Java example (reproduced as printed): filter sales of 100 or more, join with payments on <code>order_id</code>, write to the topic <code>PaymentsInnerJoinOrders</code>:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Flink table API example (reproduced as printed, abbreviated in the book)</span>
+
+<span class="c1">// 1) TableEnvironment manages table access for the Flink application</span>
+<span class="n">TableEnvironment</span><span class="w"> </span><span class="n">tableEnv</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">TableEnvironment</span><span class="p">.</span><span class="na">create</span><span class="p">(</span><span class="n">EnvironmentSettings</span><span class="p">.</span><span class="na">inStreamingMode</span><span class="p">());</span>
+
+<span class="c1">// 2) Create the output table for joined results</span>
+<span class="n">tableEnv</span><span class="p">.</span><span class="na">executeSql</span><span class="p">(</span>
+<span class="w">    </span><span class="s">"CREATE TABLE PaymentsInnerJoinOrders ("</span><span class="w"> </span><span class="o">+</span>
+<span class="w">    </span><span class="s">" order_id STRING,"</span><span class="w"> </span><span class="o">+</span>
+<span class="w">    </span><span class="s">" /* Add all columns you want to output here */"</span><span class="w"> </span><span class="o">+</span>
+<span class="w">    </span><span class="s">") WITH ("</span><span class="w"> </span><span class="o">+</span>
+<span class="w">    </span><span class="s">" 'connector' = 'kafka',"</span><span class="w"> </span><span class="o">+</span>
+<span class="w">    </span><span class="s">" 'topic' = 'PaymentsInnerJoinOrders',"</span><span class="w"> </span><span class="o">+</span>
+<span class="w">    </span><span class="s">" 'properties.bootstrap.servers' = 'localhost:9092',"</span>
+<span class="w">    </span><span class="s">")"</span>
+<span class="p">);</span>
+
+<span class="c1">// Payments and Sales table definitions removed for brevity</span>
+
+<span class="c1">// 3) Reference the Sales and Payments tables</span>
+<span class="n">Table</span><span class="w"> </span><span class="n">sales</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tableEnv</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="s">"Sales"</span><span class="p">);</span>
+<span class="n">Table</span><span class="w"> </span><span class="n">payments</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tableEnv</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="s">"Payments"</span><span class="p">);</span>
+
+<span class="c1">// 4) Perform inner join between Sales and Payments tables on order_id</span>
+<span class="n">Table</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sales</span>
+<span class="w">    </span><span class="p">.</span><span class="na">filter</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">sale</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">sale</span><span class="p">.</span><span class="na">total</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">.</span><span class="na">join</span><span class="p">(</span><span class="n">payments</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">where</span><span class="p">(</span><span class="n">$</span><span class="p">(</span><span class="s">"Sales.order_id"</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">isEqual</span><span class="p">(</span><span class="n">$</span><span class="p">(</span><span class="s">"Payment.order_id"</span><span class="p">)))</span>
+<span class="w">    </span><span class="c1">// 5) Declare your output schema in the JoinFunction</span>
+<span class="w">    </span><span class="p">.</span><span class="na">apply</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">JoinFunction</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="c1">// 6) Insert the joined results into the output Kafka topic</span>
+<span class="n">result</span><span class="p">.</span><span class="na">executeInsert</span><span class="p">(</span><span class="s">"PaymentsInnerJoinOrders"</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>Walk-through:
+<ul>
+<li>the <code>tableEnv</code> connection</li>
+<li>declare the output table (once)</li>
+<li>reference the Sales and Payments tables, which are <strong>materialised streams</strong></li>
+<li>declare the transformations: filter out <code>sales.total &lt; 100</code>, then join</li>
+<li>a placeholder where you merge matching events and <strong>declare the output schema, part of the data contract</strong> (Chapter 4)</li>
+<li>write to the output table and Flink commits to the topic</li>
+</ul>
+</li>
+<li>These few lines also handle <strong>fault tolerance, load balancing, in-order processing and big-data scale</strong>, and can join streams and tables partitioned and keyed differently.</li>
+<li>Frameworks need more upfront investment in supporting architecture and often support limited languages (Python and the JVM mostly); SQL variants are growing fastest.</li>
+</ul>
+<h2 id="3-4-the-streaming-sql-query">3.4 The streaming SQL query</h2>
+<ul>
+<li>&quot;Should my microservice just be a SQL query?&quot; SQL's <strong>declarative</strong> nature (state the result, not how) suits streams, and managed streaming SQL services are growing.</li>
+</ul>
+<pre class="hl"><code><span class="c1">-- The same application in Flink SQL; assume the tables have already been declared</span>
+<span class="k">INSERT</span><span class="w"> </span><span class="k">INTO</span><span class="w"> </span><span class="n">PaymentsInnerJoinOrders</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">Sales</span><span class="w"> </span><span class="n">s</span>
+<span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">Payment</span><span class="w"> </span><span class="n">p</span>
+<span class="k">ON</span><span class="w"> </span><span class="n">s</span><span class="p">.</span><span class="n">order_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="n">order_id</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>A streaming query is a <strong>long-running process</strong> that continually executes the logic, scaling up and down like any microservice (Chapter 14).</li>
+<li>Streaming SQL is <strong>not standardised</strong> and depends on the framework; it needs robust lower-level APIs beyond toys. Flink has four layers, each depending on the ones below (Figure 3-3): <strong>SQL</strong> (high-level language)
+<ul>
+<li><strong>Table API</strong> (declarative DSL)</li>
+<li><strong>DataStream</strong> (core APIs) and <strong>stateful stream processing</strong> (low-level building block of streams, state and event time).</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> look for chances to use streaming SQL; it can save a lot of time. Check what each framework supports.</li>
+</ul>
+<h2 id="3-5-the-legacy-application">3.5 The legacy application</h2>
+<ul>
+<li>Old but important systems, rarely changed, often <strong>gatekeepers to business data</strong> siloed in their database or files, not written for event-driven processing and unlikely to change.</li>
+<li>Integrate them with <strong>connectors</strong> (Figure 3-4):
+<ul>
+<li>read events from a source system or database, convert to events and write to a stream</li>
+<li>also read from a stream, convert and write to a legacy API or database. This gets value from streams without redesigning the whole system (Chapter 6).</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-6-topologies">3.6 Topologies</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-03-topologies.svg" alt="Topologies" loading="lazy" /></p>
+<ul>
+<li><strong>Microservice topology:</strong>
+<ul>
+<li>the event-driven logic internal to one service: transformation, storage, production of events</li>
+<li>Figure 3-5: ingest stream A into a data store (materialise), ingest stream B, filter and transform, join on the materialised state, output to a new stream.</li>
+</ul>
+</li>
+<li><strong>Business topology:</strong>
+<ul>
+<li>one level out: the microservices, event streams and APIs fulfilling complex business functions</li>
+<li>an arbitrary grouping (a team, department, or superset of functions)
+<ul>
+<li>Microservices implement the bounded contexts and event streams share cross-context domain data</li>
+<li>Figure 3-6: microservice 1 turns stream A into B</li>
+</ul>
+</li>
+<li>microservices 2 and 3 consume B</li>
+<li>2 acts strictly as a consumer and exposes a <strong>REST API</strong> for synchronous access</li>
+<li>3 transforms and outputs stream C. New services and streams are added asynchronously coupled. It does not show the inner workings of a service.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-7-responsibilities-of-an-event-driven-microservice">3.7 Responsibilities of an event-driven microservice</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-03-responsibilities.svg" alt="Responsibilities" loading="lazy" /></p>
+<table>
+<thead>
+<tr>
+<th>Responsibility</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Service boundaries and scope</strong></td>
+<td>enforce well-defined boundaries; mapping services to bounded contexts avoids ambiguity in multi-service workflows</td>
+</tr>
+<tr>
+<td><strong>Scalability</strong></td>
+<td>scale horizontally (instances) or vertically (power); frameworks with built-in scaling are appealing; compute can be per service or a shared pool</td>
+</tr>
+<tr>
+<td><strong>State management</strong></td>
+<td>solely responsible for creates, reads, updates and deletes of its store, including disk exhaustion and untested changes (Chapter 8)</td>
+</tr>
+<tr>
+<td><strong>Keep track of stream progress</strong></td>
+<td>for example Kafka's consumer group per logical service; a consumer may manually set or store offsets (to replay)</td>
+</tr>
+<tr>
+<td><strong>Failure recovery</strong></td>
+<td>return to a healthy state; resume from the last good offsets, which may cause duplicate processing and duplicate state updates; snapshots, restoration from streams and replay (Chapter 8)</td>
+</tr>
+<tr>
+<td><strong>The single writer per stream principle</strong></td>
+<td><strong>each event stream has one and only one producing microservice</strong>, the owner of each event; a known source of truth and traceable lineage; enforce with access control (Chapter 19)</td>
+</tr>
+<tr>
+<td><strong>Event keys and partitioning</strong></td>
+<td>choose the output key and partition; same key usually same partition, with round-robin, random or custom strategies possible</td>
+</tr>
+<tr>
+<td><strong>Event schemas and data contracts</strong></td>
+<td>define content with Avro, Protobuf or JSON schema (for example whether <code>product_id</code> is a string or an integer) for clear, healthy streams (Chapter 4)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-8-how-small-should-a-microservice-be">3.8 How small should a microservice be?</h2>
+<ul>
+<li>The goal is not as many as possible (&quot;you'd probably end up writing a blog about how you made 1,000 microservices and everything was awful&quot;)
+<ul>
+<li>Every service has overhead, yet avoid a monolith's pains.</li>
+</ul>
+</li>
+<li><strong>Rules of thumb:</strong>
+<ul>
+<li>manageable by <strong>one team</strong> (two pizzas is an unreliable guide, &quot;depending on how hungry your developers are&quot;)</li>
+<li>one developer can hold the whole space of duties in their head</li>
+<li>a newcomer learns what it does and how in <strong>a day or two</strong>. The real concern is that it serves a bounded context and a business need</li>
+<li>size is secondary, and services at the upper end are fine if you can name the business concern, boundaries and a mental list of what it should and should not do.</li>
+</ul>
+</li>
+<li><strong>Quick tips:</strong>
+<ul>
+<li>Build only as many services as necessary; more is not better.</li>
+<li>One person should understand the whole service.</li>
+<li>The team owns the service <strong>and its output event streams</strong>.</li>
+<li><strong>Add functionality to an existing service first</strong>; it saves per-application overhead.</li>
+<li>Build <strong>modular components</strong>, so a module can later become its own service.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-9-managing-microservices-at-scale">3.9 Managing microservices at scale</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-03-size-and-tax.svg" alt="Size, containers and tax" loading="lazy" /></p>
+<ul>
+<li>Each service needs compute, data stores, configuration and environment variables, and the owning team must be able to deploy it, so streamline DevOps
+<ul>
+<li><strong>Containerisation, container management and infrastructure as code (IaC)</strong> are key (Docker, Kubernetes, Terraform; Chapter 19).</li>
+</ul>
+</li>
+<li><strong>Containers:</strong>
+<ul>
+<li>package an application with its dependencies and share the host kernel: cheap, fast to start, consistent across environments. Trade-offs: the application must run on the host OS (a specialised OS needs an independent host)</li>
+<li><strong>security</strong>, because a kernel vulnerability puts every container on the host at risk, which matters in shared-tenancy clouds.</li>
+</ul>
+</li>
+<li><strong>Virtual machines:</strong>
+<ul>
+<li>full isolation with their own OS and virtualised hardware</li>
+<li>more secure but costlier, slower to start, larger
+<ul>
+<li><strong>MicroVMs</strong> (Google's gVisor, Amazon's Firecracker, Kata Containers) have low overhead, start in under a second and give hardware-level isolation for multitenant services</li>
+<li>Five years after the first edition, VMs of either kind are still rarer than containers, whose isolation and security have improved</li>
+</ul>
+</li>
+<li>use containers unless you have strict isolation requirements.</li>
+</ul>
+</li>
+<li><strong>Container management systems (CMS):</strong>
+<ul>
+<li>Kubernetes, Docker Engine, Amazon ECS, Nomad control deployment, resource allocation and compute integration
+<ul>
+<li>Services must scale <strong>vertically and horizontally</strong></li>
+<li>Deploy each microservice as a single unit: often one executable in one container</li>
+</ul>
+</li>
+<li>complex ones need several containers and external stores, which a Kubernetes <strong>pod</strong> deploys and reverts as one action</li>
+<li>one-off operations such as database migrations can run during deployment. VM management is more limited (Kubernetes and Docker Engine support gVisor and Kata; AWS supports Firecracker).</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-microservice-tax">The microservice tax</h3>
+<ul>
+<li>The <strong>sum of financial, manpower and opportunity costs</strong> of the tools, platforms and components of a microservice architecture: running the <strong>event broker</strong>, CMS, <strong>deployment pipelines</strong>, monitoring and logging. Paid centrally it gives a unified, scalable framework
+<ul>
+<li>paid independently per team it gives overhead, duplicate solutions, fragmented tooling and unsustainable growth.</li>
+</ul>
+</li>
+<li>Also lost productivity while developers learn asynchrony, failure recovery and modularisation (especially juniors); resources and AI copilots help.</li>
+<li>It is one of the biggest impediments to starting
+<ul>
+<li><strong>Small organisations may do better with a modular monolith</strong>, expanding when scaling and growth demand</li>
+<li>It is <strong>not all-or-nothing</strong>: invest incrementally</li>
+<li>Self-hosted, hosted and fully managed options exist, and <strong>cloud services</strong> (managed CMS, brokers, monitoring, data catalogues, pipelines) have improved greatly since 2020 and make it easier to experiment before committing.</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-10-service-contracts">3.10 Service contracts</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-03-service-contracts.svg" alt="Service contracts" loading="lazy" /></p>
+<ul>
+<li>Service contracts set clear microservice boundaries and are critical for documentation, API management and knowing what you may access. <strong>OpenAPI</strong> and <strong>Swagger</strong> are the most popular.</li>
+<li>A contract establishes:
+<ul>
+<li>service <strong>APIs</strong> (names, parameters, return types, protocols)</li>
+<li><strong>code generation</strong> (stubs)</li>
+<li><strong>documentation</strong> generated with the code so it matches</li>
+<li><strong>namespacing</strong></li>
+<li><strong>versioning</strong> and change history</li>
+<li><strong>ownership</strong></li>
+<li><strong>service-level objectives or agreements</strong> (the owner is responsible; an SRE may keep instances running), and <strong>breaking change management</strong> (mark APIs deprecated).</li>
+</ul>
+</li>
+<li>Event-driven services differ:
+<ul>
+<li>communication is via streams, not point-to-point, so many of these ideas do not apply</li>
+<li>the next chapter covers <strong>data contracts</strong>. Services that offer both request-response APIs and event streams need <strong>both</strong> service contracts and data contracts.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Microservices are applications driven by events; they may be written in many languages, though frameworks limit the choices.</li>
+<li>They own their code, state and runtime properties and are deployed in containers or VMs managed by a CMS.</li>
+<li>Pay the microservice tax incrementally, reuse what you have first, and get one service running before iterating.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Consumer group</strong>, <strong>rebalancing</strong>, <strong>offset</strong>.</li>
+<li><strong>Stream-processing framework</strong>, <strong>streaming SQL</strong>, <strong>connector</strong>.</li>
+<li><strong>Microservice topology</strong>, <strong>business topology</strong>.</li>
+<li><strong>Single writer per stream</strong>; <strong>microservice tax</strong>; <strong>microVM</strong>; <strong>CMS</strong>; <strong>pod</strong>.</li>
+<li><strong>Service contract</strong> versus <strong>data contract</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 3: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch03.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch03.html</a></li>
+<li>Figures 3-1 to 3-6 are redrawn in grouped summary diagrams
+<ul>
+<li>Figure 3-3 was read from the figure itself (the text does not list the four levels)
+<ul>
+<li>The Flink Java listing is shown as printed in the book (abbreviated, and containing a lambda written in a non-Java style)</li>
+</ul>
+</li>
+<li>the Python listing's indentation is restored from the program's logic.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/">Building Event-Driven Microservices 4: Schemas and Data Contracts</a></li>
+<li><a href="/book-digest/monolith-to-microservices/m2m-05-growing-pains/">Monolith to Microservices 5: Growing Pains</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">&larr; Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/">Building Event-Driven Microservices 4: Schemas and Data Contracts &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 6: Integrating Event-Driven Architectures with Existing Systems</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-05-designing-events/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-07-denormalization-and-eventification/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-6-integrating-event-driven-architectures-with-existing-systems">Building Event-Driven Microservices 6: Integrating Event-Driven Architectures with Existing Systems</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 6. Previous: <a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">Building Event-Driven Microservices 5: Designing Events</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-07-denormalization-and-eventification/">Building Event-Driven Microservices 7: Denormalization and Eventification</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Data liberation</strong> publishes cross-domain data from existing stores to event streams, making the stream the <strong>single source of truth</strong> and ending point-to-point coupling.</li>
+<li>Never <strong>dual write</strong> to a store and a stream: no atomic commit exists across them.</li>
+<li>Three patterns: <strong>query-based</strong>, <strong>log-based (change-data capture, CDC)</strong> and <strong>outbox table</strong>. CDC (for example Debezium) is the usual tool; the outbox gives the strongest isolation and schema guarantees.</li>
+<li><strong>Snapshot</strong> first, then capture live changes; avoid table locks.</li>
+<li>CDC frameworks are a <strong>bootstrap, not the destination</strong>: move active products toward native event production.</li>
+</ul>
+</div></div>
+<h2 id="6-1-what-is-data-liberation">6.1 What is data liberation?</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-06-liberation-patterns.svg" alt="Liberation patterns" loading="lazy" /></p>
+<ul>
+<li><strong>Data liberation</strong>
+<ul>
+<li>is identifying and publishing <strong>cross-domain data sets</strong> to event streams, part of a migration strategy</li>
+<li>Point-to-point dependencies (three services querying a legacy system directly, Figure 6-1) show what to liberate</li>
+<li>Afterwards systems couple only on event streams (Figure 6-2).</li>
+</ul>
+</li>
+<li><strong>Sinking</strong> is the reverse: events are written into an existing store when a legacy application cannot read streams.</li>
+</ul>
+<h3 id="the-dual-write-antipattern">The dual write antipattern</h3>
+<ul>
+<li>A service writes to two independent stores (a state store and an event stream); a simple transaction cannot cover both (Figure 6-3)
+<ul>
+<li>Commit to one may succeed while the other fails (invalid schema, service permanently moved, long outage)</li>
+<li>Retries run out, and the data <strong>permanently diverges</strong>.</li>
+</ul>
+</li>
+<li><strong>Two-phase commit (2PC)</strong> is not supported by many data stores or brokers; Kafka's 2PC project was in progress at publication.</li>
+</ul>
+<h3 id="the-three-liberation-patterns">The three liberation patterns</h3>
+<ul>
+<li>Liberated data must be the <strong>entire</strong> data set and stay up to date with inserts, updates and deletes:
+<ul>
+<li><strong>Query-based:</strong> query the store; any store works.</li>
+<li><strong>Log-based:</strong> follow the append-only log; only for stores that keep one.</li>
+<li><strong>Outbox table-based:</strong> write to a table used as an output queue; another process publishes then deletes the entries; needs transactions and a queue-like table.</li>
+</ul>
+</li>
+<li>Common to all: emit in sorted timestamp order using the source record's most recent <code>updated_at</code> in the event header, so the stream is timestamped by when it <strong>occurred</strong>, not when it was published (Chapter 9).</li>
+<li><strong>Frameworks:</strong> Kafka Connect (Kafka only), Debezium, Apache NiFi: many off-the-shelf connectors, custom connectors possible, scalable, Confluent schema registry integration (customisable for others).</li>
+</ul>
+<h2 id="6-2-change-data-capture">6.2 Change-data capture</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-06-cdc.svg" alt="CDC" loading="lazy" /></p>
+<ul>
+<li>Relies on the store's <strong>immutable log</strong> (MySQL binary log, PostgreSQL write-ahead log), which records a write before applying it so a crash can be replayed
+<ul>
+<li>CDC <strong>tails the log</strong>, converts each change (record creation, deletion, update, plus data set and schema changes) into events and writes them to a stream</li>
+<li>Some stores (MongoDB Change Streams, Couchbase's replication protocol) expose event APIs instead.</li>
+</ul>
+</li>
+<li>The log seldom holds the whole history, and not every store has a log or an off-the-shelf connector; it fits mostly relational databases such as MySQL and PostgreSQL.</li>
+<li>Figure 6-4: a MySQL binary log; a Kafka Connect service running a Debezium connector parses it into events; an <strong>event router</strong> emits each to a stream per source table.</li>
+<li>CDC gives <strong>every change</strong> (no missed transitions)
+<ul>
+<li>Configuration chooses fields (filter out internals) and metadata (<code>serverId</code>, <code>transactionId</code>), and often uses <strong>before/after</strong> fields (Chapter 5)</li>
+<li><strong>Checkpoint</strong> progress; recovery gives <strong>at-least-once</strong> production, fine for entity data because updating entity data is <strong>idempotent</strong></li>
+<li>Debezium is the most popular, supporting many stores and producing to Kafka and Apache Pulsar.</li>
+</ul>
+</li>
+</ul>
+<h3 id="snapshotting-the-initial-data-set">Snapshotting the initial data set</h3>
+<ul>
+<li>The log keeps only a short window (for example several GB)
+<ul>
+<li><strong>Snapshotting</strong> (bootstrapping) loads all current data into the stream from the store itself: query, copy, convert and write every entity, resource-intensive</li>
+<li>Ensure <strong>overlap</strong> between snapshot and log so no record is missed when switching to live CDC.</li>
+</ul>
+</li>
+<li>It usually needs a consistent set of data, so it may <strong>lock the table for hours</strong>. Options: snapshot from a <strong>read-only replica</strong>
+<ul>
+<li>or Debezium's <strong>non-locking incremental snapshot</strong>, based on Netflix's DBLog paper (Andreakis and Papapanagiotou): watermarks interleave log events with selected rows, selects run in <strong>chunks</strong> with progress tracked (pause and resume), no locks, minimal source impact
+<ul>
+<li>A snapshot row is discarded if a newer log record for the key was already written</li>
+</ul>
+</li>
+<li>then CDC tails the log indefinitely.</li>
+</ul>
+</li>
+</ul>
+<h3 id="benefits-and-drawbacks-of-log-based-cdc">Benefits and drawbacks of log-based CDC</h3>
+<ul>
+<li><strong>Benefits:</strong>
+<ul>
+<li><strong>Delete tracking</strong> (deletions become tombstones).</li>
+<li><strong>Minimal effect on performance</strong> for log-based stores (change tables such as SQL Server's cost by volume).</li>
+<li><strong>Low latency.</strong></li>
+<li><strong>Non-blocking snapshots.</strong></li>
+</ul>
+</li>
+<li><strong>Drawbacks:</strong>
+<ul>
+<li><strong>Exposure of internal data models</strong> through the changelog.</li>
+<li><strong>Denormalisation outside the store:</strong> highly normalised streams force downstream joins (Chapter 7).</li>
+<li><strong>Brittle dependency</strong> between source and event schema (a type change may break consumers).</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-3-liberating-data-with-a-polling-query">6.3 Liberating data with a polling query</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-06-polling.svg" alt="Polling" loading="lazy" /></p>
+<ul>
+<li>Query, convert to events, write; use Kafka Connect or Debezium rather than rolling your own
+<ul>
+<li>It uses only the store's query API (no log)</li>
+<li>Two stages: the <strong>initial snapshot</strong> (as above, with no log to switch to) and the <strong>incremental phase</strong>.</li>
+</ul>
+</li>
+<li>Needs a record of what changed:
+<ul>
+<li>an <code>updated_at</code> or <code>modified_at</code> column is the <strong>high-water mark</strong></li>
+<li>iteration n+1 selects records after n. The <strong>Kafka Connect JDBC connector</strong> modes (quoted from its documentation): <strong>incrementing</strong> (a strictly incrementing column; detects only new rows, not modifications or deletions)
+<ul>
+<li><strong>timestamp</strong> (detects new and modified rows; values monotonically incrementing, not necessarily unique)</li>
+<li><strong>timestamp+incrementing</strong> (two columns; a globally unique ID gives each row a unique stream offset). Schemas are inferred from query results by frameworks</li>
+</ul>
+</li>
+<li>if you roll your own, you generate them. If the source model changes, the event schema may too.</li>
+</ul>
+</li>
+<li>Locking tables is heavy in polling. A dated process: CDC is far more common now, and polling is for stores and APIs with no log access.</li>
+</ul>
+<h3 id="incremental-updating-steps">Incremental updating steps</h3>
+<ol>
+<li><strong>Ensure the field exists</strong> (a timestamp or auto-incrementing ID, populated by the store); without it incremental updates are impossible.</li>
+<li><strong>Choose the polling frequency:</strong> higher means lower latency but more load; the interval must allow a query to finish, or <strong>race conditions</strong> let older data overwrite newer.</li>
+<li><strong>Do one bulk load</strong> of all existing data before enabling incremental updates.</li>
+</ol>
+<ul>
+<li><strong>Benefits:</strong>
+<ul>
+<li><strong>customisability</strong></li>
+<li><strong>independent polling periods</strong> (tight SLAs get frequent queries)</li>
+<li><strong>isolation</strong> of the internal model via views or materialised views. <strong>Caution:</strong> the liberated data becomes the single source of truth, so consider whether concealed data should be liberated or the source refactored (common with legacy systems where business and entity data are intertwined).</li>
+</ul>
+</li>
+<li><strong>Drawbacks:</strong>
+<ul>
+<li>required updated-at timestamp</li>
+<li><strong>detects only soft deletes</strong> (an <code>is_deleted</code> column)</li>
+<li>brittle schema dependency (more likely when liberation is separate from the store's codebase)</li>
+<li><strong>may miss intermediate values</strong> (several changes between polls show as one)</li>
+<li>consumes production resources (a read replica helps at extra cost)</li>
+<li>query performance varies with data size (worst case all data changes each time, causing races)</li>
+<li><strong>transactional inconsistencies</strong> (a record may reference one not yet captured).</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-4-transactional-outbox-tables">6.4 Transactional outbox tables</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-06-outbox.svg" alt="Outbox" loading="lazy" /></p>
+<ul>
+<li>A dedicated table buffering data bound for the stream. When the internal model updates, select only the data to expose and write it to the outbox
+<ul>
+<li>a separate asynchronous process (such as a CDC connector) reads the outbox and writes to the stream (Figure 6-5)
+<ul>
+<li>The store's transactions make the outbox a write-ahead log: the internal update and outbox write succeed or fail <strong>together</strong></li>
+<li>After commit to the stream, delete the outbox record</li>
+</ul>
+</li>
+<li>failures keep records without loss. <strong>At-least-once delivery.</strong></li>
+</ul>
+</li>
+<li>Example 6-1 (Python, MySQL): update <code>EcomItem</code>'s price, select the name and price, insert into <code>EcomItem_Outbox</code>, commit atomically, roll back on error (the book's example connection used a literal user and a placeholder password; omitted here):</li>
+</ul>
+<pre class="hl"><code><span class="c1"># Example 6-1: atomic update of the internal model and the transactional outbox</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">conn</span> <span class="o">=</span> <span class="n">mysql</span><span class="o">.</span><span class="n">connector</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">host</span><span class="o">=</span><span class="s1">'localhost'</span><span class="p">,</span>
+                                   <span class="n">database</span><span class="o">=</span><span class="s1">'python_db'</span><span class="p">,</span>
+                                   <span class="n">user</span><span class="o">=</span><span class="s1">'&lt;user&gt;'</span><span class="p">,</span>
+                                   <span class="n">password</span><span class="o">=</span><span class="s1">'&lt;password&gt;'</span><span class="p">)</span>
+    <span class="n">conn</span><span class="o">.</span><span class="n">autocommit</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">cursor</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">cursor</span><span class="p">()</span>
+
+    <span class="c1"># 1) Update the internal domain model</span>
+    <span class="n">internal_model_update</span> <span class="o">=</span> <span class="s2">"""</span>
+<span class="s2">    Update EcomItem</span>
+<span class="s2">    set price = 1299.99</span>
+<span class="s2">    where id = 4291"""</span>
+    <span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">internal_model_update</span><span class="p">)</span>
+
+    <span class="c1"># 2) Select data from the internal domain model to write to the outbox</span>
+    <span class="n">internal_sub_model_query</span> <span class="o">=</span> <span class="s2">"""</span>
+<span class="s2">    Select name, price</span>
+<span class="s2">    from EcomItem</span>
+<span class="s2">    where id = 4291"""</span>
+    <span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">internal_sub_model_query</span><span class="p">)</span>
+    <span class="n">name_and_price</span> <span class="o">=</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">name_and_price</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">"Unexpected missing record. Can't get name_and_price"</span><span class="p">)</span>
+
+    <span class="c1"># 3) Insert the selected data into the outbox</span>
+    <span class="n">outbox_insert</span> <span class="o">=</span> <span class="s2">"""INSERT INTO EcomItem_Outbox (id, name, price)</span>
+<span class="s2">    VALUES (4291, </span><span class="si">%s</span><span class="s2">, </span><span class="si">%s</span><span class="s2">)"""</span>
+
+    <span class="c1"># Pass the name and price in to replace the query wildcards</span>
+    <span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">outbox_insert</span><span class="p">,</span> <span class="n">name_and_price</span><span class="p">)</span>
+
+    <span class="c1"># Commit the internal and outbox updates atomically</span>
+    <span class="n">conn</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
+
+<span class="k">except</span> <span class="n">mysql</span><span class="o">.</span><span class="n">connector</span><span class="o">.</span><span class="n">Error</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+    <span class="c1"># Revert changes due to exceptions</span>
+    <span class="n">conn</span><span class="o">.</span><span class="n">rollback</span><span class="p">()</span>
+
+<span class="k">finally</span><span class="p">:</span>
+    <span class="c1"># Close the database connection</span>
+    <span class="k">if</span> <span class="n">conn</span><span class="o">.</span><span class="n">is_connected</span><span class="p">():</span>
+        <span class="n">cursor</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="n">conn</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</code></pre>
+<ul>
+<li>Table 6-1 (outbox definition):
+<ul>
+<li><code>id INT NOT NULL</code>, <code>name VARCHAR(255)</code>, <code>price DECIMAL(13,2) NOT NULL</code>, <code>Datetime</code> defaulting to <code>CURRENT_TIMESTAMP</code>, <code>ordering_id INT NOT NULL AUTO_INCREMENT</code>. <code>NOT NULL</code> makes an insert fail unless the mandatory event fields are present</li>
+<li>the default timestamp may populate event metadata.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>the outbox schema and event schema must map <strong>1:1</strong></li>
+<li>validate them with predeployment scripts. The outbox is relatively <strong>invasive</strong>: it needs changes to the store or application layer and their owners' involvement.</li>
+</ul>
+</li>
+<li><strong>Built-in change-data tables</strong> (SQL Server) can be read with the query-based pattern via Kafka Connect or Debezium.</li>
+<li>Outbox records need a <strong>strict ordering identifier</strong> so intermediate states emit in order
+<ul>
+<li>alternatively upsert by primary key and forgo intermediate states (overwritten ones are never emitted).</li>
+</ul>
+</li>
+<li><strong>Performance:</strong> the extra load may be unnoticeable for small stores but expensive for large ones with many tables; weigh against a reactive strategy (parsing CDC logs).</li>
+</ul>
+<h3 id="isolating-internal-data-models">Isolating internal data models</h3>
+<ul>
+<li>The outbox need not map 1:1 with the internal domain: normalised tables built for relational operations suit consumers poorly, and exposing them as separate streams forces every downstream team to reconstruct the domain. <strong>Warning:</strong> exposing the internal data model is an antipattern
+<ul>
+<li>consumers should only see <strong>public data contracts</strong> (Chapter 4).</li>
+</ul>
+</li>
+<li>Options:
+<ul>
+<li><strong>denormalise on insert</strong> so the outbox mirrors the public contract (extra performance and storage), or keep 1:1 streams and denormalise with a downstream processor (Chapter 7)</li>
+<li>Teams often cite lack of resources, but the cost is paid either upstream once or <strong>by every consumer downstream</strong></li>
+<li>Isolation keeps services changing only for new business requirements.</li>
+</ul>
+</li>
+</ul>
+<h3 id="ensuring-schema-compatibility">Ensuring schema compatibility</h3>
+<ul>
+<li><strong>Serialise before writing</strong>
+<ul>
+<li>(Figure 6-6): a failure rolls back the internal changes, so outbox and tables stay in sync</li>
+<li>This is the <strong>strongest guarantee</strong> (the stream is a first-class citizen), and permits a <strong>single outbox</strong> with serialised content and an <code>output_stream</code> routing column (Figure 6-7)</li>
+<li>Cost: serialisation overhead, and a failed serialisation stops the business process.</li>
+</ul>
+</li>
+<li><strong>Serialise after writing</strong>
+<ul>
+<li>(Figure 6-8): independent outboxes per model mapped to each stream's public schema</li>
+<li>the publisher serialises later (Figure 6-9, User and Account outboxes). A failure means the already committed transaction put incompatible data in the outbox and may not be reversible: expect many unserialisable events, manual salvage (even downtime), and events published out of order.</li>
+</ul>
+</li>
+<li><strong>Benefits of outbox:</strong>
+<ul>
+<li>multi-language support</li>
+<li><strong>exactly-once outbox semantics</strong> (atomic creation, so no changes missed if in a transaction)</li>
+<li>early schema enforcement</li>
+<li>internal model isolation</li>
+<li>denormalisation.</li>
+</ul>
+</li>
+<li><strong>Drawbacks:</strong>
+<ul>
+<li>the database must support transactions</li>
+<li>application code changes</li>
+<li>business process performance impact (and failed transactions can block operations)</li>
+<li>data store performance impact from many writes, reads and deletes.</li>
+</ul>
+</li>
+<li><strong>Note:</strong> balance costs; some organisations parse CDC logs and leave cleanup downstream, but producer savings are &quot;often dwarfed by the expenses incurred at the consumer side&quot;.</li>
+</ul>
+<h2 id="6-5-capturing-change-data-using-triggers">6.5 Capturing change-data using triggers</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-06-triggers-and-ddl.svg" alt="Triggers and DDL changes" loading="lazy" /></p>
+<ul>
+<li>Older databases used <strong>triggers</strong> to build audit tables
+<ul>
+<li>an <code>AFTER</code> trigger on <code>INSERT</code>, <code>UPDATE</code> or <code>DELETE</code> writes a row to a change-data table, and if it fails the original command fails (atomic). Figure 6-10: user upserts captured with the insertion time and an auto-incrementing sequence ID for the publisher.</li>
+</ul>
+</li>
+<li>Validation against the event schema during a trigger is generally not possible: triggers run inside the database, with limited languages (PostgreSQL allows C, Python and Perl user-defined functions; many databases do not), and each trigger fires independently with real overhead
+<ul>
+<li>Figure 6-11: validate and serialise <strong>after the fact</strong>; failures need error handling, likely human</li>
+<li>The change-data table is the <strong>bridge</strong> between internal and output schemas, so keep it in sync with the event schema and compare them in testing.</li>
+</ul>
+</li>
+<li>Triggers can work well in <strong>legacy systems</strong> (old technology, stable load, schemas unlikely to change)
+<ul>
+<li><strong>Warning: avoid triggers whenever possible</strong> in favour of a designated CDC system (overhead and management complexity across dozens or hundreds of tables).</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong> supported by most relational databases; low overhead and easy maintenance for small, infrequently updated sets; <strong>customisable logic</strong> (expose only some fields).</li>
+<li><strong>Drawbacks:</strong>
+<ul>
+<li>inline performance overhead</li>
+<li><strong>change management complexity</strong> (code and data set changes may need trigger changes that get overlooked)</li>
+<li>poor scaling (triggers scale linearly with data sets)</li>
+<li>after-the-fact schema enforcement leaves unpublishable events in the table.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> where triggers can run validation code (Python in PostgreSQL), you cut downstream risk at some cost.</li>
+</ul>
+<h2 id="6-6-data-definition-changes-under-capture">6.6 Data definition changes under capture</h2>
+<ul>
+<li><strong>Data definition</strong>
+<ul>
+<li>is the formal description of a data set (a table in DDL: names, types, indices)</li>
+<li>Adding, deleting or renaming columns, changing types and defaults are valid but can break liberated streams.</li>
+</ul>
+</li>
+<li>Get deeply integrated with the source's <strong>change management</strong>:
+<ul>
+<li><strong>Observe data store pull requests</strong> for code touching captured stores.</li>
+<li><strong>Build integration tests</strong> that pull the event schema and compare it to the store's schema, notifying the developer in development.</li>
+<li><strong>Establish deployment validations</strong> by adding those tests to the pipeline (validate or override before deploying).</li>
+</ul>
+</li>
+<li>You are bridging two independent systems at a gap where team boundaries tend to lie
+<ul>
+<li><strong>Tip:</strong> with an outbox the populating code lives in the same codebase, so breaking changes show as compile and test errors before production.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-7-compromises-for-data-liberation">6.7 Compromises for data liberation</h2>
+<ul>
+<li>The liberated stream must eventually and accurately reflect the source
+<ul>
+<li>ECST consumers materialise it back into a table copy. Legacy systems restore from their own backups, snapshots and logs, so a restore may not match one built from the stream.</li>
+</ul>
+</li>
+<li>Ideal (Figure 6-12):
+<ul>
+<li><strong>publish to the stream first, then read it back</strong> to build internal state: a <strong>single source of truth</strong> (the producer's materialisation converges with consumers') and <strong>failure recovery from the stream</strong> (rewind and replay)</li>
+<li>Downsides: <strong>increased latency</strong> (network round trips), <strong>unsuitable for complex multistep transactions</strong> needing IDs and values from earlier steps (largely limited to basic upserts), and <strong>refactoring</strong> that legacy systems often cannot afford.</li>
+</ul>
+</li>
+<li>Compromise:
+<ul>
+<li><strong>unidirectional</strong> event-driven architecture (the legacy system does not read back)</li>
+<li>keep the internal data set synchronised with the stream through strictly controlled publishing</li>
+<li>the stream is <strong>eventually consistent</strong> with the source (Figure 6-13).</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-8-sinking-event-data-to-data-stores">6.8 Sinking event data to data stores</h2>
+<ul>
+<li><strong>Sinking:</strong>
+<ul>
+<li>consume events and insert them into a store, via a centralised framework or a standalone microservice. Works for entity, keyed and unkeyed events</li>
+<li>tracks its own offsets and runs independently and invisibly to the destination application.</li>
+</ul>
+</li>
+<li>Uses:
+<ul>
+<li><strong>replace point-to-point couplings</strong> between legacy systems (liberate from the source, sink to the destination)</li>
+<li><strong>batch big-data analysis</strong> via a distributed filesystem (HDFS, then Amazon S3, Azure Blob Storage, Google Cloud Storage) and table formats such as <strong>Apache Iceberg</strong> and <strong>Delta Lake</strong>.</li>
+</ul>
+</li>
+<li>Kafka Connect gives simple configuration on shared infrastructure; standalone microservice sinks are managed independently.</li>
+</ul>
+<h2 id="6-9-impacts-of-sinking-and-sourcing-on-a-business">6.9 Impacts of sinking and sourcing on a business</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-06-compromises-and-impact.svg" alt="Compromises and impacts" loading="lazy" /></p>
+<ul>
+<li>A <strong>centralised framework</strong> is low-overhead and one team can serve many, best in large organisations with data in many stores
+<ul>
+<li>teams configure connectors without operational duties. Two traps:</li>
+</ul>
+<ol>
+<li><strong>Shared responsibility:</strong> the framework team owns connector stability, but the source team may add or remove fields or change data volume and break connectors, which only the framework team notices: cross-team dependencies scale linearly.</li>
+<li><strong>Over-reliance:</strong> systems stay ignorant of events and requisition new sources and sinks instead of refactoring; organisations get complacent.</li>
+</ol>
+</li>
+<li><strong>Warning:</strong> CDC tools are <strong>not the final destination</strong>; they bootstrap. The broker is only as good as the quality and reliability of its data.</li>
+<li>Counterintuitively, <strong>minimise CDC framework use</strong> and have teams implement their own change-data capture (the <strong>outbox pattern</strong>) despite extra up-front work: teams own publishing, no cross-team dependencies, and an <strong>&quot;event-first&quot; mind-set</strong> (data out there, not just data in here)
+<ul>
+<li>Use connectors for <strong>maintenance-only</strong> or resource-limited products</li>
+<li>for new and active products, produce natively and schedule refactoring. Weigh each strategy's trade-offs</li>
+<li>the data communication layer is only as good as its data.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Data liberation creates a clean, consistent single source of truth, decoupling access from production and storage, and promoting new products.</li>
+<li>Spectrum: careful integration (events emitted as written, maybe produced first, producers protecting consumers) to highly reactive (frameworks pull from datasets or CDC logs, broken schemas, exposed internals), which is unsustainable.</li>
+<li>Culture decides success: data owners must produce clean, reliable streams; capture mechanisms are not the final destination.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Data liberation</strong>; <strong>dual write</strong>; <strong>2PC</strong>.</li>
+<li><strong>Query-based</strong>, <strong>log-based (CDC)</strong>, <strong>outbox</strong>; <strong>snapshot</strong>; <strong>high-water mark</strong>; <strong>soft delete</strong>.</li>
+<li><strong>Trigger</strong>; <strong>DDL</strong>; <strong>sink</strong>; <strong>unidirectional</strong> integration.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 6: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch06.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch06.html</a></li>
+<li>The DBLog quotation is from Andreas Andreakis and Ioannis Papapanagiotou (Netflix), as cited in the chapter
+<ul>
+<li>the book points to a Debezium blog post and the Netflix paper. Figures 6-1 to 6-13 are redrawn in grouped diagrams.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">Building Event-Driven Microservices 5: Designing Events</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-07-denormalization-and-eventification/">Building Event-Driven Microservices 7: Denormalization and Eventification</a></li>
+<li><a href="/book-digest/monolith-to-microservices/m2m-04-decomposing-the-database/">Monolith to Microservices 4: Decomposing the Database</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">&larr; Building Event-Driven Microservices 5: Designing Events</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-07-denormalization-and-eventification/">Building Event-Driven Microservices 7: Denormalization and Eventification &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

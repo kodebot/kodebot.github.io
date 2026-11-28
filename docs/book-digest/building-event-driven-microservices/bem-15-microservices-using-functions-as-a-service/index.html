@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 15: Microservices Using Functions as a Service</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-14-streaming-sql/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-16-eventual-consistency/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-15-microservices-using-functions-as-a-service">Building Event-Driven Microservices 15: Microservices Using Functions as a Service</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 15. Previous: <a href="/book-digest/building-event-driven-microservices/bem-14-streaming-sql/">Building Event-Driven Microservices 14: Streaming SQL</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-16-eventual-consistency/">Building Event-Driven Microservices 16: Eventual Consistency</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Functions as a service (FaaS)</strong> is a <strong>serverless</strong> way to build microservices: a function runs when a <strong>trigger</strong> fires, then terminates; the framework supplies scaling, state, monitoring and compute.</li>
+<li>Best for <strong>simple to moderately complex</strong>, <strong>stateless</strong>, <strong>variable-load</strong> work that <strong>does not need event scheduling</strong>; think of a basic producer/consumer that stops after a set time.</li>
+<li>Triggers: <strong>event-stream listener</strong>, <strong>consumer group lag</strong>, <strong>schedule</strong>, <strong>webhook</strong>, <strong>resource events</strong>. Mind <strong>cold starts</strong>, <strong>termination</strong> and <strong>rebalancing thrash</strong>.</li>
+<li>State is <strong>external</strong> (or durable functions). Functions calling functions: <strong>event-driven</strong>, <strong>asynchronous direct</strong> (out of order risk) or <strong>synchronous orchestration</strong> (order kept).</li>
+<li>Make functions <strong>idempotent</strong>; for stronger guarantees use <strong>durable function orchestration</strong> (AWS Step Functions, Google Cloud Workflows, Azure Durable Functions).</li>
+</ul>
+</div></div>
+<h2 id="15-1-what-faas-is-and-why-use-it">15.1 What FaaS is and why use it</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-15-faas-basics.svg" alt="FaaS basics" loading="lazy" /></p>
+<ul>
+<li>A <strong>function</strong> is code executed when a triggering condition occurs: it starts, runs to completion and terminates. Scaling, state and monitoring are typically provided by the <strong>FaaS framework</strong>, which also requisitions and releases compute
+<ul>
+<li>executions scale up and down to track highly variable loads.</li>
+</ul>
+</li>
+<li>Think of FaaS as a <strong>basic consumer/producer that regularly and predictably stops</strong> after a set time: like a microservice that <strong>crashes every few minutes</strong> but stores its data externally and picks up where it left off.</li>
+<li>It removes the overhead of creating and managing a microservice (given an existing FaaS framework): write the function, specify when it triggers, deploy. Use cases:
+<ul>
+<li><strong>Simple reactions to events:</strong> load data into a database; trigger a customer email.</li>
+<li><strong>Sequential workflow steps:</strong> receive an image, generate an AI assessment, pick a subset to validate with a human; each step is its own function.</li>
+<li><strong>Processing large amounts of data in parallel:</strong> ingest a large product listing file from FTP and split it into events for a stream.</li>
+<li><strong>Simple transformations and validations:</strong> mask fields for PII compliance, validate structure.</li>
+<li><strong>Routing data by content</strong> to services, brokers or data stores.</li>
+</ul>
+</li>
+<li>Fits:
+<ul>
+<li>simple topologies, <strong>stateless</strong> work, no need for <strong>deterministic processing of multiple streams</strong>, <strong>very wide scaling</strong> (queue-based processing), highly variable volume</li>
+<li>Many functions can together make up a bounded context</li>
+<li>Where determinism matters, take great care: like basic consumers (Chapter 11), FaaS needs an <strong>event scheduler</strong> for consistent results (as the frameworks have).</li>
+</ul>
+</li>
+</ul>
+<h2 id="15-2-building-microservices-with-functions">15.2 Building microservices with functions</h2>
+<ul>
+<li>Four components: <strong>the function</strong>, <strong>input event stream</strong>, <strong>triggering logic</strong>, <strong>error and scaling policies with metadata</strong>. A function in any supported language:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">myFunction</span><span class="p">(</span><span class="n">Event</span><span class="o">[]</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">println</span><span class="p">(</span><span class="s">"hello world!"</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><code>events</code> is the array to process, each with a <strong>key, value, timestamp, offset and partition_id</strong>; <code>context</code> has the function's name, stream ID and <strong>remaining lifespan</strong>.</li>
+<li>The <strong>function-trigger map</strong> (usually hidden by the framework) wires streams to functions: <code>myFunction</code> on <code>myInputStream</code> with <code>onNewEvent</code>
+<ul>
+<li><code>otherFunction</code> on <code>anotherStream</code></li>
+<li><code>yetAnotherFunction</code> on <code>fooStream,barStream</code> (a function may consume several)
+<ul>
+<li>The &quot;Policies and metadata&quot; column covers <strong>consumer group</strong>, consumer properties (<strong>batch size</strong> and <strong>batch window</strong>), <strong>retry and error handling</strong> and <strong>scaling policies</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>The <strong>event-stream listener pattern</strong>:
+<ul>
+<li>a new event starts the function, passes a batch, and it terminates on completion</li>
+<li><strong>Tip:</strong> every function-based microservice needs its <strong>own independent consumer group</strong></li>
+<li>Requirements and triggering vary by provider.</li>
+</ul>
+</li>
+</ul>
+<h3 id="cold-and-warm-starts-termination-and-shutdown">Cold and warm starts, termination and shutdown</h3>
+<ul>
+<li><strong>Cold start:</strong>
+<ul>
+<li>first start, or after enough inactivity; load code, start, connect to the broker and other resources</li>
+<li><strong>Warm</strong> once ready</li>
+<li><strong>Warm start:</strong> resumed from hibernation with <strong>connections already established</strong>, processing the next events immediately</li>
+<li>Frameworks reuse terminated functions where possible: a function on a steady stream may hit its timeout, be briefly terminated and revived by the trigger, resuming immediately if connections have not expired.</li>
+</ul>
+</li>
+<li>A function terminates when done or at the end of its lifespan, generally <strong>5 to 10 minutes</strong>
+<ul>
+<li>it is suspended into hibernation (may be revived immediately, or evicted from the cache)
+<ul>
+<li>Decide how to handle open connections and <strong>partition assignments</strong>: terminating without revoking them may delay processing until a timeout or rebalance</li>
+<li>A function almost always online need not close connections and rebalance</li>
+</ul>
+</li>
+<li>an <strong>intermittent</strong> function should <strong>close all connections and relinquish partitions</strong>
+<ul>
+<li>When in doubt clean up: lighter load on stores and broker, fewer suspended functions claiming partitions.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="choosing-a-faas-provider">Choosing a FaaS provider</h3>
+<ul>
+<li>Open source or paid cloud providers
+<ul>
+<li>an organisation with an in-house CMS can benefit from in-house FaaS
+<ul>
+<li><strong>AWS, GCP and Azure</strong> have proprietary FaaS with deep integration with their other services, and legal hurdles already cleared: major factors in their dominance versus slower open source growth</li>
+<li>The first edition (2020) named <strong>OpenWhisk, OpenFaaS and Kubeless</strong>: the first two persist but have not supplanted the cloud offerings</li>
+</ul>
+</li>
+<li><strong>Kubeless is no longer maintained</strong> (archive).</li>
+</ul>
+</li>
+<li>Change since 2020:
+<ul>
+<li>cloud FaaS is now more deeply integrated with open source brokers like <strong>Apache Kafka</strong>
+<ul>
+<li>previously Google Functions required <strong>Google PubSub</strong> triggers, AWS required <strong>Kinesis</strong>, Azure required <strong>Event Hubs</strong></li>
+</ul>
+</li>
+<li>That lifts maximum <strong>time-based retention</strong> limits of those brokers: <strong>AWS Kinesis 365 days, Azure Event Hubs 7 to 90 days, Google PubSub 31 days</strong></li>
+<li>And you no longer need a connector framework to trigger from a third-party broker: lower overhead and latency, fewer moving parts, lower cost.</li>
+</ul>
+</li>
+</ul>
+<h2 id="15-3-starting-functions-with-triggers">15.3 Starting functions with triggers</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-15-triggers-scaling-state.svg" alt="Triggers, scaling and state" loading="lazy" /></p>
+<ul>
+<li>Triggers tell a function to start; they vary by framework but fall into categories.</li>
+<li><strong>Event-stream listener</strong>
+<ul>
+<li>(Figure 15-1): fires when an event is produced</li>
+<li>the integrated consumer hides consumption, injecting an <strong>array of events</strong> from a stream or a <strong>cluster of unordered events</strong> from a queue
+<ul>
+<li>Google, Microsoft and Amazon provide it for their brokers</li>
+</ul>
+</li>
+<li>others (Kafka, Pulsar, Warpstream, NATS) may or may not be supported</li>
+<li><strong>Kafka Connect</strong> can trigger functions otherwise (Figure 15-2, an external listener). Functions may output events, including logging and error data to their own stream.</li>
+<li><strong>Synchronous</strong>
+<ul>
+<li>triggers wait for completion before issuing the next events (keeps order, limited by partition count)</li>
+<li><strong>asynchronous</strong> triggers issue events to many functions at once (no order; use only when order does not matter).</li>
+</ul>
+</li>
+<li><strong>Batch size</strong> (maximum events dispatched) and <strong>batch window</strong> (maximum wait for more events) spread the <strong>start-up overhead</strong> over the batch to reduce cost.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">myEventFunction</span><span class="p">(</span><span class="n">Event</span><span class="o">[]</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Event</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">events</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">println</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">key</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">", "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">event</span><span class="p">.</span><span class="na">value</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">Exception</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">println</span><span class="p">(</span><span class="s">"error printing "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">event</span><span class="p">.</span><span class="na">toString</span><span class="p">());</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// Indicates to the FaaS framework that batch processing was completed</span>
+<span class="w">    </span><span class="n">context</span><span class="p">.</span><span class="na">success</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Tip:</strong> like containerised microservices, listener triggers can start from the <strong>latest, earliest or any offsets</strong>.</li>
+<li><strong>Consumer group lag:</strong>
+<ul>
+<li>poll an application's group offsets and compute the delta between the current offset and the stream's head (see &quot;Consumer Offset Lag Monitoring&quot;)</li>
+<li>also usable to scale non-FaaS microservices. A monitoring framework calls the FaaS framework to start functions</li>
+<li>high lag lets the autoscaler start more instances, low lag keeps the count steady or reduces it, tailored per microservice for SLAs
+<ul>
+<li>Unlike the listener, the trigger <strong>only signals</strong> events exist: the function <strong>creates its client, consumes and commits offsets itself</strong>, like a basic producer/consumer with limited lifespan</li>
+<li>A frequently triggered function may still be <strong>warm</strong></li>
+</ul>
+</li>
+<li>for long inactivity rebalancing and cold starts reduce the work per lifespan.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">myLagConsumerFunction</span><span class="p">(</span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">consumerGroup</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">consumerGroup</span><span class="p">;</span>
+<span class="w">    </span><span class="n">String</span><span class="w"> </span><span class="n">streamName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">streamName</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Establish a connection to the broker</span>
+<span class="w">    </span><span class="n">EventBrokerClient</span><span class="w"> </span><span class="n">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EventBrokerClient</span><span class="p">(</span><span class="n">consumerGroup</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="w">    </span><span class="c1">// Poll for a batch of events to process</span>
+<span class="w">    </span><span class="n">Event</span><span class="o">[]</span><span class="w"> </span><span class="n">events</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">client</span><span class="p">.</span><span class="na">consumeBatch</span><span class="p">(</span><span class="n">streamName</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Event</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">events</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Process each event one at a time</span>
+<span class="w">        </span><span class="n">doWork</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// Commit the offsets of the processed events back to the event broker</span>
+<span class="w">    </span><span class="n">client</span><span class="p">.</span><span class="na">commitOffsets</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Indicates to the FaaS framework that the function succeeded</span>
+<span class="w">    </span><span class="n">context</span><span class="p">.</span><span class="na">success</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Return, letting the lag-triggering system know processing was a success</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Schedule:</strong>
+<ul>
+<li>start periodically or at set times, poll the source streams and process</li>
+<li><strong>not particularly common</strong> for asynchronous event-driven architectures</li>
+<li>the client code looks identical to the lag trigger example.</li>
+</ul>
+</li>
+<li><strong>Webhooks:</strong> direct invocation for custom integration with monitoring frameworks, schedulers and third parties.</li>
+<li><strong>Resource events:</strong> changes to resources (create, update or delete a file; modify a row); not used often, but handy for <strong>external sources that drop files via FTP</strong>.</li>
+</ul>
+<h3 id="scaling">Scaling</h3>
+<ul>
+<li>FaaS parallelises exceptionally for queues and streams where <strong>order does not matter</strong>
+<ul>
+<li>if order matters, parallelism is limited by <strong>partition count</strong>. Scaling policies are mostly the framework's (consumer input lag, time of day, throughput, performance characteristics).</li>
+</ul>
+</li>
+<li>For functions that manage their own broker connections, <strong>partition rebalancing</strong> on joining and leaving matters: frequent churn can leave a group in near-constant rebalancing, even a <strong>rebalancing deadlock</strong>, with many short-lived functions with small batches and aggressive scaling
+<ul>
+<li>Use a <strong>step-based scaling policy</strong> or a <strong>hysteresis loop</strong></li>
+<li><strong>Caution:</strong> avoid thrashing triggers and scaling policy (frequent rebalancing is expensive and lowers throughput).</li>
+</ul>
+</li>
+</ul>
+<h3 id="maintaining-state">Maintaining state</h3>
+<ul>
+<li>Because of short lifespans, most stateful FaaS solutions need an <strong>external stateful service</strong>: providers want quick, scalable processing units independent of data location, so local state from earlier executions would limit them to the nodes that hold it, and they enforce a <strong>&quot;no local state&quot; policy</strong>
+<ul>
+<li>Previous local state may exist after a warm start but is not guaranteed</li>
+<li>Functions connect to external stores like any client and persist and retrieve state explicitly.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> use strict access controls so nothing outside the function's bounded context can reach its state stores.</li>
+<li>Some frameworks have <strong>durable stateful functions</strong> (Microsoft Azure <strong>Durable Functions</strong>): local memory is persisted automatically and functions suspended and revived without explicit storage code
+<ul>
+<li>this simplifies stateful workflows and standardises state management. Watch for improvements.</li>
+</ul>
+</li>
+</ul>
+<h2 id="15-4-functions-calling-other-functions">15.4 Functions calling other functions</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-15-calling-and-failures.svg" alt="Calling functions and failures" loading="lazy" /></p>
+<ul>
+<li>Functions are often used to execute other functions and for <strong>choreography and orchestration</strong>, communicating asynchronously through events, request-response calls, or both.</li>
+<li><strong>Asynchronous event-driven communication</strong>
+<ul>
+<li>(Figure 15-3): one function writes to a stream</li>
+<li>downstream functions trigger on it
+<ul>
+<li>A bounded context may consist of many functions and <strong>internal streams</strong>, each with its own triggering and scaling logic</li>
+<li>Function A triggers on stream 1 and writes to stream 2 or 3 (internal streams)</li>
+</ul>
+</li>
+<li>A, B and C can <strong>share a consumer group</strong> to tie them into one logical microservice. Each function <strong>manages its own offsets</strong> and commits after finishing</li>
+<li>no outside coordination. Choreography is shown</li>
+<li>orchestration is possible at more complexity. Function failures <strong>lose no data</strong>: the broker stores events and the next instance reprocesses them.</li>
+</ul>
+</li>
+<li><strong>Direct-call pattern:</strong> a function calls others from its code like request-response; asynchronous (fire and forget) or synchronous (await the return value).
+<ul>
+<li><strong>Choreography with asynchronous calls</strong>
+<ul>
+<li>(Figure 15-4): A invokes B per batch and then updates offsets and terminates</li>
+<li>Downsides:
+<ul>
+<li>offsets commit only on A's success (B has no feedback to A), so B's errors can lose events (which may not matter for some workflows)</li>
+<li>and <strong>out-of-order processing</strong>, since several B instances run independently and later executions finish before earlier ones (a race)</li>
+</ul>
+</li>
+<li>Invoking B with the whole batch after A's loop does not fix ordering either:</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">functionA</span><span class="p">(</span><span class="n">Event</span><span class="o">[]</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Event</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">events</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Do function A's processing work</span>
+<span class="w">        </span><span class="n">doLocalWork</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">        </span><span class="c1">// Asynchronously invoke function B</span>
+<span class="w">        </span><span class="n">asyncFunctionB</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">        </span><span class="c1">// Does not wait for return value</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">context</span><span class="p">.</span><span class="na">success</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">functionA</span><span class="p">(</span><span class="n">Event</span><span class="o">[]</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Event</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">events</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Do function A's processing per event</span>
+<span class="w">        </span><span class="n">doLocalWork</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// Invoke function B asynchronously with full batch of events</span>
+<span class="w">    </span><span class="n">asyncFunctionB</span><span class="p">(</span><span class="n">events</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">context</span><span class="p">.</span><span class="na">success</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>In-order processing needs strict execution of A before B for each event, completely, before the next (especially if both act on the same external store, where B may depend on data A wrote)
+<ul>
+<li>Otherwise consider orchestrated synchronous calls.</li>
+</ul>
+</li>
+<li><strong>Orchestration with synchronous calls</strong>
+<ul>
+<li>(Chapter 10): the function awaits results
+<ul>
+<li>Figure 15-5: an orchestration function takes the batch and, <strong>per event</strong>, calls A, then B with A's result, composes the output, writes to the output stream</li>
+</ul>
+</li>
+<li>each event is fully processed before the next so <strong>offset order is respected</strong></li>
+<li>on success it updates the offsets.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">orchestrationFunction</span><span class="p">(</span><span class="n">Event</span><span class="o">[]</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w"> </span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Event</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">events</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Synchronous function calls</span>
+<span class="w">        </span><span class="n">Result</span><span class="w"> </span><span class="n">resultFromA</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">invokeFunctionA</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">        </span><span class="n">Result</span><span class="w"> </span><span class="n">resultFromB</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">invokeFunctionB</span><span class="p">(</span><span class="n">event</span><span class="p">,</span><span class="w"> </span><span class="n">resultFromA</span><span class="p">);</span>
+<span class="w">        </span><span class="n">Output</span><span class="w"> </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">composeOutputEvent</span><span class="p">(</span><span class="n">resultFromA</span><span class="p">,</span><span class="w"> </span><span class="n">resultFromB</span><span class="p">);</span>
+<span class="w">        </span><span class="c1">// Write to the output stream</span>
+<span class="w">        </span><span class="n">producer</span><span class="p">.</span><span class="na">produce</span><span class="p">(</span><span class="s">"Output Stream"</span><span class="p">,</span><span class="w"> </span><span class="n">output</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// This will tell the FaaS framework to update the consumer offsets</span>
+<span class="w">    </span><span class="n">context</span><span class="p">.</span><span class="na">success</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<h2 id="15-5-handling-function-failures">15.5 Handling function failures</h2>
+<ul>
+<li>You can always <strong>reprocess the source streams</strong>:
+<ul>
+<li>the worst case is re-running from the last failed iteration</li>
+<li>Side effects: a retry re-executes logic up to the failure, so make processing <strong>idempotent</strong></li>
+<li>Common failures:</li>
+<li><strong>Intermittent failures:</strong> connectivity (a service, broker, store, third-party SaaS) or a late reply from another function; generally resolve themselves, but verify it is not chronic.</li>
+<li><strong>Resource failures:</strong>
+<ul>
+<li>a subset of intermittent: claiming more than allowed (downloading and decompressing a large compressed file runs out of memory)</li>
+<li>restoring the last offset repeats it. Plan resources at design time</li>
+<li>split into several function calls, or reimplement as a conventional microservice.</li>
+</ul>
+</li>
+<li><strong>Event batch too big:</strong>
+<ul>
+<li>if a batch cannot be processed within the lifespan the execution fails and repeats</li>
+<li><strong>increase the maximum execution time</strong>
+<ul>
+<li>or <strong>decrease the maximum batch size</strong></li>
+<li><strong>Tip:</strong> functions that manage their own broker connections can <strong>commit offsets periodically</strong> during execution (partial completion)</li>
+</ul>
+</li>
+<li>not when given the batch. Some listeners (Amazon, Microsoft) can <strong>halve the batch</strong> on failure and retry until it fits.</li>
+</ul>
+</li>
+<li><strong>An orchestration function failure:</strong>
+<ul>
+<li>return values from workers vanish</li>
+<li>an external state store could track the workflow but you must build it
+<ul>
+<li>Default: reprocess the failed batch with a new orchestrator: reprocesses everything including successful operations, <strong>repeats side effects</strong> and calls (third parties may not deduplicate), and may cost a lot</li>
+<li>Compensation can fail again too</li>
+</ul>
+</li>
+<li>for stronger guarantees on orchestrated workflows, compensation, recovery and durability you may need <strong>durable function orchestration</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="15-6-durable-function-orchestrators">15.6 Durable function orchestrators</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-15-durable-functions.svg" alt="Durable functions" loading="lazy" /></p>
+<ul>
+<li><strong>Durable function orchestration (DFO):</strong>
+<ul>
+<li>serverless computing with strong guarantees on <strong>stateful processing</strong> under intermittent failures; a subtype of the <strong>durable execution</strong> architecture (Chapter 10)</li>
+<li>Growing since the first edition</li>
+<li>Examples:
+<ul>
+<li><strong>AWS Step Functions Redrive</strong></li>
+<li><strong>Google Cloud Workflows</strong></li>
+<li><strong>Azure Durable Functions</strong>: all from the three major cloud platforms and deeply integrated, so possibly unhelpful for a fully open-source or cloud-agnostic strategy.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Encoding the orchestrator in a proprietary document:</strong>
+<ul>
+<li>AWS Step Functions and Google Cloud Workflows describe workflows in <strong>YAML, JSON or JSONata documents</strong> outside the function code (sequence, branching, looping)</li>
+<li>Example 15-1 is an Amazon States Language definition in JSONata with a choice state (taken from Amazon's State Language homepage), shown here as printed with a placeholder for the function names:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"Comment"</span><span class="p">:</span><span class="w"> </span><span class="s2">"An example of the Amazon States Language using a choice state."</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"QueryLanguage"</span><span class="p">:</span><span class="w"> </span><span class="s2">"JSONata"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"StartAt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"FirstState"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"States"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"FirstState"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Task"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Assign"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nt">"foo"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{% $states.input.foo_input %}"</span>
+<span class="w">            </span><span class="p">},</span>
+<span class="w">            </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:lambda:region:123456789012:function:FUNCTION_NAME"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Next"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ChoiceState"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"ChoiceState"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Choice"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Default"</span><span class="p">:</span><span class="w"> </span><span class="s2">"DefaultState"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Choices"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">                </span><span class="p">{</span>
+<span class="w">                    </span><span class="nt">"Next"</span><span class="p">:</span><span class="w"> </span><span class="s2">"FirstMatchState"</span><span class="p">,</span>
+<span class="w">                    </span><span class="nt">"Condition"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{% $foo = 1 %}"</span>
+<span class="w">                </span><span class="p">},</span>
+<span class="w">                </span><span class="p">{</span>
+<span class="w">                    </span><span class="nt">"Next"</span><span class="p">:</span><span class="w"> </span><span class="s2">"SecondMatchState"</span><span class="p">,</span>
+<span class="w">                    </span><span class="nt">"Condition"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{% $foo = 2 %}"</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">]</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"FirstMatchState"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Task"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:lambda:region:123456789012:function:OnFirstMatch"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Next"</span><span class="p">:</span><span class="w"> </span><span class="s2">"NextState"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"SecondMatchState"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Task"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:lambda:region:123456789012:function:OnSecondMatch"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Next"</span><span class="p">:</span><span class="w"> </span><span class="s2">"NextState"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"DefaultState"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Fail"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Error"</span><span class="p">:</span><span class="w"> </span><span class="s2">"DefaultStateError"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Cause"</span><span class="p">:</span><span class="w"> </span><span class="s2">"No Matches!"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"NextState"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"Type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Task"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:lambda:region:123456789012:function:FUNCTION_NAME"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"End"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Figure 15-6 shows the resulting directed acyclic graph:
+<ul>
+<li>start at <code>FirstState</code> with <code>foo_input</code></li>
+<li><code>ChoiceState</code> evaluates the value: 1 goes to <code>FirstMatchState</code>, 2 to <code>SecondMatchState</code>, anything else to the <code>DefaultState</code> error</li>
+<li>all matches end at <code>NextState</code>. The format is <strong>verbose</strong> and harder to read than code-first frameworks.</li>
+</ul>
+</li>
+<li>Figure 15-7 (an AWS example):
+<ul>
+<li>check stock prices, request <strong>human approval</strong>, then buy or sell</li>
+<li>The AWS backend executes functions, maintains state and retries, and with <strong>redrive</strong> restores state right before the crash (Figure 15-8: three invocations, two failures) from the underlying durable log: <strong>no second human approval, no rebuy or resell</strong> (still keep it idempotent for races), no republished report.</li>
+</ul>
+</li>
+<li><strong>Encoding the orchestrator in source code:</strong>
+<ul>
+<li>like durable execution engines, some DFOs (Azure Durable Functions) let you write the functions <strong>and the workflow logic</strong> in code, no YAML/JSON/JSONata</li>
+<li>Example 15-2 (Azure's Python sample): <code>http_start</code> (HTTP-triggered, starts an orchestration and returns a check-status response), <code>hello_orchestrator</code> (yields three <code>call_activity(&quot;hello&quot;, city)</code> calls for Seattle, Tokyo and London and returns the list), and the <code>hello</code> activity (returns a greeting):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kn">import</span><span class="w"> </span><span class="nn">azure.functions</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">func</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">azure.durable_functions</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">df</span>
+
+<span class="n">myApp</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">DFApp</span><span class="p">(</span><span class="n">http_auth_level</span><span class="o">=</span><span class="n">func</span><span class="o">.</span><span class="n">AuthLevel</span><span class="o">.</span><span class="n">ANONYMOUS</span><span class="p">)</span>
+
+<span class="c1"># An HTTP-triggered function with a Durable Functions client binding</span>
+<span class="nd">@myApp</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="n">route</span><span class="o">=</span><span class="s2">"orchestrators/hello_orchestrator"</span><span class="p">)</span>
+<span class="nd">@myApp</span><span class="o">.</span><span class="n">durable_client_input</span><span class="p">(</span><span class="n">client_name</span><span class="o">=</span><span class="s2">"client"</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">http_start</span><span class="p">(</span><span class="n">req</span><span class="p">:</span> <span class="n">func</span><span class="o">.</span><span class="n">HttpRequest</span><span class="p">,</span> <span class="n">client</span><span class="p">):</span>
+    <span class="n">function_name</span> <span class="o">=</span> <span class="n">req</span><span class="o">.</span><span class="n">route_params</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'functionName'</span><span class="p">)</span>
+    <span class="n">instance_id</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">start_new</span><span class="p">(</span><span class="n">function_name</span><span class="p">)</span>
+    <span class="n">response</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">create_check_status_response</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">instance_id</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">response</span>
+
+<span class="c1"># Orchestrator</span>
+<span class="nd">@myApp</span><span class="o">.</span><span class="n">orchestration_trigger</span><span class="p">(</span><span class="n">context_name</span><span class="o">=</span><span class="s2">"context"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hello_orchestrator</span><span class="p">(</span><span class="n">context</span><span class="p">):</span>
+    <span class="n">result1</span> <span class="o">=</span> <span class="k">yield</span> <span class="n">context</span><span class="o">.</span><span class="n">call_activity</span><span class="p">(</span><span class="s2">"hello"</span><span class="p">,</span> <span class="s2">"Seattle"</span><span class="p">)</span>
+    <span class="n">result2</span> <span class="o">=</span> <span class="k">yield</span> <span class="n">context</span><span class="o">.</span><span class="n">call_activity</span><span class="p">(</span><span class="s2">"hello"</span><span class="p">,</span> <span class="s2">"Tokyo"</span><span class="p">)</span>
+    <span class="n">result3</span> <span class="o">=</span> <span class="k">yield</span> <span class="n">context</span><span class="o">.</span><span class="n">call_activity</span><span class="p">(</span><span class="s2">"hello"</span><span class="p">,</span> <span class="s2">"London"</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="p">[</span><span class="n">result1</span><span class="p">,</span> <span class="n">result2</span><span class="p">,</span> <span class="n">result3</span><span class="p">]</span>
+
+<span class="c1"># Activity</span>
+<span class="nd">@myApp</span><span class="o">.</span><span class="n">activity_trigger</span><span class="p">(</span><span class="n">input_name</span><span class="o">=</span><span class="s2">"city"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hello</span><span class="p">(</span><span class="n">city</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">"Hello </span><span class="si">{</span><span class="n">city</span><span class="si">}</span><span class="s2">"</span>
+</code></pre>
+<ul>
+<li>The main difference between document-first and code-first is <strong>where the workflow definition lives</strong>. In code you use familiar tools and IDEs
+<ul>
+<li>you may find framework-specific notations cumbersome and prefer the clean separation of documents.</li>
+</ul>
+</li>
+<li>Limits:
+<ul>
+<li>you rarely see an organisation (especially a large one) move to another major cloud provider just for durable function orchestration</li>
+<li>the likely outcome is using the orchestrator that comes with <strong>your cloud provider</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>FaaS is growing rapidly, with tools for development, management, deployment, triggering, testing and scaling
+<ul>
+<li>triggers include <strong>event streams, queues, consumer group lag, wall-clock time, APIs and webhooks</strong>.</li>
+</ul>
+</li>
+<li>Function solutions suit <strong>stateless and simple stateful</strong> problems that do not need event scheduling
+<ul>
+<li>orchestration calls functions in strict sequence while respecting event order</li>
+<li>durable function orchestrators handle complex multi-step workflows and avoid rerunning completed computations and calls.</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>FaaS</strong>, <strong>trigger</strong>, <strong>function-trigger map</strong>, <strong>batch size and window</strong>.</li>
+<li><strong>Cold start</strong>, <strong>warm start</strong>, <strong>lag trigger</strong>, <strong>hysteresis loop</strong>.</li>
+<li><strong>Direct-call pattern</strong>; <strong>durable function orchestration</strong>; <strong>redrive</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 15: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch15.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch15.html</a></li>
+<li>Figures 15-1 to 15-8 are redrawn or summarised in the diagrams
+<ul>
+<li>Listings are as printed with indentation restored
+<ul>
+<li>the Amazon States Language example is from Amazon's State Language documentation and the Azure Python example from Azure's samples, as cited in the chapter</li>
+</ul>
+</li>
+<li>Retention limits are the chapter's figures (2025).</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-14-streaming-sql/">Building Event-Driven Microservices 14: Streaming SQL</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-16-eventual-consistency/">Building Event-Driven Microservices 16: Eventual Consistency</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/">Building Event-Driven Microservices 10: Building Workflows with Microservices</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-14-streaming-sql/">&larr; Building Event-Driven Microservices 14: Streaming SQL</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-16-eventual-consistency/">Building Event-Driven Microservices 16: Eventual Consistency &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

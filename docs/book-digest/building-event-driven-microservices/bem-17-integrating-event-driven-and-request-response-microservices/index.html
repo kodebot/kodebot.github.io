@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-16-eventual-consistency/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-18-handling-bad-data-in-event-streams/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-17-integrating-event-driven-and-request-response-microservices">Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 17. Previous: <a href="/book-digest/building-event-driven-microservices/bem-16-eventual-consistency/">Building Event-Driven Microservices 16: Eventual Consistency</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-18-handling-bad-data-in-event-streams/">Building Event-Driven Microservices 18: Handling Bad Data in Event Streams</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Request-response is unavoidable: <strong>metrics from phones and IoT devices</strong>, <strong>third-party APIs</strong>, <strong>real-time content for web and mobile</strong>, <strong>dynamic requests</strong> (location, time, weather). Combine it with event-driven patterns.</li>
+<li><strong>Requests into events:</strong> a <strong>dedicated endpoint</strong> (high throughput, isolation) or a <strong>REST proxy</strong> (simple, not fast). Send a <strong>schema ID</strong> with plain-text payloads where clients are tiny.</li>
+<li><strong>Calling third-party APIs</strong> brings head-of-line blocking, nondeterminism, API drift and <strong>request surges on reprocessing</strong>: rate-limit in the service.</li>
+<li><strong>Serving data:</strong> from internal state (route to the owning instance), external state (<strong>all-in-one</strong> or <strong>composite service</strong>); access state <strong>only via the API</strong>.</li>
+<li>Turn requests into events for <strong>audit and replay</strong>; design <strong>asynchronous UIs</strong>; use <strong>micro frontends</strong> to align frontend, backend and data to one business concern.</li>
+</ul>
+</div></div>
+<h2 id="17-1-why-integrate">17.1 Why integrate</h2>
+<ul>
+<li>Request-response appears in:
+<ul>
+<li><strong>collecting metrics from external sources</strong> (a user's phone app, IoT devices)</li>
+<li><strong>integrating with other request-response services</strong>, particularly third-party</li>
+<li><strong>serving content in real time</strong> to web and mobile users</li>
+<li><strong>serving dynamic requests</strong> based on real-time information (location, time, weather).</li>
+</ul>
+</li>
+<li><strong>Note:</strong> here &quot;request-response services&quot; means services that call each other's API directly (HTTP is the prime example), <strong>synchronous</strong> (the caller waits) or <strong>asynchronous</strong> (the caller works while awaiting a callback).</li>
+<li>Three subjects: turning requests into events, integrating with third-party APIs, building micro frontends.</li>
+</ul>
+<h2 id="17-2-turning-requests-into-events">17.2 Turning requests into events</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-17-requests-to-events.svg" alt="Requests to events" loading="lazy" /></p>
+<ul>
+<li>Two common ways: a <strong>dedicated endpoint</strong>, or a <strong>REST proxy</strong>.</li>
+<li><strong>Dedicated endpoint:</strong>
+<ul>
+<li>the client reports to a backend server that writes to the event stream</li>
+<li>It gives <strong>very high throughput and load isolation</strong>, ideal for thousands of events per second</li>
+<li>Example:
+<ul>
+<li>a media streaming app (like Netflix) on a smart TV or phone emits which titles a viewer started, how far they got and whether they stopped</li>
+<li>Example 17-1 is a Protobuf <code>MediaClick</code>:</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 17-1: Proto3 MediaClick event</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">MediaClick</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Account Id</span>
+<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// When the click happened</span>
+<span class="w">    </span><span class="n">Timestamp</span><span class="w"> </span><span class="na">time</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// The media Id that the user clicked on</span>
+<span class="w">    </span><span class="kt">int32</span><span class="w"> </span><span class="na">mediaId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">enum</span><span class="w"> </span><span class="n">Media</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="na">Movie</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="na">Show</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">        </span><span class="na">MovieTrailer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">        </span><span class="na">ShowTrailer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// The type of media</span>
+<span class="w">    </span><span class="n">Media</span><span class="w"> </span><span class="na">mediaType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Client-side serialisation</strong>
+<ul>
+<li>(Figure 17-1): the client populates the Protobuf schema, serialises and sends it; reasonable when the client is relatively heavyweight</li>
+<li>In constrained environments (a browser, a tiny microcontroller) you often cannot package the libraries for Protobuf, Avro or JSON Schema, so <strong>serialise on the backend server</strong> (Figure 17-2): the client sends simple JSON or even plain text</li>
+<li>Risk: data not matching the server's schemas, causing <strong>data loss and repetitive break-fix</strong>.</li>
+</ul>
+</li>
+<li><strong>Avoid the risk with a schema ID</strong>:
+<ul>
+<li>at build and deployment, get the compatible schema ID from the registry and store it in the client</li>
+<li>add it to each payload (Example 17-2, plain text; <code>schemaId = 623</code>). The server parses and encodes it into that Protobuf schema:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>id = 123419873144,
+time = 1748890957,
+mediaId = 14997977211,
+mediaType = "Movie",
+schemaId = 623
+</code></pre>
+<ul>
+<li>This is <strong>brittle</strong>:
+<ul>
+<li>any deviation from the plain-text format may break the parser. <strong>Tip:</strong> plain text plus <code>schemaId</code> suits endpoints where <strong>every byte matters</strong> (web pages, low-connectivity regions)</li>
+<li>server-side serialisation suits cases where client serialisation is too expensive, difficult or impossible
+<ul>
+<li>An incorrect enum or value type breaks downstream serialisation and can fail the service, so <strong>test both the creating and parsing logic</strong> before production</li>
+</ul>
+</li>
+<li>with proper tests most of the risk disappears.</li>
+</ul>
+</li>
+</ul>
+<h3 id="rest-proxy">REST proxy</h3>
+<ul>
+<li>A service exposing a <strong>REST API to the event broker</strong>:
+<ul>
+<li>list streams, create streams, publish events, consume. Options: the <strong>Confluent REST proxy</strong></li>
+<li><strong>Azure REST Proxy</strong> (Kafka)</li>
+<li><strong>Apache Pulsar's built-in proxy</strong></li>
+<li><strong>Google PubSub's REST API</strong>.</li>
+</ul>
+</li>
+<li>Publish singly or in <strong>batches</strong> to <code>POST /topics/(string:topic_name)</code>. Example 17-3 sends three already serialised records: only <code>value</code> is mandatory
+<ul>
+<li><code>key</code> and <code>partition</code> are optional (without them the default partitioner such as round-robin applies):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="nf">POST</span> <span class="nn">/topics/test</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="na">Host</span><span class="o">:</span> <span class="l">kafkaproxy.host.com</span>
+<span class="na">Content-Type</span><span class="o">:</span> <span class="l">application/vnd.kafka.binary.v2+json</span>
+<span class="na">Accept</span><span class="o">:</span> <span class="l">application/vnd.kafka.v2+json, application/vnd.kafka+json, application/json</span>
+
+<span class="p">{</span>
+<span class="w">    </span><span class="nt">"records"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"b1B6"</span><span class="p">,</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Z33nAnn12481"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="s2">"c2233Gna1F="</span><span class="p">,</span><span class="w"> </span><span class="nt">"partition"</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="s2">"newb718=="</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Example 17-4 sends a <code>value_schema</code> with the records
+<ul>
+<li>the proxy <strong>validates against the schema registry</strong> and, if incompatible, throws, returns an error and <strong>refuses to write</strong>: it fences out bad data:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="nf">POST</span> <span class="nn">/topics/test</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="na">Host</span><span class="o">:</span> <span class="l">kafkaproxy.host.com</span>
+<span class="na">Content-Type</span><span class="o">:</span> <span class="l">application/vnd.kafka.avro.v2+json</span>
+<span class="na">Accept</span><span class="o">:</span> <span class="l">application/vnd.kafka.v2+json, application/vnd.kafka+json, application/json</span>
+
+<span class="p">{</span>
+<span class="w">    </span><span class="nt">"value_schema"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{\"name\":\"firstname\",\"type\": \"string\"}"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"records"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Bob"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Milhouse"</span><span class="p">,</span><span class="w"> </span><span class="nt">"partition"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Consuming</strong> via a REST proxy needs a <strong>durable consumer</strong> to store offset progress: create the consumer, subscribe to streams, consume, commit successfully processed offsets, delete the consumer (each proxy's API differs).</li>
+<li>A REST proxy is <strong>not typically high-performance</strong>: moderate loads may need several, and you may want to move to native producers and consumers.</li>
+</ul>
+<h2 id="17-3-integrating-with-third-party-request-response-apis">17.3 Integrating with third-party request-response APIs</h2>
+<ul>
+<li>Your service calls the API like any remote function call, awaiting the reply or continuing
+<ul>
+<li>If it <strong>waits while processing a stream</strong> it suffers <strong>head-of-line blocking</strong> (see &quot;Queues via Apache Kafka&quot;): no further events until the call returns or times out</li>
+<li>If order does not matter, <strong>consume as a queue</strong> to reduce blocking</li>
+<li>Then parse the response and continue (Figure 17-3).</li>
+</ul>
+</li>
+<li>Example 17-5 makes a <strong>blocking HTTP call</strong> inside a Kafka <strong>transaction</strong> so output and consumer offsets commit atomically:</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 17-5: a blocking call to a request-response API inside a Kafka transaction</span>
+<span class="c1">// Set up producer with transactional.id and</span>
+<span class="c1">// call initTransactions() once at startup</span>
+<span class="n">producer</span><span class="p">.</span><span class="na">initTransactions</span><span class="p">();</span>
+
+<span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="kc">true</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Poll for records</span>
+<span class="w">    </span><span class="n">ConsumerRecords</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">records</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">consumer</span><span class="p">.</span><span class="na">poll</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofMillis</span><span class="p">(</span><span class="mi">1000</span><span class="p">));</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">records</span><span class="p">.</span><span class="na">isEmpty</span><span class="p">())</span><span class="w"> </span><span class="k">continue</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">producer</span><span class="p">.</span><span class="na">beginTransaction</span><span class="p">();</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">ConsumerRecord</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">record</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">records</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">Event</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">record</span><span class="p">.</span><span class="na">value</span><span class="p">();</span>
+<span class="w">            </span><span class="n">Request</span><span class="w"> </span><span class="n">request</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">generateRequest</span><span class="p">(</span><span class="n">event</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="w">            </span><span class="n">Response</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span>
+<span class="w">                </span><span class="n">RequestService</span><span class="p">.</span><span class="na">makeBlockingRequest</span><span class="p">(</span><span class="n">request</span><span class="p">,</span><span class="w"> </span><span class="n">timeout</span><span class="p">,</span><span class="w"> </span><span class="n">retries</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">response</span><span class="p">.</span><span class="na">code</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">200</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="o">&lt;</span><span class="n">Class</span><span class="w"> </span><span class="n">Type</span><span class="o">&gt;</span><span class="w"> </span><span class="n">parsedObj</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parseResponseToObject</span><span class="p">(</span><span class="n">response</span><span class="p">);</span>
+<span class="w">                </span><span class="n">OutputEvent</span><span class="w"> </span><span class="n">outEvent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">applyBusinessLogic</span><span class="p">(</span><span class="n">parsedObj</span><span class="p">,</span><span class="w"> </span><span class="n">event</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="w">                </span><span class="c1">// Write the results to the output event stream</span>
+<span class="w">                </span><span class="c1">// using the transactional producer</span>
+<span class="w">                </span><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProducerRecord</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">"output-stream-name"</span><span class="p">,</span><span class="w"> </span><span class="n">outEvent</span><span class="p">));</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// Handle non-200 responses (log, skip, etc.)</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Send offsets to transaction before committing</span>
+<span class="w">        </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">TopicPartition</span><span class="p">,</span><span class="w"> </span><span class="n">OffsetAndMetadata</span><span class="o">&gt;</span><span class="w"> </span><span class="n">offsets</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashMap</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">TopicPartition</span><span class="w"> </span><span class="n">partition</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">records</span><span class="p">.</span><span class="na">partitions</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">List</span><span class="o">&lt;</span><span class="n">ConsumerRecord</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Event</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">pr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">records</span><span class="p">.</span><span class="na">records</span><span class="p">(</span><span class="n">partition</span><span class="p">);</span>
+<span class="w">            </span><span class="kt">long</span><span class="w"> </span><span class="n">lastOffset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pr</span><span class="p">.</span><span class="na">get</span><span class="p">(</span><span class="n">pr</span><span class="p">.</span><span class="na">size</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">).</span><span class="na">offset</span><span class="p">();</span>
+<span class="w">            </span><span class="n">offsets</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">partition</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">OffsetAndMetadata</span><span class="p">(</span><span class="n">lastOffset</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">));</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="n">producer</span><span class="p">.</span><span class="na">sendOffsetsToTransaction</span><span class="p">(</span><span class="n">offsets</span><span class="p">,</span><span class="w"> </span><span class="n">consumer</span><span class="p">.</span><span class="na">groupMetadata</span><span class="p">());</span>
+
+<span class="w">        </span><span class="c1">// Commit the transaction</span>
+<span class="w">        </span><span class="n">producer</span><span class="p">.</span><span class="na">commitTransaction</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">Exception</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Log and handle the error, then abort the transaction</span>
+<span class="w">        </span><span class="n">producer</span><span class="p">.</span><span class="na">abortTransaction</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Benefits:</strong> mix event processing with request-response APIs; call whatever external APIs however you need; process in parallel with many <strong>nonblocking</strong> requests.</li>
+<li><strong>Drawbacks:</strong>
+<ul>
+<li><strong>Nondeterminism</strong> (Chapter 9): reprocessing a failed event may differ, even a second later.</li>
+<li><strong>The API and response format may change</strong>: monitor for breaking changes (reputable third parties are careful; internal APIs owned by small or inexperienced teams may break more).</li>
+<li><strong>Request frequency:</strong>
+<ul>
+<li>after finding a bug and rewinding the input, a service consuming as fast as it can <strong>floods the endpoint</strong>, which may fail or block your IP addresses, causing failed requests, tight retry loops and more nondeterminism. Use <strong>quotas</strong> (Chapter 19) but best <strong>rate-limit in the microservice</strong></li>
+<li>external APIs may block you, and some charge more above your agreed limit.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-4-serving-data-with-a-request-response-api">17.4 Serving data with a request-response API</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-17-serving.svg" alt="Serving" loading="lazy" /></p>
+<ul>
+<li>An event-driven microservice can expose an endpoint:
+<ul>
+<li>it consumes, processes, applies its logic, stores state internally or externally</li>
+<li>the <strong>API (usually inside the application)</strong> serves reads of that state.</li>
+</ul>
+</li>
+</ul>
+<h3 id="internal-state-stores">Internal state stores</h3>
+<ul>
+<li>Figure 17-4:
+<ul>
+<li>a client request goes to a <strong>load balancer</strong> that routes to an instance; with one instance, all data is in it (inputs A and B, changelog to the broker)</li>
+<li>With several instances the state is <strong>sharded</strong>, so route requests to the owner</li>
+<li>Kafka Streams offers <strong>interactive queries</strong> that handle requests, routing and forwarding (check whether your framework supports it).</li>
+</ul>
+</li>
+<li>Two properties locate a key:
+<ul>
+<li><strong>a key maps to only a single partition</strong> (see &quot;Repartitioning Event Streams&quot;), and <strong>a partition is assigned to only a single consumer instance</strong> (see &quot;The Basics of Event-Driven Microservices&quot;)</li>
+<li>An instance knows its own and its peers' partition assignments, so it applies the <strong>partitioner</strong> to the request's key, then cross-references the partition ID with the group's assignments (Figure 17-5; Figure 17-6: the partitioner says P1, assigned to instance 1)</li>
+<li>After a rebalance the route may change.</li>
+</ul>
+</li>
+<li><strong>Drawback:</strong>
+<ul>
+<li>the more instances, the more spread the state</li>
+<li>with even keys and a round-robin balancer: <strong>success rate = 1/(number of instances)</strong>, so for many instances almost every request misses and is redirected, raising latency and load.</li>
+</ul>
+</li>
+<li>A <strong>smart load balancer</strong> (Figure 17-7) applies the partitioner logic, compares to its table of group assignments (inferred from repartition or changelog streams) and forwards correctly
+<ul>
+<li>It entangles application logic with the balancer: <strong>renaming state stores or changing topology breaks forwarding</strong>, so ship it in the <strong>single deployable and testing process</strong></li>
+<li><strong>Warning:</strong> best effort only; races and dynamic rebalancing mean every instance must still <strong>redirect</strong> misdirected requests.</li>
+</ul>
+</li>
+<li>Sharded serving is hard if your framework does not support it; you will likely use an external store.</li>
+</ul>
+<h3 id="external-state-stores">External state stores</h3>
+<ul>
+<li><strong>All state is typically directly available to each instance</strong>
+<ul>
+<li>(no forwarding; for massive state route to the right shard or query shards in parallel)</li>
+<li><strong>Rebalances do not rebuild</strong> internal stores, allowing easy zero-downtime scaling and scaling <strong>serving capacity separately from data store capacity</strong>.</li>
+</ul>
+</li>
+<li><strong>Caution:</strong> access state <strong>through the microservice's request-response API, not directly from the store</strong>; direct access introduces coupling that makes change difficult and risky.</li>
+<li><strong>All-in-one microservice</strong>
+<ul>
+<li>(Figure 17-8): each instance consumes events, materialises to the external store and serves the API</li>
+<li>both scale with instance count (beyond partition counts extra instances still serve requests)
+<ul>
+<li>Advantages: <strong>simplicity</strong>, short rebalances</li>
+<li>Drawback: <strong>resource use with asymmetric loads</strong> (many instances for REST traffic, one for event processing)</li>
+</ul>
+</li>
+<li>alternatively split them.</li>
+</ul>
+</li>
+<li><strong>The Composite Service</strong>
+<ul>
+<li>(Figure 17-9): the API is <strong>completely separate</strong> from the event-driven microservice that materialises state to the external store</li>
+<li>two microservices but <strong>one bounded context</strong>, treated as one composite service in one repository, <strong>tested, built and deployed together</strong>
+<ul>
+<li>Advantages: different <strong>languages and scaling policies</strong> (a lightweight stream framework to populate state; the organisation's usual web stack for the customer experience)</li>
+</ul>
+</li>
+<li><strong>fault isolation</strong>
+<ul>
+<li>(bugs in event processing do not take down request handling, though state goes stale)</li>
+<li>Disadvantages: <strong>complexity and risk</strong> (data structures, topologies and request patterns may need changes in both), harder end-to-end tests</li>
+<li>Useful and widely used in production</li>
+</ul>
+</li>
+<li>manage deployments carefully and test integration comprehensively.</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-5-handling-requests-within-an-event-driven-workflow">17.5 Handling requests within an event-driven workflow</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-17-request-events-and-approval.svg" alt="Requests as events" loading="lazy" /></p>
+<ul>
+<li>Handle a request <strong>directly</strong> (do it and respond) or <strong>convert it into an event</strong>, inject it into its own stream and process it like any other event
+<ul>
+<li>a service may mix the two (Figure 17-10): left, a traditional create via the API written directly to the database</li>
+<li>right, event-first: package the request as an event, publish it, then materialise it into the internal store and process it with other business logic.</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong>
+<ul>
+<li>a <strong>durable record</strong> for auditing and replaying</li>
+<li>cross-reference the request's timestamp with the most recently consumed events and <strong>postpone fulfilling the request until all earlier-timestamped events are processed</strong>.</li>
+</ul>
+</li>
+<li><strong>Trade-off:</strong> extra latency and complexity; the response waits until the request is published and processed (async/await lets the caller do other work). Not for every use case.</li>
+</ul>
+<h3 id="processing-events-for-user-interfaces">Processing events for user interfaces</h3>
+<ul>
+<li>A UI is how people interact with the bounded context. Request-response UIs respond synchronously
+<ul>
+<li>services that handle requests as events need <strong>asynchronous UI frameworks</strong> that stay responsive and update as results arrive.</li>
+</ul>
+</li>
+<li><strong>Manage expectations:</strong>
+<ul>
+<li>a synchronous click expects success or failure in maybe 500 ms or less</li>
+<li>an asynchronous service may need seconds, especially with a large backlog. Show that the request was sent and discourage more actions until done, like airline and car-rental sites' <strong>&quot;making reservation, please wait&quot;</strong> spinner that blanks out the page.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>research best practices for asynchronous UIs. Also decide <strong>when to push UI updates</strong>: business rules guide you</li>
+<li>ask the impact of a user deciding on <strong>stale state</strong> and the <strong>performance and experience impact of pushing</strong> an update.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> intermittent network failures can create <strong>duplicate requests and events</strong>; make consumers idempotent (see &quot;Generating duplicate events&quot;).</li>
+</ul>
+<h3 id="example-newspaper-publishing-workflow-approval-pattern">Example: newspaper publishing workflow (approval pattern)</h3>
+<ul>
+<li>A newspaper publisher's app manages layout with <strong>templates</strong> that decide where articles and advertisements go: the latest and most important news on the front pages
+<ul>
+<li>ads placed by size, content, budget and placement agreements (a children's toy company may not want its ad next to a missing-child story). A <strong>designer</strong> places items</li>
+<li>the <strong>editor</strong> checks cohesion, article order by estimated importance and ad placement per contracts, and must <strong>approve</strong> before printing or send it back
+<ul>
+<li><strong>Advertisers</strong> can reject only after the editor approves, and the paper seeks approval <strong>only from the most important advertisers</strong> (significant ad spend)</li>
+</ul>
+</li>
+<li>others have no overriding say (Figure 17-11).</li>
+</ul>
+</li>
+<li>Two <strong>bounded contexts</strong>, design and approval, as two microservices (Figure 17-12, omitting accounts and login)
+<ul>
+<li>The <strong>newspaper populator</strong> consumes layout templates, advertisements and articles into a relational database
+<ul>
+<li>an employee arranges them, compiles a PDF into an external store and sends it for approval (1) as a candidate by writing to the event stream</li>
+</ul>
+</li>
+<li>Example 17-6, the populated newspaper event (the PDF is referenced by URI):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>Key: String pn_key        // Populated newspaper key
+Value: {
+    String pdf_uri        // Location of the stored PDF
+    int version           // Version of the populated newspaper
+    Pages[] page_metadata // Metadata about what is on each page
+    - int page_number
+    - Enum content        // Ad, article
+    - String id           // ID of the ad or article
+}
+</code></pre>
+<ul>
+<li><strong>Tip:</strong>
+<ul>
+<li>store a large PDF externally and reference it by <strong>URI</strong></li>
+<li>you manage the permissions yourself. The populator does <strong>not</strong> turn the employee's human interactions into events: not all human interaction needs to be an event</li>
+<li>it may be a monolithic request-response framework that only produces events when writing to the output stream
+<ul>
+<li><strong>Warning:</strong> risk of the stream getting out of sync with the populator's state: see &quot;Data Liberation Patterns&quot; (outbox table, change-data capture logs).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>The <strong>approval service</strong> consumes the populated newspaper into local storage for the editor to view and mark up, comment and give tentative approval toward advertiser approval
+<ul>
+<li>the editor may reject at any point. Example 17-7, the editor approval event:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>Key: String pn_key                // Populated newspaper key
+Value: {
+    String marked_up_pdf_uri      // Optional URI of the marked-up PDF
+    int version                   // Version of the populated newspaper
+    Enum status                   // awaiting_approval, approved, rejected
+    String editor_id
+    String editor_comments
+    RejectedAdvertisements[] rejectedAds  // Optional, if rejected
+    - int page_number
+    - String advertisement_id
+    - String advertiser_id
+    - String advertiser_comments
+}
+</code></pre>
+<ul>
+<li>Advertisers get a UI to approve ad size and placement
+<ul>
+<li>the service decides <strong>which ads need approval</strong>, <strong>cuts the PDF into pieces</strong> for them and must <strong>not leak</strong> news stories or competitors' ads</li>
+<li>Example 17-8, the advertiser approval event (keyed on <code>pn_key</code>; several events per newspaper, <strong>non-entity events</strong>; <strong>the aggregate</strong> decides the advertiser approval; the editor approval's <code>rejectedAds</code> array aggregates rejections)</li>
+<li>Advertisers act independently, and the process moves on only after all have replied or timed out:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>Key: String pn_key                // Populated newspaper key
+Value: {
+    String advertiser_pdf_uri     // The PDF piece shown to the advertiser
+    int version                   // Version of the populated newspaper
+    int page_number
+    boolean approved              // Approved or not
+    String advertisement_id
+    String advertiser_id          // ID of the approver
+    String advertiser_comments
+}
+</code></pre>
+<ul>
+<li><strong>Benefit:</strong> the three event types form the <strong>canonical narrative</strong> of candidate and final newspapers, rejections, comments and approvals, auditable at any point to find where things went wrong.</li>
+</ul>
+<h3 id="separating-the-editor-and-advertiser-approval-services">Separating the editor and advertiser approval services</h3>
+<ul>
+<li>New requirements split them into two services
+<ul>
+<li><strong>Advertiser</strong> components: choose which advertisers to ask, slice the PDF, manage advertiser-facing components, controls and branding, and handle <strong>public-facing exposure</strong> (security practices, patches)</li>
+<li><strong>Editor</strong> components: approve overall layout, design and flow</li>
+<li>assess the <strong>summary</strong> of retailer responses (not each one)</li>
+<li>suggest to the designer how to handle rejections (Figure 17-13).</li>
+</ul>
+</li>
+<li>Two new streams: the **editor-approved populated newspaper stream
+<ul>
+<li>** (same format as stream</li>
+<li>, produced only when the editor releases it for advertiser approval) and the **advertiser approvals summary stream</li>
+<li>**. Advantage: <strong>all editor gating logic stays inside the editor service</strong>
+<ul>
+<li>versions of one <code>pn_key</code> live entirely there, so the editor controls which versions go for approval and gates further revisions until satisfied with initial advertiser feedback. Which ads need approval is opaque to the editor and layout service. Example 17-9, the summary event, shows the advertiser approval service encapsulating approval state</li>
+<li>the editor still decides:</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>Key: String pn_key
+Value: {
+    int version                        // Version of the populated newspaper
+    AdApprovalStatus[] ad_app_status
+    - Enum status                      // Waiting, Approved, Rejected, Timedout
+    - int page_number
+    - String advertisement_id
+    - String advertiser_id
+    - String advertiser_comments
+}
+</code></pre>
+<h2 id="17-6-micro-frontends">17.6 Micro frontends</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-17-micro-frontends.svg" alt="Micro frontends" loading="lazy" /></p>
+<ul>
+<li>A <strong>micro frontend</strong> is a microservice that handles a specific business concern <strong>and provides the API for a consumer-facing interface</strong>. Figure 17-14 compares three ways to organise customer-facing content
+<ul>
+<li>in the first two, frontend and backend are owned by separate teams behind a single frontend layer, while micro frontends align the data store, backend and frontend on the business concern.</li>
+<li><strong>Monolithic backend:</strong>
+<ul>
+<li>a dedicated backend team (many subteams in large monoliths) with headcount growing with the monolith</li>
+<li>a separate frontend team using a request-response API</li>
+<li>coordinating changes across team and technology boundaries is hard.</li>
+</ul>
+</li>
+<li><strong>Microservice backend:</strong>
+<ul>
+<li>many teams end up here, and many stay: independent, product-focused services each owned by one team, exposing request-response APIs and event streams up to an <strong>aggregation layer</strong>. Downside: the aggregation layer invites <strong>ad hoc business logic</strong> (convenient because of team and deployment boundaries) and suffers the <strong>tragedy of the commons</strong> (everyone relies on it, no one is responsible)</li>
+<li>stewardship helps, but small, innocent changes accumulate.</li>
+</ul>
+</li>
+<li><strong>Micro frontends:</strong> split the monolithic frontend into independent components, each backed by a supporting backend microservice: modularity, separation of business concerns, team autonomy, and language, deployment and codebase independence extended to the frontend.</li>
+</ul>
+</li>
+</ul>
+<h3 id="example-experience-search-and-review-application">Example: experience search and review application</h3>
+<ul>
+<li>An app connecting vacationers with local guides, attractions, entertainment and food: search local experiences, see details and contacts, leave reviews
+<ul>
+<li><strong>Version 1</strong> (Figure 17-15): one service materialises experiences and reviews into a single endpoint with a basic key-value store with limited search</li>
+<li>no geolocation search though users ask for it
+<ul>
+<li><strong>Version 2</strong> (Figure 17-16): split <strong>reviews</strong> into their own microservice (a distinct bounded context) and make a <strong>product micro frontend</strong> stitching search and review together as an aggregation layer <strong>with no business logic</strong> of its own</li>
+</ul>
+</li>
+<li>each micro frontend may be owned by its own team or one team
+<ul>
+<li>The product boundary contains search and review micro frontends</li>
+<li>Search must support <strong>geolocation</strong>: the user's address becomes <strong>lat-lon</strong> coordinates for distance to nearby experiences</li>
+</ul>
+</li>
+<li>the review micro frontend's responsibilities are unchanged but it is freed from coupling to search.</li>
+</ul>
+</li>
+<li>Notes on Figure 17-17:
+<ul>
+<li>reviews are <strong>published first as events</strong> and then ingested back into the data store (in both versions): keeping <strong>core business data external to the implementation</strong> lets you break out the review service with no data synchronisation errors (if kept internal to v1's store you would need to liberate it first, Chapter 6, and plan a long-term migration)
+<ul>
+<li><strong>Tip:</strong> being able to materialise and consume any stream, however the service needs, makes event-driven backends pair so well with micro frontends</li>
+<li>Search replaced its store with one supporting <strong>plain-text and geolocation search</strong></li>
+</ul>
+</li>
+<li>it also consumes the <strong>user profile entity stream</strong> to personalise results, and the smaller services clarify which business function uses user data (an observer sees each context's input streams; in v1 one must read code)
+<ul>
+<li>Both versions read the <strong>same streams</strong>: change backends <strong>without maintaining a specific state store or migrating data</strong>, just replay</li>
+</ul>
+</li>
+<li>unlike a monolith where data is tightly coupled to the database. The combination is limited only by the granularity and detail of the event data.</li>
+</ul>
+</li>
+</ul>
+<h3 id="benefits-and-drawbacks">Benefits and drawbacks</h3>
+<ul>
+<li><strong>Benefits:</strong>
+<ul>
+<li><strong>Composable:</strong> build interfaces from services; spin up new microservices from streams to try products and turn them off with no code remnants.</li>
+<li><strong>Pluggable:</strong> add frontends without disturbing the old; one micro frontend can power several products.</li>
+<li><strong>Independent:</strong> any frameworks, languages and stores; test and release on your own schedule; ownership is easier to determine.</li>
+<li><strong>Leverages full-stack skill sets:</strong> frontend, backend and data store work, in a narrower scope.</li>
+</ul>
+</li>
+<li><strong>Drawbacks:</strong>
+<ul>
+<li><strong>Inconsistent UI elements and styling</strong> (colours, fonts, sizing, layouts): coordinate a <strong>style guide</strong> and a <strong>common library</strong> of basic elements, with cross-team testing.</li>
+<li><strong>Cross-service updates</strong> are harder than in a monolith and more frequent (shared libraries shape the experience).</li>
+<li><strong>Varying performance and load times</strong>,
+<ul>
+<li>or failures: the composite frontend must degrade gracefully (for example spinners)</li>
+<li>stitching them is a UI-design exercise beyond the book's scope.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>External systems (human or machine) mostly use request-response, so requests and responses may need converting to events. Machine input can be schematised ahead of time and collected server-side
+<ul>
+<li>third-party API responses need parsing and wrapping into your own event definition and tend to be brittle.</li>
+</ul>
+</li>
+<li>Requests can become events processed asynchronously, which needs a UI that cues users that handling is asynchronous.</li>
+<li>Micro frontends give full-stack product alignment on event-driven backends: purpose-built frontends with a compositional layer, with autonomy mirroring backend microservices and flexible options for experimentation, segmentation and custom experiences.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Dedicated endpoint</strong>, <strong>REST proxy</strong>, <strong>schemaId</strong> payloads; <strong>head-of-line blocking</strong>.</li>
+<li><strong>Interactive queries</strong>, <strong>smart load balancer</strong>, <strong>all-in-one microservice</strong>, <strong>composite service</strong>.</li>
+<li><strong>Event-first request</strong>; <strong>asynchronous UI</strong>; <strong>approval pattern</strong>; <strong>micro frontend</strong>; <strong>aggregation layer</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 17: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch17.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch17.html</a></li>
+<li>Figures 17-1 to 17-17 are redrawn or summarised in grouped diagrams. Listings are as printed with indentation restored and the pseudo-schema listings formatted as plain text blocks.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-16-eventual-consistency/">Building Event-Driven Microservices 16: Eventual Consistency</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-18-handling-bad-data-in-event-streams/">Building Event-Driven Microservices 18: Handling Bad Data in Event Streams</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/">Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-16-eventual-consistency/">&larr; Building Event-Driven Microservices 16: Eventual Consistency</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-18-handling-bad-data-in-event-streams/">Building Event-Driven Microservices 18: Handling Bad Data in Event Streams &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

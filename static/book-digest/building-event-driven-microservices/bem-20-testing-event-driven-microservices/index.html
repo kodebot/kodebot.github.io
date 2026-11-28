@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 20: Testing Event-Driven Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-19-supportive-tooling/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-21-deploying-event-driven-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-20-testing-event-driven-microservices">Building Event-Driven Microservices 20: Testing Event-Driven Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 20. Previous: <a href="/book-digest/building-event-driven-microservices/bem-19-supportive-tooling/">Building Event-Driven Microservices 19: Supportive Tooling</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-21-deploying-event-driven-microservices/">Building Event-Driven Microservices 21: Deploying Event-Driven Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Event-driven microservices are small and purpose-built, so relatively easy to test: <strong>event streams, queues and APIs are inputs</strong>, state is local to the service, outputs are events. The chapter is a <strong>companion</strong> to general testing books, covering what is specific to event-driven systems.</li>
+<li><strong>Unit tests</strong> (stateless and stateful functions, <strong>boundaries and nulls</strong>), <strong>topology tests</strong> (no broker needed), and <strong>schema evolution tests</strong> against the registry.</li>
+<li><strong>Integration tests</strong> come in <strong>local</strong>, <strong>remote</strong> and <strong>hybrid</strong> forms; <strong>containers (Testcontainers)</strong> are the most common local route.</li>
+<li>Remote environments: <strong>temporary single-tenant</strong> (best), <strong>durable multitenant</strong> (worst), or <strong>production</strong> (careful). Populate streams with <strong>production copies</strong>, <strong>curated</strong> events or <strong>generated</strong> events (or a hybrid).</li>
+<li>Invest in <strong>tooling</strong> to create, populate and tear down environments: it also prepares you for <strong>disaster recovery</strong>.</li>
+</ul>
+</div></div>
+<h2 id="20-1-general-principles-and-unit-tests">20.1 General principles and unit tests</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-20-unit-and-topology.svg" alt="Unit and topology tests" loading="lazy" /></p>
+<ul>
+<li><strong>Functional testing</strong>
+<ul>
+<li>(unit, integration, system, regression) checks the service does what it should <strong>and does not do what it should not</strong></li>
+<li><strong>Nonfunctional testing</strong> (performance, load, stress, recovery) checks behaviour under environmental scenarios</li>
+<li>Consult other sources for language-specific frameworks and testing best practices.</li>
+</ul>
+</li>
+<li><strong>Unit tests</strong>
+<ul>
+<li>exercise the smallest pieces of code and are the foundation for larger tests. Event-driven microservices apply transformations, aggregations, mappings and reductions</li>
+<li>test each stage so the data in and out meet expectations.</li>
+</ul>
+</li>
+</ul>
+<h3 id="stateless-functions">Stateless functions</h3>
+<ul>
+<li>Easy to test independently. A MapReduce-style topology (for example Kafka Streams):</li>
+</ul>
+<pre class="hl"><code><span class="n">myInputStream</span>
+<span class="w">    </span><span class="p">.</span><span class="na">filter</span><span class="p">(</span><span class="n">myFilterFunction</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">myMapFunction</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">to</span><span class="p">(</span><span class="n">outputStream</span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>At least <strong>two unit tests</strong> (one per function). The filter has several conditions:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="nf">myFilterFunction</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">eventKey</span><span class="p">,</span><span class="w"> </span><span class="n">MyEventValue</span><span class="w"> </span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">value</span><span class="p">.</span><span class="na">type</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">7</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">value</span><span class="p">.</span><span class="na">modifier</span><span class="p">.</span><span class="na">equals</span><span class="p">(</span><span class="s">"valid"</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">value</span><span class="p">.</span><span class="na">type</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">value</span><span class="p">.</span><span class="na">type</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Test the <strong>three happy paths</strong>:
+<ul>
+<li><code>type == 7 &amp;&amp; modifier equals &quot;valid&quot;</code></li>
+<li><code>type == 4</code></li>
+<li><code>type == 5</code> (4 and 5 are the <strong>boundaries</strong> of the true range; you do not test every value inside). Test <strong>false</strong> cases at boundaries: <code>type != 7</code> with <code>&quot;valid&quot;</code></li>
+<li><code>type == 7</code> with a modifier that is not valid</li>
+<li><code>type &lt;= 3</code></li>
+<li><code>type &gt;= 6</code>. And <strong>null-pointer exceptions</strong>: <code>value == null</code>, <code>value.modifier == null</code> (especially with optional or nullable fields).</li>
+</ul>
+</li>
+<li>Tests give security that code changes do not violate expected outputs. <strong>Tip:</strong> test <strong>boundary conditions</strong> so a change that breaks the original constraints fails the tests.</li>
+</ul>
+<h3 id="stateful-functions">Stateful functions</h3>
+<ul>
+<li>More complicated:
+<ul>
+<li>computed state varies with input events and time, so you need <strong>durable state for the test cycle</strong> (a <strong>mocked</strong> or <strong>temporary</strong> data store)</li>
+<li>Example, summing values per key in a basic producer/consumer:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="n">Long</span><span class="w"> </span><span class="nf">addValueToAggregation</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="w"> </span><span class="n">eventValue</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// The data store is provided by the unit-test framework</span>
+<span class="w">    </span><span class="n">Long</span><span class="w"> </span><span class="n">storedValue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">datastore</span><span class="p">.</span><span class="na">getOrElse</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="n">L</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// Sum the values and load them back into the state store</span>
+<span class="w">    </span><span class="n">Long</span><span class="w"> </span><span class="n">sum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">storedValue</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">eventValue</span><span class="p">;</span>
+<span class="w">    </span><span class="n">datastore</span><span class="p">.</span><span class="na">upsert</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">sum</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">sum</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Mock and inject the store, or use a local version of the real store (closer to integration testing). Consider what the store must do and how it relates to the runtime one
+<ul>
+<li>mocks avoid spinning up, purging and shutting down a full store per unit test.</li>
+</ul>
+</li>
+</ul>
+<h2 id="20-2-testing-the-full-topology">20.2 Testing the full topology</h2>
+<ul>
+<li><strong>Topology testing</strong>
+<ul>
+<li>(see &quot;Microservice Topology&quot;) exercises the entire business logic</li>
+<li>full-featured frameworks typically give a <strong>local test mode</strong> (or community options), <strong>with no event broker needed</strong>:</li>
+<li><strong>Apache Spark:</strong> third-party <code>StreamingSuiteBase</code> and <code>spark-fast-tests</code>, plus the built-in <code>ContinuousMemoryStream</code> for fine-grained input and output control.</li>
+<li><strong>Apache Flink:</strong> <code>MiniClusterWithClientResource</code>, a local embedded mini cluster.</li>
+<li><strong>Kafka Streams:</strong> <code>TopologyTestDriver</code>, which mocks the framework without an event broker.</li>
+</ul>
+</li>
+<li>You control <strong>event production in code</strong>, including <strong>timestamp and partition</strong>: events with specific values
+<ul>
+<li><strong>out of order</strong></li>
+<li><strong>invalid timestamps</strong></li>
+<li><strong>invalid data</strong>, to exercise corner cases, time-based aggregations, event scheduling and stateful functions.</li>
+</ul>
+</li>
+<li>Example topology:
+<ul>
+<li><code>myInputStream.map(myMapFunction).groupByKey().reduce(myReduceFunction)</code>: unit tests cover the functions</li>
+<li>topology testing checks the results of map, groupByKey and reduce together.</li>
+</ul>
+</li>
+<li>Example 20-1, a simplified Kafka Streams test (the topology builder normally lives in the main code):</li>
+</ul>
+<pre class="hl"><code><span class="c1">// The object that drives the topology, injects events, and consumes the output</span>
+<span class="kd">private</span><span class="w"> </span><span class="n">TopologyTestDriver</span><span class="w"> </span><span class="n">testDriver</span><span class="p">;</span>
+<span class="kd">private</span><span class="w"> </span><span class="n">TestInputTopic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="n">inputTopic</span><span class="p">;</span>
+<span class="kd">private</span><span class="w"> </span><span class="n">TestOutputTopic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="n">outputTopic</span><span class="p">;</span>
+<span class="kd">private</span><span class="w"> </span><span class="n">Serde</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">stringSerde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">StringSerde</span><span class="p">();</span>
+<span class="kd">private</span><span class="w"> </span><span class="n">Serde</span><span class="o">&lt;</span><span class="n">Long</span><span class="o">&gt;</span><span class="w"> </span><span class="n">longSerde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">LongSerde</span><span class="p">();</span>
+
+<span class="c1">// This function would actually be in the main code body, not in the test code.</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">Topology</span><span class="w"> </span><span class="nf">buildMyTopology</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">inputStream</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">outputStream</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">StreamsBuilder</span><span class="w"> </span><span class="n">sb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">StreamsBuilder</span><span class="p">(...);</span>
+
+<span class="w">    </span><span class="c1">// 1) Build the topology</span>
+<span class="w">    </span><span class="n">sb</span>
+<span class="w">        </span><span class="p">.</span><span class="na">stream</span><span class="p">(</span><span class="n">inputStream</span><span class="p">,</span><span class="w"> </span><span class="n">Consumed</span><span class="p">.</span><span class="na">with</span><span class="p">(</span><span class="n">stringSerde</span><span class="p">,</span><span class="w"> </span><span class="n">longSerde</span><span class="p">))</span>
+<span class="w">        </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">myMapFunction</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">groupByKey</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">reduce</span><span class="p">(</span><span class="n">myReduceFunction</span><span class="p">,</span>
+<span class="w">            </span><span class="n">Materialized</span><span class="p">.</span><span class="na">with</span><span class="p">(</span><span class="n">stringSerde</span><span class="p">,</span><span class="w"> </span><span class="n">longSerde</span><span class="p">))</span>
+<span class="w">        </span><span class="p">.</span><span class="na">to</span><span class="p">(</span><span class="n">outputStream</span><span class="p">,</span><span class="w"> </span><span class="n">Produced</span><span class="p">.</span><span class="na">with</span><span class="p">(</span><span class="n">stringSerde</span><span class="p">,</span><span class="w"> </span><span class="n">longSerde</span><span class="p">));</span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">sb</span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="nd">@Before</span>
+<span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">setup</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Topology</span><span class="w"> </span><span class="n">topology</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">buildMyTopology</span><span class="p">(</span><span class="s">"input"</span><span class="p">,</span><span class="w"> </span><span class="s">"output"</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// 2) Setup test driver</span>
+<span class="w">    </span><span class="n">Properties</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Properties</span><span class="p">();</span>
+<span class="w">    </span><span class="n">testDriver</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">TopologyTestDriver</span><span class="p">(</span><span class="n">topology</span><span class="p">,</span><span class="w"> </span><span class="n">props</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// 3) Setup the test topics to input and output data</span>
+<span class="w">    </span><span class="n">inputTopic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">testDriver</span>
+<span class="w">        </span><span class="p">.</span><span class="na">createInputTopic</span><span class="p">(</span><span class="s">"input"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">stringSerde</span><span class="p">.</span><span class="na">serializer</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">longSerde</span><span class="p">.</span><span class="na">serializer</span><span class="p">());</span>
+<span class="w">    </span><span class="n">outputTopic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">testDriver</span>
+<span class="w">        </span><span class="p">.</span><span class="na">createOutputTopic</span><span class="p">(</span><span class="s">"output"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">stringSerde</span><span class="p">.</span><span class="na">deserializer</span><span class="p">(),</span>
+<span class="w">            </span><span class="n">longSerde</span><span class="p">.</span><span class="na">deserializer</span><span class="p">());</span>
+<span class="p">}</span>
+
+<span class="nd">@After</span>
+<span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">tearDown</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">testDriver</span><span class="p">.</span><span class="na">close</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="nd">@Test</span>
+<span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">shouldSumToThree</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// 4) Write data into the input topic</span>
+<span class="w">    </span><span class="n">inputTopic</span><span class="p">.</span><span class="na">pipeInput</span><span class="p">(</span><span class="s">"a"</span><span class="p">,</span><span class="w"> </span><span class="mi">1L</span><span class="p">);</span>
+<span class="w">    </span><span class="n">inputTopic</span><span class="p">.</span><span class="na">pipeInput</span><span class="p">(</span><span class="s">"a"</span><span class="p">,</span><span class="w"> </span><span class="mi">2L</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// 5) Assert that the outputs are exactly what we expect them to be</span>
+<span class="w">    </span><span class="n">assertThat</span><span class="p">(</span><span class="n">outputTopic</span><span class="p">.</span><span class="na">readKeyValue</span><span class="p">(),</span><span class="w"> </span><span class="n">equalTo</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">KeyValue</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">"a"</span><span class="p">,</span><span class="w"> </span><span class="mi">3L</span><span class="p">)));</span>
+
+<span class="w">    </span><span class="c1">// 6) And make sure that there isn't anything else extra in the topic</span>
+<span class="w">    </span><span class="n">assertThat</span><span class="p">(</span><span class="n">outputTopic</span><span class="p">.</span><span class="na">isEmpty</span><span class="p">(),</span><span class="w"> </span><span class="n">is</span><span class="p">(</span><span class="kc">true</span><span class="p">));</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>(Variable and method names are tidied from the printed listing, which mixes <code>input</code> and <code>inputTopic</code>.) The driver executes the topology (2), plugs in the input and output topics (3), you pipe data in (4), validate the output (5) and confirm there are <strong>no side effects or errant events</strong> (6).</li>
+</ul>
+<h2 id="20-3-testing-schema-evolution-and-compatibility">20.3 Testing schema evolution and compatibility</h2>
+<ul>
+<li>Validate a <strong>candidate schema against the one in the schema registry</strong> and compare against your <strong>schema evolution rules</strong> before deploying
+<ul>
+<li>Example (Confluent Schema Registry): register the initial <code>User</code> schema (Example 20-2) against a <strong>subject</strong> (the acceptable schemas inside a Kafka topic; <code>my_user_subject</code>, Example 20-3 via a <code>curl</code> POST)</li>
+<li>the candidate drops <code>age</code> (Example 20-4)</li>
+<li>a compatibility query (Example 20-5) passes the candidate to the registry's compatibility endpoint and reads <code>is_compatible</code> with <code>jq</code>.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"record"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"User"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"com.example"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"fields"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"id"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"name"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"age"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"int"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"record"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"User"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"com.example"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"fields"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"id"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"name"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1"># Example 20-5: validate that the updated User schema can be deployed</span>
+<span class="nv">ORIGINAL_USER_SCHEMA</span><span class="o">=</span>...<span class="w">  </span><span class="c1"># As shown above</span>
+
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/vnd.schemaregistry.v1+json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data<span class="w"> </span><span class="s2">"{\"schema\": </span><span class="nv">$ORIGINAL_USER_SCHEMA</span><span class="s2">}"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="s2">"www.mySR.com/subjects/my_user_subject/versions"</span>
+
+<span class="nv">CANDIDATE_USER_SCHEMA</span><span class="o">=</span>...<span class="w">  </span><span class="c1"># As shown above</span>
+<span class="nv">COMPATIBILITY_RESPONSE</span><span class="o">=</span><span class="k">$(</span>
+<span class="w">    </span>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/vnd.schemaregistry.v1+json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">        </span>--data<span class="w"> </span><span class="s2">"{\"schema\": </span><span class="nv">$CANDIDATE_USER_SCHEMA</span><span class="s2">}"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">        </span><span class="s2">"www.mySR.com/compatibility/subjects/my_user_subject/versions/latest"</span><span class="k">)</span>
+
+<span class="c1"># Extract the 'is_compatible' boolean from the response</span>
+<span class="nv">IS_COMPATIBLE</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="s2">"</span><span class="nv">$COMPATIBILITY_RESPONSE</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">'.is_compatible'</span><span class="k">)</span>
+
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">"</span><span class="nv">$IS_COMPATIBLE</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"true"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"The new schema is compatible, you can deploy it!"</span>
+<span class="k">elif</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">"</span><span class="nv">$IS_COMPATIBLE</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"false"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"The new schema is not compatible, don't deploy it!"</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Error: Could not determine compatibility!"</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Unexpected response from Schema Registry."</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Don't deploy the schema!"</span>
+<span class="w">    </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<span class="k">fi</span>
+</code></pre>
+<ul>
+<li>(The book's script prints tick and cross symbols; they are replaced by plain text here.) The default evolution mode is <strong>BACKWARD</strong> (you can delete fields and add optional fields), so this example is compatible and can deploy. This is one example for the Confluent registry
+<ul>
+<li>consult your registry's documentation.</li>
+</ul>
+</li>
+</ul>
+<h2 id="20-4-integration-testing">20.4 Integration testing</h2>
+<ul>
+<li>Focus on <strong>emulating event-stream inputs and direct request inputs</strong>; from simple <strong>smoke tests</strong> to suites across hundreds or thousands of input and output combinations
+<ul>
+<li>The goal: the service performs as expected on its inputs and <strong>produces events and query responses</strong> as expected</li>
+<li><strong>Note:</strong> integration tests may include more than one microservice (tightly coupled in one bounded context), but each extra service adds complexity and the chance of omitted cases.</li>
+</ul>
+</li>
+<li><strong>Three variations:</strong> <strong>local</strong> (a local replica of production), <strong>remote</strong> (a separate staging, QA or even production environment) and <strong>hybrid</strong> (some parts local, some remote, such as a laptop container against remote stores and brokers).</li>
+<li>Questions throughout: What is the goal (does it run, a smoke test with production data, complex multi-service workflows)? Must it <strong>restart from the beginning of the input streams</strong> (full data loss, reprocessing) or <strong>restore from a snapshot or checkpoint</strong>? What data decides success (hand-crafted, generated, real production, how much)? Any performance, load, throughput or scaling requirements? How to <strong>lower the barrier</strong> so each microservice does not need a custom harness?</li>
+</ul>
+<h3 id="local-integration-testing">Local integration testing</h3>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-20-local-integration.svg" alt="Local integration" loading="lazy" /></p>
+<ul>
+<li>A <strong>local copy of production</strong>:
+<ul>
+<li>at minimum an event broker, a schema registry, the microservice's data stores, the service itself and any processing frameworks (heavyweight framework or FaaS)</li>
+<li>containerisation, logging and the CMS are not strictly needed
+<ul>
+<li>You <strong>control each system independently</strong> and can script production-like scenarios: <strong>intermittent failures, out-of-order events, network loss</strong></li>
+</ul>
+</li>
+<li>test the <strong>framework integration</strong> with your logic</li>
+<li>test <strong>horizontal scaling</strong>, especially <strong>copartitioning and state</strong></li>
+<li>and test <strong>event-driven and request-response logic together</strong> (treat the API as another source of events).</li>
+</ul>
+</li>
+<li>Options by component:
+<ul>
+<li><strong>Event broker:</strong>
+<ul>
+<li>create and delete streams</li>
+<li>selective <strong>event ordering</strong> for time-based logic, out-of-order events and upstream producer failures</li>
+<li>modify partition counts</li>
+<li>induce broker failures and recovery</li>
+<li>induce stream availability failures.</li>
+</ul>
+</li>
+<li><strong>Schema registry:</strong> publish evolution-compatible schemas and use them to produce input events; induce failures and recovery.</li>
+<li><strong>Data stores:</strong> change table schemas and stored procedures (if applicable); rebuild internal state when the instance count changes; induce failures.</li>
+<li><strong>Processing framework:</strong>
+<ul>
+<li>shuffling via internal streams (lightweight) or the shuffle mechanism (heavyweight) for copartitioning and data locality</li>
+<li>checkpointing, failures and recovery</li>
+<li>inducing a <strong>worker failure</strong> (heavyweight).</li>
+</ul>
+</li>
+<li><strong>Application:</strong>
+<ul>
+<li>scale the instance count (dynamically if supported) and verify <strong>rebalancing</strong></li>
+<li><strong>state restored from checkpoints or changelogs with data locality preserved</strong></li>
+<li><strong>external state access unaffected</strong>, and <strong>request-response access unaffected</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Two ways to run local tests:
+<ul>
+<li><strong>embedded libraries in your code</strong> (narrow) or a <strong>local environment of components, most commonly containers</strong>, controlled from test scripts</li>
+<li>plus <strong>hosted or SaaS</strong> options.</li>
+</ul>
+</li>
+</ul>
+<h4 id="within-the-runtime-of-your-test-code">Within the runtime of your test code</h4>
+<ul>
+<li>Narrowest option: the test code <strong>starts and controls the full event broker and schema registry</strong> with the service under test. Example 20-6 (pseudocode):</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Start the broker and the schema registry, both of which run on the JVM</span>
+<span class="n">broker</span><span class="p">.</span><span class="na">start</span><span class="p">(</span><span class="n">brokerUrl</span><span class="p">,</span><span class="w"> </span><span class="n">brokerPort</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+<span class="n">schemaRegistry</span><span class="p">.</span><span class="na">start</span><span class="p">(</span><span class="n">schemaRegistryUrl</span><span class="p">,</span><span class="w"> </span><span class="n">srPort</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="c1">// The first instance of the microservice</span>
+<span class="n">topologyOne</span><span class="p">.</span><span class="na">start</span><span class="p">(</span><span class="n">brokerUrl</span><span class="p">,</span><span class="w"> </span><span class="n">schemaRegistryUrl</span><span class="p">,</span>
+<span class="w">    </span><span class="n">inputStreamOne</span><span class="p">,</span><span class="w"> </span><span class="n">inputStreamTwo</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="c1">// A second instance of the same microservice</span>
+<span class="n">topologyTwo</span><span class="p">.</span><span class="na">start</span><span class="p">(</span><span class="n">brokerUrl</span><span class="p">,</span><span class="w"> </span><span class="n">schemaRegistryUrl</span><span class="p">,</span>
+<span class="w">    </span><span class="n">inputStreamOne</span><span class="p">,</span><span class="w"> </span><span class="n">inputStreamTwo</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="c1">// Publish some test data to input stream 1</span>
+<span class="n">producer</span><span class="p">.</span><span class="na">publish</span><span class="p">(</span><span class="n">inputStreamOne</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+<span class="c1">// Publish some test data to input stream 2</span>
+<span class="n">producer</span><span class="p">.</span><span class="na">publish</span><span class="p">(</span><span class="n">inputStreamTwo</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+<span class="c1">// Wait a short amount of time. Not the best way to do it, but you get the idea</span>
+<span class="n">Thread</span><span class="p">.</span><span class="na">sleep</span><span class="p">(</span><span class="mi">5000</span><span class="p">);</span>
+
+<span class="c1">// Now mimic topologyOne failing</span>
+<span class="n">topologyOne</span><span class="p">.</span><span class="na">stop</span><span class="p">();</span>
+
+<span class="c1">// Check the output of the output topic. Is it as expected?</span>
+<span class="n">event</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">consumer</span><span class="p">.</span><span class="na">consume</span><span class="p">(</span><span class="n">outputTopic</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+
+<span class="c1">// Shut down the remaining components if no more testing is to be done</span>
+<span class="n">topologyTwo</span><span class="p">.</span><span class="na">stop</span><span class="p">();</span>
+<span class="n">schemaRegistry</span><span class="p">.</span><span class="na">stop</span><span class="p">();</span>
+<span class="n">broker</span><span class="p">.</span><span class="na">stop</span><span class="p">();</span>
+
+<span class="c1">// Validate the consumer output</span>
+<span class="k">return</span><span class="w"> </span><span class="n">event</span><span class="p">.</span><span class="na">equals</span><span class="p">(...);</span>
+</code></pre>
+<ul>
+<li>Beyond topology tests it can run <strong>multiple topology instances</strong>, exercise <strong>consumer group rebalancing and partition assignment</strong>, validate <strong>joins, groupBy and aggregations</strong>, test <strong>scaling up and down</strong>, and <strong>inject faults</strong>. <strong>Warning:</strong> this works only because Kafka and the Confluent Schema Registry are <strong>Java applications</strong> that can run beside another Java app
+<ul>
+<li>it is limited to Java (and Scala and Kotlin).</li>
+</ul>
+</li>
+</ul>
+<h4 id="with-containers">With containers</h4>
+<ul>
+<li><strong>The easiest, most common and most flexible</strong>
+<ul>
+<li>approach: plug any containerised service into your test workflow (with overhead to create, manage and destroy)</li>
+<li><strong>Testcontainers</strong> (open source) composes and manages containers from test code, for many languages (Java, Go, .NET, Python, Rust, Ruby, and more)</li>
+<li>Example 20-7 starts a Confluent Kafka broker, a PostgreSQL with pgvector, and a HashiCorp Vault:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="n">KafkaContainer</span><span class="w"> </span><span class="n">kafka</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">KafkaContainer</span><span class="p">(</span>
+<span class="w">    </span><span class="n">DockerImageName</span><span class="p">.</span><span class="na">parse</span><span class="p">(</span><span class="s">"confluentinc/cp-kafka:8.0.0"</span><span class="p">));</span>
+<span class="n">kafka</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+
+<span class="n">PostgreSQLContainer</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">pgvector</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="k">new</span><span class="w"> </span><span class="n">PostgreSQLContainer</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">"pgvector/pgvector:pg16"</span><span class="p">);</span>
+<span class="n">pgvector</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+
+<span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="n">VaultContainer</span><span class="o">&lt;?&gt;</span><span class="w"> </span><span class="n">vaultContainer</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="k">new</span><span class="w"> </span><span class="n">VaultContainer</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">"hashicorp/vault:1.20.0"</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">withVaultToken</span><span class="p">(</span><span class="n">VAULT_TOKEN</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">withInitCommand</span><span class="p">(</span>
+<span class="w">            </span><span class="s">"secrets enable transit"</span><span class="p">,</span>
+<span class="w">            </span><span class="s">"write -f transit/keys/my-key"</span><span class="p">,</span>
+<span class="w">            </span><span class="s">"kv put secret/mysecret1 top_secret=mountains"</span><span class="p">,</span>
+<span class="w">            </span><span class="s">"kv put secret/mysecret2 secret_one=dogs secret_two=bananas"</span>
+<span class="w">        </span><span class="p">);</span>
+</code></pre>
+<ul>
+<li>You can also create containers <strong>outside the test code</strong> (Docker and Kubernetes offer guides)
+<ul>
+<li>Apache Kafka, Apache Pulsar and Confluent Platform ship <strong>off-the-shelf Docker containers</strong></li>
+<li><strong>Tip:</strong> pin <strong>specific software versions</strong> to match production, or run against <strong>newer versions</strong> to find upgrade problems early</li>
+<li>You can bundle all dependencies in <strong>one container</strong> shared across the organisation: more production-like but more complicated and opaque
+<ul>
+<li>an open source contribution model lets colleagues contribute fixes.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Figure 20-1:
+<ul>
+<li>a lightweight-framework example: the schema registry, broker and topics live in the container, and the microservice instance runs outside and references their addresses from its test config</li>
+<li>This is probably the most common option today.</li>
+</ul>
+</li>
+</ul>
+<h4 id="hosted-managed-and-saas-services">Hosted, managed and SaaS services</h4>
+<ul>
+<li>Remotely hosted FaaS and SaaS add complications. Some managed services have open source options (Kafka, Flink, Spark)
+<ul>
+<li>most remote FaaS and SaaS do not: <strong>Microsoft Event Hubs, Google PubSub and Amazon Kinesis</strong> are proprietary. Use <strong>emulators</strong>: Google PubSub has one</li>
+<li><strong>LocalStack</strong> provides an open source Kinesis (and other Amazon services)</li>
+<li><strong>Azure Event Hubs has no emulator</strong>
+<ul>
+<li>(its clients can use Apache Kafka instead, though not every feature is supported)</li>
+<li>Google Cloud, AWS Lambda and Azure functions can be <strong>tested locally</strong></li>
+</ul>
+</li>
+<li>OpenWhisk, OpenFaaS and Kubeless provide similar mechanisms.</li>
+</ul>
+</li>
+<li><strong>Heavyweight framework</strong>
+<ul>
+<li>environments: install and configure the framework, submit the processing job to the framework, await output on the output streams</li>
+<li>a typical single-container setup runs the <strong>resource manager and worker instances beside the broker</strong> and other dependencies (Figure 20-2, containerised for distribution among developers).</li>
+</ul>
+</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>keep <strong>testing, development, staging and production separate</strong></li>
+<li>use access controls so services cannot accidentally contaminate others' streams. Fully managed, FaaS and SaaS options are <strong>much more common than in the first edition</strong></li>
+<li>many organisations host nothing and use providers' environments for development, testing and staging, sometimes with no emulator.</li>
+</ul>
+</li>
+</ul>
+<h2 id="20-5-testing-with-fully-remote-cloud-services">20.5 Testing with fully remote cloud services</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-20-remote-testing.svg" alt="Remote testing" loading="lazy" /></p>
+<ul>
+<li><strong>Prerequisites:</strong>
+<ul>
+<li>the service has an <strong>account, credentials and permissions</strong></li>
+<li>creates and populates <strong>event streams</strong> and other <strong>data stores</strong></li>
+<li><strong>cleans up and deletes its resources</strong> after the test (or failure). Most of the work is here</li>
+<li>the hardest parts are <strong>clean-up</strong> and not <strong>breaking someone else's test environment</strong>: credentials and strict permissions help
+<ul>
+<li><strong>Warning:</strong> invest in service accounts, credentials and permissions for multitenant test environments: easier, safer, more reliable, less break-fix, and it tests the permissions needed for production.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Three ways: a <strong>temporary single-tenant environment</strong>, a <strong>durable multitenant environment</strong>, or <strong>production</strong>.</li>
+</ul>
+<h3 id="temporary-single-tenant-environment">Temporary single-tenant environment</h3>
+<ul>
+<li>Use IaC (&quot;Infrastructure as Code for Clusters and Services&quot;) to generate <strong>temporary</strong> environments: your own temporary Kafka cluster on dedicated hardware, or an API request to a SaaS (such as Confluent) for a Kafka environment
+<ul>
+<li>A new environment has <strong>no streams or events</strong>, so your script populates them
+<ul>
+<li>scripted testing regularly exercises <strong>creating and deleting brokers and compute environments</strong>, and any special data or configuration is <strong>codified in the scripts</strong> (crafted data lives in test code, not a customised environment)</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> mirror <strong>production partition counts</strong> so copartitioning and repartitioning logic is properly tested.</li>
+</ul>
+</li>
+<li>Populate streams from:
+<ul>
+<li><strong>Production events:</strong>
+<ul>
+<li>copy using the replication tooling (specific streams, events, offset ranges, time ranges). <strong>Warning:</strong> consider load on production</li>
+<li>throttle large copies. Advantages: data accurately reflects production</li>
+<li>copy as many or few events as needed</li>
+<li>full isolation from other services under test. Disadvantages: may affect production performance without <strong>broker quotas</strong></li>
+<li>may need substantial data (long-lived entities in compacted streams)</li>
+<li><strong>sensitive information</strong></li>
+<li>your service cannot <strong>decrypt encrypted production data</strong> (it is not a production service and should not have production keys)</li>
+<li>streamline the copying. Common for <strong>load testing</strong>: SLOs, throughput, request latency, scaling, failure recovery.</li>
+</ul>
+</li>
+<li><strong>A curated testing source:</strong>
+<ul>
+<li>specially crafted events representing a range for a stream, usually produced by the service owner, kept as JSON, XML or YAML files in the code repository</li>
+<li>consumers load them into their own (or a mocked) broker. Advantages: anyone can use them</li>
+<li>owners know the data best</li>
+<li>data is validated during parsing and population. Disadvantages: complexity of parsing and populating</li>
+<li><strong>shifting file-format standards</strong> (competing standards in large organisations)</li>
+<li>may not exercise joins, aggregations or repartitions</li>
+<li><strong>becomes stale and orphaned</strong> as people move on</li>
+<li>hand-edited events can introduce errors. Like documentation, they decay and lose trust.</li>
+</ul>
+</li>
+<li><strong>Programmatically generated events:</strong>
+<ul>
+<li>generate from your input schemas pulled from the schema registry (latest or mixed old and new). Advantages: specific values and relationships to exercise all logic</li>
+<li><strong>total isolation</strong></li>
+<li>third-party tools (Confluent Avro tools)</li>
+<li>no production impact</li>
+<li><strong>fuzzing</strong> for boundary conditions and malformed fields</li>
+<li>failing to generate under the latest schema is an <strong>early warning</strong> that your code needs changing. Disadvantages: duplicated efforts across services</li>
+<li>stale scripts under schema evolution</li>
+<li>not accurate to production distribution (key skew)</li>
+<li>a join needs related events in two streams
+<ul>
+<li><strong>Tip:</strong> a <strong>hybrid</strong>: a small, carefully curated set of core entity events plus generated data for the rest</li>
+<li>Sample production data to make sure generated events match real schemas, ranges and relationships.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="durable-multitenant-environment">Durable multitenant environment</h3>
+<ul>
+<li>A single shared environment with pooled streams populated with a production subset or crafted data
+<ul>
+<li>Advantages: <strong>easy to start</strong>, <strong>isolated from production</strong></li>
+<li>Disadvantages: a <strong>tragedy of the commons</strong> (fragmented, abandoned streams; unclear which are valid input versus leftover output)</li>
+<li>services may <strong>produce incompatible events</strong> during their own testing and break downstream consumers</li>
+<li><strong>systems under test are not isolated</strong> (simultaneous large performance tests affect each other)</li>
+<li>data goes stale</li>
+<li>may not represent production's range.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong>
+<ul>
+<li>the <strong>worst</strong> option for usability: the broker becomes a <strong>dumping ground</strong> of confusing streams and broken data</li>
+<li>The core problem is <strong>individual carelessness</strong> (developers pollute their own output streams), growing with service and team count</li>
+<li>Mitigate with careful curation, <strong>strict naming conventions</strong> and <strong>restricted writes</strong>, but it is hard to scale.</li>
+</ul>
+</li>
+</ul>
+<h3 id="testing-in-production">Testing in production</h3>
+<ul>
+<li>Spin up the service, consume production input streams, apply business logic and write to a <strong>temporary test output stream</strong>: isolation is crucial when a previous version of the same service runs beside it (&quot;absolutely certain you aren't writing to the production output event streams&quot;)
+<ul>
+<li>Advantages: <strong>complete production events</strong></li>
+<li>uses the <strong>production security model</strong> (access control and encryption)</li>
+<li><strong>excellent for smoke tests</strong> with current data</li>
+<li>no separate environment to maintain. Disadvantages: uses production resources (affects SLOs; <strong>not for load and performance testing</strong>)</li>
+<li>you must <strong>clean up</strong> created streams, consumer groups, permissions and state stores</li>
+<li>you need tooling to tell <strong>test services and streams from production</strong> ones (<strong>metadata tagging</strong> helps a lot). Works best for <strong>smaller teams and low-utilisation clusters</strong></li>
+<li>most organisations use dedicated QA or testing environments and copy production data.</li>
+</ul>
+</li>
+</ul>
+<h3 id="choosing-a-strategy">Choosing a strategy</h3>
+<ul>
+<li>Microservice modularity means you need not pick one strategy for everything
+<ul>
+<li><strong>Supportive tooling</strong> for creating and tearing down dedicated brokers and for copying events between brokers largely determines your options.</li>
+</ul>
+</li>
+<li>With little or no tooling you end up with <strong>one shared test broker</strong> with a hodgepodge of streams: suffixes like <code>-testing-01</code>, <code>-testing-02</code>, <code>-testing-02-final</code>, <code>-testing-02-final-v2</code>
+<ul>
+<li>unreliable data</li>
+<li><strong>tribal knowledge</strong></li>
+<li>higher costs for a continuously available cluster that hosts large data and performance tests.</li>
+</ul>
+</li>
+<li>With proper investment each service can <strong>bring up its own environment</strong>, populate streams, <strong>copy some production data</strong>, run in a near-production setting and <strong>tear down afterwards</strong> (no leftover artefacts)
+<ul>
+<li>The overhead is not trivial, but unlocks <strong>multicluster benefits, redundancy and disaster recovery</strong> (Chapter 19)</li>
+<li>A shared cluster can still work with <strong>diligent housekeeping</strong>, clean and reliable source streams, deleting abandoned artefacts
+<ul>
+<li><strong>access controls so only owners populate data</strong></li>
+<li><strong>coordinated performance tests</strong>, and incremental adoption of tooling for dedicated clusters, SaaS environments and cross-broker replication.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Streams can be populated by <strong>copying production</strong>, <strong>curating</strong> data sets and <strong>generating from schemas</strong>
+<ul>
+<li>each has pros and cons and all rely on supportive tooling to create, populate and manage streams.</li>
+</ul>
+</li>
+<li>Building the test environment is a <strong>collaborative effort</strong>:
+<ul>
+<li>invest in tooling for a common platform</li>
+<li>programmatic creation of environments (including event stream population) cuts the setup overhead.</li>
+</ul>
+</li>
+<li>A <strong>shared test environment</strong> is typical when tooling investment is low, at the cost of managing data, validity and ownership
+<ul>
+<li><strong>disposable environments</strong> are preferable (isolation, fewer multitenancy issues), need more tooling investment, but save time and effort and better prepare the organisation for disaster recovery.</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Unit, topology, integration</strong> tests; <strong>TopologyTestDriver</strong>; <strong>Testcontainers</strong>; <strong>emulator</strong> (LocalStack).</li>
+<li><strong>Local, remote, hybrid</strong> integration; <strong>temporary single-tenant</strong> versus <strong>durable multitenant</strong> environments.</li>
+<li><strong>Curated</strong>, <strong>generated</strong>, <strong>production-copied</strong> test data; <strong>BACKWARD</strong> compatibility check.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 20: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch20.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch20.html</a></li>
+<li>Figures 20-1 and 20-2 are summarised
+<ul>
+<li>Listings are as printed with tidy-ups noted in the text (variable names, symbols)</li>
+<li>Tool availability (emulators, container image versions) is as stated in the chapter.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-19-supportive-tooling/">Building Event-Driven Microservices 19: Supportive Tooling</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-21-deploying-event-driven-microservices/">Building Event-Driven Microservices 21: Deploying Event-Driven Microservices</a></li>
+<li><a href="/book-digest/practical-test-pyramid/ptp-01-the-pyramid-and-unit-tests/">The Practical Test Pyramid 1: The Pyramid and Unit Tests</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-19-supportive-tooling/">&larr; Building Event-Driven Microservices 19: Supportive Tooling</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-21-deploying-event-driven-microservices/">Building Event-Driven Microservices 21: Deploying Event-Driven Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

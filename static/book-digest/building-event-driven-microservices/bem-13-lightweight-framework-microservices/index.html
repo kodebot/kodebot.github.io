@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 13: Lightweight Framework Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-12-heavyweight-framework-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-14-streaming-sql/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-13-lightweight-framework-microservices">Building Event-Driven Microservices 13: Lightweight Framework Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 13. Previous: <a href="/book-digest/building-event-driven-microservices/bem-12-heavyweight-framework-microservices/">Building Event-Driven Microservices 12: Heavyweight Framework Microservices</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-14-streaming-sql/">Building Event-Driven Microservices 14: Streaming SQL</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Lightweight</strong> frameworks need <strong>no dedicated cluster</strong>: they rely on the <strong>event broker</strong> and the <strong>container management system (CMS)</strong> to scale, keep state and recover.</li>
+<li><strong>Apache Kafka Streams</strong> is effectively the only widely used one (it is part of Apache Kafka); Apache Samza and the Python Faust framework have faded.</li>
+<li>They offer much of what heavyweight frameworks do (declarative topologies, table materialisation, primary and foreign-key joins, groupings, windows, aggregations) that a basic producer/consumer lacks.</li>
+<li><strong>Shuffling</strong> goes through <strong>internal event streams</strong> in the broker; state sits in <strong>internal stores backed by changelogs</strong>. Scaling needs no restart but has a <strong>rematerialisation pause</strong>, reduced by <strong>hot replicas</strong>.</li>
+</ul>
+</div></div>
+<h2 id="13-1-what-lightweight-frameworks-are">13.1 What lightweight frameworks are</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-13-lightweight.svg" alt="Lightweight" loading="lazy" /></p>
+<ul>
+<li>Unlike heavyweight frameworks they do <strong>not require a dedicated processing and resource management cluster</strong>
+<ul>
+<li>they use the <strong>event broker and the CMS</strong> to scale, manage state and recover from failures.</li>
+</ul>
+</li>
+<li>History:
+<ul>
+<li>the first edition identified only <strong>Apache Kafka Streams</strong> and <strong>Apache Samza</strong></li>
+<li>Kafka Streams remains the only one in widespread use, as a core component of Apache Kafka</li>
+<li>Samza's use and release cadence have diminished; the author would not start a new project with it over Kafka Streams</li>
+<li>Others have faded too, such as the open source <strong>BSD-licensed Python Faust</strong> framework: not that nobody uses them, but the <strong>critical social mass</strong> to keep up with broker changes has gone</li>
+<li>Building a full-featured, durable, reliable and scalable framework is hard, and with other off-the-shelf options it is hard to rally enough developers and users.</li>
+</ul>
+</li>
+<li>The chapter leans on Kafka Streams, which is perhaps the only one still in the toolkit in another five years thanks to its embedding in Kafka.</li>
+</ul>
+<h2 id="13-2-example-joining-products-with-brand-data-on-a-foreign-key">13.2 Example: joining products with brand data on a foreign key</h2>
+<ul>
+<li>Connectors pull <strong>brand</strong> and <strong>product</strong> data from an ecommerce database into two streams (Figure 13-1). Product holds what it is, a text description, price and a foreign key to the brand (<code>brandId</code>)
+<ul>
+<li>brand holds the official name and a <strong>logo link</strong> for advertising.</li>
+</ul>
+</li>
+<li>Kafka Streams joins them on <code>brandId</code> to produce an <code>EnrichedProduct</code> stream by denormalising with brand data (Example 13-1, slightly abbreviated):</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 13-1: a Kafka Streams microservice joining and enriching Product with Brand data</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">Topology</span><span class="w"> </span><span class="nf">buildTopology</span><span class="p">(</span><span class="n">Properties</span><span class="w"> </span><span class="n">envProps</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Configuration code not shown for brevity</span>
+<span class="w">    </span><span class="c1">// 1) Create the Kafka topic Serializer/Deserializers, aka Serdes</span>
+<span class="w">    </span><span class="n">BrandSerde</span><span class="w"> </span><span class="n">brandSerde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">BrandSerde</span><span class="p">(...);</span>
+<span class="w">    </span><span class="n">ProductSerde</span><span class="w"> </span><span class="n">productSerde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ProductSerde</span><span class="p">(...);</span>
+<span class="w">    </span><span class="n">EnrichedProductSerde</span><span class="w"> </span><span class="n">enrichedProductSerde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EnrichedProductSerde</span><span class="p">(...);</span>
+
+<span class="w">    </span><span class="c1">// 2) Create the stream builder</span>
+<span class="w">    </span><span class="n">KStreamBuilder</span><span class="w"> </span><span class="n">builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">KStreamBuilder</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// 3) Declare two KTables</span>
+<span class="w">    </span><span class="n">KTable</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Brand</span><span class="o">&gt;</span><span class="w"> </span><span class="n">brandTable</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">builder</span><span class="p">.</span><span class="na">table</span><span class="p">(</span><span class="n">Serdes</span><span class="p">.</span><span class="na">Long</span><span class="p">(),</span><span class="w"> </span><span class="n">brandSerde</span><span class="p">,</span><span class="w"> </span><span class="s">"brand-topic"</span><span class="p">);</span>
+<span class="w">    </span><span class="n">KTable</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Product</span><span class="o">&gt;</span><span class="w"> </span><span class="n">productTable</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">builder</span><span class="p">.</span><span class="na">table</span><span class="p">(</span><span class="n">Serdes</span><span class="p">.</span><span class="na">Long</span><span class="p">(),</span><span class="w"> </span><span class="n">productSerde</span><span class="p">,</span><span class="w"> </span><span class="s">"product-topic"</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// 4) Declare the join, providing the joiner function</span>
+<span class="w">    </span><span class="n">productTable</span>
+<span class="w">        </span><span class="p">.</span><span class="na">join</span><span class="p">(</span><span class="n">brandTable</span><span class="p">,</span><span class="w"> </span><span class="n">Product</span><span class="p">::</span><span class="n">getBrandId</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ProductToBrandJoiner</span><span class="p">())</span>
+<span class="w">        </span><span class="c1">// 5) Convert back to a stream and write to the output</span>
+<span class="w">        </span><span class="p">.</span><span class="na">toStream</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">to</span><span class="p">(</span><span class="s">"enriched-product-topic"</span><span class="p">,</span>
+<span class="w">            </span><span class="n">Produced</span><span class="p">.</span><span class="na">with</span><span class="p">(</span><span class="n">Serdes</span><span class="p">.</span><span class="na">Long</span><span class="p">(),</span><span class="w"> </span><span class="n">enrichedProductSerde</span><span class="p">));</span>
+
+<span class="w">    </span><span class="c1">// 6) Build and return the declared streaming topology</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">builder</span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Example 13-2: the ProductToBrandJoiner used to populate the enriched item</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProductToBrandJoiner</span><span class="w"> </span><span class="kd">implements</span>
+<span class="w">    </span><span class="n">ValueJoiner</span><span class="o">&lt;</span><span class="n">Product</span><span class="p">,</span><span class="w"> </span><span class="n">Brand</span><span class="p">,</span><span class="w"> </span><span class="n">EnrichedProduct</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">EnrichedProduct</span><span class="w"> </span><span class="nf">apply</span><span class="p">(</span><span class="n">Product</span><span class="w"> </span><span class="n">p</span><span class="p">,</span><span class="w"> </span><span class="n">Brand</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">EnrichedProduct</span>
+<span class="w">            </span><span class="p">.</span><span class="na">newBuilder</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="na">setId</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="na">getId</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="na">getName</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="na">setDescription</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="na">getDescription</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="na">setPrice</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="na">getPrice</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="na">setBrandName</span><span class="p">(</span><span class="n">b</span><span class="p">.</span><span class="na">getBrandName</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="na">setBrandLogoURI</span><span class="p">(</span><span class="n">b</span><span class="p">.</span><span class="na">getBrandLogoURI</span><span class="p">())</span>
+<span class="w">            </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Steps:
+<ul>
+<li><strong>Serdes</strong> (serialiser and deserialiser) convert Kafka byte arrays into Avro, Protobuf or JSON Schema objects mapped to plain Java objects</li>
+<li>the <strong>stream builder</strong> declares the topology</li>
+<li>two <strong>KTables</strong> materialise <code>brand-topic</code> and <code>product-topic</code></li>
+<li>a <strong>table-to-table join</strong> with a <code>ValueJoiner</code> (<code>ProductToBrandJoiner</code>) saying how to merge the entities</li>
+<li>convert back to a stream and write to <code>enriched-product-topic</code></li>
+<li>build the topology, which the calling class sets up to begin streaming. See the official documentation for foreign-key joins</li>
+</ul>
+</li>
+<li>Lightweight frameworks give stream-processing features <strong>comparable to heavyweight</strong> ones for those who want the advanced features without <strong>running their own clusters</strong>: declarative topologies, table materialisation, primary and foreign-key joins, groupings, windowing and aggregations, all missing from a basic producer/consumer.</li>
+</ul>
+<h2 id="13-3-under-the-hood">13.3 Under the hood</h2>
+<ul>
+<li>Defined by a <strong>lightweight deployment model</strong>:
+<ul>
+<li>deploy like any event-driven application using native CMS functions, changing parallelism by adding or removing instances. No secondary cluster (as with Flink or Spark) for durable state, recovery or scalability</li>
+<li>they rely mainly on the <strong>event broker</strong>, and to a lesser extent the CMS.</li>
+</ul>
+</li>
+</ul>
+<h3 id="event-shuffling-and-repartitioning">Event shuffling and repartitioning</h3>
+<ul>
+<li>Shuffling relies on <strong>internal event streams hosted by the broker</strong>: the producer writes events to their partitions through an internal stream, consumed by downstream instances of the same application
+<ul>
+<li>Key-based operations (joins, <code>groupByKey</code> with reduce or aggregate) need same-key data on one instance, so events pass through an internal stream with each key in a single partition (see &quot;Copartitioning Event Streams&quot;).</li>
+</ul>
+</li>
+<li>The internal stream acts like the <strong>external shuffle service</strong> described for heavyweight frameworks (Figure 13-2)
+<ul>
+<li>each repartition stage uses its <strong>own dedicated internal stream</strong>, hosted by the same broker.</li>
+</ul>
+</li>
+<li><strong>Caution:</strong> internal streams are <strong>private</strong>; no other microservice uses them. <strong>Do not couple microservices on internal streams.</strong></li>
+<li>Because in-flight events are durably retained in the broker, the application <strong>scales dynamically</strong>. The trade-off is <strong>increased latency</strong>, unavoidable because there are no other shuffle options
+<ul>
+<li>Kafka Streams is bound entirely to Apache Kafka.</li>
+</ul>
+</li>
+</ul>
+<h3 id="state-and-changelogs">State and changelogs</h3>
+<ul>
+<li><strong>In-memory and disk-based key-value stores</strong>
+<ul>
+<li>are most common, since the <strong>domain-specific language (DSL)</strong> is based on manipulating and storing keys and values</li>
+<li>By default: <strong>internal state stores backed by changelog streams in the broker</strong> (see Chapter 8).</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> since every lightweight application is independent, one can request instances with very fast local disk while another asks for very large, slower drives.</li>
+<li>You can extend them to <strong>plug in other storage</strong> by implementing the storage interface (for example the Kafka Streams <code>StateStore</code> interface), allowing external stores or alternative storage and query models: for example <strong>Amazon DynamoDB</strong> instead of an internal key-value store.</li>
+</ul>
+<h3 id="scaling-and-recovering-from-failures">Scaling and recovering from failures</h3>
+<ul>
+<li>Scaling and failure recovery are <strong>very similar</strong>:
+<ul>
+<li>adding an instance (intentionally, or a recovering one) needs partition and state assignment</li>
+<li>removing one needs reassigning partitions and state to a live instance.</li>
+</ul>
+</li>
+<li>Main benefit:
+<ul>
+<li><strong>dynamic scaling, no restart</strong> to change parallelism, though processing may pause for <strong>consumer group rebalancing</strong> and <strong>rematerialisation from the changelog</strong></li>
+<li>Figure 13-3: assigned input partitions (including internal streams) are rebalanced and state is restored from changelogs before work continues.</li>
+</ul>
+</li>
+</ul>
+<h3 id="state-assignment">State assignment</h3>
+<ul>
+<li>An instance with new internal state must <strong>load the changelog before processing new events</strong>, like loading a checkpoint in heavyweight systems.
+<ul>
+<li><strong>Operator state</strong> (<code>&lt;partitionId, offset&gt;</code> for all partitions, input and internal) is stored in the application's <strong>consumer group</strong>.</li>
+<li><strong>Keyed state</strong> (<code>&lt;key, state&gt;</code>) is stored in each state store's <strong>changelog</strong>.</li>
+</ul>
+</li>
+<li>During the <strong>state restoration phase</strong> all internal state must be loaded <strong>before</strong> new events
+<ul>
+<li>processing earlier risks nondeterministic results. Once every store is restored, consumption of input and internal streams resumes.</li>
+</ul>
+</li>
+</ul>
+<h3 id="state-replication-and-hot-replicas">State replication and hot replicas</h3>
+<ul>
+<li>A <strong>hot replica</strong> (see Chapter 8) is a copy of a state store materialised from the changelog: a standby fallback for a failed primary, and a way to <strong>scale down gracefully</strong>: on termination and rebalance, partitions are assigned to use the replica's state without interruption
+<ul>
+<li>Cost: <strong>additional disk and processor</strong> usage.</li>
+</ul>
+</li>
+<li>Scaling up currently looks like:
+<ul>
+<li>start an instance</li>
+<li>join the consumer group and rebalance</li>
+<li><strong>pause while state is materialised from the changelog</strong> (can take time)</li>
+<li>resume
+<ul>
+<li>An option: populate a <strong>replica of the state on the new instance</strong>, wait until it catches up to the head of the changelog, <strong>then</strong> rebalance to give it ownership of the input partitions</li>
+<li>This reduces outages and needs extra bandwidth only from the broker</li>
+</ul>
+</li>
+<li>it is <strong>under development for Kafka Streams</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Lightweight frameworks need no independent cluster; they rely on the broker and CMS for scaling, shuffling and durability.</li>
+<li>Kafka Streams relies extensively on broker integration and is the most popular lightweight framework in use
+<ul>
+<li>Apache Samza's popularity, use and project activity have dwindled since the first edition.</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Lightweight framework</strong>; <strong>Kafka Streams</strong>; <strong>KTable</strong>; <strong>Serde</strong>; <strong>ValueJoiner</strong>.</li>
+<li><strong>Internal (repartition) stream</strong>; <strong>changelog</strong>; <strong>state restoration phase</strong>; <strong>hot replica</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 13: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch13.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch13.html</a></li>
+<li>Figures 13-1 to 13-3 are summarised in the diagram. Listings are as printed (abbreviated) with indentation restored.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-12-heavyweight-framework-microservices/">Building Event-Driven Microservices 12: Heavyweight Framework Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-14-streaming-sql/">Building Event-Driven Microservices 14: Streaming SQL</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/">Building Event-Driven Microservices 8: Stateful Event-Driven Microservices</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-12-heavyweight-framework-microservices/">&larr; Building Event-Driven Microservices 12: Heavyweight Framework Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-14-streaming-sql/">Building Event-Driven Microservices 14: Streaming SQL &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

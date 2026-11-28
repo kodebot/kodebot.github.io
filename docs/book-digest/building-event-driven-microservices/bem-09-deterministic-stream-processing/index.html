@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 9: Deterministic Stream Processing</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-9-deterministic-stream-processing">Building Event-Driven Microservices 9: Deterministic Stream Processing</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 9. Previous: <a href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/">Building Event-Driven Microservices 8: Stateful Event-Driven Microservices</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/">Building Event-Driven Microservices 10: Building Workflows with Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Deterministic processing</strong> means the same output whether a service runs in near real time or catches up from the start of the streams. Only <strong>best-effort</strong> determinism is possible with unbounded streams.</li>
+<li>It needs <strong>consistent timestamps</strong>, well-chosen keys, <strong>event scheduling</strong> across partitions, and a strategy for <strong>late events</strong>.</li>
+<li><strong>Watermarks</strong> (Spark, Flink, Samza, Beam) and <strong>stream time</strong> (Kafka Streams) track event-time progress and define what is late.</li>
+<li><strong>Windows</strong> (tumbling, sliding, session) are where lateness matters most; choose to discard, delay, allow a grace period, or route late events elsewhere, as a <strong>business decision</strong>.</li>
+<li>Plan <strong>reprocessing</strong> carefully (start point, volume, time, side effects).</li>
+</ul>
+</div></div>
+<h2 id="9-1-determinism-with-event-driven-workflows">9.1 Determinism with event-driven workflows</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-09-timestamps.svg" alt="Timestamps" loading="lazy" /></p>
+<ul>
+<li>Three questions:
+<ul>
+<li>how does a service <strong>choose the order</strong> of events across partitions</li>
+<li>how does it handle <strong>out-of-order and late</strong> events</li>
+<li>how do we ensure <strong>deterministic results</strong> in near-real-time versus from the beginning? Answers: timestamps, event scheduling, watermarks and stream time
+<ul>
+<li>Bugs, errors and business logic changes force reprocessing, which makes determinism important.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>A service is either processing near real time or processing the past to catch up (underscaled or new services)
+<ul>
+<li><strong>If you rewound the consumer offsets to the beginning, would you get the same output?</strong> That is the goal.</li>
+</ul>
+</li>
+<li>Some workflows are <strong>explicitly nondeterministic</strong>: those based on current wall-clock time and those that <strong>query external services</strong> whose answers change. Watch for them.</li>
+<li>Fully deterministic processing (every event on time, no failures, no network issues) is the ideal
+<ul>
+<li>reality gives <strong>best effort</strong>, enough in most cases. You need: consistent timestamps, well-selected event keys, partition assignment, event scheduling and late-event strategies.</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-2-timestamps">9.2 Timestamps</h2>
+<ul>
+<li>An event in a stream has an <strong>offset</strong> (what has been read) and a <strong>timestamp</strong> (when it was created, for temporal order relative to other events). Timestamp types (Figure 9-1):
+<ul>
+<li><strong>Event time:</strong> local timestamp assigned by the producer when the event occurred.</li>
+<li><strong>Broker ingestion time:</strong> assigned by the broker; configurable as event time or ingestion time (event time is much more common); a substitute when producer clocks are unreliable.</li>
+<li><strong>Consumer ingestion time:</strong> when the consumer ingests it; can be the event time from the broker record or wall-clock time.</li>
+<li><strong>Processing time:</strong> the wall-clock time of processing.</li>
+</ul>
+</li>
+<li>Event time can propagate to the consumer so its logic decides by when something happened.</li>
+</ul>
+<h3 id="synchronising-distributed-timestamps">Synchronising distributed timestamps</h3>
+<ul>
+<li>Two independent systems cannot share precisely the same clock time (material tolerances, temperature, network delays)
+<ul>
+<li>Clocks can be <strong>nearly</strong> in sync, which is good enough</li>
+<li>Main mechanism: <strong>Network Time Protocol (NTP)</strong> servers; cloud providers such as Amazon and Google offer redundant satellite-connected and atomic clocks per region.</li>
+</ul>
+</li>
+<li>On a LAN, NTP gives a drift of only <strong>a few ms after 15 minutes</strong>, reducible to <strong>1 ms or less</strong> with more frequent synchronisation in best cases (according to David Mills, NTP's inventor), though network issues may prevent it
+<ul>
+<li>Over the open internet skew reaches <strong>+/- 100 ms</strong>, relevant when reconciling events from different regions</li>
+<li>NTP can fail (outages, misconfiguration, unreliable servers; multitenancy affects VM clocks)</li>
+<li>Improvements to NTP servers and GPS are pushing accuracy into the sub-millisecond range</li>
+<li>Minor out-of-order issues will still occur.</li>
+</ul>
+</li>
+<li>Offsets compare events only <strong>within one partition</strong>; many use cases need temporal order across streams
+<ul>
+<li>Example (Figure 9-2): a bank keeps a running tally from a deposits stream and a withdrawals stream, applying an overdraft penalty below $0</li>
+<li>A naive round-robin consumer processes the $10 deposit, the $25 withdrawal (negative balance, penalty) and then the $20 deposit: wrong, since that is not the temporal order.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> the consumer needs <strong>copartitioned</strong> streams so a key's deposits and withdrawals meet; otherwise repartition or rekey.</li>
+</ul>
+<h2 id="9-3-event-scheduling-and-deterministic-processing">9.3 Event scheduling and deterministic processing</h2>
+<ul>
+<li><strong>Event scheduling</strong>
+<ul>
+<li>chooses the next events to process across input partitions</li>
+<li>Logs are consumed in offset order, but across partitions you must <strong>interleave by event time</strong> (Figure 9-2)</li>
+<li><strong>Tip:</strong> the common implementation dispatches <strong>the event with the oldest timestamp</strong> across all assigned partitions.</li>
+</ul>
+</li>
+<li>Present in many stream-processing frameworks, typically <strong>absent from basic consumers</strong>. <strong>Warning:</strong> you need it if event order matters to the business logic.</li>
+<li><strong>Custom event schedulers:</strong>
+<ul>
+<li>Apache Samza's <code>MessageChooser</code> can choose by stream priority, wall-clock time, event time, metadata or content</li>
+<li>take care since many custom schedulers are <strong>nondeterministic</strong> and cannot reproduce results.</li>
+</ul>
+</li>
+<li><strong>Which time to use:</strong>
+<ul>
+<li>locally assigned event time or broker ingestion time occur once per produce-consume workflow</li>
+<li>wall-clock and consumer ingestion times vary with when the app runs. With healthy producers and consumers and no backlog all four are within seconds</li>
+<li>when processing history, event time and consumer ingestion time differ a lot. Prefer <strong>event time</strong> if you can rely on it</li>
+<li>else <strong>broker ingestion time</strong> (rarely, substantial delay when producer and broker cannot communicate reliably).</li>
+</ul>
+</li>
+<li><strong>Timestamp extraction:</strong>
+<ul>
+<li>at consumer ingestion a <strong>timestamp extractor</strong> takes the timestamp from the key, value or metadata</li>
+<li>it becomes the record's event time for the rest of processing.</li>
+</ul>
+</li>
+<li><strong>Request-response calls to external systems</strong> may give nondeterministic results because their state and answers change; whether it matters is a business assessment.</li>
+</ul>
+<h2 id="9-4-watermarks-and-stream-time">9.4 Watermarks and stream time</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-09-watermarks-stream-time.svg" alt="Watermarks and stream time" loading="lazy" /></p>
+<h3 id="watermarks">Watermarks</h3>
+<ul>
+<li>A technique used by Apache Spark, Flink, Samza and Beam to <strong>track event-time progress</strong> through a topology and declare that <strong>all data of a given event time or earlier has been processed</strong>
+<ul>
+<li>A watermark is a <strong>specialised event injected by the framework</strong> and propagated along the topology</li>
+<li>a node receiving it updates its own event time and forwards it (Figure 9-3)
+<ul>
+<li>The consumer node has the highest watermark, generating new ones periodically (after a period of wall-clock or event time, or a number of events): in the figure it has just generated Watermark(24)</li>
+</ul>
+</li>
+<li>Watermark(20) sits between events with timestamps 22 and 20</li>
+<li>once the map stage processes event 20 and then Watermark(20), its internal watermark moves from t=10 to t=20.</li>
+</ul>
+</li>
+<li>A Google whitepaper describes watermarks; chapters 2 and 3 of Akidau, Chernyak and Lax, <em>Streaming Systems</em> (O'Reilly, 2018) go deeper.</li>
+<li><strong>In parallel processing</strong>
+<ul>
+<li>(Figure 9-4): two instances each consume a partition, <code>groupByKey</code> then <code>aggregate</code>, with a <strong>shuffle</strong> sending same-key events across instances
+<ul>
+<li>Watermarks are generated at the source and propagated</li>
+</ul>
+</li>
+<li>a node with several inputs keeps the <strong>minimum</strong> of its inputs' event times
+<ul>
+<li>Both aggregate nodes move from 13 to 15 when the groupByKey-1 watermark arrives</li>
+<li>A watermark <strong>does not affect scheduling</strong></li>
+</ul>
+</li>
+<li>it only tells the node events earlier than it are <strong>late</strong>.</li>
+</ul>
+</li>
+<li>Spark, Flink and Beam need a <strong>dedicated cluster</strong> that also provides cross-task communication and central coordination: repartitioning (groupByKey plus aggregate) uses <strong>cluster-internal communication, not event streams</strong> in the broker.</li>
+</ul>
+<h3 id="stream-time">Stream time</h3>
+<ul>
+<li>Kafka Streams' approach:
+<ul>
+<li><strong>stream time</strong> is <strong>the highest event timestamp last seen by the node</strong></li>
+<li>The consumer buffers events, applies event scheduling to select the next, and raises stream time if larger</li>
+<li>Events processed with a lower stream time than the highest are <strong>out of order</strong>
+<ul>
+<li>Kafka Streams <strong>delays advancing the stream time</strong> (the watermark) until the <strong>grace period</strong> has passed, so windows can include late data rather than discard it.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Figure 9-5:
+<ul>
+<li>stream time is 20</li>
+<li>the next event is the smallest across the two input buffers, event time 30</li>
+<li>dispatched, and stream time becomes 30. It is maintained by processing each event <strong>completely through the topology</strong> before the next (<strong>depth first</strong>)</li>
+<li>in a topology with a repartition stream, each <strong>subtopology</strong> has its own distinct stream time
+<ul>
+<li>Unlike watermarks, where events can be buffered at each node with independently updated event times.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Kafka Streams shuffles through internal <strong>repartition topics</strong> (streams) within a single topology
+<ul>
+<li>Spark, Flink and Beam use their own shuffle mechanism without the broker. Figure 9-6: groupByKey then aggregate</li>
+<li>keys A and B go to repartition stream P1, X and Z to P0</li>
+<li>event time is preserved but data is no longer in strictly ascending order per key, so subtopologies must accommodate out-of-order data
+<ul>
+<li>Check the documentation on stream time and topologies, since it is largely limited to Kafka Streams.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> watermarking can also use repartition streams (Samza's standalone mode is similar to Kafka Streams but with watermarks).</li>
+</ul>
+<h2 id="9-5-out-of-order-and-late-arriving-events">9.5 Out-of-order and late-arriving events</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-09-late-events-windows.svg" alt="Late events and windows" loading="lazy" /></p>
+<ul>
+<li>An event is <strong>out of order</strong> if its timestamp is not equal to or greater than the events ahead of it in the stream (Figure 9-7: F is out of order because its timestamp is lower than G's; H lower than I's).</li>
+<li><strong>Bounded</strong>
+<ul>
+<li>data processed in batch resists out-of-order data (the whole batch is one large window) and gives high determinism, at high latency (nightly batch: results only after the 24-hour period plus processing). For <strong>unbounded</strong> streams you must weigh <strong>latency versus determinism</strong>, a business as well as technical question: &quot;Does my microservice handle out-of-order and late-arriving events according to business requirements?&quot; Bank example: a deposit then an immediate withdrawal must be ordered correctly</li>
+<li>the app may keep state for a business-defined <strong>grace window</strong> such as one hour.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> events from a single partition should always be processed by offset order regardless of timestamp (which can lead to out-of-order events).</li>
+<li>Lateness is relative to the consumer: one service treats any out-of-order event as late, another waits hours.
+<ul>
+<li><strong>Watermarks:</strong> t' is late when it arrives after watermark W(t); the node decides how to handle it.</li>
+<li><strong>Stream time:</strong> t' is late when stream time has moved past t'; each operator in the subtopology decides.</li>
+<li><strong>Tip:</strong> an event is late only when it has missed a deadline specific to the consumer.</li>
+</ul>
+</li>
+</ul>
+<h3 id="causes-and-impacts">Causes and impacts</h3>
+<ul>
+<li><strong>Out-of-order sources</strong> (a stream already out of order, or an external system with out-of-order timestamps).</li>
+<li><strong>Multiple producers to multiple partitions</strong>,
+<ul>
+<li>such as repartitioning (Figure 9-8: two instances repartition two partitions by user ID, for session analysis; Harry interacted with products ID12 and ID77)</li>
+<li>Each instance has its own stream time with <strong>no synchronisation</strong>, so time skew (Figure 9-9: events at t = 90 and t = 95 end up out of order although instance 0 was only slightly ahead)
+<ul>
+<li>worse with unbalanced partition sizes, unequal rates and big backlogs</li>
+</ul>
+</li>
+<li>You cannot depend on consistently increasing time in each stream</li>
+<li><strong>Tip:</strong> a <strong>single-threaded producer</strong> will not create out-of-order events in normal operation unless its source is out of order</li>
+<li>A jump in stream time can make many events late after reordering.</li>
+</ul>
+</li>
+</ul>
+<h3 id="time-sensitive-functions-and-windowing">Time-sensitive functions and windowing</h3>
+<ul>
+<li>Late events matter for <strong>time-based business logic</strong> (aggregations over a period, timers)
+<ul>
+<li>A late event arrives after logic for that period has finished</li>
+<li><strong>Windowing</strong> groups events by time (usually per key)</li>
+<li><strong>Tip:</strong> windows can use event time or processing time; event-time windows typically have more business applications.</li>
+<li><strong>Tumbling window</strong> (Figure 9-10): fixed size, non-overlapping; &quot;when is the peak hour for product usage?&quot;</li>
+<li><strong>Sliding window</strong> (Figure 9-11): fixed size with an incremental step (window slide), reflecting only events currently in it; &quot;how many users clicked on my product in the past hour?&quot;</li>
+<li><strong>Session window</strong> (Figure 9-12): dynamic size, ends on an inactivity timeout, then a new session; &quot;what does a user look at in a browsing session?&quot;</li>
+</ul>
+</li>
+<li>Each must deal with out-of-order events:
+<ul>
+<li>decide how long to wait</li>
+<li>You can never be sure you have received all events; waiting works but you eventually give up</li>
+<li>Consider state size, likelihood of late events and business impact of ignoring them.</li>
+</ul>
+</li>
+</ul>
+<h3 id="handling-late-events">Handling late events</h3>
+<ul>
+<li>Decide the strategy at <strong>business level first</strong>:
+<ul>
+<li>financial transactions and system failures may need handling wherever they appear</li>
+<li>measurement events (temperature, force) may be discarded. Waiting raises determinism but also <strong>latency</strong>, which hurts time-sensitive applications and tight SLAs</li>
+<li>microservices let you tailor it per service.</li>
+</ul>
+</li>
+<li>When a window sees an event past its cut-off it starts a new window and emits the old. For an event that belonged in the old window:
+<ul>
+<li><strong>Discard</strong> it (the window is closed).</li>
+<li><strong>Keep the window open and delay output</strong> for a fixed time (more complete, higher latency).</li>
+<li><strong>Grace period:</strong> emit as soon as complete but keep the window available for a set grace period; merge late events and write the updated output to the stream.</li>
+<li><strong>Route to a separate stream:</strong> log it and send it to a dedicated stream, with some <strong>reconciliation or compensation</strong> or it sits unresolved (&quot;The Compensation Workflow Pattern&quot;).</li>
+</ul>
+</li>
+<li>There is no technical rule
+<ul>
+<li>if requirements do not specify, the business must resolve it. Guiding questions: How likely are late events? How long must you guard against them? Business impact of dropping them? Business benefit of waiting? Disk or memory for state? Do waiting costs outweigh benefits?</li>
+</ul>
+</li>
+</ul>
+<h2 id="9-6-reprocessing-versus-processing-in-near-real-time">9.6 Reprocessing versus processing in near real time</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-09-reprocessing.svg" alt="Reprocessing" loading="lazy" /></p>
+<ul>
+<li>Immutable streams let consumers <strong>rewind offsets and replay</strong>:
+<ul>
+<li>reprocessing, which every designer must consider</li>
+<li>Typically only for services using <strong>event time</strong>, not wall-clock aggregation and windowing</li>
+<li>A new service effectively reprocesses some, all or none of history: point offsets to the start and let it process, materialise state, compute and write output.</li>
+</ul>
+</li>
+<li><strong>Event scheduling</strong> is important for reprocessing correctly (same order as near real time), as is handling out-of-order events, because repartitioning through the broker (rather than inside Spark, Flink or Beam) can cause reordering.</li>
+<li>Steps:
+<ol>
+<li><strong>Determine the starting point:</strong> best practice is the very beginning for stateful consumers, especially entity streams (a service interested in only the last 30 days may reprocess just that).</li>
+<li><strong>Determine which consumer offsets to reset:</strong> stateful streams to the very beginning (a bank balance without earlier paychecks is wrong).</li>
+<li><strong>Consider the volume of data:</strong> how long and what bottlenecks; <strong>quotas</strong> (Chapter 19) so the broker is not overwhelmed.</li>
+<li><strong>Consider the time to reprocess:</strong> possibly many hours; tell downstream consumers about stale data; scale to maximum parallelism, then back down.</li>
+<li><strong>Consider the impact:</strong> do not, for example, re-email users that their packages shipped.</li>
+</ol>
+</li>
+</ul>
+<h2 id="9-7-intermittent-failures-and-late-events">9.7 Intermittent failures and late events</h2>
+<ul>
+<li>An event can be late during near-real-time processing (watermark or stream time advanced) but <strong>in place in the stream when reprocessed</strong>, which is hard to detect and shows how upstream problems affect downstream consumers.</li>
+<li><strong>Producer or broker connectivity issues</strong>
+<ul>
+<li>(Figures 9-13 to 9-15): records are created in timestamp order but cannot be published; the producer retries and either succeeds later or gives up (ideally a <strong>noisy</strong> failure)</li>
+<li>The consumer reads stream A and advances its watermark or stream time, but stream B shows nothing, so it concludes no new data exists and does not know about the outage</li>
+<li>When the producer reconnects, events are published in correct event-time order, but the near-real-time consumer has <strong>already marked them late</strong></li>
+<li>This can go unnoticed even in retrospect.</li>
+</ul>
+</li>
+<li>Mitigations: <strong>wait a predetermined time</strong> before processing (adds latency and only helps if delays are shorter than the wait) or use <strong>robust late-event handling</strong> in the business logic.</li>
+</ul>
+<h2 id="summary-and-further-reading">Summary and further reading</h2>
+<ul>
+<li>Full determinism can never be completely achieved with unbounded streams and intermittent failures; reasonable best-effort solutions give the best latency and correctness trade-off.</li>
+<li>Further reading: Tyler Akidau's &quot;Streaming 101: The World Beyond Batch&quot; and &quot;Streaming 102&quot;; Mikito Takada, <em>Distributed Systems for Fun and Profit</em> (online).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Event time, broker ingestion time, consumer ingestion time, processing time</strong>; <strong>NTP</strong>.</li>
+<li><strong>Event scheduling</strong>; <strong>timestamp extractor</strong>; <strong>watermark</strong>; <strong>stream time</strong>; <strong>grace period</strong>.</li>
+<li><strong>Tumbling, sliding, session</strong> windows; <strong>reprocessing</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 9: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch09.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch09.html</a></li>
+<li>Figures 9-1 to 9-15 are redrawn in grouped diagrams. NTP drift figures are attributed in the chapter to David Mills; not independently checked.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/">Building Event-Driven Microservices 8: Stateful Event-Driven Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/">Building Event-Driven Microservices 10: Building Workflows with Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/">&larr; Building Event-Driven Microservices 8: Stateful Event-Driven Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/">Building Event-Driven Microservices 10: Building Workflows with Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

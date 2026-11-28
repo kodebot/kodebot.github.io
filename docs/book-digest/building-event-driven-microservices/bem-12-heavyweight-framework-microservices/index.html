@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 12: Heavyweight Framework Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-13-lightweight-framework-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-12-heavyweight-framework-microservices">Building Event-Driven Microservices 12: Heavyweight Framework Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 12. Previous: <a href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/">Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-13-lightweight-framework-microservices/">Building Event-Driven Microservices 13: Lightweight Framework Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Heavyweight</strong> frameworks (Apache <strong>Spark</strong>, <strong>Flink</strong>, the <strong>Beam</strong> model) are full-featured stream processors that need <strong>their own cluster</strong>, use their <strong>own mechanisms</strong> for failures, scheduling, storage and coordination, and <strong>shuffle</strong> data automatically.</li>
+<li>They descend from <strong>batch</strong> processing (Hadoop, MapReduce) and suit analytical use cases: ETL, windows and sessions, anomaly detection, aggregation. They can also run <strong>batch jobs</strong>.</li>
+<li>Weaknesses for microservices: a <strong>dedicated cluster</strong> to run, <strong>Java and Python</strong> mostly, and uneven support for materialising tables and <strong>joins</strong>.</li>
+<li>Run them <strong>hosted</strong>, on your <strong>own cluster</strong>, or <strong>on Kubernetes</strong> per application. State lives in internal stores with <strong>checkpoints</strong> to durable storage.</li>
+<li>Scale by <strong>restart</strong> (all) or <strong>while running</strong> (some); watch <strong>multitenancy</strong>.</li>
+</ul>
+</div></div>
+<h2 id="12-1-what-makes-a-framework-heavyweight">12.1 What makes a framework heavyweight</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-12-heavyweight-overview.svg" alt="Overview" loading="lazy" /></p>
+<ul>
+<li>Streaming frameworks give <strong>primary-key joins, foreign-key joins, aggregations and time-based operations</strong>, and handle data sets far beyond a single instance
+<ul>
+<li>Basic producer/consumer and FaaS lack these</li>
+<li>This chapter and the next are overviews, not comparisons; examples come from Spark, Flink and the Beam model.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> the first edition also discussed <strong>Apache Storm and Apache Heron</strong>; removed since use has greatly dwindled.</li>
+<li>Three defining characteristics:
+<ol>
+<li>An <strong>independent cluster</strong> of processing resources: shareable worker nodes plus resource managers that schedule and coordinate.</li>
+<li>Its <strong>own internal mechanisms</strong> for failures, recovery, resource allocation, task distribution, data storage, communication and coordination (unlike lightweight frameworks, FaaS and BPCs, which rely on the container management system (CMS) and the event broker).</li>
+<li>An <strong>automated mechanism for shuffling data</strong> between instances, critical for joins and aggregations at scale (all data of a key ends up in the right instance).</li>
+</ol>
+</li>
+<li>Managing these clusters independently of the broker and CMS is no small task, hence &quot;heavyweight&quot;. A fourth property: they can <strong>process data in batch jobs</strong>, reflecting their origins.</li>
+</ul>
+<h3 id="a-brief-history">A brief history</h3>
+<ul>
+<li><strong>Apache Hadoop</strong>
+<ul>
+<li>(released 2006) bundled massive parallel processing, failure recovery, data durability and internode communication, so users could use commodity hardware to solve problems needing thousands of nodes</li>
+<li><strong>MapReduce</strong> was among the first widely available ways to process very large batches (&quot;big data&quot;), since overtaken by more performant options</li>
+<li>Data sizes grew from hundreds or thousands of gigabytes to terabytes and petabytes, driving demand for faster processing and near-real-time streams.</li>
+</ul>
+</li>
+<li><strong>Spark</strong>
+<ul>
+<li>started as a high-performance MapReduce replacement, largely batch only, with stream processing added later</li>
+<li><strong>Flink</strong> could process streams from the start. Many organisations begin with event-driven processing when data science and analytics teams convert <strong>batch jobs into streaming pipelines</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-2-example-session-windowing-of-clicks-and-views">12.2 Example: session windowing of clicks and views</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-12-session-example.svg" alt="Session example" loading="lazy" /></p>
+<ul>
+<li>An online advertising company buys ad space and resells it
+<ul>
+<li>customers want <strong>click-through rate</strong> as return on investment. Engagement is billed per <strong>session</strong>: continuous activity with no break longer than <strong>30 minutes</strong>.</li>
+</ul>
+</li>
+<li>Two streams: <code>Click</code> (<code>userId</code>, <code>productId</code>, <code>createdEventTime</code>) and <code>AdView</code> (<code>userId</code>, <code>adId</code>, <code>productId</code>, <code>createdEventTime</code>), both Protobuf (Examples 12-1, 12-2):</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 12-1: the Click schema in Protobuf</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">Click</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">int32</span><span class="w"> </span><span class="na">userId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">productId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Timestamp</span><span class="w"> </span><span class="na">createdEventTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Example 12-2: the AdView schema in Protobuf</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">AdView</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">int32</span><span class="w"> </span><span class="na">userId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">adId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">productId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="w">    </span><span class="n">Timestamp</span><span class="w"> </span><span class="na">createdEventTime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Goal:
+<ul>
+<li>aggregate into <strong>session windows</strong> and emit once <strong>event time</strong> (not wall-clock) of 30 minutes passes without a new event (see Chapter 9). Operations: group by <code>userId</code> (data locality)</li>
+<li>window with a 30-minute timeout</li>
+<li>within each session compute the <code>AdView</code> events that have a corresponding <code>Click</code>, mark them <code>AdEngagement</code> and emit the list. An <code>AdView</code> is generated only when an ad is shown</li>
+<li>a <code>Click</code> only when the user clicks (possibly without seeing an ad).</li>
+</ul>
+</li>
+<li>Example 12-3, Flink (abbreviated, as printed):</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 12-3: snippet of Flink code showing the stream-processing operations</span>
+<span class="c1">// Create streams of click and view events (super type is UserEvent)</span>
+<span class="n">DataStream</span><span class="o">&lt;</span><span class="n">Either</span><span class="o">&lt;</span><span class="n">ClickEvent</span><span class="p">,</span><span class="w"> </span><span class="n">AdViewEvent</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">eitherClicks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">...</span>
+<span class="n">DataStream</span><span class="o">&lt;</span><span class="n">Either</span><span class="o">&lt;</span><span class="n">ClickEvent</span><span class="p">,</span><span class="w"> </span><span class="n">AdViewEvent</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">eitherViews</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">...</span>
+
+<span class="n">eitherClicks</span>
+<span class="w">    </span><span class="p">.</span><span class="na">union</span><span class="p">(</span><span class="n">eitherViews</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">keyBy</span><span class="p">(</span><span class="n">t</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="na">isRight</span><span class="p">())</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="na">right</span><span class="p">().</span><span class="na">getProductId</span><span class="p">();</span>
+<span class="w">        </span><span class="k">else</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="na">left</span><span class="p">().</span><span class="na">getProductId</span><span class="p">();</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="na">window</span><span class="p">(</span><span class="n">EventTimeSessionWindows</span><span class="p">.</span><span class="na">withGap</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofMinutes</span><span class="p">(</span><span class="mi">30</span><span class="p">)))</span>
+<span class="w">    </span><span class="p">.</span><span class="na">process</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProcessClickViewWindowFunction</span><span class="p">())</span>
+<span class="w">    </span><span class="p">.</span><span class="na">addSink</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">KafkaTopicSink</span><span class="p">(...));</span>
+</code></pre>
+<ul>
+<li>Example 12-4's <code>ProcessClickViewWindowFunction</code> iterates the windowed grouping and pairs views with clicks by ad, emitting a <code>List&lt;String&gt;</code> of engaged <code>adId</code>s
+<ul>
+<li>its output is <code>userId</code> to <code>List&lt;String&gt; adEngagements</code> (Table 12-1). (The code, as in the book, ignores event time and assumes the view precedes the click.)</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 12-4: the innards of ProcessClickViewWindowFunction that matches ad views with clicks</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">ProcessClickViewWindowFunction</span><span class="w"> </span><span class="kd">extends</span>
+<span class="w">    </span><span class="n">ProcessWindowFunction</span><span class="o">&lt;</span>
+<span class="w">        </span><span class="n">Either</span><span class="o">&lt;</span><span class="n">ClickEvent</span><span class="p">,</span><span class="w"> </span><span class="n">AdViewEvent</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">Long</span><span class="p">,</span>
+<span class="w">        </span><span class="n">TimeWindow</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">    </span><span class="nd">@Override</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">process</span><span class="p">(</span><span class="n">Long</span><span class="w"> </span><span class="n">key</span><span class="p">,</span>
+<span class="w">                        </span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">,</span>
+<span class="w">                        </span><span class="n">Iterable</span><span class="o">&lt;</span><span class="n">Either</span><span class="o">&lt;</span><span class="n">ClickEvent</span><span class="p">,</span><span class="w"> </span><span class="n">AdViewEvent</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">input</span><span class="p">,</span>
+<span class="w">                        </span><span class="n">Collector</span><span class="o">&lt;</span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">        </span><span class="c1">// Create an empty list where we store the adIds for engagements</span>
+<span class="w">        </span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">adEngagements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Map&lt;ProductId, Tuple2&lt;AdId, wasClicked&gt;&gt;</span>
+<span class="w">        </span><span class="n">Map</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Tuple2</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Boolean</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">HashMap</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// First, get all the Advertisements that have both a click and a view.</span>
+<span class="w">        </span><span class="c1">// This example ignores event time, but assumes that the view must come</span>
+<span class="w">        </span><span class="c1">// before the click.</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Either</span><span class="o">&lt;</span><span class="n">ClickEvent</span><span class="p">,</span><span class="w"> </span><span class="n">AdViewEvent</span><span class="o">&gt;</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+
+<span class="w">            </span><span class="c1">// Reminder that (key = productId)</span>
+<span class="w">            </span><span class="n">Tuple2</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Boolean</span><span class="o">&gt;</span><span class="w"> </span><span class="n">adEngage</span><span class="w"> </span><span class="o">=</span>
+<span class="w">                </span><span class="n">map</span><span class="p">.</span><span class="na">getOrDefault</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Tuple2</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">""</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">));</span>
+
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">isLeft</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// If it is a click event then set wasClicked=true.</span>
+<span class="w">                </span><span class="c1">// Keep the same value for f0.</span>
+<span class="w">                </span><span class="n">map</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Tuple2</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">adEngage</span><span class="p">.</span><span class="na">f0</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">));</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="c1">// If it is a view event populate with the adId</span>
+<span class="w">                </span><span class="n">AdViewEvent</span><span class="w"> </span><span class="n">adv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">event</span><span class="p">.</span><span class="na">right</span><span class="p">();</span>
+<span class="w">                </span><span class="n">String</span><span class="w"> </span><span class="n">adId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">adv</span><span class="p">.</span><span class="na">getAdId</span><span class="p">();</span>
+<span class="w">                </span><span class="n">Boolean</span><span class="w"> </span><span class="n">wasClicked</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">adEngage</span><span class="p">.</span><span class="na">f1</span><span class="p">;</span>
+<span class="w">                </span><span class="c1">// Set the AdId and the original value of wasClicked</span>
+<span class="w">                </span><span class="n">map</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Tuple2</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">adId</span><span class="p">,</span><span class="w"> </span><span class="n">wasClicked</span><span class="p">));</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">Entry</span><span class="o">&lt;</span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Tuple2</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Boolean</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">clickViews</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">map</span><span class="p">.</span><span class="na">entrySet</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">clickViews</span><span class="p">.</span><span class="na">getValue</span><span class="p">().</span><span class="na">f0</span><span class="p">.</span><span class="na">length</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">clickViews</span><span class="p">.</span><span class="na">getValue</span><span class="p">().</span><span class="na">f1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">adEngagements</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">clickViews</span><span class="p">.</span><span class="na">getValue</span><span class="p">().</span><span class="na">f0</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="c1">// key=(String) -&gt; the userId</span>
+<span class="w">        </span><span class="c1">// value=(List&lt;String&gt;) -&gt; a List of adIds with both a view and a click</span>
+<span class="w">        </span><span class="n">out</span><span class="p">.</span><span class="na">collect</span><span class="p">(</span><span class="n">adEngagements</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The listings are reproduced as printed (including <code>keyBy</code> on the product ID in one place and the user ID in a comment)
+<ul>
+<li>the book adds braces to the original <code>if</code> and <code>else</code> here for formatting only.</li>
+</ul>
+</li>
+<li><strong>Stages</strong>
+<ul>
+<li>(Figure 12-1, two instances): <strong>Stage 1:</strong> executors get tasks and input partitions</li>
+<li>the click and view streams are <strong>unioned</strong> into one logical stream and prepared with <code>keyBy</code>
+<ul>
+<li><strong>Stage 2:</strong> <code>keyBy</code> with downstream <code>window</code> and <code>process</code> needs a <strong>shuffle</strong> so all events of a key are consumed by one instance</li>
+<li><strong>Stage 3:</strong> session windows yield a list of <code>adId</code>s with both a view and a click per user</li>
+</ul>
+</li>
+<li>each pair is written to the <code>AdEngagements</code> output stream.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> frameworks offer many more window controls, such as <strong>retaining closed sessions</strong> so late events can be applied and an update emitted.</li>
+<li><strong>Scaling to one instance</strong>
+<ul>
+<li>(Figure 12-2): without dynamic scaling, halt the processor and restore from a <strong>checkpoint</strong> with the new parallelism</li>
+<li>keyed state is read back and operator state restored to assigned partitions</li>
+<li>instance 0 then consumes every partition and still groups and shuffles (to itself) through stage 3.</li>
+</ul>
+</li>
+<li>These frameworks treat streams and events as <strong>building-block primitives</strong> for declaratively grouping, aggregating, joining, processing and storing.</li>
+</ul>
+<h2 id="12-3-inner-workings">12.3 Inner workings</h2>
+<ul>
+<li>Spark and Flink operate similarly at a coarse level (development, deployment, scaling, storage, failure handling)
+<ul>
+<li>Google's <strong>Dataflow</strong> (running Beam applications) probably too, though it is closed. Consult your framework's documentation for nuances.</li>
+</ul>
+</li>
+<li>A <strong>cluster</strong> has two roles:
+<ul>
+<li>The <strong>resource manager</strong> prioritises, assigns and manages workers and tasks, with backup nodes to fail over to.</li>
+<li>The <strong>worker (executor) node</strong> runs the business logic of its tasks using CPU, memory and disk.</li>
+</ul>
+</li>
+<li><strong>Tasks</strong>
+<ul>
+<li>are generated from the application's topology, connect directly to the broker and consume and produce streams (Figure 12-3). A <strong>job</strong> is an application written with the framework's SDK (the word is a batch leftover)</li>
+<li>a streaming job runs indefinitely like any microservice.</li>
+</ul>
+</li>
+<li><strong>Apache ZooKeeper</strong>
+<ul>
+<li>provides <strong>distributed coordination</strong> to decide which resource manager is in charge</li>
+<li>on failure it helps elect a new leader
+<ul>
+<li>Frameworks are built to survive failure of a worker, resource manager or ZooKeeper node</li>
+<li><strong>Note:</strong> ZooKeeper has historically been a major component</li>
+</ul>
+</li>
+<li>newer frameworks may not use it, but distributed coordination remains essential.</li>
+</ul>
+</li>
+<li>On submission, the application is split into tasks assigned to workers (Figure 12-4)
+<ul>
+<li>a <strong>task manager</strong> monitors tasks, restarting and rebalancing as needed, set up for high availability (otherwise all jobs fail and an expensive restart follows). Parallelism is configurable: tasks map 1:1 to partitions in the figure, but one task can consume all partitions or many tasks one partition (as with a queue).</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-4-benefits-and-limitations">12.4 Benefits and limitations</h2>
+<ul>
+<li>Roots in analytics:
+<ul>
+<li>quicker decisions from large volumes of events in near real time. Common patterns: <strong>ETL</strong></li>
+<li>session and window analysis</li>
+<li>detecting abnormal behaviour</li>
+<li>aggregating and keeping state</li>
+<li>stateless streaming operations. They are powerful and mature, with extensive documentation, books and samples.</li>
+</ul>
+</li>
+<li><strong>Limitations</strong> (not prohibitive):
+<ol>
+<li><strong>Not designed for microservice-style deployment:</strong> a dedicated cluster beyond the broker and CMS adds complexity at scale (some mitigations later in the chapter).</li>
+<li><strong>Java and Python only</strong> historically; a common workaround is to let the heavyweight framework perform transformations as its own standalone application, and serve business functionality from the transformed state store in another application (or use streaming SQL, Chapter 14).</li>
+<li><strong>Materialising an entity stream into an indefinitely retained table</strong> is not supported out of the box by all: that blocks table-table and stream-table joins and long-running aggregations.</li>
+</ol>
+</li>
+<li><strong>Acid test:</strong>
+<ul>
+<li>a framework's ability to serve <strong>joins</strong> (as streams or materialised tables), hard to implement and a substantial barrier</li>
+<li>Many focus on time-based aggregation with limited windows
+<ul>
+<li>the leading ones offer a <strong>global window</strong> for indefinite materialisation, from which you can build custom joins (less documented than they should be)</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> if a framework does not handle joins, it likely has not addressed some harder problems.</li>
+</ul>
+</li>
+<li>Though born for analytics, they can power operational event-driven microservices; the next choice is <strong>build or buy</strong>.</li>
+</ul>
+<h2 id="12-5-cluster-setup-options-and-execution-modes">12.5 Cluster setup options and execution modes</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-12-deployment.svg" alt="Deployment" loading="lazy" /></p>
+<ul>
+<li><strong>Hosted service:</strong>
+<ul>
+<li>the simplest: pay someone to run it
+<ul>
+<li>Highest sticker price compared with free open source, but a <strong>total cost</strong> that includes hardware, development, maintenance, upgrades, debugging, monitoring, scaling and <strong>opportunity cost</strong></li>
+<li>Examples: <strong>Confluent</strong> (co-creators of Kafka) fully managed, serverless <strong>Flink SQL</strong> with Kafka</li>
+</ul>
+</li>
+<li><strong>Amazon</strong> managed Flink and Spark</li>
+<li><strong>Google, Databricks and Microsoft</strong> offerings of Spark</li>
+<li><strong>Google Dataflow</strong> (a Beam runner). <strong>Warning:</strong> not all are equal</li>
+<li>some are fully serverless, others need hands-on maintenance</li>
+<li>the trend is serverless with the cluster invisible, which may not suit your security, performance or isolation needs.</li>
+</ul>
+</li>
+<li><strong>Build and run your own:</strong>
+<ul>
+<li>historically dedicated commodity-hardware clusters. <strong>Warning:</strong> &quot;How hard could it be?&quot; is common</li>
+<li>a proof of concept is easy but hardening to a reliable production service is very challenging and expensive. Large, well-staffed companies may afford it</li>
+<li>smaller ones may choose managed services and <strong>optimise costs after product-market fit</strong>.</li>
+</ul>
+</li>
+<li>Alongside the <strong>CMS</strong>:
+<ul>
+<li><strong>Mode one:</strong>
+<ul>
+<li>deploy the cluster on CMS-provisioned resources</li>
+<li>Resource managers, workers and ZooKeeper run in containers or VMs, monitored and restarted like any other</li>
+<li><strong>Tip:</strong> statically assign resource managers and other high-availability services so the CMS does not shuffle them (avoids excess alerts).</li>
+</ul>
+</li>
+<li><strong>Mode two:</strong>
+<ul>
+<li>use the CMS to specify resources <strong>per application</strong>, increasingly popular with containers
+<ul>
+<li>Spark and Flink can use <strong>Kubernetes</strong> (Flink: each application in its own isolated <strong>session cluster</strong>; Spark: Kubernetes as resource manager with isolated workers) (Figure 12-5)</li>
+<li><strong>Tip:</strong> nearly identical to deploying non-heavyweight microservices</li>
+<li>Advantages: uses the CMS resource model including scaling</li>
+</ul>
+</li>
+<li>complete isolation between jobs</li>
+<li>different frameworks and versions</li>
+<li>same deployment process as microservices. Disadvantages: not supported by all frameworks or CMSs</li>
+<li>features of full cluster mode such as automatic scaling may be missing.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="application-submission-modes">Application submission modes</h3>
+<ul>
+<li><strong>Driver mode</strong>
+<ul>
+<li>(Spark, Flink): a single local standalone <strong>driver</strong> coordinates execution while the application runs in the cluster</li>
+<li>it reports errors, logs, etc. <strong>Terminating the driver terminates the application</strong>, a simple way to deploy and stop</li>
+<li>deploy the driver as a microservice via the CMS.</li>
+</ul>
+</li>
+<li><strong>Cluster mode:</strong>
+<ul>
+<li>the whole application is submitted to the cluster, which returns a <strong>unique ID</strong> used to command it via the cluster API</li>
+<li>deploy and halt commands go directly to the cluster, which may not suit a microservice deployment pipeline.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-6-state-and-checkpoints">12.6 State and checkpoints</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-12-state-checkpoints.svg" alt="Checkpoints" loading="lazy" /></p>
+<ul>
+<li>Stateful operations may use internal or external state (Chapter 8), but most heavyweight frameworks favour <strong>internal state</strong> for performance and scalability: records in memory, spilled to <strong>disk</strong> for durability and when state exceeds memory. Risks: disk or node failure, temporary outages from aggressive CMS scaling
+<ul>
+<li>the performance usually outweighs them with planning.</li>
+</ul>
+</li>
+<li>A <strong>checkpoint</strong> is a snapshot of internal state, persisted to durable storage external to the workers, used to rebuild state after scaling or failures
+<ul>
+<li>Historically <strong>HDFS</strong>; now <strong>Amazon S3</strong>, <strong>Google Cloud Storage</strong>, <strong>Azure Blob Storage</strong></li>
+<li>A failed instance restores from the latest checkpoint and resets its consumer offsets to resume.</li>
+</ul>
+</li>
+<li>Two states (Figure 12-6):
+<ul>
+<li><strong>Operator state:</strong> pairs of <code>&lt;partitionId, offset&gt;</code>; each <code>partitionId</code> is unique among all input topics.</li>
+<li><strong>Key state:</strong> pairs of <code>&lt;key, state&gt;</code> (aggregations, reductions, windowing, joins and other stateful operations).</li>
+</ul>
+</li>
+<li>The mechanism <strong>synchronously records both</strong> so they match:
+<ul>
+<li>otherwise events may be skipped or processed twice</li>
+<li><strong>Tip:</strong> functionally equivalent to restoring external stores from snapshots (Chapter 8)</li>
+<li>State must be <strong>completely loaded from the checkpoint before new data</strong>, and the framework verifies operator state matches keyed state per task for correct partition assignment</li>
+<li>Each framework implements this differently.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-7-scaling-and-autoscaling">12.7 Scaling and autoscaling</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-12-scaling-and-tenancy.svg" alt="Scaling" loading="lazy" /></p>
+<ul>
+<li>Maximum parallelism is typically limited by input <strong>partition counts</strong>, since data is read in order
+<ul>
+<li>Cyclical patterns (Figure 12-7: heavy by day, light at night) benefit from scaling up and down: enough capacity without overprovisioning, minimal latency (though many apps tolerate temporarily higher latency)</li>
+<li><strong>Warning:</strong> scaling an application is separate from scaling a cluster; assume the cluster has resources.</li>
+</ul>
+</li>
+<li><strong>Stateless</strong> apps scale easily (join or leave the consumer group, rebalance). <strong>Stateful</strong> apps must load state matching the partition assignment.</li>
+</ul>
+<h3 id="scaling-by-restarting">Scaling by restarting</h3>
+<ul>
+<li>Pause, <strong>checkpoint</strong>, stop, restart with the new parallelism, reload from checkpoints and resume
+<ul>
+<li>Supported by <strong>all</strong> heavyweight frameworks (batch roots)</li>
+<li>Why? <strong>State redistribution</strong> takes time, and <strong>data shuffling</strong>: scaling down a node mid-shuffle can lose data, and adding a node without changing the shuffler's destination at the right moment can lose or duplicate data</li>
+<li>Figure 12-8:
+<ul>
+<li>if an instance terminates abruptly, the reduce nodes no longer know where to source their shuffled events, causing a fatal exception</li>
+<li>so pause, let shuffles finish, and checkpoint.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Safe and simple; consider the downtime, which relates to checkpoint size. It is also a <strong>good way to validate disaster recovery</strong> (equivalent to recovering from the last good state).</li>
+</ul>
+<h3 id="scaling-while-running">Scaling while running</h3>
+<ul>
+<li>Removing, adding or reassigning instances without stopping:
+<ul>
+<li>only in some frameworks (careful state and shuffled-event handling)</li>
+<li>still redistributes partitions and reloads state from the last checkpoint.</li>
+</ul>
+</li>
+<li><strong>Spark's dynamic resource allocation</strong>
+<ul>
+<li>needs <strong>coarse-grained mode</strong> and an <strong>external shuffle service (ESS)</strong> as an isolation layer: the ESS receives shuffled events from upstream tasks and stores them for downstream tasks (Figure 12-9), so tasks scale down on demand (Figure 12-10: instance 0 takes both partitions while the downstream continues via the ESS)</li>
+<li>Spark also offers <strong>shuffle tracking</strong> (keep executors that generated shuffle files alive while downstream jobs use them) and <strong>shuffle block decommissioning</strong> (the block manager migrates shuffled blocks on graceful shutdown)</li>
+<li><strong>Flink's adaptive scheduler</strong> relies on declarative resource management to abstract resources from the job.</li>
+</ul>
+</li>
+<li>Active autoscaling for live applications is still an area of <strong>active development</strong> for both.</li>
+</ul>
+<h3 id="autoscaling">Autoscaling</h3>
+<ul>
+<li>Automatic scaling on <strong>metrics</strong> (processing latency, consumer lag, memory, CPU). Built into some (Google Dataflow, Spark Streaming's dynamic allocation)
+<ul>
+<li>otherwise collect your own and wire them to the framework's scaling, such as the lag monitor tooling (Chapter 19).</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-8-recovering-from-failures-multitenancy-languages-choosing">12.8 Recovering from failures, multitenancy, languages, choosing</h2>
+<ul>
+<li><strong>Failures:</strong>
+<ul>
+<li>worker node failure moves its tasks to another worker with state reloaded from the latest checkpoint plus partition assignments</li>
+<li>resource-manager failure should be transparent to running applications (you may be unable to <strong>deploy</strong> new jobs during an outage)</li>
+<li>high-availability mode backed by ZooKeeper or similar mitigates it. <strong>Tip:</strong> monitor and alert on resource managers and workers</li>
+<li>a single failure may not halt processing but can degrade it and prevent recovery from successive failures.</li>
+</ul>
+</li>
+<li><strong>Multitenancy:</strong>
+<ul>
+<li>consider <strong>priority of resource acquisition</strong>, <strong>ratio of spare to committed resources</strong> and the <strong>rate</strong> at which applications claim resources</li>
+<li>A new application replaying from the start may take most free resources and starve running ones, breaking SLOs</li>
+<li>Mitigations:</li>
+<li><strong>Run multiple smaller clusters</strong> (per team or business unit; best when requisitioned programmatically; higher cost from coordinating nodes and monitoring).</li>
+<li><strong>Namespacing</strong> (a cluster divided into namespaces with resource allocations; apps cannot starve others; downside: spare resources must be allocated to each namespace, leaving a larger fragmented pool of unused resources).</li>
+</ul>
+</li>
+<li><strong>Languages and syntax:</strong>
+<ul>
+<li>rooted in the <strong>JVM</strong> (Java most common, then Scala)</li>
+<li><strong>Python</strong> well represented (data scientists and ML specialists)</li>
+<li><strong>MapReduce-style APIs</strong> (chained immutable operations on data sets)</li>
+<li>fairly restrictive.</li>
+</ul>
+</li>
+<li><strong>Choosing a framework:</strong>
+<ul>
+<li>decide how much <strong>operational overhead</strong> (monitoring, scaling, troubleshooting, debugging, cost assignment) your organisation will authorise</li>
+<li>hosted options are fewer than for CMS or brokers</li>
+<li>popularity: <strong>Apache Flink</strong> is a leader with significant growth since the first edition</li>
+<li><strong>Spark structured streaming</strong> is popular</li>
+<li><strong>Apache Beam</strong> is popular mainly as a way to run on Google Dataflow, without the growth of Spark and Flink. <strong>Warning:</strong> a heavyweight framework may not suit your microservice</li>
+<li>verify first.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Heavyweight frameworks are highly scalable and support many analytical patterns, but may not meet the requirements of some stateful event-driven microservice patterns.</li>
+<li>They use centralised resource clusters with extra operational overhead, monitoring and coordination
+<ul>
+<li>recent integration with container managers such as Kubernetes allows more granular, microservice-like deployment.</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Heavyweight framework</strong>; <strong>resource manager</strong>, <strong>worker (executor)</strong>, <strong>task</strong>, <strong>job</strong>; <strong>ZooKeeper</strong>.</li>
+<li><strong>Driver mode</strong>, <strong>cluster mode</strong>; <strong>checkpoint</strong>, <strong>operator state</strong>, <strong>key state</strong>.</li>
+<li><strong>External shuffle service (ESS)</strong>; <strong>scale by restart</strong>; <strong>autoscaling</strong>; <strong>multitenancy</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 12: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch12.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch12.html</a></li>
+<li>Figures 12-1 to 12-10 are redrawn in grouped diagrams. Code listings are as printed (abbreviated) with indentation restored.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/">Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-13-lightweight-framework-microservices/">Building Event-Driven Microservices 13: Lightweight Framework Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/">Building Event-Driven Microservices 9: Deterministic Stream Processing</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/">&larr; Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-13-lightweight-framework-microservices/">Building Event-Driven Microservices 13: Lightweight Framework Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

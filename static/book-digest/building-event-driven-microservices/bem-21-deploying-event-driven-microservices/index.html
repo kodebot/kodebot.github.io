@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 21: Deploying Event-Driven Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-20-testing-event-driven-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-22-conclusion/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-21-deploying-event-driven-microservices">Building Event-Driven Microservices 21: Deploying Event-Driven Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 21. Previous: <a href="/book-digest/building-event-driven-microservices/bem-20-testing-event-driven-microservices/">Building Event-Driven Microservices 20: Testing Event-Driven Microservices</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-22-conclusion/">Building Event-Driven Microservices 22: Conclusion</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Deploying microservices is harder than one monolithic deployment; with many services, <strong>standardise and streamline</strong> deployment and give <strong>teams autonomy</strong> over it, backed by <strong>supportive tooling</strong>.</li>
+<li><strong>Principles:</strong> team autonomy, a standard process, supportive tooling, <strong>reprocessing impacts</strong>, <strong>SLAs</strong> (worst-case state rebuild), minimal dependent changes, <strong>negotiate breaking changes</strong>. A service that regularly forces others to deploy with it may have <strong>ill-defined bounded contexts</strong>.</li>
+<li><strong>CI</strong> builds and validates; <strong>continuous delivery</strong> keeps it deployable; <strong>continuous deployment</strong> automates release (<strong>hard for stateful services</strong>).</li>
+<li>Patterns: <strong>basic full-stop</strong>, <strong>rolling update</strong> (strict prerequisites), <strong>breaking schema change</strong> (three variants, plus historical data migration), and <strong>blue-green</strong> (careful with a shared output stream).</li>
+</ul>
+</div></div>
+<h2 id="21-1-principles-of-deployment">21.1 Principles of deployment</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-21-principles-and-full-stop.svg" alt="Principles and full-stop" loading="lazy" /></p>
+<ul>
+<li>An organisation with a few dozen services can use a few custom processes, but any organisation <strong>seriously invested in microservices</strong>, event-driven or not, must <strong>standardise and streamline</strong> deployment.</li>
+<li>Principles:
+<ul>
+<li><strong>Give teams deployment autonomy:</strong> control their own testing and deployment and deploy at their discretion.</li>
+<li><strong>Standardised deployment process:</strong> consistent across services; a new service starts with a process already available, usually via a <strong>continuous integration</strong> framework.</li>
+<li><strong>Supportive tooling:</strong> reset consumer group offsets, purge state stores, check and update schema evolution, delete internal streams; enables automation and autonomy.</li>
+<li><strong>Consider event-stream reprocessing impacts:</strong>
+<ul>
+<li>reconsuming input can take long, leaving <strong>stale</strong> results for downstream consumers</li>
+<li>the service may then emit a <strong>large volume of output</strong> causing load downstream</li>
+<li>very large streams and streams with many consumers see surges</li>
+<li>consider <strong>side effects</strong> (for example resending multiple years of promotional emails).</li>
+</ul>
+</li>
+<li><strong>Adhere to SLAs:</strong> rebuilding state stores can cause <strong>significant downtime</strong>; account for the worst-case rebuild when setting SLAs.</li>
+<li><strong>Minimise dependent service changes:</strong>
+<ul>
+<li>deployments may force other services to change APIs or data models (REST API, domain schema)</li>
+<li>these violate the other team's autonomy to deploy only when business requirements demand.</li>
+</ul>
+</li>
+<li><strong>Negotiate breaking changes with downstream consumers:</strong>
+<ul>
+<li>a breaking schema change may need new streams and a renegotiated data contract</li>
+<li>hold the discussions before deployment and have a <strong>consumer migration plan</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Warning:</strong>
+<ul>
+<li>make microservices <strong>independently deployable</strong></li>
+<li>If a deployment regularly needs other services to synchronise theirs, their <strong>bounded contexts may be ill-defined</strong> and should be reviewed (exception: a few tightly coupled services in one bounded context built to be codependent, typically owned by one team).</li>
+</ul>
+</li>
+</ul>
+<h2 id="21-2-architectural-components">21.2 Architectural components</h2>
+<ul>
+<li>Two main roles: the systems that <strong>build and deploy</strong> the code, and the <strong>compute resources</strong> that run the services.</li>
+</ul>
+<h3 id="ci-delivery-and-deployment">CI, delivery and deployment</h3>
+<ul>
+<li>Build, test and deploy as code changes are committed: part of the <strong>microservice tax</strong>; owners decide when, where and how to deploy.
+<ul>
+<li><strong>Continuous integration (CI):</strong>
+<ul>
+<li>automating the integration of changes from multiple contributors into one project
+<ul>
+<li>the team integrates at its own discretion, reducing the time from writing code to seeing it in production</li>
+</ul>
+</li>
+<li>CI frameworks execute processes on merge to the main (or any) branch: build, unit tests, integration tests, code style validation, <strong>schema evolution validation</strong>, linting</li>
+<li>The output is a <strong>ready-to-deploy container or virtual machine</strong>.</li>
+</ul>
+</li>
+<li><strong>Continuous delivery:</strong> keeping the codebase deployable; the CI pipeline validates the build, but the <strong>deployment is not automated</strong> and needs manual intervention.</li>
+<li><strong>Continuous deployment:</strong> automated deployment: a committed change propagates through CI, reaches a deliverable state and is <strong>automatically deployed to production</strong>, a tight loop with short turnaround.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong>
+<ul>
+<li>continuous deployment is <strong>difficult in practice</strong>, especially for <strong>stateful services</strong> (deployments may need state store rebuilds and stream reprocessing)</li>
+<li>weigh the impact before choosing automatic or manual deployment.</li>
+</ul>
+</li>
+</ul>
+<h3 id="container-management-and-commodity-hardware">Container management and commodity hardware</h3>
+<ul>
+<li>The <strong>CMS</strong> manages, deploys and controls resource use of containers (see &quot;Managing Containers and Virtual Machines&quot;). The container built in CI is stored in a repository, awaiting CMS deployment instructions
+<ul>
+<li>CI to CMS integration (usually provided by the CMS) is essential.</li>
+</ul>
+</li>
+<li>Many event-driven microservices need no specialised hardware:
+<ul>
+<li><strong>commodity hardware</strong> is inexpensive, reliable enough and supports horizontal scaling (add or remove hardware from pools; recover by spinning up instances on the next available server)</li>
+<li>Create <strong>special pools</strong> for services needing dedicated graphics cards, very fast storage or high parallelism.</li>
+</ul>
+</li>
+</ul>
+<h2 id="21-3-the-basic-full-stop-deployment-pattern">21.3 The basic full-stop deployment pattern</h2>
+<ul>
+<li>The basis of all other patterns (Figure 21-1, a CI pipeline showing continuous delivery versus continuous deployment); add steps as needed.
+<ol>
+<li><strong>Commit code:</strong> the usual trigger, often via <strong>webhooks</strong> or other hooks.</li>
+<li><strong>Execute automated unit and integration tests:</strong> integration tests may need their own <strong>transient environments</strong> populated with data (&quot;Local Integration Testing&quot;). <strong>Tip:</strong> independent integration environments avoid multitenancy issues (resource contention, contaminated sources, version mismatches).</li>
+<li><strong>Run predeployment validation tests:</strong> detect problems before release: <strong>event stream validation</strong> (existence and configuration of input and output streams; missing streams can be created; read and write permissions) and <strong>schema validation</strong> (input and output schemas follow evolution rules, validated against the schema registry). <strong>Tip:</strong> keep the event schemas your code is written against in the service's repository; after compatibility validation use a <strong>code generator</strong> to produce structs or classes.</li>
+<li><strong>Deployment:</strong> stop the deployed service before deploying the new one:
+<ul>
+<li><strong>Stop instances and clean up:</strong>
+<ul>
+<li>stop the instances</li>
+<li>perform state store and consumer group resets</li>
+<li>delete internal streams
+<ul>
+<li>If rebuilding state would be expensive on failure, instead <strong>leave state, consumer group and internal topics alone and deploy as a new parallel service</strong> (quick rollback, more complex).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Deploy:</strong>
+<ul>
+<li>deploy the containerised code and start the required instances</li>
+<li><strong>wait for them to boot and signal readiness</strong> before moving on</li>
+<li>on failure abandon and deploy the <strong>previous working version</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Run post-deployment validation tests:</strong> the service operates normally, <strong>consumer lag returns to normal</strong>, no logging errors, endpoints work.</li>
+</ol>
+</li>
+<li><strong>Warning:</strong> consider the impact on <strong>all dependent services</strong>: SLAs, downtime, <strong>catch-up time</strong>, output event load, new streams, breaking schema changes; communicate with their owners.</li>
+</ul>
+<h2 id="21-4-the-rolling-update-pattern">21.4 The rolling update pattern</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-21-rolling-and-schema-variants.svg" alt="Rolling update and schema variants" loading="lazy" /></p>
+<ul>
+<li>Keep the service running while updating <strong>individual instances</strong>. <strong>Prerequisites:</strong> no breaking changes to state stores
+<ul>
+<li>none to the <strong>internal microservice topology</strong> (especially for lightweight frameworks)</li>
+<li>none to <strong>internal event schemas</strong></li>
+<li><strong>no replaying of input event streams</strong>.</li>
+</ul>
+</li>
+<li>Works well for: new fields in input streams to integrate; consuming from new streams; <strong>bug fixes that do not need rewinding and reprocessing</strong>.</li>
+<li><strong>Warning:</strong> inadvertently altering the internal topology is <strong>one of the most common mistakes</strong>; it is a breaking change and needs a full application reset, not a rolling update.</li>
+<li>Only <strong>step 4</strong> changes:
+<ul>
+<li>instead of stopping all instances, <strong>one at a time</strong> is stopped, updated and started, so old and new instances run together with old and new logic at once</li>
+<li><strong>Benefit:</strong> processing continues with <strong>no downtime</strong></li>
+<li><strong>Drawback:</strong> the prerequisites limit it to specific scenarios.</li>
+</ul>
+</li>
+</ul>
+<h2 id="21-5-the-breaking-schema-change-pattern">21.5 The breaking schema change pattern</h2>
+<ul>
+<li>Breaking changes are inevitable as an organisation grows:
+<ul>
+<li>a fundamental shift in the business domain, or a fix for a poorly defined schema (&quot;Negotiating a Breaking Schema Change&quot; covers negotiation; this covers deployment)</li>
+<li><strong>Downstream consumers are the number one concern.</strong> Two options: write new events to <strong>the same stream</strong> or to <strong>a new stream</strong>.</li>
+</ul>
+</li>
+<li><strong>Variant 1: write breaking events to the same old stream.</strong>
+<ul>
+<li>Simplest for the producer: update the schema and redeploy (Figure 21-2)</li>
+<li>only new events use the new schema, the old ones stay. No reprocessing or reconstruction under old schemas</li>
+<li><strong>consumers must handle both</strong>
+<ul>
+<li>Hopefully they <strong>throw exceptions</strong> on new events if not updated, preventing erroneous progress, but they may <strong>silently fail, discard the new events, or worst of all incorrectly deserialise them into bad data</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Variant 2: write breaking events to a new stream.</strong>
+<ul>
+<li>The service produces new events only to a dedicated new stream (Figure 21-3): a <strong>breaking change for all existing consumers</strong>, each notified and coordinated</li>
+<li>a <strong>big bang</strong> that is risky without testing. <strong>Warning:</strong> producer owners must extensively test the new schema</li>
+<li>if events fail to be created or consumers cannot read them you get <strong>multiple service outages</strong>.</li>
+<li>Often required when business changes force consumers to adopt the new schema in their data models
+<ul>
+<li>Example: deprecating <code>Account</code> and re-creating it as <code>BuyerAccount</code> and <code>SellerAccount</code> (a regulatory compliance model that separates accounts by function, where the old model allowed both buying and selling).</li>
+</ul>
+</li>
+<li><strong>Biggest risk:</strong>
+<ul>
+<li>consumers do not notice the old stream is <strong>no longer active</strong>, producing stale data and increasingly inaccurate computations</li>
+<li>track <strong>all consumers with read access</strong> and notify them.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Variant 3: write both old and new events in parallel</strong>
+<ul>
+<li>to their own streams (Figure 21-4)</li>
+<li>may not be possible for all use cases
+<ul>
+<li>Mark the old stream <strong>deprecated</strong>, encourage (and maybe chronically nag) consumers to migrate, then remove the old stream or <strong>archive</strong> it</li>
+<li>Assumptions: the producer can write both, with the data to create <strong>both</strong> formats (some remodelling cannot map to both)</li>
+</ul>
+</li>
+<li>and consumers can keep consuming two definitions <strong>without inconsistency</strong> (small changes like a type expansion may not matter, major ones likely will).</li>
+<li><strong>Benefit:</strong> consumers must <strong>deliberately swap</strong> streams, a guard against variant 1's silent failures and bad decoding.</li>
+<li><strong>Caution:</strong>
+<ul>
+<li>the migration may <strong>never finish</strong>, leaving similar-yet-different streams in use indefinitely</li>
+<li>new services may subscribe to the <strong>old</strong> stream. Use <strong>metadata tagging</strong> to mark streams deprecated and keep migration windows small.</li>
+</ul>
+</li>
+<li>Works best for <strong>minor changes</strong> where both formats keep integrity: for example changing a field from Integer to String is breaking but both can be output (String is a superset of Integer).</li>
+<li><strong>Warning:</strong> avoid prolonged dual production: it is a temporary solution that becomes permanent without a tight schedule of <strong>deprecation, consumer migration and eventual deletion or archiving</strong>.</li>
+<li><strong>Two dedicated services</strong>
+<ul>
+<li>(Figure 21-5): a second microservice produces the new schema while the old one keeps the old</li>
+<li>when everyone migrates you simply <strong>turn off</strong> the old service (no patch and redeploy to stop old production)
+<ul>
+<li>Drawback: you must clone and manage a copy of the service</li>
+<li><strong>Warning:</strong> the <strong>offsets in the new stream will not match</strong> the old stream's (late-arriving events and repartitioning change order; intermittent failures create duplicates)</li>
+<li>New questions: how to manage offsets</li>
+</ul>
+</li>
+<li>do migrating consumers reprocess from the beginning</li>
+<li>what about historical data?</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="reprocessing-historical-data-for-breaking-schema-changes">Reprocessing historical data for breaking schema changes</h3>
+<ul>
+<li>The foundational question:
+<ul>
+<li>will you <strong>populate the new stream with historical data</strong>? Often writing new data in the new format suffices, particularly for <strong>time-limited</strong> streams (24 hours of data) or unimportant history</li>
+<li><strong>Tip:</strong> the schema may change so much that old and new formats cannot coexist: more common than it seems when a business updates its model, expands products or takes new customers.</li>
+</ul>
+</li>
+<li>For <strong>entity streams</strong> (see &quot;Entity Events&quot;) and other <strong>infinite-duration</strong> data you will likely need to <strong>migrate history</strong>: present and future consumers need a reliable source of truth, and converting once in one place reduces consumer complexity and the chance each introduces <strong>bad data</strong> (Chapter 18), worse with popular data
+<ul>
+<li>Two ways:</li>
+<li><strong>From the producer's internal state stores:</strong>
+<ul>
+<li>iterate the internal database and produce the historical entities in the new schema to the new stream, a <strong>one-time process</strong> before consumers read from it (so they can rebuild their stores)</li>
+<li>natively, or via a <strong>new snapshot</strong> with a connector (Chapter 6).</li>
+</ul>
+</li>
+<li><strong>From upstream event streams:</strong>
+<ul>
+<li>rewind the producer's input offsets and reprocess, producing history in the new schema</li>
+<li>the producer may use several input streams and the broker for its own durable state (lightweight framework, Chapter 13).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Decide which streams to re-create:
+<ul>
+<li><strong>entities almost always</strong></li>
+<li>time-based events (past interactions) are rarely candidates. Rebuilding is only part of it: you must still <strong>help consumers migrate</strong>, manage deprecation and eventual archival or deletion.</li>
+</ul>
+</li>
+<li><strong>Biggest risk:</strong>
+<ul>
+<li>consumers fail to migrate and <strong>cannot fall back</strong> to the old source as with eventual migration</li>
+<li>Reduce it with <strong>integration testing</strong>, preferably in programmatically generated environments and source data: register producer and consumers together to rehearse the migration</li>
+<li><strong>Note:</strong> <strong>synchronised migrations are uncommon</strong>; core entities usually have stable domain models, but when major breaking changes occur one may be unavoidable.</li>
+</ul>
+</li>
+</ul>
+<h2 id="21-6-the-blue-green-deployment-pattern">21.6 The blue-green deployment pattern</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-21-history-and-blue-green.svg" alt="History and blue-green" loading="lazy" /></p>
+<ul>
+<li>Goal:
+<ul>
+<li><strong>zero downtime</strong> while deploying new functionality</li>
+<li>mostly used in <strong>request-response</strong> deployments so request handling continues during the update (Figure 21-6)
+<ul>
+<li>A full copy of the new service (<strong>blue</strong>) runs in parallel with the old (<strong>green</strong>)</li>
+</ul>
+</li>
+<li>blue has a <strong>fully isolated external data store</strong>, <strong>its own consumer group</strong> and its own IP addresses
+<ul>
+<li>It consumes input until monitoring shows it has <strong>caught up</strong> to green, then traffic starts to move.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>A <strong>router</strong> in front sends a few requests to blue and the rest to green
+<ul>
+<li>if there are no failures it routes more to blue and less to green (watch for <strong>scaling issues</strong>), until all traffic is on blue. Green is then turned off or left <strong>idle</strong> for a cooldown</li>
+<li>if an error appears the router <strong>reroutes traffic back</strong> to green to restore SLOs.</li>
+</ul>
+</li>
+<li><strong>Note:</strong>
+<ul>
+<li>integrate <strong>monitoring and alerting</strong> (resource metrics, consumer group lag, autoscaling triggers, system alerts) into the pattern</li>
+<li>It suits services needing minimal downtime (customer experiences, around-the-clock services), but with event streams beware <strong>asynchronous materialisation and computation</strong> and <strong>multiple consumer groups</strong>.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong>
+<ul>
+<li>be cautious about blue-green <strong>writing to a common output stream</strong>: two independent instances may <strong>overwrite each other's work or create duplicate events</strong></li>
+<li>prefer a <strong>rolling update</strong> or <strong>full-stop</strong> deployment there.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Streamlined deployment means <strong>paying the microservice tax</strong> in deployment and monitoring systems; delegate deployment to owning teams with supportive tooling.</li>
+<li><strong>CI pipelines</strong> set up and run tests, validate builds and prepare containers; the <strong>CMS</strong> manages deployment into compute clusters, resources and scaling.</li>
+<li>Full-stop is simplest but can cause <strong>significant downtime</strong> and may not fit SLAs; the other patterns each have benefits and drawbacks and are a starting point, not a comprehensive list.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>CI, continuous delivery, continuous deployment</strong>; <strong>full-stop</strong>, <strong>rolling update</strong>, <strong>blue-green</strong>.</li>
+<li><strong>Breaking schema change variants 1 to 3</strong>; <strong>dual production</strong>; <strong>historical data migration</strong>.</li>
+<li><strong>Predeployment validation</strong>; <strong>post-deployment validation</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 21: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch21.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch21.html</a></li>
+<li>Figures 21-1 to 21-6 are summarised in grouped diagrams.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-20-testing-event-driven-microservices/">Building Event-Driven Microservices 20: Testing Event-Driven Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-22-conclusion/">Building Event-Driven Microservices 22: Conclusion</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/">Building Event-Driven Microservices 4: Schemas and Data Contracts</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-20-testing-event-driven-microservices/">&larr; Building Event-Driven Microservices 20: Testing Event-Driven Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-22-conclusion/">Building Event-Driven Microservices 22: Conclusion &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

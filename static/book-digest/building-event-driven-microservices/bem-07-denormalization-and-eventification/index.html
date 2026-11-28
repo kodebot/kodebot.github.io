@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 7: Denormalization and Eventification</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-06-integrating-event-driven-architectures-with-existing-systems/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-7-denormalization-and-eventification">Building Event-Driven Microservices 7: Denormalization and Eventification</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 7 (portions appeared in <em>Building an Event-Driven Data Mesh</em>, O'Reilly 2023). Previous: <a href="/book-digest/building-event-driven-microservices/bem-06-integrating-event-driven-architectures-with-existing-systems/">Building Event-Driven Microservices 6: Integrating Event-Driven Architectures with Existing Systems</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/">Building Event-Driven Microservices 8: Stateful Event-Driven Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Streams sourced from relational tables (especially via CDC) are <strong>normalised</strong>; every consumer would repeat the same expensive, error-prone <strong>foreign-key joins</strong>.</li>
+<li><strong>Eventification</strong> denormalises and remodels those streams once, upstream, so consumers get easy-to-use events and couple on a <strong>public data contract</strong>.</li>
+<li>Do it <strong>at the transactional outbox</strong> (inside the source transaction) or in a <strong>dedicated service</strong> (streaming SQL or a framework), ideally owned by the team that owns the source data.</li>
+<li>Include <strong>commonly used</strong> data; leave out data that is <strong>large</strong> or <strong>changes frequently</strong>.</li>
+<li>Choose <strong>Type 1</strong> (overwrite) or <strong>Type 2</strong> (append) handling for <strong>slowly changing dimensions</strong>.</li>
+</ul>
+</div></div>
+<h2 id="7-1-the-problem-and-the-example">7.1 The problem and the example</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-07-problem.svg" alt="Problem" loading="lazy" /></p>
+<ul>
+<li>Relational databases resolve relationships at <strong>query time</strong> with all data available
+<ul>
+<li>Event-driven microservices work best when the data is <strong>in the event</strong></li>
+<li>Streaming joins are more complex than joins on static data and are <strong>slower and more expensive</strong> (Chapters 12 to 14).</li>
+</ul>
+</li>
+<li><strong>Eventification</strong>
+<ul>
+<li>is an implementation pattern for denormalising and remodelling highly relational streams into forms suited to event-driven consumers, reducing the repetitive, error-prone, expensive denormalisation every consumer would do</li>
+<li>Denormalising in a stream is harder than in tables, so decide carefully what goes in.</li>
+</ul>
+</li>
+<li>The example is an ecommerce marketplace (think Amazon, eBay, Alibaba, Etsy, Shopify):
+<ul>
+<li><code>Item</code> (<code>item_id</code> 4291, name &quot;Mirage Block Set&quot;, price 1299.99, <code>merchant_id</code> 4, <code>updated_at</code>) has a <strong>foreign key</strong> to <code>Merchant</code> (<code>merchant_id</code> 4, &quot;Devin's Trading Cards&quot;, <code>premium_partner</code> true).</li>
+<li><code>Item</code> shares its primary key <code>item_id</code> with <code>Inventory</code> (<code>quantity_in_stock</code> 3).</li>
+<li><code>premium_partner</code> marks a paid premium experience (better advertising, placement and search; video, extra pictures, bundles, AI-generated custom deals)
+<ul>
+<li>Most services need Item <strong>and</strong> Merchant for branding and premium treatment.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Without eventification (Figure 7-1) each consumer repeats the same join. Downsides:
+<ul>
+<li><strong>Repeated processing:</strong> duplicate code and similar resource use per client; costly at scale with partitioned streams.</li>
+<li><strong>Significant client code constraints:</strong>
+<ul>
+<li>scalable streaming joins are mostly <strong>JVM-based</strong> (Kafka Streams, Flink, Spark), some Python and SQL</li>
+<li><strong>no first-class support</strong> for Go, JavaScript, Ruby, Rust. A dedicated relational database per service may not suit its other needs.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Solution: denormalise the merchant into an <strong><code>Enriched_Item</code></strong> (Inventory left out for now).</li>
+<li><strong>Factors:</strong>
+<ul>
+<li><strong>Consumption patterns:</strong> ease of use is the chief goal; foreign-key denormalisation is often a top requirement.</li>
+<li><strong>Degree of denormalisation:</strong> depends on use cases, size and change frequency.</li>
+<li><strong>Keys for joining related streams:</strong> choose event keys that make joins easy (Inventory and Item share a primary key).</li>
+<li><strong>Structuring the external data model:</strong> convert and standardise data and <strong>conceal</strong> parts of the internal model, so consumers couple only on a public contract.</li>
+</ul>
+</li>
+<li>Two implementation places: <strong>within the source database</strong> (transactional outbox) or <strong>external</strong>, with a dedicated service.</li>
+<li><strong>Warning:</strong> some companies denormalise in their <strong>data lake</strong>: slow, expensive, and it makes consumers responsible for denormalising and standardising, which hurts data quality.</li>
+</ul>
+<h2 id="7-2-where-to-eventify">7.2 Where to eventify</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-07-where-to-eventify.svg" alt="Where to eventify" loading="lazy" /></p>
+<h3 id="at-the-transactional-outbox">At the transactional outbox</h3>
+<ul>
+<li>Select internal model data and denormalise it before writing to the outbox
+<ul>
+<li>Example 7-1 (based on Example 6-1) joins Item and Merchant inside one transaction and writes <code>Enriched_Item_Outbox</code>:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1"># Example 7-1: eventification and denormalisation prior to writing event data to the outbox for event 4291</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="c1"># Stubbing out example code to save some space</span>
+    <span class="n">conn</span> <span class="o">=</span> <span class="o">...</span>
+    <span class="n">cursor</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">cursor</span><span class="p">()</span>
+    <span class="n">internal_model_update</span> <span class="o">=</span> <span class="o">...</span>
+
+    <span class="c1"># Commit the internal model updates</span>
+    <span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">internal_model_update</span><span class="p">)</span>
+
+    <span class="c1"># Select fields from the internal model and denormalize</span>
+    <span class="c1"># by joining against the Merchant table</span>
+    <span class="n">internal_model_query</span> <span class="o">=</span> <span class="s2">"""</span>
+<span class="s2">    select i.name, i.price, m.name as merchant_name, m.premium_partner</span>
+<span class="s2">    from Item as i, Merchant as m,</span>
+<span class="s2">    join on i.merchant_id = Merchant.id</span>
+<span class="s2">    where i.id = 4291"""</span>
+
+    <span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">internal_sub_model_query</span><span class="p">)</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
+
+    <span class="c1"># Create the insert statement for the outbox table</span>
+    <span class="n">outbox_insert</span> <span class="o">=</span> <span class="s2">"""</span>
+<span class="s2">    INSERT INTO</span>
+<span class="s2">    Enriched_Item_Outbox (id, name, price, merchant_name, premium_partner)</span>
+<span class="s2">    VALUES (4291, </span><span class="si">%s</span><span class="s2">, </span><span class="si">%s</span><span class="s2">, </span><span class="si">%s</span><span class="s2">, </span><span class="si">%s</span><span class="s2">)"""</span>
+
+    <span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">outbox_insert</span><span class="p">,</span> <span class="n">result</span><span class="p">)</span>
+    <span class="c1"># Commit the internal and outbox updates atomically</span>
+    <span class="n">conn</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
+
+<span class="k">except</span> <span class="n">mysql</span><span class="o">.</span><span class="n">connector</span><span class="o">.</span><span class="n">Error</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+    <span class="c1"># Revert changes due to exceptions</span>
+    <span class="n">conn</span><span class="o">.</span><span class="n">rollback</span><span class="p">()</span>
+
+<span class="k">finally</span><span class="p">:</span>
+    <span class="c1"># Close the database connection</span>
+    <span class="k">if</span> <span class="n">conn</span><span class="o">.</span><span class="n">is_connected</span><span class="p">():</span>
+        <span class="n">cursor</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="n">conn</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</code></pre>
+<ul>
+<li>The listing is reproduced as printed
+<ul>
+<li>its SQL has a stray comma and the query and execute variable names differ (<code>internal_model_query</code> versus <code>internal_sub_model_query</code>), which the book leaves as it is.</li>
+</ul>
+</li>
+<li>The internal relational model stays encapsulated; the outbox offers a model suited to consumers.</li>
+<li><strong>Catch:</strong>
+<ul>
+<li>when <strong>Merchant</strong> data changes (a merchant pays for premium status), every previously created <code>Enriched_Item</code> must be <strong>updated too</strong>, or the stream is permanently inaccurate</li>
+<li>Whenever you denormalise (outbox or dedicated service) you must update the event whenever <strong>any</strong> included field changes.</li>
+</ul>
+</li>
+<li>An outbox decouples internal and external models at low overhead
+<ul>
+<li>It is not always possible: stores without transactions, frozen legacy systems, and strict performance requirements rule it out.</li>
+</ul>
+</li>
+</ul>
+<h3 id="in-a-dedicated-service">In a dedicated service</h3>
+<ul>
+<li>A purpose-built microservice or streaming SQL application outside the source joins the normalised CDC streams into one enriched stream (Figure 7-2) using Kafka Streams, Flink or Spark.</li>
+<li>Example 7-2 (Flink SQL):</li>
+</ul>
+<pre class="hl"><code><span class="c1">-- Example 7-2: a Flink SQL version of an eventification service for Item and Merchant</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">Item</span>
+<span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">Merchant</span>
+<span class="k">ON</span><span class="w"> </span><span class="n">Item</span><span class="p">.</span><span class="n">merchant_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Merchant</span><span class="p">.</span><span class="n">id</span>
+</code></pre>
+<ul>
+<li><strong>Tip:</strong>
+<ul>
+<li>windowing can limit materialised data size and improve performance</li>
+<li>SQL is common, easy to read, and makes smuggled business logic easy to spot</li>
+<li>The purpose is <strong>simple denormalisation</strong>, not business logic, filters or application-specific logic.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> handle <strong>out-of-order data</strong> (Flink uses watermarks, Chapter 9; check others' documentation).</li>
+<li><strong>Advantages:</strong> reduced demand on the database, scales independently of it, simplifies source application logic.</li>
+<li><strong>Challenges:</strong>
+<ul>
+<li>synchronising changes to tables, connectors and the eventification service</li>
+<li>few robust stream-joiner frameworks (JVM or SQL)</li>
+<li><strong>ownership arguments</strong> (the best owner is the team that owns the source data).</li>
+</ul>
+</li>
+<li>Wherever you denormalise (inside the database, a dedicated service, or the consumer), make data easy to understand, use well-defined schemas, and reduce the chance of misinterpretation.</li>
+</ul>
+<h2 id="7-3-what-should-go-in-the-event-and-what-should-stay-out">7.3 What should go in the event, and what should stay out?</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-07-what-to-include.svg" alt="What to include" loading="lazy" /></p>
+<ul>
+<li>Balance consumer needs, update frequency, data size and total load.</li>
+<li><strong>Frequency:</strong>
+<ul>
+<li>every inventory change (sale, return, shipment; a Black Friday &quot;door crasher&quot;) would trigger a join and re-emission of the Item</li>
+<li>Consumers that ignore quantity still process inconsequential updates, at cost for producer and consumer</li>
+<li>The Inventory producer could emit periodically (for example every 5 or 30 seconds), trading latency for fewer updates.</li>
+</ul>
+</li>
+<li><strong>Size:</strong> a <code>Reviews</code> table of the top 100 reviews per Item rarely changes, but joining it re-emits the <strong>whole payload</strong> on every Item or Reviews update, burdening consumers that never use it.</li>
+<li><strong>Both:</strong> high rate of change times large size compounds load on the broker, the eventification process and consumers: &quot;very expensive&quot;.</li>
+<li><strong>Rule of thumb:</strong>
+<ul>
+<li>avoid joining in data that <strong>changes frequently or is large</strong></li>
+<li>let consumers integrate it themselves. Figure 7-3: <code>Enriched_Item</code> includes the commonly used data, <strong>omits Reviews (size) and Inventory (frequency)</strong>. No magic cut-off exists</li>
+<li>these are heuristics.</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-4-slowly-changing-dimensions">7.4 Slowly changing dimensions</h2>
+<ul>
+<li>Many Items belong to one Merchant, whose name or location rarely changes but could at any moment
+<ul>
+<li>This is a <strong>slowly changing dimension (SCD)</strong>: usually static, changes unpredictably (a term from data analytics, useful here).</li>
+</ul>
+</li>
+<li>Relational databases normalise it into its own table and update one row
+<ul>
+<li>Event streams resemble the <strong>document model</strong>: if you denormalise Merchant data into millions of Items, you must update all those events when it changes</li>
+<li>Of at least eight SCD subtypes, <strong>Type 1</strong> and <strong>Type 2</strong> matter most for event streams.</li>
+</ul>
+</li>
+</ul>
+<h3 id="type-1-overwrite-with-the-new-value">Type 1: overwrite with the new value</h3>
+<ul>
+<li>Only the most recent value is kept. Example 7-3 (Devin's Trading Cards, <code>premium_partner: false</code>) then Example 7-4 (<code>true</code>, new <code>updated_at</code>) as a new entity event overwriting the old:</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Devin's Trading Cards"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"premium_partner"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"updated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2011-08-10 13:22:09"</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Devin's Trading Cards"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"premium_partner"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"updated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2019-08-12 19:00:27"</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>The broker can <strong>compact away</strong> the old event; retaining longer is optional but Type 1 does not model a change history.</li>
+</ul>
+<h3 id="type-2-append-the-new-value">Type 2: append the new value</h3>
+<ul>
+<li>The changed value is <strong>appended</strong> to the state and emitted as a new event, so the consumer sees current and previous versions and can reconstruct the entity at a point in time: one service reacts to <code>premium_partner</code> true while analytics track premium status over time
+<ul>
+<li>The producer must track what it has already written</li>
+<li>Example 7-5 (with version IDs):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Devin's Trading Cards"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"premium_partner"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"updated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2011-08-10 13:22:09"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Devin's Trading Cards"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"premium_partner"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"updated_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2019-08-12 19:00:27"</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1"</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">]</span>
+</code></pre>
+<ul>
+<li>The <strong>default is usually Type 1</strong>: publish the latest data and let the stream hold prior values; the consumer <strong>opts in</strong> to keeping previous values in its own store.</li>
+<li><strong>Type 2</strong>
+<ul>
+<li>forces the consumer to consider the dimension changes: joins give <strong>different results depending on the point in time</strong> represented, and a consumer wanting only the latest must select it explicitly</li>
+<li>More verbose and more overhead, but it reduces the chance a consumer <strong>overlooks the history</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Many source structures convert poorly to events; relational models (especially via CDC) cause tight coupling, repetitive and expensive joins, and overly complex microservices.</li>
+<li>Eventification (outbox or standalone application) also decouples internal from external models. **Limit it to simplifying formats through joins and standardisation
+<ul>
+<li>custom consumer business logic belongs downstream.**</li>
+</ul>
+</li>
+<li>Event size and update frequency are the main factors; be careful adding information that is rarely used, very large, or causes a high update rate.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Eventification</strong>; <strong>enriched event</strong>; <strong>foreign-key join</strong>.</li>
+<li><strong>Slowly changing dimension</strong>; <strong>Type 1</strong> (overwrite), <strong>Type 2</strong> (append).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 7: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch07.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch07.html</a></li>
+<li>Tables 7-1 to 7-3 and Figures 7-1 to 7-3 are summarised in the diagrams.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-06-integrating-event-driven-architectures-with-existing-systems/">Building Event-Driven Microservices 6: Integrating Event-Driven Architectures with Existing Systems</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/">Building Event-Driven Microservices 8: Stateful Event-Driven Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">Building Event-Driven Microservices 5: Designing Events</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-06-integrating-event-driven-architectures-with-existing-systems/">&larr; Building Event-Driven Microservices 6: Integrating Event-Driven Architectures with Existing Systems</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-08-stateful-event-driven-microservices/">Building Event-Driven Microservices 8: Stateful Event-Driven Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 1: Why Event-Driven Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-1-why-event-driven-microservices">Building Event-Driven Microservices 1: Why Event-Driven Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 1. Next: <a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>An <strong>event-driven microservice</strong> is a small, purpose-built service that consumes and/or produces events from <strong>event streams</strong>, keeps its own state, and is driven by an event loop. Events are <strong>not destroyed on consumption</strong>, so many consumers can read them.</li>
+<li>Event-driven microservices work because they <strong>decouple what a service does from how it accesses data</strong>. Data gets its own <strong>data communication structure</strong>, instead of being an afterthought bolted on to a service.</li>
+<li>Events form a <strong>durable, canonical, replayable record</strong>; producers own the format and schema; consumers build their own models and queries.</li>
+<li>Align services and bounded contexts to <strong>business needs</strong>, not technical layers.</li>
+<li>Request-response microservices still have a place: <strong>hybrid architectures</strong> are the norm.</li>
+</ul>
+</div></div>
+<h2 id="1-1-what-are-event-driven-microservices">1.1 What are event-driven microservices?</h2>
+<ul>
+<li>Microservices have existed under many names
+<ul>
+<li>SOAs often chain microservices through direct synchronous calls; message-passing architectures use consumable events asynchronously</li>
+<li>Event-driven architecture is not new, but handling big data sets at scale and in real time is, and needs a different style.</li>
+</ul>
+</li>
+<li><strong>Synchronous</strong>
+<ul>
+<li>means the requester waits (blocks) for a response</li>
+<li><strong>asynchronous</strong> means it continues with other work. This book focuses on asynchronous communication through <strong>events via event streams</strong>.</li>
+</ul>
+</li>
+<li>In a modern event-driven microservices architecture, systems communicate by issuing and consuming events that <strong>are not destroyed on consumption</strong> (unlike message passing, Chapter 2) but remain available for other consumers
+<ul>
+<li>That is what enables the book's patterns.</li>
+</ul>
+</li>
+<li>Microservices are small, purpose-built for business requirements, fit &quot;conceptually within one's head&quot; and are owned by a small team (&quot;two pizzas&quot; as popularised by Amazon).</li>
+</ul>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-01-microservice.svg" alt="A microservice" loading="lazy" /></p>
+<ul>
+<li>Simplest form (Figure 1-1): consumes from two input streams, processes and reacts, produces to an output stream, with its own state store.</li>
+<li>The service is entirely responsible for:
+<ul>
+<li>consuming events from its chosen input streams;</li>
+<li>producing data to its chosen output streams;</li>
+<li>storing and managing its own state in its own state store;</li>
+<li>processing, storing and reacting to events by its own business logic;</li>
+<li>maintaining scalability in processing power and state storage;</li>
+<li>integrating with monitoring.</li>
+</ul>
+</li>
+<li><strong>Consumer</strong>
+<ul>
+<li>microservices read from streams, <strong>producer</strong> microservices write to them; it is common to be both</li>
+<li>Services may be stateless or stateful (Chapter 8), though most non-trivial ones need state</li>
+<li>They may use request-response APIs and third-party endpoints (Chapter 17)</li>
+<li>They can be built with lightweight frameworks (Chapter 13), heavyweight frameworks (Chapter 12), functions as a service (Chapter 15), SQL (Chapter 14), or plain producer and consumer clients (Chapter 11).</li>
+</ul>
+</li>
+</ul>
+<h3 id="benefits">Benefits</h3>
+<table>
+<thead>
+<tr>
+<th>Benefit</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Technological flexibility</td>
+<td>each service uses the most appropriate language and technology; easy prototyping</td>
+</tr>
+<tr>
+<td>Business requirement flexibility</td>
+<td>granular services are easy to reassign; fewer cross-team dependencies; faster reaction to change</td>
+</tr>
+<tr>
+<td>Loose coupling</td>
+<td>coupled on domain data, not on an implementation API; schemas manage change (Chapter 4)</td>
+</tr>
+<tr>
+<td>Continuous integration and delivery</td>
+<td>small modular services are easy to ship and roll back</td>
+</tr>
+<tr>
+<td>High testability</td>
+<td>fewer dependencies are easier to mock</td>
+</tr>
+<tr>
+<td>Scalability</td>
+<td>services scale up and down individually</td>
+</tr>
+<tr>
+<td>Granularity</td>
+<td>services map to bounded contexts and are easy to rewrite</td>
+</tr>
+</tbody>
+</table>
+<h2 id="1-2-domain-driven-design-and-bounded-contexts">1.2 Domain-driven design and bounded contexts</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-01-ddd-nesting.svg" alt="Nesting" loading="lazy" /></p>
+<ul>
+<li>From Eric Evans' <em>Domain-Driven Design</em> (see also <em>Implementing Domain-Driven Design</em> and &quot;What Is the Domain Model in Domain Driven Design?&quot;). Concepts:
+<ul>
+<li><strong>Domain:</strong> the problem space a business occupies: rules, processes, ideas, terminology.</li>
+<li><strong>Subdomain:</strong> a component of the domain (warehouse, sales, engineering); a large one may be a domain of its own.</li>
+<li><strong>Domain model:</strong> the construct used to represent reality; its terminology is internal (another domain may use the same words to mean something else).</li>
+<li><strong>Bounded context:</strong>
+<ul>
+<li>the logical boundaries (inputs, outputs, events, requirements, processes, data models) relevant to the subdomain</li>
+<li>loose coupling between contexts stops one context's changes affecting another.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Figure 1-2:
+<ul>
+<li>the sales domain contains the orders and shipping subdomains, each with bounded contexts (taking orders, managing inventory, queuing orders to fill, fulfilment). Some contexts have several microservices, some just one</li>
+<li>the only requirement is that the services fulfil the context's purpose.</li>
+</ul>
+</li>
+<li>Aligning contexts with business requirements lets teams solve their own problems with autonomy and fewer inter-team dependencies.</li>
+</ul>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-01-alignment.svg" alt="Alignment" loading="lazy" /></p>
+<ul>
+<li><strong>Technical alignment</strong>
+<ul>
+<li>(point-to-point request-response services, or teams owning technical layers) spreads a business function across teams and services, coupling them across team and API boundaries</li>
+<li>a bug or failure ripples to all users of the technical system (Figure 1-3)
+<ul>
+<li>Technically aligned services are still fine for non-functional needs (authentication, authorisation, logging, monitoring)</li>
+</ul>
+</li>
+<li>do not write your own for each service.</li>
+</ul>
+</li>
+<li>Trade-off of business alignment:
+<ul>
+<li><strong>code replication</strong></li>
+<li>Developers trying to cut it may expose data directly, causing tighter coupling and complex APIs that may cost far more than repeating logic and storing similar data.</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-3-boundaries-and-communication-structures">1.3 Boundaries and communication structures</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-01-communication-structures.svg" alt="Communication structures" loading="lazy" /></p>
+<ul>
+<li>Event-driven microservices <strong>decouple what a service does from how it accesses data</strong>, where monoliths and point-to-point request-response services bundle data and service together
+<ul>
+<li>Teams, systems and people communicate through three structures:</li>
+<li><strong>Business communication structure</strong> (Figure 1-4): teams and departments and the goals assigned to them.</li>
+<li><strong>Implementation communication structure</strong>
+<ul>
+<li>(Figure 1-5): the data and logic that solve a business problem, formalised in code, data and APIs</li>
+<li>the classic example is the monolithic database application.</li>
+</ul>
+</li>
+<li><strong>Data communication structure</strong>
+<ul>
+<li>(Figure 1-6): how the business accesses data across the organisation</li>
+<li>It is usually neglected, found as a haphazard interface bolted on to the service, doing double duty as the implementation</li>
+<li>Services are left to find their own data or wrap it into the same implementation.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Conway's law:</strong>
+<ul>
+<li>&quot;Organizations which design systems..</li>
+<li>are constrained to produce designs which are copies of the communication structures of these organizations&quot; (Melvin Conway, <em>How Do Committees Invent?</em>, April 1968)</li>
+<li>Teams build to their boundaries, yet domain concepts span the business, so services need data from other contexts</li>
+<li>Implementation structures are poor at data communication, which has two effects:</li>
+<li>it <strong>discourages new, logically separate products</strong> (hard to get common data);</li>
+<li>it makes it easy to <strong>colocate</strong> new functionality with existing data (no new pipelines or monitoring): the monolithic pattern
+<ul>
+<li>A carrot (keep everything in one store) and a stick (confront data access before you can build).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Caution:</strong> if data access is too hard, or products scope-creep because the data sits in one implementation, you lack a data communication structure, and it worsens as the organisation grows.</li>
+<li>Workarounds and their drawbacks:
+<ul>
+<li>shared databases (coupling on internal models)</li>
+<li>read-only replicas (still tight on private models)</li>
+<li>periodic batch dumps (complexity, error prone, duplicate or missing data, multiple sources of the same data). Event streams solve these but need investment.</li>
+</ul>
+</li>
+</ul>
+<h3 id="a-traditional-team-scenario">A traditional team scenario</h3>
+<ul>
+<li>A team has one service and one data store and gets a new requirement: <strong>Option 1</strong>, a new service (data locked in the old service, no process for launching independent services; but modular systems ease later team splits) or <strong>Option 2</strong>, add it to the existing service (data, logging, monitoring, testing, deployment and rollback already exist; risks in coupling, sustainable growth and scalability)
+<ul>
+<li>Many choose option 2, which is fine (monoliths are powerful), for two reasons: accessing another system's data reliably at scale and in real time is difficult, and new services carry overhead and risk without an established way to launch them.</li>
+</ul>
+</li>
+<li>Copying data into your service has problems:
+<ul>
+<li>point-to-point couplings multiply</li>
+<li>you must not expose the source's internal model</li>
+<li>replication queries can overload the source</li>
+<li>failed syncs go unnoticed</li>
+<li>copies of copies are mistaken for the source of truth</li>
+<li>copies are always somewhat stale (a reporting service and billing service disagree).</li>
+</ul>
+</li>
+<li>A year later the team splits and asks:
+<ul>
+<li>which team owns which data, where does it live, what if several teams modify values? They decide to share the service, needing cross-team synchronisation, which slows them</li>
+<li>The cause is a weak or non-existent data communication structure, not a flaw in the concept of data sharing.</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-4-event-driven-data-communication">1.4 Event-driven data communication</h2>
+<ul>
+<li>Benefits:
+<ul>
+<li><strong>Events form a durable canonical record:</strong>
+<ul>
+<li>they are the data, not just signals that data is ready or a transfer from one implementation to another</li>
+<li>they store data and communicate asynchronously. Nearly anything can be an event, from simple occurrences to complex stateful records (Chapter 4).</li>
+</ul>
+</li>
+<li><strong>Limitation of producer responsibilities:</strong> producers write what they intend to share to an event stream, owning format, schema and contents, but not the querying needs of others.</li>
+<li><strong>Separation of consumer responsibilities:</strong>
+<ul>
+<li>consumers read at their own pace, react, update their models, and may emit events</li>
+<li>they mix streams and build query layers themselves without relying on a producer's query API.</li>
+</ul>
+</li>
+<li><strong>Replayable record:</strong> instead of working out how to extract data from a system, consume it from the stream; streams are the primary means of communication and a reusable source.</li>
+<li><strong>Independence from a specific implementation:</strong> teams restructure and projects come and go, but core data stays available; you can swap a stream's producer without affecting consumers.</li>
+<li><strong>Align services with business needs:</strong> mix and match events to build your own data models and choose your own technology.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> share only the data other teams need, just as a monolith restricts access to its internal model.</li>
+<li><strong>The team revisited:</strong>
+<ul>
+<li>a new service ingests the data from event streams, processes historical events, keeps only the fields it needs, and owns its storage and life cycle</li>
+<li>Single-team ownership lets teams scale and reorganise: the team splits and reassigns microservices; <strong>event-stream ownership moves with the producing service</strong>, giving clear lineage</li>
+<li>Scaling concerns move to individual event-processing services and to the data communication structure itself (the stream platform)</li>
+<li>It needs organisation-wide adoption and the ability to start and manage a fleet of microservices.</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-5-request-response-microservices">1.5 Request-response microservices</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-01-request-response.svg" alt="Request-response" loading="lazy" /></p>
+<ul>
+<li>Called &quot;request-response&quot; rather than &quot;synchronous&quot; because a requester can block or can wrap the request in a Future and check later.</li>
+<li>Drawbacks:
+<ul>
+<li><strong>point-to-point couplings</strong> (fan-out, hard to trace responsibility, entrenched communication structure)</li>
+<li><strong>dependent scaling</strong> (your scale depends on every dependent service)</li>
+<li><strong>service failure handling</strong> (retry, fail, recover consistently, harder as services grow)</li>
+<li><strong>API versioning and dependency management</strong> (several API versions coexist)</li>
+<li><strong>data access tied to the implementation</strong></li>
+<li><strong>distributed monoliths</strong> (copying monolith boundaries as remote calls)</li>
+<li><strong>testing</strong> (integration tests need operational dependents).</li>
+</ul>
+</li>
+<li>Many companies (Netflix, Lyft, Uber, Facebook) succeed with them, but success does not prove an architecture's quality: companies have also earned fortunes with tangled monoliths. Neither style is strictly better
+<ul>
+<li>the author finds event-driven offers &quot;unparalleled flexibility and power&quot;.</li>
+</ul>
+</li>
+<li>Benefits:
+<ul>
+<li>some data patterns suit request-response (authenticating a user, an AB test report)</li>
+<li>third-party integrations are almost always request-response over HTTP</li>
+<li>tracing is often easier</li>
+<li>web and mobile experiences rely on them</li>
+<li>more developers have the experience, making hiring easier.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> a company's architecture is rarely, if ever, entirely event-driven; hybrids are the norm. Chapter 17 covers integration patterns.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Rethink how data is created and communicated across the company: a durable set of domain events gives each service its own data without coupling to another's implementation.</li>
+<li>Chapters 2 and 3 cover event streams and microservices as building blocks.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Event stream</strong>; <strong>consumer and producer microservice</strong>; <strong>state store</strong>.</li>
+<li><strong>Domain, subdomain, bounded context</strong>.</li>
+<li><strong>Business, implementation and data communication structures</strong>; <strong>Conway's law</strong>.</li>
+<li><strong>Request-response microservice</strong>; <strong>distributed monolith</strong>; <strong>hybrid architecture</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 1: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch01.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch01.html</a></li>
+<li>Foreword and preface not digested. Figures 1-1 to 1-6 are redrawn in summary diagrams; the figure content is taken from the text and captions.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a></li>
+<li><a href="/book-digest/monolith-to-microservices/m2m-01-just-enough-microservices/">Monolith to Microservices 1: Just Enough Microservices</a></li>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-01-cloud-infrastructure-is-not-enough/">Principles and Patterns for Distributed Application Architecture 1: Cloud Infrastructure Is Not Enough</a></li>
+</ul>
+<nav class="pager"><span></span><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

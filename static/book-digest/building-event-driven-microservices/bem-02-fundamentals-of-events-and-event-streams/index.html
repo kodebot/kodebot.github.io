@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-01-why-event-driven-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-2-fundamentals-of-events-and-event-streams">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 2. Previous: <a href="/book-digest/building-event-driven-microservices/bem-01-why-event-driven-microservices/">Building Event-Driven Microservices 1: Why Event-Driven Microservices</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>An <strong>event</strong> is a recording of something that happened in the business, and it is the <strong>single source of truth</strong>. Events are <strong>immutable</strong>: correct them by publishing a new event.</li>
+<li>An <strong>event stream</strong> is a durable, append-only, immutable log, partitioned, ordered per partition, indexed by offset, replayable, and able to keep events indefinitely.</li>
+<li>Three delivery models: <strong>ephemeral messaging</strong> (at most once, not stored), <strong>queues</strong> (consumed and removed), <strong>event streams</strong> (retained, replayable): streams are the backbone of data communication.</li>
+<li>Events are <strong>unkeyed</strong>, <strong>keyed</strong> or <strong>entity</strong> events. <strong>Keys give data locality</strong>; entity events carry full state (event-carried state transfer, ECST).</li>
+<li><strong>Kappa architecture</strong> (the stream is the only record) is preferred over <strong>lambda</strong> (stream plus a historical store).</li>
+</ul>
+</div></div>
+<h2 id="2-1-what-is-an-event">2.1 What is an event?</h2>
+<ul>
+<li>Anything that happened within the scope of the business communication structure: receiving an invoice, booking a room, requesting a coffee, hiring an employee, finishing some code
+<ul>
+<li>Like an application log, but also <strong>the single source of truth</strong>, so it must contain everything needed to describe what happened.</li>
+</ul>
+</li>
+<li><strong>Immutable:</strong> once published it cannot be modified. Mutating data already read by consumers is useless since they cannot easily be told; instead publish a corrective event.</li>
+<li><strong>Schemas:</strong> well-defined field names, types and defaults (Chapter 4).</li>
+<li>The author avoids the word <strong>message</strong>:
+<ul>
+<li>it suggests a private note to a specific person that may be deleted after reading</li>
+<li>Events are more like a post on a message board: public to anyone with access, readable many times, not deleted because it is old</li>
+<li>&quot;All messages are events, but not all events are messages&quot;; the book uses event and <strong>record</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-2-what-is-an-event-stream">2.2 What is an event stream?</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-02-partitions.svg" alt="Partitions" loading="lazy" /></p>
+<ul>
+<li>A <strong>durable and append-only immutable log</strong>:
+<ul>
+<li>producers append at the <strong>tail</strong>, consumers start at the <strong>head</strong> and read at their own pace</li>
+<li>A timestamped sequence of business facts for a domain.</li>
+</ul>
+</li>
+<li>Properties:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Immutability</strong></td>
+<td>contents, offset position, timestamp and metadata cannot change; you only add events</td>
+</tr>
+<tr>
+<td><strong>Partitioned</strong></td>
+<td>supports massive data sets; instances of a service consume partitions in parallel</td>
+</tr>
+<tr>
+<td><strong>Indexed</strong></td>
+<td>each event gets an immutable index (offset) uniquely identifying it</td>
+</tr>
+<tr>
+<td><strong>Ordered</strong></td>
+<td>records in a partition are served in publication order</td>
+</tr>
+<tr>
+<td><strong>Durability and replayability</strong></td>
+<td>consume now or later; new and existing consumers can replay, given enough storage; not deleted on read or lack of consumers</td>
+</tr>
+<tr>
+<td><strong>Indefinite storage</strong></td>
+<td>retain as long as needed; no forced expiry</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Figure 2-1:
+<ul>
+<li>a stream with three partitions and a service with two instances</li>
+<li>instance 0 consumes partition 0, instance 1 consumes partitions 1 and 2. Events were just appended at offset 5 (partition 0) and 7 (partition 1)</li>
+<li>instance 1 is at offset 4 and has 5, 6 and 7 to process. A new consumer from the head must process everything to catch up.</li>
+</ul>
+</li>
+<li>Streams live on an <strong>event broker</strong>
+<ul>
+<li><strong>Apache Kafka</strong> is the de facto standard. A <strong>topic</strong> is where events are written</li>
+<li>the broker handles replication, rebalancing, client connections and access control.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-3-three-ways-to-communicate-ephemeral-queue-stream">2.3 Three ways to communicate: ephemeral, queue, stream</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-02-three-modes.svg" alt="Three modes" loading="lazy" /></p>
+<ul>
+<li><strong>Ephemeral messaging</strong>
+<ul>
+<li>(Figure 2-2): a <strong>channel</strong> carries a message from a producer to current subscribers only
+<ul>
+<li>nothing is stored and messages are discarded if there is a failure or no subscriber (<strong>at-most-once</strong>; <a href="http://NATS.io" target="_blank" rel="noopener noreferrer">NATS.io</a> Core, not JetStream)</li>
+</ul>
+</li>
+<li>A late subscriber gets only later messages</li>
+<li>Good for low-overhead direct service-to-service communication where some loss is tolerable (Tinder uses NATS for update notifications: a missed push matters little)</li>
+<li>It lacks the retention, durability and replayability needed for <strong>data products</strong>.</li>
+</ul>
+</li>
+<li><strong>Queues</strong>
+<ul>
+<li>(Figure 2-3): a durable sequence of records awaiting processing
+<ul>
+<li>consumers <strong>compete</strong> first-come first-served, acknowledge per record, and the broker then typically <strong>deletes</strong> the record (unlike streams, which use partition-exclusive subscriptions and strict ordering)</li>
+</ul>
+</li>
+<li>RabbitMQ and Apache ActiveMQ support AMQP and MQTT</li>
+<li>Typical use: a <strong>work queue</strong></li>
+<li>Usually <strong>at-least-once</strong> (a failed subscriber means reprocessing)</li>
+<li>Queues can order by priority since they are not strict FIFO.</li>
+<li>For several independent consumers: a <strong>per-consumer queue</strong> or a durable event stream.</li>
+<li><strong>Modern queue brokers</strong>
+<ul>
+<li>use an <strong>exchange</strong> that copies a record to each subscribed queue (Figure 2-4)</li>
+<li>Some (Solace, RabbitMQ Streams) support replay and infinite retention</li>
+<li>Queue TTLs were historically short, which fed the false notion that brokers cannot retain data; RabbitMQ and ActiveMQ allow unlimited TTL</li>
+<li>Queues are good <strong>input buffers</strong> for parallelisable work where order does not matter, and consumers scale by registering more consumers.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Queues via Apache Kafka (KIP-932):</strong> new since the first edition (early access in Kafka 4.0). Using a stream as a queue had problems:
+<ul>
+<li><strong>one consumer per partition</strong> in a consumer group;</li>
+<li><strong>head-of-line blocking</strong> (one slow record stalls the partition);</li>
+<li><strong>no per-record retry</strong> or failure marking (you acknowledge or redo a whole batch).</li>
+<li>A <strong>share group</strong> (a <code>KafkaShareConsumer</code>) treats the topic's log like a queue: <strong>multiple instances per partition</strong>
+<ul>
+<li><strong>individual acknowledgement</strong></li>
+<li><strong>retries</strong> until a maximum (default 5) or success</li>
+<li><strong>processing time-outs</strong> that release records to other instances, and <strong>rewindable progress</strong> (data is not deleted after processing). It lets you use queue semantics without a dedicated queue broker.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-4-the-structure-of-an-event">2.4 The structure of an event</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-02-event-structure.svg" alt="Event structure" loading="lazy" /></p>
+<ul>
+<li>A record has a <strong>header</strong>, a <strong>key</strong> and a <strong>value</strong> (Figure 2-5 shows an ecommerce order with the items bought and total cost).
+<ul>
+<li><strong>Header</strong> (record properties): metadata about the event, often broker-specific: datetimes, tracking IDs, user-defined key-value pairs that do not belong in the value.</li>
+<li><strong>Key</strong> (optional): usually routes the event to a partition so all records of one key are colocated; may represent a unique entity.</li>
+<li><strong>Value:</strong> the bulk of the data; if the key is a table's primary key, the value is the other fields.</li>
+</ul>
+</li>
+<li>Queues and ephemeral systems use similar but different conventions (routing keys, binding keys).</li>
+<li><strong>Unkeyed events</strong>
+<ul>
+<li>(Figure 2-6): no key, independent, no special routing</li>
+<li>Often raw measurements: a camera photographing a car running a red light</li>
+<li>It could have been keyed by camera ID, but this device records only in its own format; adding a key needs extra processing and a new stream.</li>
+</ul>
+</li>
+<li><strong>Keyed events</strong>
+<ul>
+<li>(Figures 2-7, 2-8): a non-null key set by the producer, immutable once written; for the camera, the licence plate</li>
+<li>All events with the same key go to <strong>one partition</strong> (<strong>data locality</strong>), so consumers can divide work per partition knowing key-based work reads one partition</li>
+<li>FAST 321 has at least two red-light events.</li>
+</ul>
+</li>
+<li><strong>Entity events:</strong>
+<ul>
+<li>represent a unique thing, keyed by its unique ID, describing its properties and state at a point in time (also <strong>state events</strong>)</li>
+<li>Examples: Car, Driver, Tire, Intersection (Figure 2-9)</li>
+<li>Like a <strong>database row</strong>: a primary key and current data, valid until it changes</li>
+<li>Repaint the car blue and a new event carries the updated colour and datetime and <strong>all unchanged data too</strong> (Figure 2-10), which enables powerful things (Chapter 5)</li>
+<li>The same key goes to the same partition (Figure 2-11: red then blue event for FAST 321); the producer appends a full entity event whenever the entity is created, updated or deleted.</li>
+<li>Entity events enable <strong>event-carried state transfer (ECST)</strong>: the entity's state travels in the event to all consumers, who can <strong>materialise</strong> it into their bounded context.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-5-repartitioning-and-copartitioning">2.5 Repartitioning and copartitioning</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-02-repartition.svg" alt="Repartitioning" loading="lazy" /></p>
+<ul>
+<li><strong>Repartitioning</strong>
+<ul>
+<li>(Figure 2-12): a service reads one stream and writes another with a different key, key-to-partition mapping and/or partition count (two partitions to four)</li>
+<li>It lets you join, group and aggregate streams of different partitioning</li>
+<li>It may introduce <strong>out-of-order data</strong> (see &quot;Multiple producers to multiple partitions&quot;, later).</li>
+</ul>
+</li>
+<li><strong>Copartitioning</strong>
+<ul>
+<li>(Figure 2-13): two streams are copartitioned when they have the <strong>same key, same key-to-partition mapping strategy and same partition count</strong></li>
+<li>Required for primary-key joins, aggregations and reduce operations, assigning the same keyed data to the same instance</li>
+<li>Instance 0 reads partition 0 of both streams, so all events with key A go to instance 0, key D to instance 1.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-6-aggregating-and-materialising-state">2.6 Aggregating and materialising state</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-02-aggregation-materialisation.svg" alt="Aggregation and materialisation" loading="lazy" /></p>
+<ul>
+<li><strong>Aggregation:</strong>
+<ul>
+<li>consume two or more events and combine into one result; a primary way to generate state from events</li>
+<li>It needs durable state (so progress survives failure; Chapter 8)</li>
+<li>Keyed events make it easy: one key is one partition</li>
+<li>Reading several topics requires them to be partitioned identically, else repartition</li>
+<li>Simple example (Figure 2-14): sum the traffic fines issued to a driver</li>
+<li>Complex ones use several streams, event types and internal state machines.</li>
+</ul>
+</li>
+<li><strong>Materialisation:</strong>
+<ul>
+<li>a <strong>projection of a stream into a table</strong></li>
+<li>Apply entity events in order, <strong>upserting</strong> each so the latest event per key is represented (Figure 2-15: FAST 321 and SJFH 372 hold their newest values)</li>
+<li>The reverse also works: publish every table update as an entity event (Figure 2-16: BB upserted twice and DD once give three upsert events).</li>
+</ul>
+</li>
+<li><strong>Stream-table duality:</strong>
+<ul>
+<li>a stream can be represented by a table and a table by a stream</li>
+<li>this is fundamental to sharing state between services with no coupling. A relational table's insert, update and delete commands can be played from an immutable log (MySQL's binary log) to reconstruct it.</li>
+</ul>
+</li>
+<li><strong>Deleting events and compaction:</strong>
+<ul>
+<li>you cannot delete a record like a table row because immutability is the point</li>
+<li>Publish a <strong>tombstone</strong>: a keyed event with a <strong>null value</strong> (a Kafka convention)</li>
+<li>It signals consumers the key's data is deleted, and enables <strong>compaction</strong>.</li>
+<li><strong>Compaction</strong>
+<ul>
+<li>is an asynchronous broker process keeping only the <strong>most recent event per key</strong> (Figure 2-17); older events are removed and the rest compacted into smaller files</li>
+<li>It reduces disk and the events needed to reach current state, at the cost of losing part of the history</li>
+<li>The tombstone itself is kept briefly (Kafka default 24 hours).</li>
+</ul>
+</li>
+<li>Guarantees: a <strong>minimum compaction lag</strong> (Kafka: <code>min.compaction.lag.ms</code>; for example 24 hours or 7 days so consumers read first), <strong>offsets unchanged</strong> (gaps appear; reading a removed offset errors), and <strong>consistency</strong> (a consumer from the start builds the same table as one running since the beginning).</li>
+<li><strong>Caution:</strong> manual deletion tools can have unexpected results because consumers' derived state is not fixed; preventing bad data is essential (Chapter 18).</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-7-kappa-and-lambda-architectures">2.7 Kappa and lambda architectures</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-02-kappa-lambda.svg" alt="Kappa and lambda" loading="lazy" /></p>
+<ul>
+<li><strong>Kappa</strong>
+<ul>
+<li>(Jay Kreps, co-creator of Apache Kafka and co-founder of Confluent, 2014): event streams are the <strong>sole record of current and historical data</strong></li>
+<li>Consumers start at the beginning and reach the head (Figure 2-18); no secondary store</li>
+<li>Possible only with modern brokers and cheap cloud storage, no longer limited by mandatory TTLs</li>
+<li>Services materialise their own state from the streams: simple code, no extra permissions.</li>
+<li>Trade-offs:
+<ul>
+<li>each service builds its own state, so a large data set with few partitions can take hours or days (<strong>hydration time</strong>)</li>
+<li>Mitigate with <strong>snapshots or backups</strong> of materialised state (Kafka Streams, Apache Flink, Spark Structured Streaming provide them)</li>
+<li>Kappa gives one guarantee: the stream is the single source of truth.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 2-1: joins with Kafka Streams</span>
+<span class="n">StreamsBuilder</span><span class="w"> </span><span class="n">builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">StreamsBuilder</span><span class="p">();</span>
+
+<span class="c1">// Materializes the tables from the source Kafka topics</span>
+<span class="n">KTable</span><span class="w"> </span><span class="n">products</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">builder</span><span class="p">.</span><span class="na">table</span><span class="p">(</span><span class="s">"products"</span><span class="p">);</span>
+<span class="n">KTable</span><span class="w"> </span><span class="n">productReviews</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">builder</span><span class="p">.</span><span class="na">table</span><span class="p">(</span><span class="s">"product_reviews"</span><span class="p">);</span>
+
+<span class="c1">// Join events on the primary key, apply business logic as needed</span>
+<span class="n">KTable</span><span class="w"> </span><span class="n">productsWithReviews</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">products</span><span class="p">.</span><span class="na">join</span><span class="p">(</span><span class="n">productReviews</span><span class="p">,</span><span class="w"> </span><span class="n">businessLogic</span><span class="p">(..),</span><span class="w"> </span><span class="p">...);</span>
+<span class="n">builder</span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">-- Example 2-2: joins with Flink SQL</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">PRODUCTS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">product_id</span><span class="w"> </span><span class="nb">BIGINT</span><span class="p">,</span>
+<span class="w">    </span><span class="n">name</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">,</span>
+<span class="w">    </span><span class="n">brand</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">,</span>
+<span class="w">    </span><span class="n">description</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">,</span>
+<span class="w">    </span><span class="k">timestamp</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+<span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="n">product_id</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="n">ENFORCED</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="k">WITH</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s1">'connector'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'kafka'</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">'topic'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'products'</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">'format'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'protobuf'</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">'properties.bootstrap.servers'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'localhost:9092'</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">'properties.group.id'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'foobar'</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">PRODUCT_REVIEWS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">product_id</span><span class="w"> </span><span class="nb">BIGINT</span><span class="p">,</span>
+<span class="w">    </span><span class="n">reviews</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">,</span>
+<span class="w">    </span><span class="k">timestamp</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+<span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="n">product_id</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="n">ENFORCED</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="k">WITH</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s1">'connector'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'kafka'</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">'topic'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'product_reviews'</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">'format'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'protobuf'</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">'properties.bootstrap.servers'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'localhost:9092'</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">'properties.group.id'</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'foobar'</span>
+<span class="p">);</span>
+
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">PRODUCTS_WITH_REVIEWS</span><span class="w"> </span><span class="k">AS</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">PRODUCTS</span>
+<span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">PRODUCT_REVIEWS</span>
+<span class="k">ON</span><span class="w"> </span><span class="n">PRODUCTS</span><span class="p">.</span><span class="n">product_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PRODUCT_REVIEWS</span><span class="p">.</span><span class="n">product_id</span><span class="p">;</span>
+</code></pre>
+<ul>
+<li>A <code>KTable</code> is a stream materialised into a table using ECST
+<ul>
+<li>both examples do a non-windowed inner join on the primary key into a denormalised, enriched table with a few lines of code (Part III goes deeper).</li>
+</ul>
+</li>
+<li><strong>Lambda:</strong>
+<ul>
+<li>an event stream for real time plus a <strong>secondary repository</strong> for history; consumers load history first, then switch to the stream</li>
+<li>It rests on the outdated idea that streams cannot hold events indefinitely</li>
+<li>The book includes it <strong>for historical context, not as an endorsement</strong>.</li>
+<li><strong>Version 1</strong>
+<ul>
+<li>(Figure 2-19): stream and history built independently</li>
+<li>often the history is just the source system's internal database, an antipattern that loads the producer
+<ul>
+<li>The producer writes both and <strong>not atomically</strong>, so an intermittent failure leaves them diverged</li>
+</ul>
+</li>
+<li>a stream-only consumer then differs from a new consumer built from history, hard to trace since stream data expires in days.</li>
+</ul>
+</li>
+<li><strong>Version 2</strong> (Figure 2-20): history built from the stream by a secondary process; resembles kappa with an awkward split.</li>
+<li><strong>Obstacles:</strong>
+<ul>
+<li>the producer maintains extra code</li>
+<li>the consumer maintains <strong>two code paths</strong> and must switch without missing or duplicating data</li>
+<li>results may not converge</li>
+<li>data models must evolve in sync in two places</li>
+<li><strong>merging lambda data sets is nearly impossible</strong> (two streams need one reconciliation, kappa avoids crossover, lambda needs four).</li>
+</ul>
+</li>
+<li>Verdict: too difficult at scale and puts the onus of data access on the consumer; kappa is simpler.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-8-event-data-definitions-and-schemas">2.8 Event data definitions and schemas</h2>
+<ul>
+<li>Event data is both long-term, implementation-agnostic storage and the communication mechanism, so producers and consumers need a common understanding: consumers should interpret an event without asking the producer's owner
+<ul>
+<li>It is analogous to an API definition for request-response services.</li>
+</ul>
+</li>
+<li>Schema technologies such as <strong>Apache Avro</strong> and Google's <strong>Protobuf</strong> provide an <strong>evolution framework</strong> (safe changes without downstream code changes) and <strong>generated typed classes</strong> for business logic (Chapter 4).</li>
+</ul>
+<h2 id="2-9-powering-microservices-with-the-event-broker">2.9 Powering microservices with the event broker</h2>
+<ul>
+<li>A cluster of distributed brokers provides:
+<ul>
+<li><strong>scalability</strong> (add brokers for production, consumption, storage)</li>
+<li><strong>durability</strong> (replication)</li>
+<li><strong>high availability</strong> (clients reconnect to other nodes) and <strong>high performance</strong> (hundreds of thousands of reads or writes a second).</li>
+</ul>
+</li>
+</ul>
+<h3 id="selecting-an-event-broker">Selecting an event broker</h3>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-02-broker-selection.svg" alt="Broker selection" loading="lazy" /></p>
+<ul>
+<li>Kafka is the book's example; consider factors rather than comparing products:
+<ul>
+<li><strong>Support tooling</strong> (Chapter 19): browse records and schemas; quotas, access control and topic management; monitoring, throughput and lag.</li>
+<li><strong>Hosted services:</strong> exist? buy or host? monitoring, scaling, disaster recovery, replication, multizone? lock-in? professional support?</li>
+<li><strong>Client libraries and processing frameworks:</strong> your languages, ability to build missing ones, common frameworks or roll-your-own.</li>
+<li><strong>Community support:</strong> online help, maturity, use across organisations, attracting and exciting employees.</li>
+<li><strong>Indefinite and tiered storage:</strong>
+<ul>
+<li>store events forever with older segments on slower, cheaper storage</li>
+<li><strong>Tiered storage</strong> keeps a fast tier on broker memory or SSD and a cheaper tier in a large-scale store (Amazon S3, Google Cloud Storage, Azure Storage), moved asynchronously but still replayable through the consumer API</li>
+<li>Ask: automatic? movable by usage? seamless retrieval?</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Streams give durable, replayable, scalable access: every consumer gets an identical copy if it reads as written.</li>
+<li>Consumers no longer query the producer, removing point-to-point connections; they materialise and aggregate their own state.</li>
+<li>The broker is the single source of truth for all data; local copies serve business logic.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Event, record, tombstone</strong>; <strong>offset</strong>, <strong>partition</strong>, <strong>topic</strong>.</li>
+<li><strong>Unkeyed, keyed, entity event</strong>; <strong>ECST</strong>; <strong>data locality</strong>.</li>
+<li><strong>Repartitioning, copartitioning</strong>; <strong>aggregation, materialisation</strong>; <strong>stream-table duality</strong>; <strong>compaction</strong>.</li>
+<li><strong>Kappa, lambda</strong>; <strong>hydration time</strong>; <strong>tiered storage</strong>; <strong>share group</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 2: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch02.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch02.html</a></li>
+<li>Figures 2-1 to 2-20 are redrawn in grouped summary diagrams. KIP-932 is the Kafka improvement proposal for queues for Kafka named in the chapter.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-01-why-event-driven-microservices/">Building Event-Driven Microservices 1: Why Event-Driven Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</a></li>
+<li><a href="/book-digest/principles-and-patterns-for-distributed-application-architecture/ppd-02-principles-of-distributed-application-architecture/">Principles and Patterns for Distributed Application Architecture 2: Principles of Distributed Application Architecture</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-01-why-event-driven-microservices/">&larr; Building Event-Driven Microservices 1: Why Event-Driven Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

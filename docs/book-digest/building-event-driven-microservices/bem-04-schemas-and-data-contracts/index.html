@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 4: Schemas and Data Contracts</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-05-designing-events/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-4-schemas-and-data-contracts">Building Event-Driven Microservices 4: Schemas and Data Contracts</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 4 (an earlier version appeared in <em>Building an Event-Driven Data Mesh</em>, O'Reilly 2023). Previous: <a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">Building Event-Driven Microservices 5: Designing Events</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>schema</strong> is an explicit declaration of structure, names, types, defaults and limits. Technically optional, but &quot;effectively essential&quot;: without one, every consumer interprets the data its own way.</li>
+<li>Use <strong>Protobuf</strong> or <strong>Avro</strong> (JSON Schema is a reasonable third). <strong>Never use schemaless JSON</strong> on event streams.</li>
+<li><strong>Schema evolution</strong> is governed by compatibility modes; start with <strong>full-transitive</strong>, because loosening later is easy and tightening is extremely hard.</li>
+<li>A <strong>data contract</strong> is the schema plus <strong>SLOs, ownership, access restrictions, field-level encryption and evolution rules</strong>.</li>
+<li>A <strong>schema registry</strong> replaces the per-event schema with an ID, validates evolution, enables discovery and documentation. <strong>Field-level encryption</strong> and <strong>data catalogues</strong> extend it.</li>
+</ul>
+</div></div>
+<h2 id="4-1-serialisation-and-deserialisation">4.1 Serialisation and deserialisation</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-04-serialization.svg" alt="Serialisation" loading="lazy" /></p>
+<ul>
+<li><strong>Serialisation</strong>
+<ul>
+<li>converts an in-memory event object into bytes sent over the network and written to the stream</li>
+<li>the <strong>schema</strong> specifies the conversion. A field <code>length</code> declared Integer throws an exception if set to the String &quot;six feet&quot; (Figure 4-1).</li>
+</ul>
+</li>
+<li>The consumer reverses it (Figure 4-2): bytes back into an object it understands, which needs the schema. By default the schema travels with the event; the registry (below) avoids that.</li>
+</ul>
+<h2 id="4-2-what-is-a-schema">4.2 What is a schema?</h2>
+<ul>
+<li>Like a <strong>database table definition</strong>: at minimum names, types, restrictions and defaults, giving producer and all consumers a shared understanding.</li>
+<li>Without schemas interpretation is left to consumers
+<ul>
+<li>With only one consumer it may work (not advisable), but important data has many consumers across business units, languages and databases: <strong>two streams and five consumers give ten unique interpretations</strong> (Figure 4-3)</li>
+<li>Less structure means more misinterpretation, divergent results and avoidable mistakes.</li>
+</ul>
+</li>
+<li>Example 4-1, a Protobuf <code>Person</code> schema (field numbers give wire position and <strong>cannot change</strong>):</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 4-1: Person schema with Protobuf</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">Person</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// The person's unique ID.</span>
+<span class="w">    </span><span class="c1">// The field number = 1, indicating its position in the wire format.</span>
+<span class="w">    </span><span class="c1">// You cannot change the field number once it is established.</span>
+<span class="w">    </span><span class="kt">int32</span><span class="w"> </span><span class="na">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// The person's full legal name</span>
+<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Measured in centimeters, rounded to the nearest centimeter</span>
+<span class="w">    </span><span class="kt">int32</span><span class="w"> </span><span class="na">height</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">enum</span><span class="w"> </span><span class="n">CountryCode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="na">ABW</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="na">AFG</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">        </span><span class="c1">// ...</span>
+<span class="w">        </span><span class="na">ZWE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">248</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// ISO3166-1-alpha-3 standard. AAA=OTHER</span>
+<span class="w">    </span><span class="n">CountryCode</span><span class="w"> </span><span class="na">country</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Errors can still creep in: a developer might record height in inches instead of centimetres.</li>
+<li><strong>Code generation</strong>
+<ul>
+<li>(Figure 4-4): a Java producer generates classes with the Protobuf generator</li>
+<li>a C++ consumer generates its own structs. Avro and Protobuf have generators for Rust, Go, Java, Kotlin, Python, C++, C#, Dart, JavaScript and more.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Example 4-2: populate a Person object generated from the Protobuf schema (file as placeholder for the event)</span>
+<span class="n">Person</span><span class="w"> </span><span class="n">jeremiah</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Person</span><span class="p">.</span><span class="na">newBuilder</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="na">setId</span><span class="p">(</span><span class="mi">8675309</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">setName</span><span class="p">(</span><span class="s">"Jeremiah Wasabullfrog"</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">setHeight</span><span class="p">(</span><span class="mi">167</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">setCountryCode</span><span class="p">(</span><span class="s">"CAD"</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">FileOutputStream</span><span class="p">(</span><span class="s">"ProtoPerson.data"</span><span class="p">);</span>
+<span class="n">jeremiah</span><span class="p">.</span><span class="na">writeTo</span><span class="p">(</span><span class="n">output</span><span class="p">);</span>
+</code></pre>
+<pre class="hl"><code><span class="c1">// Example 4-3: C++ consumer parsing the serialised Person</span>
+<span class="n">Person</span><span class="w"> </span><span class="n">jeremiah</span><span class="p">;</span>
+<span class="n">fstream</span><span class="w"> </span><span class="nf">input</span><span class="p">(</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
+<span class="w">    </span><span class="n">ios</span><span class="o">::</span><span class="n">in</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">ios</span><span class="o">::</span><span class="n">binary</span><span class="p">);</span>
+<span class="n">jeremiah</span><span class="p">.</span><span class="n">ParseFromIstream</span><span class="p">(</span><span class="o">&amp;</span><span class="n">input</span><span class="p">);</span>
+
+<span class="c1">// jeremiah is now populated with the id, name, and height received in the event</span>
+<span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jeremiah</span><span class="p">.</span><span class="n">id</span><span class="p">();</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jeremiah</span><span class="p">.</span><span class="n">name</span><span class="p">();</span>
+<span class="n">height</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jeremiah</span><span class="p">.</span><span class="n">height</span><span class="p">();</span>
+<span class="n">cc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">jeremiah</span><span class="p">.</span><span class="n">countryCode</span><span class="p">();</span>
+</code></pre>
+<ul>
+<li><strong>Benefits:</strong>
+<ul>
+<li><strong>Schemas as code:</strong> reviews and commit history show who changed what and why.</li>
+<li><strong>Data protection:</strong> the producer fails to serialise non-conforming data instead of publishing it; bypassing needs a deliberate choice.</li>
+<li><strong>Embedded documentation</strong>, easy to keep current.</li>
+<li><strong>A foundation for discussion</strong> in pull requests.</li>
+<li><strong>Code generation:</strong> code against typed classes, not generic maps.</li>
+<li><strong>Schema evolution</strong> with safeguards (below).</li>
+<li><strong>Test data generators:</strong> for example Kafka Connect Datagen with constraints, such as <code>userid</code> matching the regex <code>User_[1-9]</code> (Example 4-4).</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-3-schema-technologies">4.3 Schema technologies</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-04-schema-technologies.svg" alt="Technologies" loading="lazy" /></p>
+<ul>
+<li><strong>Protobuf</strong> (Google; open source 2008; popular for gRPC):
+<ul>
+<li>scalar and complex types; <strong>schema not stored with the event</strong> but in a separate file, usually shared through a registry; composition via other files; <strong>no dynamic types</strong>.</li>
+<li><strong>v2:</strong>
+<ul>
+<li>required or optional fields, custom defaults</li>
+<li><strong>v3:</strong> removed required and custom defaults (all fields optional; implicit defaults only empty string, empty bytes, false or 0, so you cannot tell whether the default was applied or the data matched it), leading to a long-running schism</li>
+<li><strong>Protobuf Editions</strong> (2024): write <code>edition=&quot;2023&quot;</code> instead of <code>syntax=&quot;proto2&quot;/&quot;proto3&quot;</code>, and choose how defaults, optionals and other features work.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Apache Avro</strong> (initial release 2009; common with Kafka and as a row-based big-data format):
+<ul>
+<li>primitive and complex types
+<ul>
+<li>the <strong>schema is stored alongside the event by default</strong> (or in a registry)</li>
+<li>this allows <strong>dynamic deserialisation</strong> into a <code>GenericRecord</code> when no generator is available</li>
+<li>composition via other files</li>
+<li>evolution is possible but <strong>not explicitly part of the standard</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"record"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Person"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"com.event.driven.microservices"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"doc"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Example of a Person record"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"fields"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"id"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"integer"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"doc"</span><span class="p">:</span><span class="w"> </span><span class="s2">"The person's unique ID"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"name"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"doc"</span><span class="p">:</span><span class="w"> </span><span class="s2">"The person's full legal name"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"height"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"integer"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"doc"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Measured in centimeters, rounded to the nearest centimeter"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"countryCode"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"enum"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"symbols"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"AAA"</span><span class="p">,</span><span class="w"> </span><span class="s2">"ABW"</span><span class="p">,</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="s2">"ZWE"</span><span class="p">],</span>
+<span class="w">            </span><span class="nt">"doc"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ISO3166-1-alpha-3 standard. AAA=OTHER"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Example 4-6 above is shown as in the book (the <code>integer</code> and inline <code>enum</code> type names are as printed). In Avro the <code>type</code> and <code>doc</code> properties live inside the field definition
+<ul>
+<li>Protobuf uses C/C++ style comments.</li>
+</ul>
+</li>
+<li><strong>JSON Schema:</strong>
+<ul>
+<li>annotates and validates JSON
+<ul>
+<li>unlike Avro and Protobuf you <em>can</em> use JSON with no schema, which the book says not to do (<strong>schemaless JSON</strong> leaves room for error, misinterpretation and missing data)</li>
+</ul>
+</li>
+<li>Six primitive types (null, boolean, object, array, number, string), references, validation keywords for numbers, strings, arrays and objects, producers validate before writing</li>
+<li>It is the only one here with a language for <strong>validation ranges</strong>: <code>height</code> limited to 1 to 300 would catch millimetres but not inches (72 inches fits).</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"$id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://example.com/person.schema.json"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"$schema"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://json-schema.org/draft/2020-12/schema"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Person"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"properties"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"number"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"The person's unique ID"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"The person's full legal name"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"height"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"number"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Measured in centimeters, rounded to the nearest centimeter"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"minimum"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"maximum"</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nt">"countryCode"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"enum"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"AAA"</span><span class="p">,</span><span class="w"> </span><span class="s2">"ABW"</span><span class="p">,</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="s2">"ZWE"</span><span class="p">],</span>
+<span class="w">            </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ISO3166-1-alpha-3 standard. AAA=OTHER"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Avro and Protobuf stayed at the top five years on; Kleppmann's <em>Designing Data-Intensive Applications</em>, chapter 4, analyses JSON, XML, Protobuf, Thrift and Avro.</li>
+</ul>
+<h2 id="4-4-schema-evolution">4.4 Schema evolution</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-04-compatibility.svg" alt="Compatibility" loading="lazy" /></p>
+<ul>
+<li>Even a perfect model may change (new products, new demands)
+<ul>
+<li>Evolution lets new consumers get new data <strong>without breaking existing consumers</strong>, using <strong>compatibility modes</strong> (so no <code>if schema.version == 1</code> code in consumers).</li>
+</ul>
+</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Backward</strong></td>
+<td>consumers on the <strong>new</strong> schema can read <strong>old</strong> data; deleting a field is backward compatible</td>
+</tr>
+<tr>
+<td><strong>Forward</strong></td>
+<td>consumers on an <strong>old</strong> schema can read <strong>new</strong> events (seeing only what matches their version); matters when an existing consumer rewinds its offset to historical data</td>
+</tr>
+<tr>
+<td><strong>Full</strong></td>
+<td>convertible forward and backward to the immediately adjacent version</td>
+</tr>
+<tr>
+<td><strong>Full-transitive</strong></td>
+<td>convertible to <strong>any</strong> other version in the stream; strongest guarantee</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Worked example:
+<ul>
+<li>version 1 has <code>id</code> and <code>foobar</code>; version 2 drops <code>foobar</code></li>
+<li>Version 2 is backward compatible (drop the field), but not forward compatible, since version 1 has no default for <code>foobar</code> to fill the gap</li>
+<li>Add a default to version 1 before publishing it:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"record"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Example"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"doc"</span><span class="p">:</span><span class="w"> </span><span class="s2">"This is Version 1, but with a default value for foobar"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"fields"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"id"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"integer"</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"foobar"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"default"</span><span class="p">:</span><span class="w"> </span><span class="s2">"DEFAULT_VALUE_STRING"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li><strong>Defaults apply at read time, not write time</strong>,
+<ul>
+<li>and only when the record lacks the field (unlike a database default)</li>
+<li>Converting a version 2 record to version 1 sets <code>foobar</code> to the default instead of throwing</li>
+<li>Developers often use a marker value to flag that data is missing due to conversion, not a real null.</li>
+</ul>
+</li>
+<li>Avro, JSON Schema and Protobuf v2 allow custom defaults; Protobuf v3 deliberately removed them, so it is harder to evolve. Always check your chosen format's specifics.</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>start at <strong>full-transitive</strong>: consumers only update code when the business case changes, not when a schema breaks. Loosening later is easy</li>
+<li>tightening is extremely difficult. Add compatibility tests to pull requests.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-5-what-is-a-data-contract">4.5 What is a data contract?</h2>
+<ul>
+<li>Like a service contract (Chapter 3) but about the <strong>data guarantees of the event stream itself</strong>: the compact between a producer and all consumers past, present and future, answering &quot;what are the guarantees for this data?&quot; Seen in data mesh, data lakes and warehouses too.</li>
+<li><strong>Warning:</strong> not every stream needs one. Tightly coupled clusters of services (a highly orchestrated workflow) owned by one team may skip it.</li>
+<li>Components:
+<ul>
+<li><strong>Schema(s):</strong> one, or several through evolution or colocated event types (Chapter 5).</li>
+<li><strong>Service-level objectives:</strong> if streams stop, the business stops; offer SLOs as for request-response services.</li>
+<li><strong>Ownership:</strong> the team or person who handles change requests, support and SLOs.</li>
+<li><strong>Access restrictions:</strong> know your consumers so you can warn them of changes; per-service credentials (Chapter 19).</li>
+<li><strong>Field-level encryption</strong> (below).</li>
+<li><strong>Schema evolution rules.</strong></li>
+</ul>
+</li>
+</ul>
+<h2 id="4-6-negotiating-a-breaking-schema-change">4.6 Negotiating a breaking schema change</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-04-data-contract-change.svg" alt="Breaking change" loading="lazy" /></p>
+<ul>
+<li>Breaking changes usually come from shifting domain boundaries as the business expands
+<ul>
+<li>Example: a <code>User</code> with an <code>address</code> string (Example 4-11) becomes <code>User_v2</code> with <code>home_address</code> and <code>work_address</code> as nested <code>Address</code> records (with an optional <code>phone_number</code>; Example 4-12)</li>
+<li>Downstream consumers of the string field are affected.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"record"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"User"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user.namespace"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"fields"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"first_name"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"last_name"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"address"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"record"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"User_v2"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user.namespace"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"fields"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"first_name"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"last_name"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"home_address"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"record"</span><span class="p">,</span>
+<span class="w">                </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Address"</span><span class="p">,</span>
+<span class="w">                </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user.namespace.inner"</span><span class="p">,</span>
+<span class="w">                </span><span class="nt">"fields"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">                    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"phone_number"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"null"</span><span class="p">,</span><span class="w"> </span><span class="s2">"string"</span><span class="p">]</span><span class="w"> </span><span class="p">},</span>
+<span class="w">                    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"address"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">                    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"city"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">                    </span><span class="p">{</span>
+<span class="w">                      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"country"</span><span class="p">,</span>
+<span class="w">                      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span>
+<span class="w">                    </span><span class="p">}</span>
+<span class="w">                </span><span class="p">]</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">            </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"work_address"</span><span class="p">,</span>
+<span class="w">            </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user.namespace.inner.Address"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Follow the <strong>API deprecation precedent</strong> (libraries, frameworks, REST APIs keep legacy support, then deprecate, then remove):
+<ol>
+<li><strong>Design the new schema</strong> (the owning team); consumers review since they must migrate.</li>
+<li><strong>Consult consumers and gain approval</strong>, ideally via code review; expect iterations; then write a release guide and a deprecation plan.</li>
+<li><strong>Plan release, migration and deprecation:</strong> estimate migration time plus padding; consumers may rebuild state stores. <strong>Historical data</strong> is the hard part: remodelling existing fields can be migrated, but net-new data cannot (is the old address home or work? the source cannot fill the other field). Backfilling the new stream captures only the current state. Support both streams for a period (such as 8 to 12 weeks).</li>
+<li><strong>Execute:</strong> release the new stream beside the old; mark the old one <strong>deprecated</strong> to block new registrations and redirect people to <code>User_v2</code> (ideally through a central data portal, Chapter 19).</li>
+</ol>
+</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>set a <strong>hard cut-off date</strong>, send many warnings, or consumers (lacking resources, with competing priorities) will never finish</li>
+<li>Do not keep two versions forever: inconsistent data, partial outages, accumulating technical debt.</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-7-the-schema-registry">4.7 The schema registry</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-04-schema-registry.svg" alt="Schema registry" loading="lazy" /></p>
+<ul>
+<li>A service that registers schemas in association with event streams
+<ul>
+<li>Main purpose: <strong>cut network bytes</strong></li>
+<li>Plain serialisation appends a full schema to every record (Figure 4-5: lower throughput, higher replication cost, more consumer load)</li>
+<li>With a registry the schema is stored once and each event carries a <strong>unique ID</strong> (Figure 4-6).</li>
+</ul>
+</li>
+<li>Producer flow: query the registry
+<ul>
+<li>, register the schema</li>
+<li>, replace the schema with a short ID (3, 4), produce</li>
+<li>Consumer: read from the stream</li>
+<li>, query the registry by ID (7, 8), obtain the schema</li>
+<li>, deserialise (10, 11). Confluent's Kafka Schema Registry uses a <strong>5-byte prefix</strong>; serialisers must follow the registry's proprietary format and registries differ</li>
+</ul>
+</li>
+<li>Other benefits:
+<ul>
+<li><strong>Data discovery:</strong> stream to schema mapping; self-service search on fields, docs and tags.</li>
+<li><strong>Schema evolution validation:</strong> registration is mandatory on the write path, a hook to throw on unauthorised evolution (such as breaking backward compatibility), a completely invalid schema, or a malformed event.</li>
+<li><strong>Automatically updated documentation:</strong> names, types and <code>doc</code> fields, likelier to be current because embedded.</li>
+<li><strong>Downloadable schemas</strong> to generate classes and unit-test events.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> a custom registration script can check every field has a non-empty <code>doc</code>, scan for <strong>PII</strong> patterns and request extra verification, or generate classes and run validation tests before deployment.</li>
+</ul>
+<h2 id="4-8-field-level-encryption-fle">4.8 Field-level encryption (FLE)</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-04-fle-and-catalogs.svg" alt="FLE and catalogues" loading="lazy" /></p>
+<ul>
+<li>A producer encrypts <strong>specific fields</strong>; only consumers granted access can decode them
+<ul>
+<li>PII, financial, health and legal data often need special handling</li>
+<li>A bank transfer (Table 4-1) encrypts <code>email</code>, <code>user</code> and <code>account</code> while <code>amount</code> and <code>datetime</code> stay readable, so an analytics system can total movement without decrypting</li>
+<li><strong>No separate stream per security level</strong> is needed.</li>
+</ul>
+</li>
+<li><strong>Format-preserving encryption</strong>
+<ul>
+<li>keeps the same characters, spacing and length, so the schema still describes the data and <strong>legacy streams need no schema renegotiation</strong></li>
+<li>other encryption can malform (a long account ID becomes a 64-character string, a nested object an array of hashed bytes).</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> finer-grained access and per-field decryption keys reduce the leak surface. Encrypting sensitive data also helps with the <strong>right to be forgotten</strong> (Chapter 18).</li>
+</ul>
+<h2 id="4-9-integration-with-data-catalogues">4.9 Integration with data catalogues</h2>
+<ul>
+<li>A <strong>data catalogue</strong> stores schemas, location and business metadata (ownership, evolution restrictions, sample data, tags such as PII or financial). A registry gives operational schema management
+<ul>
+<li>a catalogue adds one place to <strong>browse, search, discover and publish</strong> data sets, historically for data at rest (databases, Parquet files), now increasingly for <strong>event streams</strong> too.</li>
+</ul>
+</li>
+<li>Options:
+<ul>
+<li><strong>AWS Glue</strong>, <strong>Azure Data Catalog</strong>, <strong>Google's Dataplex Universal Catalog</strong></li>
+<li>open source <strong>Apache Atlas</strong>, <strong>OpenMetadata</strong>, <strong>DataHub</strong>. Many add governance, dependency modelling and access control. Not strictly required, but likely to be adopted</li>
+<li>weigh schema compatibility, <strong>vendor lock-in</strong> and build versus buy.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Schemas give structure and clarity; code generators bridge schema and business logic for both producers and consumers; quality control happens as close to the source as possible.</li>
+<li>Evolution gives explicit up-front rules; breaking changes follow a negotiated process; schema changes go through the same review as code.</li>
+<li>Avro and Protobuf remain the best options, JSON Schema a reasonable third; decide centrally with a federated governance team.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Serialisation, deserialisation</strong>; <strong>schema</strong>; <strong>code generation</strong>.</li>
+<li><strong>Backward, forward, full, full-transitive</strong> compatibility.</li>
+<li><strong>Data contract</strong>; <strong>schema registry</strong>; <strong>field-level encryption</strong>; <strong>format-preserving encryption</strong>; <strong>data catalogue</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 4: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch04.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch04.html</a></li>
+<li>Figures 4-1 to 4-6 and Table 4-1 are redrawn or summarised. Schema listings are shown as printed in the book (with <code>...</code> elided enum values written as comments or placeholders).</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">Building Event-Driven Microservices 5: Designing Events</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">&larr; Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">Building Event-Driven Microservices 5: Designing Events &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

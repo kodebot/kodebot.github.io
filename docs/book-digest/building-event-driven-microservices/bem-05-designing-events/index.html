@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 5: Designing Events</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-06-integrating-event-driven-architectures-with-existing-systems/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-5-designing-events">Building Event-Driven Microservices 5: Designing Events</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 5 (an earlier version appeared in <em>Building an Event-Driven Data Mesh</em>, O'Reilly 2023). Previous: <a href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/">Building Event-Driven Microservices 4: Schemas and Data Contracts</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-06-integrating-event-driven-architectures-with-existing-systems/">Building Event-Driven Microservices 6: Integrating Event-Driven Architectures with Existing Systems</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Events are <strong>state</strong> (the full entity, a database row) or <strong>delta</strong> (the transition). <strong>State events are the best choice for cross-domain communication</strong>, via event-carried state transfer.</li>
+<li>Prefer <strong>current state</strong> over <strong>before/after</strong> events: smaller, compactable, no leftover data.</li>
+<li><strong>Delta events belong inside a bounded context</strong> (event sourcing, tightly coupled apps). Across domains they have five major problems.</li>
+<li><strong>Hybrid</strong> and <strong>notification</strong> events are to be used with caution, if at all. <strong>Measurement</strong> events record occurrences and suit aggregation.</li>
+<li>Design for <strong>privacy</strong> early: encrypt, keep keys in a KMS, and use <strong>crypto-shredding</strong> to meet the right to be forgotten.</li>
+</ul>
+</div></div>
+<h2 id="5-1-introduction-to-event-types">5.1 Introduction to event types</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-05-event-types.svg" alt="Event types" loading="lazy" /></p>
+<ul>
+<li>Every change has three stages (Figure 5-1, a square wave):
+<ul>
+<li>the <strong>initial state</strong>, the <strong>delta</strong> that alters it, and the <strong>final state</strong> (the initial state of the next change)</li>
+<li>Most events are <strong>state</strong> or <strong>delta</strong>.</li>
+</ul>
+</li>
+<li><strong>State events:</strong>
+<ul>
+<li>fully describe an entity at a point in time, like a database row</li>
+<li>the most flexible and useful for sharing business data between teams and systems</li>
+<li>also called level, noun or fact events.</li>
+</ul>
+</li>
+<li><strong>Delta events:</strong>
+<ul>
+<li>describe the transition and typically contain only what changed</li>
+<li>more common between highly coupled systems, since the event definition and its interpretation are tightly linked</li>
+<li>also edge, verb or action events.</li>
+</ul>
+</li>
+<li><strong>Hybrid events</strong> describe both state and transition: usually a kludge when a deeper rework is not possible (&quot;trying to make the quarter's profit goal&quot;), and tend to cause undesirable coupling.</li>
+</ul>
+<h2 id="5-2-state-events-and-event-carried-state-transfer">5.2 State events and event-carried state transfer</h2>
+<ul>
+<li>The <strong>key</strong> is the entity's unique ID
+<ul>
+<li>the <strong>value</strong> is the full set of data available to consumers. Examples: Item, Order, User (commerce)</li>
+<li>Truck, Package, Driver (shipping)</li>
+<li>Payment, Debit, Account (banking).</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong>
+<ul>
+<li><strong>ECST:</strong> the event carries state to any number of consumers, who can reason about and react to it.</li>
+<li><strong>Materialisation:</strong> consume the stream and build your own state store.</li>
+<li><strong>Strong decoupling:</strong> the definition stays inside the producer's bounded context with no coupling to its internal logic.</li>
+<li><strong>Infer changes from state:</strong> compare the current event with the previous one for the key (Figure 5-2: name, price and stock changed, so update signage, order inventory or re-rank search).</li>
+</ul>
+</li>
+<li>Two design strategies: <strong>current state</strong> and <strong>before/after state</strong> (popular via change-data capture).</li>
+</ul>
+<h3 id="current-state-events">Current state events</h3>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-05-state-designs.svg" alt="State designs" loading="lazy" /></p>
+<ul>
+<li>Contain only the current public state (for example the latest <code>quantity</code> for an <code>item_id</code>). Benefits:
+<ul>
+<li><strong>Lean:</strong> minimal space and network.</li>
+<li><strong>Simple:</strong> the broker keeps earlier events, so rewind and replay offsets for history; set compaction per stream.</li>
+<li><strong>Compactable:</strong> stream size is proportional to unique keys (1,000 keys gives just over 1,000 events).</li>
+</ul>
+</li>
+<li>Properties to consider:
+<ul>
+<li><strong>Agnostic to why it changed:</strong> consumers cannot couple to the producer's internal transitions (like a database table, which does not say why a row changed). (Hybrid events bend this.)</li>
+<li><strong>Consumers must maintain state to detect transitions:</strong>
+<ul>
+<li>for example a customer moving country may need new legal documents depending on both countries</li>
+<li>the consumer stores the subset of state it cares about, giving clean separation and flexibility when business logic changes.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="before-after-state-events">Before/after state events</h3>
+<pre class="hl"><code>Key: 26
+Value: {
+    before: { name: "Adam", country: "Madagascar" },
+    after: { name: "Adam", country: "Canada" }
+}
+</code></pre>
+<pre class="hl"><code>Key: 26
+Value: {
+    before: { name: "Adam", country: "Canada" },
+    after: null
+}
+</code></pre>
+<ul>
+<li>Benefits:
+<ul>
+<li>every changed (and unchanged) field in one transaction in one event (but not the reason)</li>
+<li><strong>simple detection without consumer state</strong> (Madagascar to Canada). It fails with two moves in quick succession (Madagascar to Ethiopia, then Canada), and the theoretical stateless consumer is seldom realised since most services keep state.</li>
+</ul>
+</li>
+<li>Drawbacks:
+<ul>
+<li><strong>Compaction is difficult:</strong>
+<ul>
+<li>a deletion sets <code>after</code> to null but the whole value is not null, so Kafka does not treat it as a tombstone. You must write a <strong>secondary tombstone event</strong> (Figure 5-3), as Debezium (a change-data capture service) does</li>
+<li>rewriting compaction logic is rarely feasible, especially with SaaS.</li>
+</ul>
+</li>
+<li><strong>Leftover information:</strong> old data stays in <code>before</code>, and there is a variable delay before asynchronous compaction.</li>
+<li><strong>Doubled storage and network:</strong>
+<ul>
+<li>on average double over the wire and on disk, borne by producers, consumers and broker</li>
+<li>costly for high-volume streams, including cross-region transfer fees.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Verdict: current state events are far better. Consumers keep only what they need, disk is cheap, broker operations simplify, and the leak risk from improper deletion disappears.</li>
+</ul>
+<h2 id="5-3-delta-events">5.3 Delta events</h2>
+<ul>
+<li>Represent the change within a domain (the edge in Figure 5-1):
+<ul>
+<li>only information about the change, not past or current state</li>
+<li>Phrased as past-tense verbs: <code>itemAddedToCart</code>, <code>itemRemovedFromCart</code>, <code>orderPaid</code>, <code>orderShipped</code>, <code>orderReturned</code>, <code>userMoved</code>, <code>userDeleted</code></li>
+<li>Historically common, particularly with the lambda architecture, and used inside a domain for <strong>event sourcing</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="delta-events-for-event-sourcing">Delta events for event sourcing</h3>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-05-event-sourcing.svg" alt="Event sourcing" loading="lazy" /></p>
+<ul>
+<li><strong>Event sourcing</strong>
+<ul>
+<li>records what happened as a sequence of <strong>immutable, append-only events</strong> and builds current state by applying them in order with domain logic</li>
+<li>It is promoted as an alternative to <strong>CRUD</strong>, where the mutable state is modified directly and only the final state retained (an audit log serves auditing, not business logic).</li>
+</ul>
+</li>
+<li><strong>CRUD limits:</strong>
+<ul>
+<li>operations hit the data store directly (slow under heavy use, timeouts)</li>
+<li>high-concurrency operations on the same entity cause conflicts and failed transactions. <strong>CRUD strengths:</strong> strong read-after-write consistency (depending on the database), intuitive, abundant tooling (Figure 5-4: one create and two updates to a refrigerator's contents).</li>
+</ul>
+</li>
+<li>In event sourcing (Figure 5-5) the same operations are events in a durable log (often a single local table). A <strong>domain aggregator</strong></li>
+<li>is separate from the writer</li>
+<li>so they scale independently; a domain can have several aggregators building different state stores. The owner can design deltas freely (<code>turn_lights_on</code>, <code>open_door</code>)</li>
+<li>Using Kafka for event sourcing adds network latency both ways and an availability risk
+<ul>
+<li>The main drawback is <strong>eventual consistency</strong>: a delay between writing and seeing the materialised result, and concurrent writers make it hard to attribute a change to your own delta, so it can be unsuitable where strong consistency is needed.</li>
+</ul>
+</li>
+<li>The problem arises when event sourcing is used as <strong>interdomain communication</strong>: others couple on and misinterpret private domain events that change over time
+<ul>
+<li>You may expose events outside, but each becomes part of the <strong>public data contract</strong> whose meaning must not drift</li>
+<li>Keep &quot;events in here&quot; and &quot;events out there&quot; separate.</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-problems-with-delta-events-across-domains">The problems with delta events across domains</h3>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-05-delta-problems.svg" alt="Delta problems" loading="lazy" /></p>
+<ul>
+<li>Deltas are not bad per se, but often misused. Five problems:
+<ol>
+<li><strong>An infinite number of delta types.</strong> The real set is finite, but every consumer must know how to apply each into its own state. Shopping cart (Figure 5-6): <code>ItemAdded</code>, <code>ItemRemoved</code>; adding <code>ItemQuantityUpdated</code> (Figure 5-7) changes how consumers aggregate; coupons, shipping estimates and subscriptions make it sprawl (Figure 5-8). People choose deltas to avoid consumer state, but this is a trap.</li>
+<li><strong>The interpretation logic must be replicated to each consumer</strong> (Figure 5-9). Consumers must identify, understand and correctly apply each event; lagging brokers deliver events out of order, causing wrong transitions; one consumer may wait up to 30 seconds for late events while another discards them, so aggregates differ. Any producer change must reach every consumer: &quot;tightly couples the producer, the event definitions, and the consumers&quot;.</li>
+<li><strong>Delta events map poorly to event streams.</strong> How do consumers learn of new deltas? &quot;Put it all in one stream&quot; only gives them events they cannot use, raising exceptions or silent wrong results, and violates <strong>one evolvable schema per stream</strong>. New streams are easier to discover but still need notification and code updates. State events encapsulate everything in the producer and change only through schema evolution.</li>
+<li><strong>Inversion of ownership:</strong> consumers push their business logic into the producer. A &quot;package shipped&quot; email needs the producer to compute that delta (Figure 5-10); each new need adds another (Figure 5-11): <code>userReturnedItemAfterTelephoneComplaint</code>, <code>userSawAtLeastThreeAdsThenPurchasedIt</code>. Even then a consumer needing ads from one service and payments from another (Figure 5-12) must keep state; changing three ads to four needs a whole new event definition. Better: general-purpose state, with consumers deciding.</li>
+<li><strong>Inability to maintain historical data:</strong> deltas cannot be compacted. Ten years of cart events could take, for example, three weeks to replay (Figure 5-13). Purging loses data; offloading to a side store needs the <strong>order</strong> preserved; building a snapshot of state (Figure 5-14) means creating the public state definition you tried to avoid, and the consumer must then switch from snapshot to stream, which is the <strong>lambda architecture</strong> again (Figure 5-15).</li>
+</ol>
+</li>
+</ul>
+<h3 id="where-to-use-delta-and-state-events">Where to use delta and state events</h3>
+<ul>
+<li><strong>Delta events are best within a private domain's boundary</strong>,
+<ul>
+<li>where tight coupling can be managed consistently</li>
+<li>fine inside one application (event sourcing) and between tightly coupled applications.</li>
+</ul>
+</li>
+<li>Insufficient arguments for deltas between domains (quoted from &quot;that person who doesn't want to use state events&quot;): maintaining duplicate state is wasteful and takes too much disk
+<ul>
+<li>consumers will know what an event means, how could they misinterpret it</li>
+<li>&quot;I really only care about this one transition, just publish a custom event for me&quot;.</li>
+</ul>
+</li>
+<li>Reality: <strong>disk is extremely cheap, a software engineer's time is not</strong> (break-fix work dwarfs storage cost).</li>
+<li>Good practice (Figure 5-16):
+<ul>
+<li>context 1 has deltas and state streams, tightly coupled but owned by one team</li>
+<li>the deltas stay private and one service composes <strong>state events</strong> for others. Contexts 2 and 3 independently consume that state</li>
+<li>context 4 consumes context 3's state and uses deltas internally (maybe multi-type streams and side snapshot stores), which is nobody else's concern.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-4-hybrid-events-state-with-a-bit-of-delta">5.4 Hybrid events: state with a bit of delta</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-05-hybrid-measurement-notification.svg" alt="Hybrid, measurement, notification" loading="lazy" /></p>
+<ul>
+<li><strong>Warning:</strong> exposing how or why may tightly couple consumers to the producer's business logic.</li>
+<li>Example:
+<ul>
+<li>users sign up via the home page, an email advertising link, a third-party account, or an administrator</li>
+<li>Consumers want to know which (an onboarding workflow; analytics on sign-up methods)</li>
+<li>Instead of four delta events, a user state event with an enum:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>Key: "USERID-9283716596927463"
+Value: {
+    name: "Randolph L. Bandito",
+    signup_time: "2022-02-22T22:22:22Z",
+    birthday: "2000-01-01T00:00:00Z",
+    // An enum of (MAIN, VIA_AD_EMAIL, THIRD_PARTY, or ADMIN)
+    method_of_signup: "VIA_AD_EMAIL"
+}
+</code></pre>
+<ul>
+<li>Risks:
+<ul>
+<li>how a user signs up is a private detail</li>
+<li>what &quot;main&quot; means may drift, the enum may grow (<code>VIA_MOBILE_APP</code>), and consumers must be told before the definition changes or they can hit fatal errors.</li>
+</ul>
+</li>
+<li>Risk here is <strong>low but not zero</strong>:
+<ul>
+<li>the sign-up method is <strong>immutable</strong></li>
+<li>the logic is simple (a binary delta)</li>
+<li>and clear schema documentation prevents drift. By contrast <code>userReturnedItemAfterTelephoneComplaint</code> has many sequential dependencies and drifts easily.</li>
+</ul>
+</li>
+<li>A hybrid event is a <strong>trade-off</strong>: risk is proportional to the delta's complexity and likelihood of change. Try to decouple further; a delta-type field becomes part of your data contract.</li>
+</ul>
+<h2 id="5-5-measurement-events">5.5 Measurement events</h2>
+<ul>
+<li>A <strong>complete record of an occurrence at a point in time</strong>: web analytics (Google Analytics), behaviour tracking, a user seeing an ad:</li>
+</ul>
+<pre class="hl"><code>Key: "USERID-8271949472726174"
+Value: {
+    utc_timestamp: "2022-01-22T15:39:19Z",
+    ad_id: 1739487875123,
+    page_id: 364198769786,
+    url: https://www.somewebsite.com/welcome.html
+}
+</code></pre>
+<ul>
+<li><strong>Enable aggregations</strong>
+<ul>
+<li>(most popular <code>page_id</code>, when users see the most ads, average ads per session)</li>
+<li><strong>Sources may be lossy</strong> (ad-blockers), good enough for much analysis</li>
+<li><strong>Can power time-sensitive applications</strong>
+<ul>
+<li>(factory temperature and humidity: trends for analytics, quick reaction for operations)</li>
+<li>after a connectivity gap, a stream may drop 30 to 60 seconds of old data and publish the latest, or keep everything, depending on SLOs.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Practice (the author at RIM, now BlackBerry):</strong>
+<ul>
+<li>when a bad thing happened on a developer device (dropped call, failed message, modem reset, custom triggers) it dumped measurements to backend servers for problem reports. Lessons: a <strong>well-defined schema</strong> makes automated processing easier</li>
+<li><strong>completeness mattered more than real time</strong> (events hours, days or weeks old, such as a device offline on a flight), and the SLOs said so.</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-6-notification-events">5.6 Notification events</h2>
+<ul>
+<li>A <strong>minimal fact that something happened plus a link or URI</strong> to more information (phone notifications)
+<ul>
+<li>Example: <code>NEW_MESSAGE</code> with a click-through URI</li>
+<li>The <strong>misuse</strong>: sending a pointer instead of state:</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code>Key: 12309131238218
+Value: {
+    status: "PARTIAL_RETURN",
+    utc_timestamp: "2021-21-13T13:11:42Z",
+    access_uri: "serverURI:8080/orders/values/12309131238218"
+}
+</code></pre>
+<ul>
+<li>Problems:
+<ul>
+<li>The event is not a record of state at that moment unless the target is immutable (usually mutable): a <strong>race condition</strong>
+<ul>
+<li>SOLD, PARTIAL_RETURN, FULL_RETURN emit three events, but a lagging consumer may find only FULL_RETURN, and a <strong>new consumer sees only the current state</strong>.</li>
+</ul>
+</li>
+<li><strong>More complexity:</strong> the owner must also serve synchronous requests, with access control, authorisation and scaling for both the producer and the query API.</li>
+</ul>
+</li>
+<li>Better: publish the state as an immutable record of that point in time.</li>
+</ul>
+<h2 id="5-7-event-design-for-data-privacy-and-the-right-to-be-forgotten">5.7 Event design for data privacy and the right to be forgotten</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-05-privacy.svg" alt="Privacy" loading="lazy" /></p>
+<ul>
+<li>PII and financial data have high security requirements, often legal
+<ul>
+<li><strong>GDPR</strong> applies to any organisation processing data of people in Europe; <strong>Article 17</strong> gives individuals the right to have personal data deleted without significant delay</li>
+<li>But streams are immutable (Chapter 18 covers bad-data techniques), so <strong>encrypt first</strong>.</li>
+</ul>
+</li>
+<li>Use <strong>field-level encryption</strong> or encrypt the whole event, with a <strong>key-management service (KMS)</strong> holding keys and a secure API
+<ul>
+<li>Use <strong>a unique key per user, account or other entity</strong>: to delete someone's data, <strong>delete the key</strong>, making all encrypted data inaccessible</li>
+<li>This is <strong>crypto-shredding</strong>: cryptographically unavailable, usually enough for privacy law, but check with your lawyers</li>
+<li>Consumers ask the KMS for keys (with permission) and decrypt themselves.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> consumers must keep the same encryption in their private stores; avoid storing sensitive data unless necessary.</li>
+<li>Why it matters:
+<ul>
+<li><strong>Large amounts of data</strong> in backups, tape and cold storage are costly and slow to read, delete from and rewrite.</li>
+<li><strong>Partial encryption</strong> keeps non-PII data useful (deleting only the PII can satisfy Article 17).</li>
+<li><strong>Multiple systems:</strong> deleting the keys halts access everywhere at once, even where slow to delete.</li>
+<li><strong>Defence in depth:</strong> leaked encrypted data is far less damaging.</li>
+</ul>
+</li>
+<li>It does not protect against consumers who negligently store decrypted data or keys: give clear policies, <strong>time-limit key retention</strong> and never write decrypted data to disk
+<ul>
+<li>Adding encryption later is hard and probably a breaking change (decryption, KMS connectivity, retention validation).</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>State events (ECST, with indefinite retention, durable state and compaction) are the best way to share data between domains, enabling kappa and avoiding lambda.</li>
+<li>Deltas stay in event sourcing and tightly coupled communication inside a bounded context; never allow cross-domain coupling on them.</li>
+<li>Measurement events record occurrences for aggregates and rapid reaction. Use hybrid and notification events with caution, if at all.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>State, delta, hybrid, measurement, notification</strong> events.</li>
+<li><strong>Current state</strong> versus <strong>before/after</strong> events; <strong>event sourcing</strong>; <strong>CRUD</strong>; <strong>domain aggregator</strong>.</li>
+<li><strong>Crypto-shredding</strong>; <strong>KMS</strong>; <strong>right to be forgotten</strong> (GDPR Article 17).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 5: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch05.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch05.html</a></li>
+<li>Figures 5-1 to 5-16 are redrawn in grouped diagrams. GDPR Article 17 as described in the chapter (not independently checked).</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/">Building Event-Driven Microservices 4: Schemas and Data Contracts</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-06-integrating-event-driven-architectures-with-existing-systems/">Building Event-Driven Microservices 6: Integrating Event-Driven Architectures with Existing Systems</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-04-schemas-and-data-contracts/">&larr; Building Event-Driven Microservices 4: Schemas and Data Contracts</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-06-integrating-event-driven-architectures-with-existing-systems/">Building Event-Driven Microservices 6: Integrating Event-Driven Architectures with Existing Systems &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

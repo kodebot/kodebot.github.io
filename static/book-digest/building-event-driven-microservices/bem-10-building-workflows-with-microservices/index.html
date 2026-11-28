@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 10: Building Workflows with Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-10-building-workflows-with-microservices">Building Event-Driven Microservices 10: Building Workflows with Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 10. Previous: <a href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/">Building Event-Driven Microservices 9: Deterministic Stream Processing</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/">Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>workflow</strong> is a set of actions forming a business process, usually spanning several microservices. Concerns: creating and <strong>modifying</strong> it, <strong>monitoring</strong> it, and <strong>distributed transactions</strong>.</li>
+<li><strong>Choreography</strong> (services react independently to events) is loosely coupled and easy to extend but hard to reorder and monitor.</li>
+<li><strong>Orchestration</strong> (a central service commands workers) gives explicit control, easier change and monitoring, at the cost of tighter coupling and an extra service.</li>
+<li><strong>Sagas</strong> (distributed transactions) are hard: avoid them unless necessary; prefer <strong>compensation</strong> (move forward to a good state).</li>
+<li><strong>Durable execution engines</strong> (Temporal and others) make orchestrators fault-tolerant, with trade-offs.</li>
+</ul>
+</div></div>
+<h2 id="10-1-considerations">10.1 Considerations</h2>
+<ul>
+<li>A <strong>workflow</strong> is a set of actions that compose a business process, including logical branching and compensatory actions
+<ul>
+<li>Each microservice has its own bounded context and emits events to downstream consumers.</li>
+</ul>
+</li>
+<li>Questions to ask:
+<ul>
+<li><strong>Creating and modifying workflows:</strong>
+<ul>
+<li>how are the services related</li>
+<li>how to modify an existing workflow without breaking work in progress, without changing several services, without breaking monitoring and visibility?</li>
+</ul>
+</li>
+<li><strong>Monitoring workflows:</strong> how to tell when it completed for an event, if an event failed or is stuck, and the overall health?</li>
+<li><strong>Distributed transactions:</strong> many workflows need actions to happen together or not at all; how to implement and roll back?</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-2-the-choreography-pattern">10.2 The choreography pattern</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-10-choreography.svg" alt="Choreography" loading="lazy" /></p>
+<ul>
+<li><strong>Choreographed (reactive) architectures:</strong>
+<ul>
+<li>highly decoupled microservices <strong>independently reacting</strong> to input events: no blocking or waiting, no dependence on upstream producers or downstream consumers</li>
+<li>Like dancers who each know their role and perform without being told during the dance.</li>
+</ul>
+</li>
+<li>Usually implemented with events:
+<ul>
+<li>services publish business outcomes to their streams and independent consumers subscribe</li>
+<li>The producer <strong>does not know its consumers</strong> or what they do with the data</li>
+<li>Many workflows are logically independent and need no strict coordination, an ideal fit.</li>
+</ul>
+</li>
+<li>Figure 10-1:
+<ul>
+<li>service A produces events driving B, which produces events driving C, within a single <strong>bounded context</strong></li>
+<li>streams 1 and 2 are locked behind the context boundary while C's output stream is available to other consumers. Choreography need not have a defined bounded context: many arise <strong>organically</strong> as streams and services are added.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>very loose coupling, commonly connecting services owned by different teams</li>
+<li>But finding where a workflow starts and ends is hard across team boundaries, ownership is distributed, and debugging is difficult</li>
+<li><strong>Tip:</strong> despite shortcomings, it is the most common coupling in event-driven architectures, usually easy to extend with no changes to other services.</li>
+</ul>
+</li>
+</ul>
+<h3 id="modifying-a-choreographed-workflow">Modifying a choreographed workflow</h3>
+<ul>
+<li>**Adding steps at the end is easy
+<ul>
+<li>inserting in the middle or reordering is problematic.** Figure 10-2: reordering so C acts before B means editing both services C and B to consume streams 1 and 2 respectively</li>
+<li>The data in the streams may no longer suit, requiring breaking schema changes that affect other consumers, possibly a new schema for stream 2 and migration, deletion or leaving of old data</li>
+<li>All services must finish in-flight processing before the topology is swapped, or results can be partial, wrong or failed.</li>
+</ul>
+</li>
+<li>Relationships between services are hard to see outside the workflow, more so as service counts grow
+<ul>
+<li>choreographed workflows are <strong>brittle</strong>, and small logic changes may mean rewriting many services.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> restrict access to intermediate streams you do not want others to couple on.</li>
+</ul>
+<h3 id="monitoring-a-choreographed-workflow">Monitoring a choreographed workflow</h3>
+<ul>
+<li>Steps:
+<ul>
+<li>a <strong>strict definition</strong> of the workflow (smaller, one-team workflows are easier to track)</li>
+<li>your <strong>metrics of success</strong> (an order is paid and fulfilled; a car completes assembly), measurable from systems or streams</li>
+<li>a <strong>centralised state store</strong>: a monitor consumes each stream and materialises progress to find events stuck or workflows incomplete (fixing is for service owners). Figure 10-3: solid lines show the monitor reading the streams
+<ul>
+<li>dashed lines are <strong>health checks</strong> such as heartbeats</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Large workflows (a multinational retailer's order fulfilment with dozens of services and teams) are hard to see fully
+<ul>
+<li><strong>monitor a subset</strong>:
+<ul>
+<li>5 or 6 of 100 critical steps, and use other monitoring and logs for depth</li>
+<li>Monitoring is brittle as independent services change unpredictably (persistent break-fix)</li>
+</ul>
+</li>
+<li>decide whether a monitor is necessary at all. Easier for a few services owned by one team.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-3-the-orchestration-pattern">10.3 The orchestration pattern</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-10-orchestration.svg" alt="Orchestration" loading="lazy" /></p>
+<ul>
+<li><strong>Orchestration</strong>
+<ul>
+<li>centralises logic in <strong>one microservice that issues commands and awaits responses</strong> from subordinate workers, like a conductor</li>
+<li>The workflow is <strong>explicitly in code</strong> in the orchestrator, not implicit</li>
+<li>It tracks which parts are complete, in process or not started, and the commands sent and responses received</li>
+<li>It may use streams or direct request-response (HTTP, RPC).</li>
+</ul>
+</li>
+<li><strong>Division of labour:</strong>
+<ul>
+<li>it tells a worker <strong>what</strong> to do (book a flight, pay for an order, post an item for auction), not <strong>how</strong> or how to retry or handle failure. A payment service owns the whole success or failure (trying, say, three times) and reports only complete success or complete failure</li>
+<li>the orchestrator has no say in the number of attempts (that is the payment service's bounded context).</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> the orchestrator's bounded context is strictly <strong>workflow logic</strong> with minimal business fulfilment logic; the workers hold the bulk of business logic.</li>
+</ul>
+<h3 id="a-simple-event-driven-orchestration-example">A simple event-driven orchestration example</h3>
+<ul>
+<li>Figure 10-4 is the orchestrated version of Figure 10-1
+<ul>
+<li>The orchestrator <strong>materialises the events it issues</strong> to services A, B and C and updates a state store from the worker results</li>
+<li>Table 10-1: input event 100 done (all three results), 101 with A and B results and C dispatched (processing), 102 dispatched to A only (processing)</li>
+<li>It selects the next step from the workflow logic, and when complete or ultimately failed composes the output and publishes it.</li>
+</ul>
+</li>
+<li>The loop consumes from each input stream and, by source, processes, updates progress and sends the next command:</li>
+</ul>
+<pre class="hl"><code><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="kc">true</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Event</span><span class="o">[]</span><span class="w"> </span><span class="n">events</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">consumer</span><span class="p">.</span><span class="na">consume</span><span class="p">(</span><span class="n">streams</span><span class="p">);</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">Event</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">events</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">source</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">"Input Stream"</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">processInput</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">            </span><span class="n">updateProgress</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">            </span><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">"A-Command"</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">source</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">"A-Response"</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">processAResponse</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">            </span><span class="n">updateProgress</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">            </span><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">"B-Command"</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">source</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">"B-Response"</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">processBResponse</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">            </span><span class="n">updateProgress</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">            </span><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">"C-Command"</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">source</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">"C-Response"</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">processCResponse</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">            </span><span class="n">updateProgress</span><span class="p">(</span><span class="n">event</span><span class="p">);</span>
+<span class="w">            </span><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">"Output"</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">consumer</span><span class="p">.</span><span class="na">commitOffsets</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>(The book's listing contains a stray character after the last <code>updateProgress(event);</code>, removed here.) Orchestrated workflows are <strong>typically easier to change</strong>: all logic in one place, if operations are independent (if A's result feeds B you cannot reorder)
+<ul>
+<li>Edit, test, deploy one service, but do not corrupt in-progress events by changing their workflow mid-completion.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> use <strong>queues</strong> in the orchestration framework: workers process each queue in parallel, relying on queue semantics for retries and scaling.</li>
+</ul>
+<h3 id="a-simple-request-response-orchestration-example">A simple request-response orchestration example</h3>
+<ul>
+<li>The orchestrator calls workers directly (HTTP or RPC), awaiting responses (Figure 10-5), synchronously or asynchronously with futures and promises
+<ul>
+<li>Common with <strong>third-party systems without event APIs</strong> (SaaS endpoints) and <strong>legacy services</strong>: use request-response for those and event-driven semantics elsewhere.</li>
+</ul>
+</li>
+</ul>
+<h3 id="modifying-and-monitoring-an-orchestration">Modifying and monitoring an orchestration</h3>
+<ul>
+<li>The orchestrator materialises incoming and outgoing streams and request-response results
+<ul>
+<li>the workflow is defined <strong>only</strong> in it, a single point of change, often without disrupting partially processed events. But orchestration means <strong>tighter coupling</strong>: the orchestrator and workers are explicitly related.</li>
+</ul>
+</li>
+<li><strong>Antipattern:</strong>
+<ul>
+<li>a &quot;<strong>God</strong>&quot; service issuing granular commands to many weak &quot;minion&quot; services spreads business logic between orchestrator and workers (poor encapsulation, ill-defined bounded contexts, hard to scale ownership beyond one team)</li>
+<li>Delegate full responsibility to workers.</li>
+</ul>
+</li>
+<li><strong>Monitoring is simple:</strong> the orchestrator's data store holds the complete state of work in progress; expose it by API or publish state changes per entity to a monitoring stream.</li>
+</ul>
+<h3 id="comparing-request-response-and-event-driven-orchestration">Comparing request-response and event-driven orchestration</h3>
+<table>
+<thead>
+<tr>
+<th>Event-driven</th>
+<th>Request-response</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>same I/O monitoring and lag scaling as other event-driven services</td>
+<td>very low latency (no stream to produce to and consume from)</td>
+</tr>
+<tr>
+<td>other services can consume the orchestrator's streams</td>
+<td>integrates third-party APIs with no event integration</td>
+</tr>
+<tr>
+<td>generally more durable: the broker isolates orchestrator and workers from each other's intermittent failures</td>
+<td>needs dedicated functionality for scaling, URI abstraction, routing and failover</td>
+</tr>
+<tr>
+<td>built-in retry (streams and queues do not progress until processed and a response is created)</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Mixing is common: mostly event-driven, with request-response to third-party APIs or legacy systems.</li>
+</ul>
+<h2 id="10-4-distributed-transactions-and-the-saga-pattern">10.4 Distributed transactions and the saga pattern</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-10-sagas-and-compensation.svg" alt="Sagas and compensation" loading="lazy" /></p>
+<ul>
+<li>A <strong>distributed transaction (saga)</strong> spans two or more fully independent data stores
+<ul>
+<li>each microservice processes its part and <strong>reverses it</strong> if aborted. <strong>Warning:</strong> sagas are hard</li>
+<li><strong>avoid them unless absolutely necessary</strong>: synchronisation between systems, rollbacks, transient instance failures and network failures.</li>
+</ul>
+</li>
+<li>Fulfilment and reversal logic live in the <strong>same microservice</strong> (maintainability, and no new transaction can start if it cannot be rolled back)
+<ul>
+<li>The implementation must be <strong>idempotent</strong> or support state rollbacks so intermittent failures do not leave inconsistency</li>
+<li>Implement via choreography or orchestration.</li>
+</ul>
+</li>
+</ul>
+<h3 id="sagas-via-choreography">Sagas via choreography</h3>
+<ul>
+<li>Choreography is normally unidirectional
+<ul>
+<li>a saga makes it <strong>tightly coupled</strong> upstream and downstream: each service must roll back, tell upstream systems and give them enough data to roll back, and a completed saga must signal completion (commonly a feedback loop to the initiator).</li>
+</ul>
+</li>
+<li>Figure 10-6:
+<ul>
+<li>each service reads a <strong>saga stream</strong> (data for the next service) and writes an <strong>instruction stream</strong> (commit or roll back). Success (Figure 10-7): A instructs B, B instructs C</li>
+<li>C commits locally and propagates the commit to B, then A</li>
+<li>A writes the output. Failure (Figure 10-8): a local commit failure in C makes B and A abort their share</li>
+<li>A emits the failed result and continues.</li>
+</ul>
+</li>
+<li>Monitoring a choreographed saga is as hard as any (build a dedicated system, as in Figure 10-3)
+<ul>
+<li>modification is as hard (halt new processing and finish all ongoing before swapping order; adding a service D after C is easier). <strong>Tip:</strong> <strong>lift and shift</strong>: swap the whole bounded context for a new implementation using the same input consumer group offsets.</li>
+</ul>
+</li>
+<li>They tend to <strong>arise organically in pairs of services</strong> when a business change introduces transactional needs; as service count and need for oversight grow, consider orchestration.</li>
+</ul>
+<h3 id="sagas-via-orchestration">Sagas via orchestration</h3>
+<ul>
+<li>The orchestrator adds the logic to <strong>revert from any point</strong> by running each worker's <strong>complementary reversing action</strong>
+<ul>
+<li>Figure 10-9: a two-stage transaction using both event streams and request-response</li>
+<li>Central state gives close monitoring; changing the order means editing the orchestrator's logic</li>
+<li>It can add <strong>timeouts</strong> (periodically check the materialised state for timed-out services) and <strong>human interactions</strong> (a REST API, Chapter 17, for cancellation)</li>
+<li>A transaction can abort on a worker's return value, a timeout or a human interrupt.</li>
+</ul>
+</li>
+<li>Figure 10-10, a rollback after a failed final service: SaaS endpoint B fails to commit and reports back
+<ul>
+<li>the orchestrator updates its store</li>
+<li>, issues a rollback to A</li>
+<li>A rolls back</li>
+<li>and responds</li>
+<li>the orchestrator marks the transaction failed</li>
+<li>and emits results</li>
+<li>Then it may <strong>retry</strong>, <strong>discard</strong> the related input events, or throw an exception and terminate</li>
+</ul>
+</li>
+<li><strong>Worst case:</strong>
+<ul>
+<li>the transaction can neither complete nor roll back (for example A cannot undo its commits): generally <strong>halt all processing and treat it as an incident</strong></li>
+<li>Transactions should cleanly complete or fail, but bugs and long-lasting data store failures happen.</li>
+</ul>
+</li>
+<li><strong>Caution:</strong>
+<ul>
+<li>each microservice remains responsible for its own state being consistent after a rollback</li>
+<li>the orchestrator only issues rollback commands and awaits confirmations. Orchestrated transactions offer better visibility, flexibility and monitoring than choreographed ones, at the overhead and management cost of an orchestrator.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-5-the-compensation-workflow-pattern">10.5 The compensation workflow pattern</h2>
+<ul>
+<li>Take a <strong>forward compensating action</strong> to fix the current undesirable state instead of undoing every step
+<ul>
+<li>It may be simpler, cleaner and leave customers happier</li>
+<li>Ticketing and inventory systems often use it when they oversell.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>a website sells only stocked items; the customer orders, pays and gets a confirmation email</li>
+<li>In the warehouse the shelf is empty although the system says three remain (misplaced, stolen, a wrong quantity received, or a race between two orders)</li>
+<li>A strict saga would refund, cancel, fix stock and alert, but what about the rest of the order (cancel it, or partially refund and ship some)?</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> you can build workflows with <strong>human intervention</strong>; a kind message to the customer helps; still provide a <strong>compensatory override</strong> to correct the bad state.</li>
+<li>Key:
+<ul>
+<li>decide the desirable outcome from the current bad state and build a path to it: order new stock, notify of a delay, offer a <strong>discount code</strong> as apology, and let the customer cancel or wait</li>
+<li>Not always suitable, and sometimes reversing is better, but digital and physical records inevitably diverge, sometimes discovered weeks or months later.</li>
+</ul>
+</li>
+</ul>
+<h2 id="10-6-orchestration-via-a-durable-execution-engine">10.6 Orchestration via a durable execution engine</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-10-durable-execution.svg" alt="Durable execution" loading="lazy" /></p>
+<ul>
+<li>A <strong>durable execution engine (DEE)</strong> is a platform for running <strong>long-running, stateful processes</strong> with <strong>guaranteed reliability</strong>
+<ul>
+<li>also &quot;workflows-as-code&quot; or fault-tolerant workflow engines</li>
+<li>Your code runs to completion despite failures, restarts and time-outs</li>
+<li>More common since 2020</li>
+<li>Examples: <strong>Cadence, Temporal, Restate, Resonate</strong> (free open source options, with possible licensing limits for larger workloads).</li>
+</ul>
+</li>
+<li>Features:
+<ul>
+<li><strong>Automatic retries and fault tolerance</strong> (resume from the last good state).</li>
+<li><strong>Managing distributed transactions</strong> (eventual consistency, optional compensation).</li>
+<li><strong>Less boilerplate</strong> error handling.</li>
+<li><strong>Resource savings:</strong> no re-executing completed code or calls.</li>
+<li><strong>Long durations:</strong> minutes to days, waiting for human approval or external events.</li>
+</ul>
+</li>
+<li>Example from Temporal's sample Java code (trimmed in the book): <code>Async.function</code> calls <code>composeGreeting</code> twice and returns <code>Promise&lt;String&gt;</code> values
+<ul>
+<li><code>hello.get() + &quot;\n&quot; + bye.get()</code> waits for both. The calls, promises and return values are recorded in the engine's <strong>append-only durable log</strong></li>
+<li>if it fails after &quot;Hello&quot; but before &quot;Bye&quot;, the restored service skips &quot;Hello&quot; and goes on to &quot;Bye&quot;.</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="c1">// Temporal sample, trimmed for brevity (as in the book)</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">io.temporal.workflow.Async</span><span class="p">;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">io.temporal.workflow.Promise</span><span class="p">;</span>
+<span class="c1">// ...</span>
+
+<span class="cm">/** Simple activity implementation, that concatenates two strings. */</span>
+<span class="kd">static</span><span class="w"> </span><span class="kd">class</span> <span class="nc">GreetingActivitiesImpl</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">GreetingActivities</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nd">@Override</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">composeGreeting</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">greeting</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">greeting</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">" "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">"!"</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="c1">// ...</span>
+
+<span class="nd">@Override</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="nf">getGreeting</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cm">/*</span>
+<span class="cm">     * This is our workflow method.</span>
+<span class="cm">     * We invoke the composeGreeting method two times using</span>
+<span class="cm">     * io.temporal.workflow.Async#function(Func).</span>
+<span class="cm">     * The results of each async activity method invocation returns us a</span>
+<span class="cm">     * io.temporal.workflow.Promise which is similar to a Java Future</span>
+<span class="cm">     */</span>
+<span class="w">    </span><span class="n">Promise</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">hello</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">Async</span><span class="p">.</span><span class="na">function</span><span class="p">(</span><span class="n">activities</span><span class="p">::</span><span class="n">composeGreeting</span><span class="p">,</span><span class="w"> </span><span class="s">"Hello"</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
+<span class="w">    </span><span class="n">Promise</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">bye</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">Async</span><span class="p">.</span><span class="na">function</span><span class="p">(</span><span class="n">activities</span><span class="p">::</span><span class="n">composeGreeting</span><span class="p">,</span><span class="w"> </span><span class="s">"Bye"</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Application waits until receiving both of the async results</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">hello</span><span class="p">.</span><span class="na">get</span><span class="p">()</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">"\n"</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">bye</span><span class="p">.</span><span class="na">get</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>Embedding DEE code in a service is appealing:
+<ul>
+<li>it is plain code from an SDK, usable where it suits, with familiar tools</li>
+<li><strong>Tip:</strong> a DEE is most useful for business logic triggered by a <strong>non-repeatable source</strong> such as an HTTP or RPC request (you can reprocess a stream's events but not requests you already failed and returned).</li>
+</ul>
+</li>
+<li>It needs a <strong>dedicated durable store</strong> for execution progress
+<ul>
+<li>an immutable, durable, <strong>append-only log</strong> (event sourcing) is the common choice, deeply coupled and proprietary. It records:</li>
+<li><strong>workflow progress</strong> (last line executed, success or failure, branches, conditions and loops);</li>
+<li><strong>all relevant state</strong> you chose to append;</li>
+<li><strong>parameters</strong> of function calls and direct call APIs;</li>
+<li><strong>returns</strong> of those calls;</li>
+<li><strong>durable promises</strong> (what has been invoked, so it is not repeated on restore).</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> a DEE prevents duplicate work and calls but <strong>cannot remove race conditions</strong> (a request may be sent and the service crash before recording it): keep operations and requests <strong>idempotent</strong>.</li>
+<li><strong>Trade-offs:</strong>
+<ul>
+<li><strong>New dependency</strong> and lock-in (will the vendor exist in 5 or 10 years; is there an open-source option you can run).</li>
+<li><strong>Learning curve</strong> (distributed systems concepts).</li>
+<li><strong>Engine-specific abstractions</strong> (workflows, activities, workers, timers, task queues, signals, await, promises).</li>
+<li><strong>Versioning challenges</strong> (may run versions in parallel, or modify code to handle old and new data on reprocessing).</li>
+<li><strong>State persistence overhead</strong> (computation and storage; possible slowdown for high-throughput, low-latency work).</li>
+<li><strong>Extra resources</strong> (buy, build, host or manage; scale with usage).</li>
+</ul>
+</li>
+<li>Often overkill, since a service can simply retry by reconsuming input streams
+<ul>
+<li>best for complex, long-running stateful workflows without reliable, retriable triggers. <strong>Note:</strong> other durable execution may suit orchestrators, such as durable function orchestrators (Chapter 15).</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li><strong>Choreography:</strong> loose coupling between business units and independent workflows; best for simpler workflows with few dependencies, few services, and rarely changing order.</li>
+<li><strong>Orchestration:</strong>
+<ul>
+<li>explicit control at the cost of an extra service</li>
+<li>better visibility and monitoring</li>
+<li>handles complicated distributed transactions</li>
+<li>logic is easier to modify</li>
+<li>suits changing workflows with many independent services.</li>
+</ul>
+</li>
+<li>Not all workflows need distributed transactions; <strong>compensation</strong> often builds forward to a healthy state.</li>
+<li>Durable execution engines build highly reliable orchestrators but bring a learning curve and operational overhead: evaluate fit.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Choreography</strong>, <strong>orchestration</strong>, <strong>orchestrator</strong>, <strong>God service</strong> antipattern.</li>
+<li><strong>Saga</strong>, <strong>compensation workflow</strong>, <strong>lift and shift</strong>.</li>
+<li><strong>Durable execution engine (DEE)</strong>, <strong>durable promise</strong>, <strong>append-only log</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 10: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch10.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch10.html</a></li>
+<li>Figures 10-1 to 10-10 and Table 10-1 are redrawn or summarised. The Temporal listing is shown as trimmed in the book (from Temporal's sample Java code; comment markup simplified).</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/">Building Event-Driven Microservices 9: Deterministic Stream Processing</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/">Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices</a></li>
+<li><a href="/book-digest/monolith-to-microservices/m2m-05-growing-pains/">Monolith to Microservices 5: Growing Pains</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/">&larr; Building Event-Driven Microservices 9: Deterministic Stream Processing</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-11-basic-producer-and-consumer-microservices/">Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

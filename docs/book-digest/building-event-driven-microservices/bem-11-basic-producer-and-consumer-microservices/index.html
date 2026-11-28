@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-12-heavyweight-framework-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-11-basic-producer-and-consumer-microservices">Building Event-Driven Microservices 11: Basic Producer and Consumer Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 11. Previous: <a href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/">Building Event-Driven Microservices 10: Building Workflows with Microservices</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-12-heavyweight-framework-microservices/">Building Event-Driven Microservices 12: Heavyweight Framework Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A <strong>basic producer and consumer (BPC)</strong> microservice uses plain consumer and producer clients only: no event scheduling, watermarks, built-in materialisation, changelogs, or scaling beyond <strong>consumer group balancing</strong>.</li>
+<li>It fits <strong>stateless</strong> transformations and <strong>stateful logic that does not depend on event order</strong>, usually with an <strong>external state store</strong>.</li>
+<li>Good uses: the <strong>sidecar</strong> pattern for legacy systems, <strong>gating</strong> (all inputs must arrive, in any order), work done by the <strong>data store</strong>, and <strong>independent scaling</strong> of processing and storage.</li>
+<li>Weakness: no joins between streams, materialisation or timestamp-based decisions; those need the frameworks of Chapters 12 and 13.</li>
+</ul>
+</div></div>
+<h2 id="11-1-what-is-a-bpc">11.1 What is a BPC?</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-11-basic-producer-consumer.svg" alt="Basic producer and consumer" loading="lazy" /></p>
+<ul>
+<li>BPC microservices <strong>ingest events</strong> from one or more streams, apply transformations or business logic, and emit events to output streams. Synchronous request-response I/O may also be involved (Chapter 17)
+<ul>
+<li>this chapter is strictly about event-driven components.</li>
+</ul>
+</li>
+<li>They use <strong>basic clients</strong> providing only consuming and producing
+<ul>
+<li>They <strong>lack</strong> event scheduling, watermarks, built-in materialisation, changelogs and horizontal scaling beyond consumer group balancing</li>
+<li>You can build your own libraries for these, but that is out of scope, so check whether BPC meets your requirements.</li>
+</ul>
+</li>
+<li>Strengths:
+<ul>
+<li>clients exist in most languages (low cognitive overhead)</li>
+<li>the whole bounded-context workflow lives in <strong>one application</strong>, keeping responsibilities local and easy to understand</li>
+<li>it can be wrapped in one or more <strong>containers</strong> and run by your container management solution.</li>
+</ul>
+</li>
+</ul>
+<h2 id="11-2-where-bpcs-work-well">11.2 Where BPCs work well</h2>
+<ul>
+<li>Despite lacking stream-processing components, BPCs fulfil many requirements: <strong>stateless transformations</strong> are easy, and so are <strong>stateful patterns where deterministic event scheduling is not required</strong>.</li>
+<li><strong>External state stores</strong>
+<ul>
+<li>are more common than internal ones: scaling local state across instances and recovering from instance failure is hard without a full framework</li>
+<li>External stores give all instances uniform access, plus backup and recovery.</li>
+</ul>
+</li>
+</ul>
+<h3 id="integration-with-existing-systems-the-sidecar-pattern">Integration with existing systems: the sidecar pattern</h3>
+<ul>
+<li>A basic producer and consumer client is an <strong>optimal way to integrate event-driven services into legacy codebases</strong>
+<ul>
+<li>A legacy system can write its own events with <strong>at-least-once</strong> semantics and consume events to insert into its database or run reactive code.</li>
+</ul>
+</li>
+<li>When it is not safe to modify the legacy codebase, the <strong>sidecar pattern</strong> adds event-driven functionality <strong>without affecting the source codebase</strong>.</li>
+<li>Example:
+<ul>
+<li>an ecommerce <strong>frontend</strong> displays inventory and product data, previously synchronised from a read-only subordinate data store by a <strong>scheduled batch job</strong> (Figure 11-1)</li>
+<li>In the event-driven world there are two streams, <strong>Product Info</strong> and <strong>Product Inventory</strong>, each a mirror of its source table; the frontend needs both</li>
+<li>A sidecar service <strong>sinks</strong> both streams into the data store, using a BPC to consume and <strong>upsert</strong> (Figure 11-2)</li>
+<li>The frontend gains a <strong>near-real-time feed</strong> of product updates with no code change.</li>
+</ul>
+</li>
+<li>The sidecar lives in its own container but is part of the <strong>single deployable</strong> of the frontend: for example a <strong>Kubernetes sidecar</strong>, or even in the same container as the application
+<ul>
+<li>It adds new functionality to a system without significant legacy changes, most often to bring event-driven processing to applications otherwise left out.</li>
+</ul>
+</li>
+<li><strong>Drawbacks:</strong>
+<ul>
+<li>more complexity and coordination</li>
+<li>testing is harder because the stream-processing component is part of the test scope</li>
+<li>the bounded context spans the microservice and the stream component, so you must deploy and <strong>roll back the components together</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="stateful-business-logic-that-does-not-depend-on-event-order">Stateful business logic that does not depend on event order</h3>
+<ul>
+<li>Many processes do not care about order but need <strong>all necessary events to eventually arrive</strong>: the <strong>gating pattern</strong>
+<ul>
+<li>Example: a book publisher needs three things before a book goes to the printer, in any order:</li>
+<li><strong>Contents:</strong> the contents are written.</li>
+<li><strong>Cover art:</strong> the cover art is created.</li>
+<li><strong>Pricing:</strong> prices are set for regions and formats.</li>
+</ul>
+</li>
+<li>Each stream drives logic:
+<ul>
+<li>a new event is <strong>materialised</strong> into its table, then every other table is <strong>looked up</strong> to see whether the other events are present (Figure 11-3). The book ending in ISBN 0010 has already been published to the output book stream</li>
+<li>the one ending 0011 is <strong>waiting for cover art</strong> and has not been published.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> the gating pattern may also need explicit <strong>human approval</strong> (&quot;Example: Newspaper Publishing Workflow (Approval Pattern)&quot;).</li>
+</ul>
+<h3 id="when-the-data-store-does-much-of-the-work">When the data store does much of the work</h3>
+<ul>
+<li>A BPC suits cases where the <strong>underlying data store performs most of the business logic</strong>: a geospatial store, a document store, machine learning, AI and neural network applications.</li>
+<li>Examples:
+<ul>
+<li>an ecommerce company ingests products scraped from websites and <strong>classifies</strong> them with a BPC using a <strong>batch-trained machine learning categoriser</strong> in the backend (complex logic offline in batch, classification real time via per-event lookups)</li>
+<li>or user behaviour events correlated with a <strong>geospatial store</strong> to find the nearest retailers for advertisements.</li>
+</ul>
+</li>
+<li>The producer and consumer only provide the means to <strong>consume, process and emit</strong>.</li>
+</ul>
+<h3 id="independent-scaling-of-processing-and-data-store">Independent scaling of processing and data store</h3>
+<ul>
+<li>Processing and storage needs are not linearly related. Example load pattern: the <strong>sleep/wake cycle</strong> of a local population: intensive by day, very low at night.</li>
+<li>Example:
+<ul>
+<li>aggregate user behaviour events into <strong>24-hour sessions</strong> to find each user's recently popular products and drive related advertisements</li>
+<li>on completing a session the service <strong>emits the result</strong> and <strong>flushes the data store</strong>. Table 11-1: a key-value store with a <strong>composite primary key</strong> <code>userId, timestamp</code> and a <code>List(productId)</code> value.</li>
+</ul>
+</li>
+<li>Processing needs follow the cycle, so the service <strong>scales down at night</strong> to save money: the partition assignor reassigns input partitions to a single instance
+<ul>
+<li>But the <strong>domain of potential users remains constant</strong> (anyone may be logged in), so the service needs access to every user aggregation: <strong>scaling down processing does not reduce the state's upper size boundary</strong>.</li>
+</ul>
+</li>
+<li>By day, <strong>more instances</strong> come online; the data store's query rate rises too, but <strong>caching, partitioning and batching</strong> keep load lighter than the linear increase in processing.</li>
+<li><strong>Tip:</strong> cloud providers typically offer <strong>high-performance key-value storage</strong> with independent read and write scaling and costs proportional to access patterns.</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>BPC is simple yet powerful and the foundation of many stateless and stateful event-driven patterns.</li>
+<li>It is flexible: pairs with data stores that do most of the work, serves as an interface layer between streams and legacy systems, and can use external stream-processing systems to augment it.</li>
+<li>Major shortcoming:
+<ul>
+<li>no advanced handling of <strong>relationships between streams</strong> (joins require loading everything into a database), and no out-of-the-box <strong>state materialisation, event scheduling or timestamp-based decisions</strong></li>
+<li>The next two chapters cover heavyweight and lightweight frameworks, which provide all of these.</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>BPC</strong>; <strong>sidecar pattern</strong>; <strong>gating pattern</strong>.</li>
+<li><strong>Composite primary key</strong> state; independent scaling of compute and store.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 11: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch11.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch11.html</a></li>
+<li>Figures 11-1 to 11-3 and Table 11-1 are summarised in the diagram.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/">Building Event-Driven Microservices 10: Building Workflows with Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-12-heavyweight-framework-microservices/">Building Event-Driven Microservices 12: Heavyweight Framework Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-10-building-workflows-with-microservices/">&larr; Building Event-Driven Microservices 10: Building Workflows with Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-12-heavyweight-framework-microservices/">Building Event-Driven Microservices 12: Heavyweight Framework Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 22: Conclusion</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-21-deploying-event-driven-microservices/" aria-label="Previous">&lsaquo; Prev</a></div>
+<main>
+<h1 id="building-event-driven-microservices-22-conclusion">Building Event-Driven Microservices 22: Conclusion</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 22. Previous: <a href="/book-digest/building-event-driven-microservices/bem-21-deploying-event-driven-microservices/">Building Event-Driven Microservices 21: Deploying Event-Driven Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Event streams give <strong>well-defined, low-latency data</strong> to whichever services need it, <strong>as many times as needed</strong>; microservices let you pick the best technology per problem. Together they give <strong>resilient, decoupled services that communicate durably and asynchronously</strong>.</li>
+<li>The <strong>data communication structure</strong> decouples the <strong>ownership and production</strong> of data from its <strong>access and consumption</strong>.</li>
+<li>Align services on <strong>bounded contexts</strong>, pay the <strong>microservice tax</strong> incrementally, design events deliberately (<strong>state, delta, hybrid</strong>), use <strong>schemas</strong>, <strong>liberate</strong> data and make the <strong>event broker the single source of truth</strong>.</li>
+<li>Pick the implementation (<strong>lightweight</strong>, <strong>heavyweight</strong>, <strong>BPC</strong>, <strong>FaaS</strong>, <strong>streaming SQL</strong>) to fit; <strong>test</strong> with composed events and temporary environments; <strong>deploy</strong> with owner autonomy while weighing SLAs, state rebuilds and reconsumption.</li>
+</ul>
+</div></div>
+<h2 id="22-1-recap">22.1 Recap</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-22-conclusion.svg" alt="Conclusion" loading="lazy" /></p>
+<h3 id="the-data-communication-structure">The data communication structure</h3>
+<ul>
+<li>It gives access to important business data across the company without ad hoc solutions. <strong>Event brokers</strong> let services reach any data written to a stream, organise it strictly, propagate updates in <strong>near real time</strong> and operate at <strong>very large scale</strong>
+<ul>
+<li>the broker is <strong>agnostic to business logic</strong> and simply stores events resiliently and distributes them to subscribers.</li>
+</ul>
+</li>
+<li>Producers get <strong>readily available, low-latency, decoupled</strong> access for all consumers and no longer provide <strong>custom query endpoints</strong>, focusing on their primary use cases
+<ul>
+<li>Consumers use their <strong>own logic, processing power and storage</strong>.</li>
+</ul>
+</li>
+<li>A mature structure <strong>decouples ownership and production of data from its access and consumption</strong>: applications no longer do <strong>double duty</strong> (internal logic plus synchronisation and outside access)
+<ul>
+<li>A failed instance no longer makes data inaccessible, only <strong>delays new data</strong> until the producer returns.</li>
+</ul>
+</li>
+</ul>
+<h3 id="business-domains-and-bounded-contexts">Business domains and bounded contexts</h3>
+<ul>
+<li>A business has a <strong>domain</strong>, broken into <strong>subdomains</strong>
+<ul>
+<li>solutions are described by <strong>bounded contexts</strong> that identify boundaries (inputs, outputs, events, requirements, processes, data models) of the subdomain</li>
+<li>Align microservices with a bounded context: a small context may use one service, a larger one several</li>
+<li>The result is <strong>decoupled services</strong> updated independently, meeting changing business needs while preserving <strong>team autonomy</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="tooling-infrastructure-and-the-microservice-tax">Tooling, infrastructure and the microservice tax</h3>
+<ul>
+<li>Event-driven microservices need investment in systems and tools to operate at scale: the <strong>microservice tax</strong>
+<ul>
+<li>The <strong>event broker</strong> is at the heart, providing the fundamental communication</li>
+<li>Each new service needs its own repository, deployment pipeline, monitoring, logging and processing and storage resources
+<ul>
+<li>a custom process per service is costly, while letting teams do these steps themselves pays off.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>The tax includes:
+<ul>
+<li>the <strong>event broker and streams</strong></li>
+<li><strong>schema registry and metadata management</strong></li>
+<li><strong>access control management</strong></li>
+<li>the <strong>container management system</strong> with resource management</li>
+<li><strong>continuous integration, delivery and deployment</strong></li>
+<li><strong>monitoring and logging</strong>. Paying it is <strong>not all-or-nothing</strong>: start with a broker or CMS and add the rest as needed.</li>
+</ul>
+</li>
+</ul>
+<h3 id="event-design">Event design</h3>
+<ul>
+<li><strong>State events:</strong>
+<ul>
+<li>an entity's state at a point in time with all related fields</li>
+<li>may hold only the current state or earlier versions too (before/after)</li>
+<li>use a <strong>primary key</strong> to enable <strong>copartitioning and compaction</strong></li>
+<li>support <strong>event-carried state transfer</strong>.</li>
+</ul>
+</li>
+<li><strong>Delta events:</strong>
+<ul>
+<li>the change from one state to another, usually only changed fields so the consumer composes state</li>
+<li><strong>not compactable</strong> (storage grows)</li>
+<li>support <strong>event sourcing</strong>, most used for state changes <strong>within</strong> a bounded context, not between them.</li>
+</ul>
+</li>
+<li><strong>Hybrid events:</strong> state plus the deltas that led to it: a compromise at the cost of production and consumption complexity, storage and network.</li>
+<li><strong>Normalisation:</strong>
+<ul>
+<li>relational databases handle joins on data at rest and benefit from normalised schemas (third or fourth normal form)</li>
+<li>in streams joins are more complex and expensive, so a <strong>denormalised</strong> approach helps. Trade-offs: larger events, more storage and network, harder for the producer</li>
+<li>consumers avoid expensive stream joins and can use a wider range of frameworks.</li>
+</ul>
+</li>
+</ul>
+<h3 id="schematised-events">Schematised events</h3>
+<ul>
+<li>Schemas play a critical role in communicating meaning:
+<ul>
+<li>strongly typed events make <strong>producers and consumers face the realities of data</strong> instead of hoping someone else figures it out</li>
+<li>Producers must emit according to the schema and consumers code against it, reducing misinterpretation and bad data and providing a <strong>contract</strong> for future changes.</li>
+</ul>
+</li>
+<li><strong>Schema evolution</strong> lets producers add fields while consumers that do not care keep older schemas, cutting the frequency and risk of nonessential changes; the rest upgrade independently.</li>
+<li><strong>Field-level encryption</strong>
+<ul>
+<li>(only authorised consumers decrypt specific fields) and <strong>value constraints</strong> (a positive integer age, alphabetical names). <strong>Code generation</strong> creates classes or structures so problems surface early</li>
+<li>the <strong>schema registry</strong> is a searchable map of data to streams for <strong>data discovery</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="data-liberation-and-the-single-source-of-truth">Data liberation and the single source of truth</h3>
+<ul>
+<li>Populate streams with business-critical data
+<ul>
+<li>liberating it from services and data stores takes time but is <strong>essential for decoupling</strong> and moving toward an event-driven architecture. <strong>Tip:</strong> with data in streams, services are built <strong>by composition</strong>: a new service subscribes to the streams of interest through the broker instead of connecting to every service that would provide the data.</li>
+</ul>
+</li>
+<li>Start with data <strong>most commonly used and critical to the organisation's next major goals</strong>
+<ul>
+<li>Weigh each extraction method's impact on the existing service against the risks of <strong>stale data</strong>, <strong>lack of schemas</strong> and <strong>exposed internal data models</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="microservices">Microservices</h3>
+<ul>
+<li>Small, purpose-built services solving specific business problems
+<ul>
+<li>most sustainable when aligned with <strong>business-focused bounded contexts</strong>, isolating them from changes elsewhere except where business changes require it. Many technologies work (lightweight, heavyweight, BPC, FaaS, streaming SQL), with <strong>internal versus external state</strong> and <strong>containers</strong> (most common) versus VMs (less common) to decide.</li>
+</ul>
+</li>
+<li><strong>Not all microservices need be micro</strong>:
+<ul>
+<li>several larger services are reasonable, especially without paying the microservice tax in part or full</li>
+<li>&quot;There is no award for building the most microservices, nor is there an award for having just a single massive service.&quot;</li>
+</ul>
+</li>
+<li>Fine-grained, decoupled new services get easier if you:
+<ul>
+<li>publish commonly used and important business <strong>entities and events</strong> to the broker</li>
+<li>use the broker as the <strong>single source of truth</strong> driving microservices</li>
+<li>make it <strong>easy to set up, use and manage</strong> your own microservices.</li>
+</ul>
+</li>
+</ul>
+<h3 id="microservice-implementation-options">Microservice implementation options</h3>
+<ul>
+<li><strong>Lightweight frameworks:</strong>
+<ul>
+<li>the greatest out-of-the-box functionality: streams materialised to tables and maintained indefinitely</li>
+<li>joins (including on foreign keys) across streams and tables</li>
+<li><strong>hot replicas, durable storage and changelogs</strong> for resiliency and scalability.</li>
+</ul>
+</li>
+<li><strong>Heavyweight frameworks:</strong>
+<ul>
+<li>similar functionality but less processing independence (a <strong>separate dedicated cluster</strong>)</li>
+<li>new cluster options such as <strong>Kubernetes</strong> integration are growing</li>
+<li>often already used in mid-sized and larger organisations for big-data analysis.</li>
+</ul>
+</li>
+<li><strong>Basic producer/consumer (BPC):</strong>
+<ul>
+<li>flexible across languages and runtimes but limited to basic consumption and production</li>
+<li><strong>deterministic behaviour is difficult</strong> (no built-in event scheduling)</li>
+<li>complex operations need your own custom libraries or simpler use cases that tolerate nondeterministic processing.</li>
+</ul>
+</li>
+<li><strong>Functions as a service (FaaS):</strong>
+<ul>
+<li>similar to BPC but with more streamlined management and scaling</li>
+<li>simple stateless and stateful processing and <strong>orchestration</strong> for complex workflows (orchestrator functions are not available from all providers).</li>
+</ul>
+</li>
+</ul>
+<h3 id="testing">Testing</h3>
+<ul>
+<li>Event-driven microservices suit <strong>unit and integration testing</strong>: compose events for a wide range of cases (order, timestamps, partitions, contents across input streams), structured by the <strong>event schemas</strong> including constraints and edge cases.</li>
+<li><strong>Local testing</strong>
+<ul>
+<li>covers unit and integration tests, using dynamically created brokers, schema registries and other dependencies: a broker in the <strong>same executable</strong> as the test (numerous JVM solutions) or in a <strong>container</strong> beside the application</li>
+<li>full control lets you simulate <strong>load, race conditions, outages and failures</strong>.</li>
+</ul>
+</li>
+<li><strong>Production integration testing:</strong>
+<ul>
+<li>dynamically create a <strong>temporary broker</strong>, populate it with <strong>copies of production streams and events</strong> (barring information-security concerns) and run the service: a <strong>smoke test</strong> before deploying, plus <strong>performance tests</strong> of a single instance and horizontal scaling</li>
+<li>then discard the environment.</li>
+</ul>
+</li>
+</ul>
+<h3 id="deploying">Deploying</h3>
+<ul>
+<li>Owners must be able to <strong>deploy and roll back quickly and easily</strong>: autonomy removes bottlenecks of an infrastructure team solely responsible for deployments. <strong>CI, delivery and deployment pipelines</strong> provide a streamlined, customisable process that reduces manual steps and scales to other services
+<ul>
+<li>the CMS may add help with deployments and rollbacks.</li>
+</ul>
+</li>
+<li>Deployment must consider <strong>SLAs, state rebuilds and reconsumption</strong> of input streams. SLAs are not only downtime but the impact on <strong>all downstream consumers</strong> and the <strong>health of the broker</strong>: a rebuilding service may place considerable load on the broker, force downstream consumers to scale up and &quot;process <strong>millions or billions of events</strong> in short order&quot;
+<ul>
+<li><strong>quotas</strong> mitigate but a rebuilding service may stay inconsistent too long for downstream needs.</li>
+</ul>
+</li>
+<li><strong>Trade-offs</strong>
+<ul>
+<li>between SLAs, downstream impact, broker impact and monitoring and alerting: for example <strong>blue-green</strong> needs two consumer groups to be considered for monitoring and alerting, including lag-based autoscaling</li>
+<li>An alternative to blue-green is a <strong>thin, always-on serving layer</strong> handling synchronous requests while the backend event processor is <strong>swapped out and reprocesses in its own time</strong>: it may serve stale data for a while but needs no tooling augmentations or complex swaps and may still meet dependent SLAs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="22-2-final-words">22.2 Final words</h2>
+<ul>
+<li>Event-driven microservices are <strong>powerful, flexible, resilient and scalable</strong>: purpose-built services aligned with business goals using any frameworks, languages, stores and tooling.</li>
+<li>Success needs a <strong>rethink of what data is and how services access and use it</strong>: gone are the days of all organisational data in one database and one monolithic service
+<ul>
+<li>Event streams provide the <strong>data communication structure</strong> many organisations lack: publishing important data makes it widely available to any authorised service, system, team or person, relieving services of serving other bounded contexts' query needs.</li>
+</ul>
+</li>
+<li>Services <strong>compose their own data models from streams</strong>, giving flexibility for business units to use whatever data they need
+<ul>
+<li>Even organisations with <strong>just a handful of services</strong> can benefit, paving the way for new services decoupled from old requirements and implementations.</li>
+</ul>
+</li>
+<li>Closing: the data communication structure <strong>extends the power of an organisation's data to any service or team that needs it</strong>, eliminates access boundaries, and reduces unnecessary complexity in production and distribution, &quot;a solid foundation for you to build the services your organization needs to find ultimate business success&quot;.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Data communication structure</strong>; <strong>bounded context</strong>; <strong>microservice tax</strong>; <strong>single source of truth</strong>.</li>
+<li><strong>State, delta, hybrid</strong> events; <strong>schema evolution</strong>; <strong>data liberation</strong>.</li>
+<li><strong>Lightweight, heavyweight, BPC, FaaS</strong>; <strong>blue-green</strong> alternative (thin serving layer).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 22: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch22.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch22.html</a></li>
+<li>The foreword, preface and index were not digested.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-21-deploying-event-driven-microservices/">Building Event-Driven Microservices 21: Deploying Event-Driven Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-01-why-event-driven-microservices/">Building Event-Driven Microservices 1: Why Event-Driven Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-21-deploying-event-driven-microservices/">&larr; Building Event-Driven Microservices 21: Deploying Event-Driven Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><span></span></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

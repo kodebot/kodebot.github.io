@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 16: Eventual Consistency</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-15-microservices-using-functions-as-a-service/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-16-eventual-consistency">Building Event-Driven Microservices 16: Eventual Consistency</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 16 (an earlier version appeared in <em>Building an Event-Driven Data Mesh</em>, O'Reilly 2023). Previous: <a href="/book-digest/building-event-driven-microservices/bem-15-microservices-using-functions-as-a-service/">Building Event-Driven Microservices 15: Microservices Using Functions as a Service</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/">Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Eventual consistency</strong> is really <strong>eventual convergence</strong>: independent replicas end up with the same values. Event-driven services are convergent but rarely <strong>consistent at a moment in time</strong>, since each consumes at its own rate.</li>
+<li>Two causes: a <strong>lagging consumer</strong> and a <strong>lagging producer</strong> (the stream lacks data the producer's state already has).</li>
+<li>It mostly bites when <strong>one independent context directly queries another</strong>. <strong>Avoid direct request-response between asynchronous services</strong>; build a service that materialises both streams instead.</li>
+<li>Strategies: <strong>wait or give up</strong>, use <strong>state events</strong>, <strong>expose lag</strong> in responses (503, stale marker, callback), <strong>detect lag with offsets</strong> (not event time), and <strong>prevent failures</strong>.</li>
+</ul>
+</div></div>
+<h2 id="16-1-convergence-not-consistency">16.1 Convergence, not consistency</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-16-convergence.svg" alt="Convergence" loading="lazy" /></p>
+<ul>
+<li>For event streams, eventual consistency concerns lie mostly on the <strong>consumer side</strong>: each consumer reads and processes at its own rate
+<ul>
+<li>Pat Helland collated thought leaders' views:
+<ul>
+<li><strong>Doug Terry</strong> coined &quot;eventual consistency&quot; in the <strong>Bayou paper (1995)</strong> meaning that for each object, all replicas eventually have the same value</li>
+<li>Terry later said &quot;I should have called it <strong>eventual convergence</strong>&quot;</li>
+</ul>
+</li>
+<li><strong>Peter Alvaro</strong> (PhD thesis &quot;Data-Centric Programming for Distributed Systems&quot;, 2015): a system is convergent, or &quot;eventually consistent&quot;, if <strong>when all messages have been delivered, all replicas agree on the set of stored values</strong>.</li>
+</ul>
+</li>
+<li>A consumer materialising a stream can say <strong>what data it has, not what it lacks</strong>: it may say it lacks something and then receive it in the very next clock cycle
+<ul>
+<li>But it can say whether it is <strong>caught up to a given offset</strong>, useful for convergence questions with other systems.</li>
+</ul>
+</li>
+<li>Eventual consistency is often listed as a con, but it need not be: only a few big things need watching, and architectures are about trade-offs
+<ul>
+<li>Building everything as <strong>synchronous point-to-point services</strong> has major cons of its own.</li>
+</ul>
+</li>
+<li>Two reasons services have not converged:
+<ol>
+<li><strong>A consumer service lags</strong> on consuming, processing and storing, relative to another service.</li>
+<li><strong>The producer service lags</strong> in production: a bug or error stops it writing updates; its internal state is current but the external representation on the stream is not, so consumers may converge with each other yet not with the producer (the two reasons can combine).</li>
+</ol>
+</li>
+<li>Most of the time services are up to date (unless catching up from the beginning, as a new or reset application)
+<ul>
+<li>Worry stems from not knowing whether services are converged enough, how to detect lag and what to do</li>
+<li>The crux: it is <strong>mostly an issue when one independent context directly queries another</strong>, because there are no guarantees their datasets have converged and answers vary with query time.</li>
+</ul>
+</li>
+</ul>
+<h2 id="16-2-converging-one-event-at-a-time">16.2 Converging one event at a time</h2>
+<ul>
+<li>Each event-driven instance lives in its own <strong>time bubble</strong>:
+<ul>
+<li>internal time is based solely on the <strong>timestamps of events it has consumed</strong> and integrated into state (see &quot;Timestamps&quot;), though it may read the wall clock</li>
+<li>Streams normally have monotonically increasing offsets and timestamps (events can be out of order).</li>
+</ul>
+</li>
+<li>Figure 16-1:
+<ul>
+<li>two independent consumers read one stream, each applying logic and saving state</li>
+<li>Their outputs (API, stream) are unlikely to be exactly in sync</li>
+<li><strong>Consumer 2 at t=900 asks consumer 1 at t=220</strong> for its sunflower data; having never heard of sunflowers, it replies &quot;Error, not found&quot;.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>besides offsets or incrementing event IDs, you may use <strong>event time</strong> (when it occurred) to account for convergence</li>
+<li>for <strong>CDC</strong> events, event time is typically when the data was created in the source database.</li>
+</ul>
+</li>
+<li>By contrast, two <strong>synchronous</strong> services owning all their data assume the <strong>same time bubble</strong> (the same wall-clock, or close enough): they handle or fail requests immediately and return the most up-to-date data, not populated from streams.</li>
+<li>Example:
+<ul>
+<li>a shipping company needs a <strong>driver for each truck</strong> (Figure 16-2)</li>
+<li>On the left, synchronous services in a single time bubble return a complete list of trucks and drivers at that instant</li>
+<li>On the right, event-sourced services:
+<ul>
+<li>the <strong>truck lookup service is 7 hours behind</strong> materialising its events, so the driver service asking for a new truck may get none although trucks were published</li>
+<li><strong>a service's internal time is the union of its input offsets</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Structuring driver and truck services to need <strong>synchronous communication while using asynchronous event-driven data sources is a pretty big antipattern</strong>: correctness depends on the timing of consumption across two streams
+<ul>
+<li>Better: populate the driver service with the truck data too, removing the lookup (more decoupled, less complexity, no race conditions).</li>
+</ul>
+</li>
+<li>Registering driver and truck in <strong>a single atomic event</strong> enforces consistency within the event and is good when possible, but not always: many professional drivers own no truck and some companies lease trucks without drivers
+<ul>
+<li>each must register independently.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>system times are synchronised to within milliseconds by NTP (see &quot;Synchronizing Distributed Timestamps&quot;). If you need <strong>perfect time alignment between two events</strong>, refactor the domain to put the critical time-sensitive data in <strong>one event</strong></li>
+<li>otherwise plan for eventual consistency.</li>
+</ul>
+</li>
+<li>A second source of non-convergence:
+<ul>
+<li>an <strong>event stream not yet updated although all consumers are caught up</strong>, especially when events relate by foreign or primary key</li>
+<li>Figure 16-3:
+<ul>
+<li>a <strong>flower pot builder service</strong> joins a flowers stream and a <strong>preferred soil</strong> stream</li>
+<li>though fully up to date, there are no matching soil records for <strong>sunflowers and poppies</strong>, so it must wait</li>
+</ul>
+</li>
+<li>Causes: different domains, different SLAs, the soil producer down, a network partition, an unavailable broker</li>
+<li>Since preferred soil has a foreign-key relationship with flowers, a flower record with a soil type is expected to have a soil record</li>
+<li>Fully up-to-date consumers can be inconsistent with upstream through no fault of their own.</li>
+</ul>
+</li>
+<li>In short: <strong>consumers that have not converged, and streams that have not converged with their source</strong>.</li>
+</ul>
+<h2 id="16-3-strategies-for-dealing-with-eventual-consistency">16.3 Strategies for dealing with eventual consistency</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-16-strategies.svg" alt="Strategies" loading="lazy" /></p>
+<ul>
+<li>Two main options, between services or within a service:
+<ol>
+<li><strong>Wait</strong> for the state to become consistent (the event that completes the join, ends the session or finalises the aggregation). It also works when querying an external service that gives an inconsistent answer: wait and <strong>retry later</strong>; or output an <strong>incomplete result</strong> marked as such and update it when the data arrives.</li>
+<li><strong>Give up</strong> after a time. Giving up is <strong>final</strong>: if the event or answer arrives a split second later, it is too late and you will not be notified.</li>
+</ol>
+</li>
+</ul>
+<h3 id="use-state-event-types">Use state event types</h3>
+<ul>
+<li>Accidental divergence comes from misunderstanding events
+<ul>
+<li><strong>Delta events</strong> are harder for consumers to reconcile consistently; convergence is still possible but the added complexity makes inconsistent states more likely (Chapter 5)</li>
+<li><strong>State events</strong> are simpler to read, process and integrate, so consumers make fewer mistakes and converge to the same results.</li>
+</ul>
+</li>
+</ul>
+<h3 id="expose-eventual-consistency-in-the-server-response">Expose eventual consistency in the server response</h3>
+<ul>
+<li>Like the <strong>&quot;Please wait to confirm, do not hit refresh&quot;</strong> spinner when booking a flight, hotel or car: adopt it for server-to-server communication. Options:
+<ul>
+<li><strong>Halt serving requests when lag exceeds a threshold:</strong>
+<ul>
+<li>the service monitors its consumer lag on its input offsets and serves only when lag is below the threshold</li>
+<li>otherwise return a &quot;not ready&quot; such as <strong>HTTP 503 Service Unavailable</strong>, optionally with a <strong>Retry-After</strong> based on typical throughput.</li>
+</ul>
+</li>
+<li><strong>Provide stale data to the requester:</strong>
+<ul>
+<li>respond regardless, with an indication in the payload that it is stale</li>
+<li>the <strong>client decides</strong> (some do not care, others hold off until up-to-date data).</li>
+</ul>
+</li>
+<li><strong>Provide a callback API:</strong>
+<ul>
+<li>clients register to be called back with the data when the service is no longer lagging</li>
+<li>More complex: the client must block or context-switch, and you must buffer and handle callbacks and provide SLAs.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Can event time detect lag?</strong>
+<ul>
+<li>Sometimes</li>
+<li>For a high-volume click stream (shares and likes: hundreds or thousands of events a second) 10 seconds without a click suggests a problem upstream, if the broker says your consumer is current</li>
+<li>But for an <strong>event-carried state transfer</strong> stream that updates slowly (user registrations, email changes, deletions: hours or days between events) consumers remain <strong>converged and up to date</strong> and can tell you only the event time of the last event: you could wrongly infer lag</li>
+<li>Use <strong>offsets</strong> to detect and expose lag whenever possible.</li>
+</ul>
+</li>
+</ul>
+<h3 id="use-event-driven-communication-instead-of-request-response">Use event-driven communication instead of request-response</h3>
+<ul>
+<li><strong>Avoid direct calls to remote services entirely</strong>
+<ul>
+<li>embrace asynchrony and communicate with events. If you must relate data in two services (driver and truck): **create a new service</li>
+<li>materialise both streams into it</li>
+<li>query that service directly** for anything about drivers and trucks (an administration web UI, an accounting portal). In one service you can reason about time, lateness and consistency</li>
+<li>it is easier than reconciling between services but needs willingness and ability to build purpose-built microservices.</li>
+</ul>
+</li>
+</ul>
+<h3 id="prevent-failures-to-avoid-inconsistency">Prevent failures to avoid inconsistency</h3>
+<ul>
+<li>Assume failures:
+<ul>
+<li>services crashing, network connectivity, broker connectivity, cloud storage connectivity</li>
+<li>Reduce them with good <strong>DevOps</strong>
+<ul>
+<li><strong>monitoring</strong></li>
+<li><strong>resource scaling</strong> and <strong>testing</strong>; ensure consumers have resources to scale and stay current and that producer outages are quickly found and fixed</li>
+</ul>
+</li>
+<li>Anything that keeps producers and consumers reading and writing <strong>without lag</strong> reduces eventual consistency effects.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li><strong>Benefits:</strong>
+<ul>
+<li>temporal decoupling (services scale, fail and recover independently), less multiservice coordination, loosely coupled choreographed architectures</li>
+<li>many systems simply do not need full consistency.</li>
+</ul>
+</li>
+<li>When full consistency is needed it is trickier:
+<ul>
+<li>be aware of how it arises and whether to mitigate it</li>
+<li>Streams let consumers converge on the same final state, but each consumer must correctly process and integrate the data.</li>
+</ul>
+</li>
+<li>A lagging consumer is inconsistent with another service or data set (each in its own relative time). Avoiding direct request-response queries between asynchronous services avoids the inconsistencies
+<ul>
+<li>if unavoidable, account for the services' time frames in the communication.</li>
+</ul>
+</li>
+<li>Streams can reference data in another stream not yet produced (a lagging producer): design for <strong>late-arriving data</strong>, mindful of end-to-end latency metrics that may require earlier action on incomplete data.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Convergence</strong> (Terry, Alvaro); <strong>time bubble</strong>; <strong>lag</strong> (offset-based).</li>
+<li><strong>503 and Retry-After</strong>; <strong>stale data</strong>; <strong>callback API</strong>.</li>
+<li>Single-service materialisation instead of cross-service queries.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 16: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch16.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch16.html</a></li>
+<li>Quotations and attributions (Terry, Alvaro, Helland) are as given in the chapter via Pat Helland's collation
+<ul>
+<li>not independently verified. Figures 16-1 to 16-3 are summarised in the diagrams.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-15-microservices-using-functions-as-a-service/">Building Event-Driven Microservices 15: Microservices Using Functions as a Service</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/">Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/">Building Event-Driven Microservices 9: Deterministic Stream Processing</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-15-microservices-using-functions-as-a-service/">&larr; Building Event-Driven Microservices 15: Microservices Using Functions as a Service</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/">Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 19: Supportive Tooling</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-18-handling-bad-data-in-event-streams/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-20-testing-event-driven-microservices/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-19-supportive-tooling">Building Event-Driven Microservices 19: Supportive Tooling</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 19. Previous: <a href="/book-digest/building-event-driven-microservices/bem-18-handling-bad-data-in-event-streams/">Building Event-Driven Microservices 18: Handling Bad Data in Event Streams</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-20-testing-event-driven-microservices/">Building Event-Driven Microservices 20: Testing Event-Driven Microservices</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Tooling lets you <strong>manage event-driven microservices and event streams</strong> at scale; much of it must be <strong>self-service</strong> (DevOps: testing, deployments, rollbacks, scaling, debugging) and <strong>owned by the team</strong> that owns the service.</li>
+<li>The author's view: choose <strong>fully managed cloud services</strong> where possible, <strong>self-hosted only when necessary</strong>.</li>
+<li>Core tools: <strong>infrastructure as code</strong>, <strong>IAM</strong>, a <strong>microservice-to-team assignment system</strong>, <strong>stream creation</strong>, <strong>metadata tags</strong>, <strong>quotas</strong>, a <strong>schema registry</strong>, <strong>permissions (ACL or RBAC)</strong>, <strong>schema change notifications</strong>, <strong>offset management and application reset</strong>, <strong>lag monitoring</strong>, <strong>streamlined service creation</strong>, <strong>CMS controls</strong>, <strong>multicluster replication</strong>, and <strong>dependency and topology visualisation</strong>.</li>
+<li>Reduce <strong>tribal knowledge</strong>: codify ownership, schemas and metadata; ambiguity multiplies with each instance.</li>
+</ul>
+</div></div>
+<h2 id="19-1-scope-and-build-versus-buy">19.1 Scope and build versus buy</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-19-foundations.svg" alt="Foundations" loading="lazy" /></p>
+<ul>
+<li>Covers tools you are likely to use, which you may build, install from free open source, or get within a SaaS offering. It <strong>does not recommend a product</strong>
+<ul>
+<li>it links to free open source examples
+<ul>
+<li>Many tools have command-line interfaces for administrators, but you also need <strong>self-service tools that automate common steps</strong> for DevOps</li>
+<li>Your tooling will be heavily influenced by your organisation's practices, cloud providers, frameworks, languages and skills</li>
+</ul>
+</li>
+<li>there is no one right way.</li>
+</ul>
+</li>
+<li><strong>Build versus buy</strong>
+<ul>
+<li>depends first on <strong>higher-level requirements</strong> (legal, data on-shoring rules): extremely sensitive data may force <strong>self-hosting on your own hardware</strong> in your own buildings</li>
+<li>otherwise you may use fully managed services and drop all infrastructure work. Second, <strong>precedent</strong>: if you already run on a cloud provider you will almost certainly run your microservices there, reusing its deployment, logging, monitoring and access control.</li>
+</ul>
+</li>
+<li>The author's preference:
+<ul>
+<li><strong>fully managed cloud services where possible, self-hosted only when necessary</strong>, because &quot;a business' success is not dependent on getting good at building self-hosted platforms, but it is dependent on satisfying its customer's needs&quot;
+<ul>
+<li>Managed services start and move faster, letting you focus on business problems</li>
+</ul>
+</li>
+<li>the <strong>total cost of ownership appears as a monthly bill</strong> that seems higher but <strong>hides no costs</strong> such as debugging and engineering time
+<ul>
+<li>As you grow you can renegotiate prices or move some of the platform to self-hosting if scale justifies the engineering investment</li>
+</ul>
+</li>
+<li>crunch your own numbers.</li>
+</ul>
+</li>
+</ul>
+<h2 id="19-2-infrastructure-as-code">19.2 Infrastructure as code</h2>
+<ul>
+<li><strong>IaC</strong>
+<ul>
+<li>manages and provisions infrastructure with code instead of manual processes: define event brokers, a schema registry, a CMS, a microservice in configuration files that automate creation, updates, scaling and deletion. Frameworks: <strong>Terraform</strong> (proprietary licence, formerly open source)</li>
+<li><strong>Pulumi</strong> (described as a Terraform fork with an MPL-2.0 licence)</li>
+<li><strong>Ansible</strong></li>
+<li><strong>Puppet</strong>, plus the cloud providers' own tools (often compatible with open source ones).</li>
+</ul>
+</li>
+<li><strong>Benefits:</strong>
+<ul>
+<li><strong>automation</strong> (less manual effort and error)</li>
+<li><strong>reproducibility</strong> (identical environments for development, testing and production)</li>
+<li><strong>version control</strong> (Git history, collaboration, rollback)</li>
+<li><strong>scalable</strong></li>
+<li><strong>cloud-provider agnostic</strong></li>
+<li><strong>aligned with DevOps</strong> (easier hiring).</li>
+</ul>
+</li>
+<li>Cluster creation matters more as usage grows:
+<ul>
+<li>a small or medium company can often use a <strong>single event broker cluster</strong></li>
+<li>larger companies face pressure to provide several for technical and legal reasons. IaC is the best way beyond manually configured single deployments.</li>
+</ul>
+</li>
+</ul>
+<h2 id="19-3-identity-ownership-and-stream-creation">19.3 Identity, ownership and stream creation</h2>
+<ul>
+<li><strong>Identity and access management (IAM):</strong>
+<ul>
+<li>manages and controls access to resources so only authorised individuals or machines reach data or systems
+<ul>
+<li>Two flavours: <strong>open source</strong> (Keycloak, Zitadel; you install, configure, manage and integrate) or <strong>proprietary integrated</strong> (AWS, GCP, Azure, Cloudflare; deeply integrated, possibly with external services) and streaming platforms such as <strong>Confluent</strong></li>
+<li>Features: identity management for users (services, applications, people), groups and roles</li>
+</ul>
+</li>
+<li><strong>role-based access control</strong> and permission assignment</li>
+<li>authentication and authorisation</li>
+<li>security and encryption</li>
+<li>regulatory requirements. Guided by what you already have</li>
+<li>consult technical leadership</li>
+<li>several IAMs often coexist (multi-cloud, large organisations).</li>
+</ul>
+</li>
+<li><strong>Microservice-to-team assignment system:</strong>
+<ul>
+<li>attributes <strong>ownership</strong> of a service to a team. Easy to track in a small organisation but hard with microservices</li>
+<li>ties to IAM (who may update, deploy, roll back, and who answers for errors)</li>
+<li>enables <strong>event-stream ownership</strong> via the <strong>single writer principle</strong> (see &quot;Event-Driven Microservice Responsibilities&quot;)
+<ul>
+<li>Start as a <strong>spreadsheet</strong> linking service identities to the owner's email or chat ID, then integrate with IAM, the broker(s) and the CMS</li>
+<li>Make it a top priority</li>
+</ul>
+</li>
+<li>it becomes essential for navigating service dependencies.</li>
+</ul>
+</li>
+<li><strong>Event-stream creation and modification:</strong>
+<ul>
+<li>teams must create and modify streams</li>
+<li>microservices should automatically create <strong>their own internal streams</strong> with full control over <strong>partition count, retention policy and replication factor</strong>
+<ul>
+<li>A critical, sensitive, never-lose stream: <strong>infinite retention, high replication factor</strong></li>
+</ul>
+</li>
+<li>a high-volume stream of unimportant updates: <strong>high partition count, low replication factor, short retention</strong>. Assign <strong>ownership</strong> to a microservice or external system when created.</li>
+</ul>
+</li>
+<li><strong>Metadata tagging</strong>
+<ul>
+<li>(organise services and streams in one searchable place: ownership, costs, business lines)</li>
+<li>Only teams with production rights to a stream may edit its tags</li>
+<li>Tools: <strong>Apache Atlas, Amundsen, OpenMetadata</strong> (all Apache 2.0 licensed; others exist, some paid)</li>
+<li>Useful tags:</li>
+<li><strong>Stream owner (service)</strong> for change requests and audits.</li>
+<li><strong>PII:</strong> stricter handling; restrict access unless the data's team approves.</li>
+<li><strong>Financial information:</strong> money, billing, revenue events; similar but not identical to PII.</li>
+<li><strong>Namespace:</strong> aligned with nested bounded contexts; hide streams from services outside it to reduce discovery overload.</li>
+<li><strong>Deprecation:</strong>
+<ul>
+<li>grandfathered consumers continue, new ones are blocked from subscribing, used for breaking format changes</li>
+<li>notify the owner when no consumers remain, then delete safely.</li>
+</ul>
+</li>
+<li><strong>Custom tags.</strong></li>
+</ul>
+</li>
+</ul>
+<h2 id="19-4-quotas-registry-and-permissions">19.4 Quotas, registry and permissions</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-19-controls.svg" alt="Controls" loading="lazy" /></p>
+<ul>
+<li><strong>Quotas:</strong>
+<ul>
+<li>a maximum cap on <strong>broker throughput for a client</strong> (for example <strong>Apache Kafka quotas</strong>), such as allowing only 10% of CPU time to serve one producer or consumer group
+<ul>
+<li>They prevent <strong>self-inflicted denial of service</strong> from a chatty producer or a highly parallel consumer group starting a huge stream from the beginning, so the cluster is not saturated by one service (it is throttled)</li>
+<li><strong>Tip:</strong> set a <strong>maximum global quota of 25%</strong> for the broker as a starting point</li>
+</ul>
+</li>
+<li>allow <strong>surge-prone</strong> services up to <strong>75%</strong></li>
+<li>consider <strong>no limit for producers handling external data sources</strong> (a throttled producer may drop data or crash).</li>
+</ul>
+</li>
+<li><strong>Schema registry</strong>
+<ul>
+<li>(see &quot;The Role of the Schema Registry&quot;): enables explicit Avro, Protobuf or JSON Schema definitions (names, types, defaults, documentation)</li>
+<li>Benefits: <strong>less bandwidth</strong> (no schema per event), <strong>a single point of reference</strong>, <strong>data discovery</strong>, <strong>evolution enforcement</strong> and protection against accidental changes</li>
+<li>Choice follows your broker; for Kafka the <strong>Confluent Schema Registry</strong> is a free, common option supporting Avro, Protobuf and JSON.</li>
+</ul>
+</li>
+<li><strong>Event-stream permissions:</strong>
+<ul>
+<li><strong>ACLs</strong>
+<ul>
+<li>grant access per entity (each producer and consumer needs its own set; every change applied individually)</li>
+<li><strong>RBAC</strong> defines roles with permission sets assigned to many entities (change the role and all update), easier for large organisations</li>
+<li><strong>Apache Kafka and Apache Pulsar</strong>
+<ul>
+<li>come with only ACLs</li>
+<li>RBAC is more common in <strong>cloud-vendor managed services</strong> and needs identity management integration (Confluent for its cloud and platform; StreamNative for its Pulsar service).</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Access to a stream is granted only by the <strong>team that owns the producing service</strong>, enforced via the assignment system
+<ul>
+<li>Categories (broker-dependent): <strong>READ, WRITE, CREATE, DELETE, MODIFY, DESCRIBE</strong>.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong>
+<ul>
+<li>permissions need <strong>identification of each producer and consumer</strong></li>
+<li>enable and enforce it <strong>from day one</strong> (adding it later requires updating and reviewing every connecting service).</li>
+</ul>
+</li>
+<li>Access control protects <strong>bounded contexts</strong>:
+<ul>
+<li>a service is the only owner of CREATE, WRITE and READ on its <strong>internal and changelog streams</strong> and never couples on another's</li>
+<li>By the <strong>single writer principle</strong> exactly one service has WRITE on a stream</li>
+<li>Streams may be public or restricted (sensitive financial or PII).</li>
+</ul>
+</li>
+<li>Table 19-1:
+<ul>
+<li>typical permissions for a microservice: **input streams: READ</li>
+<li>output streams: CREATE, WRITE (and maybe READ if used internally)</li>
+<li>internal and changelog streams: CREATE, WRITE, READ.**</li>
+</ul>
+</li>
+<li>Let individuals grant and revoke access for their team's streams and services, or centralise requests with a <strong>security review</strong> for sensitive data (guided by tags)
+<ul>
+<li>Keep grants and revocations as <strong>their own event stream</strong>: a durable, immutable access record for auditing.</li>
+</ul>
+</li>
+<li><strong>Orphans:</strong>
+<ul>
+<li>cross-reference permissions with existing streams and services: a stream with <strong>no consumers</strong> may be eligible for deprecation and deletion</li>
+<li>a service writing to a stream <strong>nobody consumes</strong> may itself be deletable.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Schema creation and modification notifications:</strong>
+<ul>
+<li>with many services it is hard to tell other teams a schema they depend on will evolve. A <strong>notification system</strong> alerts consumers before their input schemas evolve</li>
+<li>ACLs and RBAC (the permissions graph) show which service consumes which stream and which team owns it
+<ul>
+<li><strong>Tip:</strong> use <strong>Git webhooks</strong> to alert when a schema file changes in a pull request</li>
+<li>It avoids breaking changes and flags changes that expose sensitive information or bloat events</li>
+</ul>
+</li>
+<li>hook up automatic checks (for example <strong>PII scans</strong>).</li>
+</ul>
+</li>
+</ul>
+<h2 id="19-5-offsets-reset-lag-creation-cms">19.5 Offsets, reset, lag, creation, CMS</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-19-operations.svg" alt="Operations" loading="lazy" /></p>
+<ul>
+<li><strong>Consumer offset management:</strong> normally the offset advances as processing completes, but manual changes are needed for:
+<ul>
+<li><strong>Application reset: resetting the offset</strong> to reprocess after a logic change (usually the beginning).</li>
+<li><strong>Application reset: advancing the offset</strong> to the latest when old data is not needed.</li>
+<li><strong>Application recovery: specifying the offset</strong>, such as a point in time for <strong>multicluster failover</strong> (for example <strong>N minutes before the crash</strong> so no replicated events are missed).</li>
+<li>Only the owning team or an administrator may modify a group's offsets.</li>
+</ul>
+</li>
+<li><strong>State management and application reset:</strong>
+<ul>
+<li>resetting a stateful application's state is common when its implementation changes. The tool must: <strong>delete internal and changelog streams</strong></li>
+<li><strong>delete state store materialisations</strong> (if applicable)</li>
+<li><strong>reset consumer group offsets</strong>
+<ul>
+<li>to the beginning for each input stream or a user-chosen point</li>
+<li>Where the platform supports it, also reset <strong>external state stores</strong> (for example <strong>Amazon DynamoDB or Google Bigtable</strong>), reducing operational overhead and removing stale or erroneous data</li>
+</ul>
+</li>
+<li>unsupported services need manual resets. It should be <strong>self-serve</strong> but never let a team delete another's streams and state: use the assignment system (owner or admin only).</li>
+</ul>
+</li>
+<li><strong>Consumer offset lag monitoring:</strong>
+<ul>
+<li><strong>consumer lag</strong>
+<ul>
+<li>is one of the best scaling indicators</li>
+<li>Lag is the <strong>difference in event count between the most recent event and the last processed event</strong> for a consumer group</li>
+<li><strong>Warning:</strong> verify lag is not caused by service errors (a service throwing errors and not progressing will not be helped by scaling)</li>
+<li>A basic threshold: if lag exceeds <strong>N events for M minutes</strong>, <strong>double</strong> the processors and rebalance</li>
+</ul>
+</li>
+<li>scale back down when resolved
+<ul>
+<li>Systems such as <strong>Burrow (Kafka)</strong> consider lag <strong>history</strong> (with high volume lag is 0 only for a split second, so a periodic measure always looks lagging; deviation from historical norms shows falling behind or catching up)</li>
+<li>Use <strong>hysteresis</strong> (a tolerance threshold) to avoid scaling up and down endlessly</li>
+</ul>
+</li>
+<li>modern clouds (<strong>AWS CloudWatch</strong>, <strong>Google Cloud Operations</strong>) can accommodate it.</li>
+</ul>
+</li>
+<li><strong>Streamline the microservice creation process:</strong>
+<ul>
+<li>automate a typical process: create a repository</li>
+<li>integrate with the CI pipeline (&quot;Continuous Integration, Delivery, and Deployment Systems&quot;)</li>
+<li>configure webhooks and dependencies</li>
+<li><strong>assign ownership</strong> via the assignment system</li>
+<li>register for <strong>permissions on input streams</strong></li>
+<li>create <strong>output streams</strong> and apply ownership permissions</li>
+<li>offer a <strong>template or code generator</strong> for the skeleton
+<ul>
+<li>It saves time over many repetitions and keeps templates current</li>
+<li><strong>Warning:</strong> otherwise people <strong>copy and paste</strong> an existing service into a new repository and edit settings, which is error-prone and causes permission errors, malconfigured services and repetitive break-fix.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Container management controls:</strong>
+<ul>
+<li>Kubernetes or a cloud equivalent (see &quot;Managing Containers and Virtual Machines&quot;). Expose so teams provide their own DevOps: <strong>environment variables</strong></li>
+<li><strong>which cluster</strong> (testing, integration, production)</li>
+<li><strong>CPU, memory and disk</strong></li>
+<li><strong>autoscaling</strong> by CPU, memory, disk or lag</li>
+<li><strong>manual scaling</strong>. The business decides which controls go to developers versus an operations team</li>
+<li>Kubernetes <strong>RBAC</strong> gives fine-grained permissions</li>
+<li>the <strong>Kubernetes Dashboard UI</strong> is part of the official project.</li>
+</ul>
+</li>
+</ul>
+<h2 id="19-6-multicluster-deployments-and-event-stream-replication">19.6 Multicluster deployments and event-stream replication</h2>
+<ul>
+<li>Reasons for several broker, CMS or service clusters:
+<ul>
+<li><strong>data locality laws</strong></li>
+<li><strong>automatic failover and disaster recovery</strong></li>
+<li><strong>reduced data transfer costs</strong></li>
+<li><strong>workload isolation</strong>. The subject is too broad to cover (on premises, cloud, hybrid)</li>
+<li>consult documentation for your broker, CMS and state stores
+<ul>
+<li>Within scope: running <strong>multiple clusters in different regions</strong> needs <strong>programmatic cluster management</strong> (IaC) and standardised creation and maintenance to avoid repetitive break-fix.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Event-stream replication</strong>
+<ul>
+<li>reasons: a <strong>hub-and-spoke</strong> model with smaller regional clusters feeding aggregates to a central one</li>
+<li>replicating <strong>core business entities</strong> to cut cross-region access costs</li>
+<li>a <strong>replica of production data for testing</strong> services before deploying to the real thing.</li>
+</ul>
+</li>
+<li>Questions for a replication tool:
+<ul>
+<li>does it automatically replicate <strong>new streams and deletions</strong></li>
+<li>does it replicate <strong>exactly</strong> (same offsets, partitions, timestamps) or approximately</li>
+<li>does it replicate <strong>schemas, permissions and consumer group offsets</strong></li>
+<li>what is the <strong>latency</strong></li>
+<li>can it <strong>scale</strong>?</li>
+</ul>
+</li>
+<li>Exact replication is hard, especially for failover:
+<ul>
+<li>many tools use the broker's producer and consumer interface and not a deep file replication, so data is copied but <strong>offsets, ordering and partitioning are not preserved</strong>
+<ul>
+<li><strong>Apache Kafka MirrorMaker 2</strong> (a marked improvement over version 1) keeps a <strong>mapping between source and destination offsets</strong> to translate offsets when consumers migrate</li>
+<li>Proprietary tools are simpler and more precise but vendor-bound: <strong>Confluent Cluster Linking</strong> gives a <strong>perfect byte-to-byte replica</strong> (offsets, partitions, consumer groups)</li>
+</ul>
+</li>
+<li><strong>Amazon MSK Replicator</strong> is similar to MirrorMaker 2 with offset mapping</li>
+<li>both only for customers of the respective service.</li>
+</ul>
+</li>
+</ul>
+<h2 id="19-7-dependency-tracking-and-topology-visualisation">19.7 Dependency tracking and topology visualisation</h2>
+<ul>
+<li>Knowing which microservices read and write which streams helps run an event-driven organisation
+<ul>
+<li><strong>Self-reporting is voluntary</strong>: some teams forget or opt out, leaving gaps and incomplete topologies</li>
+<li>Instead <strong>derive dependencies from the permissions structure</strong> (ACLs and RBAC): a service <strong>cannot operate without registering permissions</strong>, and any permission change <strong>updates the topology automatically</strong>.</li>
+</ul>
+</li>
+<li>Uses:
+<ul>
+<li><strong>Determine data lineage:</strong>
+<ul>
+<li>trace each ancestor service and stream of an event</li>
+<li>replaying the permissions and assignment event streams gives the topology <strong>at a past time</strong> (useful for auditing old data).</li>
+</ul>
+</li>
+<li><strong>Overlay team boundaries:</strong> show which teams are responsible for which services.</li>
+<li><strong>Discover data sources:</strong> see which streams exist and their producers and consumers.</li>
+<li><strong>Measure interconnectedness and complexity:</strong> count a team's internal connections versus cross-boundary connections (fewer external is generally better, though a simple count is a basic metric that still reveals relative interdependence).</li>
+<li><strong>Map business requirements to microservices:</strong>
+<ul>
+<li>state each service's business requirements alongside its code (README or metadata store), mapped to teams</li>
+<li>a business owner asks &quot;Does this implementation structure align with the goals and priorities of this team?&quot;.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Figure 19-1:
+<ul>
+<li><strong>25 microservices</strong> and <strong>four teams</strong>, each arrow a stream produced and consumed</li>
+<li>team 2 owns two services (2 and 7) outside its main bounded context with dependencies on teams 1, 3 and 4, enlarging its &quot;surface area&quot;
+<ul>
+<li>Table 19-2: team 1: 1 incoming and 3 outgoing streams, 5 services</li>
+</ul>
+</li>
+<li>team 2: 8 incoming, 2 outgoing, 3 incoming and 2 outgoing team connections, 8 services</li>
+<li>team 3: 3 and 3, 6 services</li>
+<li>team 4: 1 and 5, 8 services
+<ul>
+<li>Reassigning service 7 to team 1 or 3, service 2 to team 4 (and maybe service 1 to team 4) gives Figure 19-2 and Table 19-3: team 2 drops to 4 incoming and 0 outgoing streams and 6 services</li>
+</ul>
+</li>
+<li>cross-team incoming and outgoing stream counts fall with a <strong>net decrease of three</strong> connections among teams.</li>
+</ul>
+</li>
+<li><strong>Caveat:</strong>
+<ul>
+<li>fewer cross-boundary connections reduce complexity but are no guarantee</li>
+<li>consider <strong>head count, expertise, implementation and history</strong>
+<ul>
+<li>A team that only sources and organises external data into events may legitimately have many connections</li>
+<li>Ask qualitative questions: does service 2's function align with team 2's or team 4's goals</li>
+</ul>
+</li>
+<li>service 7 with team 1's? Team goals change with business needs, so keep assignments aligned.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>As service counts grow, no one can know how everything works:
+<ul>
+<li>keep explicit track of <strong>service and stream ownership, schemas and metadata</strong> to track change over time</li>
+<li>reduce tribal knowledge and codify properties, since ambiguity is amplified with each instance.</li>
+</ul>
+</li>
+<li><strong>Autonomy and control</strong> over a team's services matter: under DevOps principles manage your own services with minimal administrative overhead.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>IaC</strong>; <strong>IAM</strong>; <strong>ACL versus RBAC</strong>; <strong>single writer</strong> permissions; <strong>metadata tags</strong>.</li>
+<li><strong>Quota</strong> (25% global); <strong>offset reset</strong>; <strong>lag</strong> and <strong>hysteresis</strong>; <strong>MirrorMaker 2</strong>, <strong>Cluster Linking</strong>.</li>
+<li><strong>Topology visualisation</strong>; <strong>data lineage</strong>; <strong>orphan stream</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 19: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch19.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch19.html</a></li>
+<li>Figures 19-1 and 19-2 and Tables 19-1 to 19-3 are summarised. Licence statements (Terraform, Pulumi, Apache 2.0 tools) and vendor features are the chapter's, not independently checked.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-18-handling-bad-data-in-event-streams/">Building Event-Driven Microservices 18: Handling Bad Data in Event Streams</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-20-testing-event-driven-microservices/">Building Event-Driven Microservices 20: Testing Event-Driven Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-03-fundamentals-of-event-driven-microservices/">Building Event-Driven Microservices 3: Fundamentals of Event-Driven Microservices</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-18-handling-bad-data-in-event-streams/">&larr; Building Event-Driven Microservices 18: Handling Bad Data in Event Streams</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-20-testing-event-driven-microservices/">Building Event-Driven Microservices 20: Testing Event-Driven Microservices &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

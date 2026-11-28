@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 18: Handling Bad Data in Event Streams</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-19-supportive-tooling/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-18-handling-bad-data-in-event-streams">Building Event-Driven Microservices 18: Handling Bad Data in Event Streams</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 18. Previous: <a href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/">Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-19-supportive-tooling/">Building Event-Driven Microservices 19: Supportive Tooling</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Bad data</strong> does not conform to what is expected (an email with no <code>@</code>, a card expiry with <code>MM/YYYY</code> swapped to <code>YYYY/MM</code>) or is malformed or corrupted. Event streams are <strong>immutable</strong>, so you cannot edit it after the fact (outside expiry or compaction).</li>
+<li>Three strategies, in order: <strong>prevention</strong> (schemas, testing, validation; fail fast and gracefully), <strong>event design</strong> (corrections that overwrite bad data), and <strong>rewind, rebuild and retry</strong> as a last resort.</li>
+<li>There are <strong>eight types</strong> of bad data. Schemas cover types 1 to 5, <strong>data quality rules</strong> and producer tests cover 6, and <strong>testing</strong> covers 7 and 8.</li>
+<li><strong>State events</strong> can be fixed once and compacted; <strong>delta events</strong> cannot, so fixes are build-forward or a rebuild.</li>
+<li>Use <strong>dead-letter queues</strong> sparingly.</li>
+</ul>
+</div></div>
+<h2 id="18-1-the-eight-types-of-bad-data">18.1 The eight types of bad data</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-18-bad-data-types.svg" alt="Types" loading="lazy" /></p>
+<ul>
+<li>Bad data can come from many places; a recurring reason appears across the types (revisited in the prevention sections: <strong>no schema, validation or tests at the producer</strong>).
+<ol>
+<li><strong>Corrupted data</strong> (Figure 18-1): indecipherable, so the consumer cannot tell what the event was. Relatively rare; caused by <strong>faulty serialisers</strong> that convert objects to byte arrays.</li>
+<li><strong>Event has no schema</strong> (Figure 18-2): events sent without a schema; without types, names, requirements, limitations or structure it is impossible to tell good from bad, and interpretation falls to consumers.</li>
+<li><strong>Event has an invalid schema</strong> (Figure 18-3): the purported schema cannot be applied. Example: with the Confluent Schema Registry the event's <code>SchemaId</code> does not correspond to a valid schema; you deleted it, or the serialiser inserted the wrong ID (perhaps from a staging or testing registry).</li>
+<li><strong>Incompatible schema evolution</strong> (Figure 18-4): technically deserialisable but it <strong>cannot be converted to the consumer's schema</strong>; usually the source made a breaking evolution and consumers were not updated.</li>
+<li><strong>Logically invalid value in a field</strong> (Figure 18-5): a value that should never occur, such as an array of integers for <code>first_name</code> or a null in a non-nullable field. Arises with <strong>implicit conventions</strong> instead of a well-defined schema, or with incomplete, old or <strong>homemade serialisation libraries</strong> that ignore parts of the protocol.</li>
+<li><strong>Logically valid but semantically incorrect</strong> (Figure 18-6): trickier. A serialisable string <code>first_name</code> of <code>Robert'); DROP TABLE Students; --</code> is valid for the field but not plausibly a first name (sanitise inputs; not only user data causes this). An order with a <strong>negative cost</strong> may be a bug in production, a semantic change in the schema definition, or something worse. Prone: services that parse <strong>NGINX server logs</strong> or customer-submitted YAML or XML inventory files; malformed sources such as concatenated phone numbers with varying spaces, dashes and symbols.</li>
+<li><strong>Missing events:</strong> nothing produced when there should have been. Fairly easy to prevent by testing, but high impact if only some data is missing, as with event sourcing.</li>
+<li><strong>Events that should not have been produced:</strong> bugs in producer code; a service fails, comes back and repeats from its last known good state, creating duplicates (Figure 18-7): a delta (add 1 to a sum) corrupts an aggregation; an analytics event (which ads a user clicked) inflates engagement; an order with its own <code>order_id</code> may ship and bill twice. <strong>Idempotent production</strong> (the Kafka idempotent producer) fences out duplicates from intermittent failures and retries, <strong>but not duplicates that are logically indistinguishable from other events</strong>.</li>
+</ol>
+</li>
+</ul>
+<h2 id="18-2-preventing-bad-data-with-schemas-validation-and-tests">18.2 Preventing bad data with schemas, validation and tests</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-18-prevention.svg" alt="Prevention" loading="lazy" /></p>
+<ul>
+<li><strong>Prevention is the number one approach</strong>: far easier than fixing later (&quot;it cannot be overstated&quot;; far less effort and cost than any other strategy).</li>
+<li><strong>Schemas (types 1 to 5):</strong>
+<ul>
+<li>Avro, Protobuf or JSON Schema (Confluent Schema Registry and similar support these) make events easy to create, test, validate and evolve
+<ul>
+<li>they significantly reduce incident rates and let consumers use data instead of best-effort parsing</li>
+</ul>
+</li>
+<li><strong>JSON</strong> is a common but poor choice: no enforced types, mandatory or optional fields, defaults or evolution</li>
+<li>Implicit schemas, historical conventions and <strong>tribal knowledge</strong> cannot provide data integrity: be strict, and let <strong>CI/CD pipelines</strong> validate schema, data and evolution before deploying, so no bad data reaches production streams.</li>
+</ul>
+</li>
+<li><strong>Data quality rules (type 6):</strong>
+<ul>
+<li>schemas enforce types (no Strings in Integer fields) but not semantics</li>
+<li>Options: <strong>producer unit tests</strong> (throw if malformed, such as a phone number over X digits) and <strong>data contracts with data quality rules</strong></li>
+<li>A Confluent rule for a US Social Security number enforcing exactly nine characters, applied at serialisation (<code>mode: WRITE</code>):</li>
+</ul>
+</li>
+</ul>
+<pre class="hl"><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">"schema"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"ruleSet"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"domainRules"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">            </span><span class="p">{</span>
+<span class="w">                </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"checkSsnLen"</span><span class="p">,</span>
+<span class="w">                </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CONDITION"</span><span class="p">,</span>
+<span class="w">                </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CEL"</span><span class="p">,</span>
+<span class="w">                </span><span class="nt">"mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"WRITE"</span><span class="p">,</span>
+<span class="w">                </span><span class="nt">"expr"</span><span class="p">:</span><span class="w"> </span><span class="s2">"size(message.ssn) == 9"</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>If <code>message.ssn</code> is not exactly nine characters, the serialiser throws and the record is <strong>not written</strong>
+<ul>
+<li>You can then terminate the producer, skip the record, or send it to a <strong>dead-letter queue (DLQ)</strong></li>
+<li>If it is an integer, you could also require it be positive; if a string, contain only digits.</li>
+</ul>
+</li>
+<li><strong>Approach DLQs with caution:</strong>
+<ul>
+<li>shunting data aside means dealing with it later (repair and resend)
+<ul>
+<li>They work best when each event is <strong>completely independent</strong>, with no relation to others and no ordering requirement</li>
+</ul>
+</li>
+<li>otherwise you risk an error-free but <strong>incomplete</strong> stream causing its own miscalculations. A DLQ is a <strong>last-ditch effort</strong></li>
+<li>test and foolproof producer logic to publish correctly the first time.</li>
+</ul>
+</li>
+<li><strong>Testing (types 7 and 8):</strong>
+<ul>
+<li>write unit and integration tests for <strong>serialisers and deserialisers</strong> (validate schemas against the production schema registry), data validation rules and business logic</li>
+<li>run producer tests in <strong>CI/CD</strong> before production (Chapter 20).</li>
+</ul>
+</li>
+</ul>
+<h2 id="18-3-event-design-and-fixing-bad-data">18.3 Event design and fixing bad data</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-18-event-design-fix.svg" alt="Event design" loading="lazy" /></p>
+<ul>
+<li><strong>State events</strong>
+<ul>
+<li>carry the whole fact about an entity (Order, Product, Customer, Shipment), like table rows with schema, types and defaults</li>
+<li><strong>Delta events</strong> describe changes and need aggregating a sequence to get current state (Figure 18-8)</li>
+<li>State events enable <strong>ECST</strong>, materialised into consumers' own stores (Figure 18-9), with a new event for key A <strong>upserted</strong> over the old (Figure 18-10).</li>
+</ul>
+</li>
+<li>State events <strong>benefit from compaction</strong>:
+<ul>
+<li>the compactor deletes events with newer values of the same key without affecting materialisation</li>
+<li>With deltas this is impossible: every delta is needed</li>
+<li>Compaction is <strong>critical for deleting bad, private and sensitive data</strong> from the stream.</li>
+</ul>
+</li>
+</ul>
+<h3 id="fix-it-once-and-fix-it-right-with-state-events">Fix it once and fix it right with state events</h3>
+<ul>
+<li><strong>Publish a new event with the correct data</strong>; it propagates to all consumers and compaction eventually removes the old bad records.</li>
+<li>Consumers must still deal with <strong>side effects of earlier bad data</strong>: if they made business decisions on it they must undo them or <strong>compensate</strong> (Chapter 10), exactly as with bad data in a non-event-driven system.</li>
+<li>With <strong>connectors</strong> (Chapter 6), just fix the data in the <strong>source database</strong> (Figure 18-11): the CDC connector takes it from the database log, packages it and publishes to the compacted output topic
+<ul>
+<li>A <strong>Kafka Streams</strong> app on compacted state topics always gets the eventually correct state event and publishes corrected events downstream (Figure 18-12)</li>
+<li>If it gets bad data itself (a bad evolution, corrupted data) it can log an error, divert to a <strong>DLQ</strong> and continue.</li>
+</ul>
+</li>
+<li><strong>FTP example</strong>
+<ul>
+<li>(Figure 18-13): an external partner drops a daily XML export of total product inventory in an FTP directory
+<ul>
+<li>a <strong>listener trigger</strong> starts a short job (AWS Lambda or another FaaS, Chapter 15) that parses it into inventory state events keyed on <code>productId</code>, rather than an idle full-time streaming job</li>
+</ul>
+</li>
+<li>If the partner cannot commit to a <strong>schema</strong> you face frequent break-fix (they re-create files, you change parsing): a chronic source of bad data</li>
+<li><strong>Tip:</strong> get partners to comply with a basic schema, providing SDKs or validation tools.</li>
+</ul>
+</li>
+<li>State events are easy to fix, compactable, map to database tables, store only what you need, and let you infer deltas at any point if stored.</li>
+</ul>
+<h3 id="build-forward-undo-bad-deltas-with-new-deltas">Build forward: undo bad deltas with new deltas</h3>
+<ul>
+<li>Deltas (and commands) cannot be compacted, updated or deleted, and every delta is relative to the previous one: a bad delta moves you to a bad state
+<ul>
+<li>Two strategies: <strong>build forward</strong> (undo bad deltas with new ones; challenging and error-prone) or <strong>rewind, rebuild and retry</strong> (filter bad data out, restore consumers from snapshots or the source streams; labour-intensive and error-prone).</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> deltas have <strong>no mechanism for purging data</strong> under legal obligations such as the GDPR right to be forgotten; make sure delta streams contain no sensitive information.</li>
+<li>Build forward needs all bad events identified and results remediated: <strong>undo events</strong> (consumers must apply them correctly; risk of bad data in the undo itself, such as duplicates) or a <strong>compensation</strong> (&quot;The Compensation Workflow Pattern&quot;).</li>
+<li>Deltas tightly couple event models to consumer logic:
+<ul>
+<li><strong>one way to compute correct state, an infinite number of ways to compute incorrect state</strong>, some terminal (&quot;a package, once sent, can't be unsent, nor can a car crushed into a cube be un-cubed&quot;)</li>
+<li>Undo events must restore the good state without <strong>overshooting</strong> to another bad one, requiring audits of each consumer's code and deployed state, so it is feasible mainly with <strong>one tightly coupled consumer</strong> under the same team.</li>
+</ul>
+</li>
+</ul>
+<h2 id="18-4-the-last-resort-rewind-rebuild-and-retry">18.4 The last resort: rewind, rebuild and retry</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-18-rewind-rebuild.svg" alt="Rewind and rebuild" loading="lazy" /></p>
+<ul>
+<li>Applies to <strong>any</strong> topic with bad data (delta, state, hybrid or other): expensive, risky, labour-intensive and easy to get wrong.</li>
+<li><strong>From an external source</strong>
+<ul>
+<li>(for example an NGINX or gateway server whose log rows a connector parses into events): find the cause: say a new logging configuration changed the format but the parser was not updated in lockstep (more reason for testing)</li>
+<li>The logfile remains the replayable truth but every parsed event after that point is malformed and has propagated downstream</li>
+<li>If the parser used schemas and data quality checks, it could have shunted bad data to a DLQ, protecting consumers but <strong>delaying</strong> them
+<ul>
+<li>repair means updating the parser and reprocessing the logs, and consumers resume (the data being late).</li>
+</ul>
+</li>
+<li><strong>Tip:</strong>
+<ul>
+<li>prevention would have stopped it</li>
+<li>A stream already <strong>contaminated</strong> cannot be compacted (not a keyed entity stream) or edited: <strong>purge and rebuild it from the original logs</strong></li>
+<li>This is not a normal state of affairs: treat it as an <strong>incident-worthy event</strong> with notes, a postmortem and actionable follow-ups.</li>
+</ul>
+</li>
+<li><strong>Consumers in a bad state</strong>
+<ul>
+<li>must be stopped, reset or restored, then consume the new stream</li>
+<li><strong>From the beginning</strong> is easiest: rebuild event by event, re-emitting outputs (maybe wanted, maybe muted until a logical condition such as a datetime)</li>
+<li><strong>Offsets from the old stream are useless</strong> since the new stream's offsets do not correspond</li>
+<li><strong>From a snapshot or savepoint</strong>
+<ul>
+<li>needs planning ahead (not done if producers skipped schemas): see &quot;Recovery using snapshots or checkpoints&quot;</li>
+<li>it matches a known good datetime, so start processing from an event timestamp <strong>earlier than the snapshot's latest</strong> to avoid missing events, and keep processing <strong>idempotent</strong> or you will get another bad data scenario.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>From the topic as the only source:</strong>
+<ul>
+<li>if state events, publish good data over bad</li>
+<li>If it is a <strong>sequence of measurements</strong> (clickstream analytics written verbatim to a stream through a gateway with no unit and validation tests, no schema, no data quality rules), the only option is to <strong>reprocess the bad topic into a new good topic</strong>: write a stream processor (<strong>streaming SQL</strong> works well) to identify and repair the bad data into a new stream</li>
+<li>This assumes all needed data is in the event; otherwise it is <strong>permanently lost</strong> (acceptable for lossy data, critical for others)</li>
+<li>Then port the producer (fix the <strong>root cause</strong> or it recurs) and migrate consumers (another intensive operation, particularly if repair changed event ordering and offsets; may need a total reset to the beginning or a snapshot).</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Data is immutable once written, so dealing with bad data afterwards is hard.</li>
+<li><strong>First, prevent:</strong> well-defined schemas, schema validation, data quality checks and testing are the most cost-effective and important strategy.</li>
+<li><strong>Second, event design:</strong>
+<ul>
+<li>state events let you republish the same key with updated data</li>
+<li>the broker compacts away incorrect, redacted and deleted data (such as for <strong>GDPR and CCPA</strong>)</li>
+<li>fix it once at the source and propagate to every subscriber with little extra effort.</li>
+</ul>
+</li>
+<li><strong>Third, rewind, rebuild and retry:</strong> pause consumers and producers, fix and rewrite data to a new stream, migrate everyone; expensive and complex, avoid if possible.</li>
+<li>The most successful organisations integrate prevention and good event design into normal development
+<ul>
+<li>the least successful have no standards, schemas, testing or validation and &quot;pay a heavy price&quot;.</li>
+</ul>
+</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Bad data types 1 to 8</strong>; <strong>data quality rule</strong>; <strong>dead-letter queue</strong>; <strong>idempotent producer</strong>.</li>
+<li><strong>Build forward</strong>; <strong>rewind, rebuild, retry</strong>; <strong>savepoint</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 18: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch18.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch18.html</a></li>
+<li>Figures 18-1 to 18-13 are redrawn or summarised in grouped diagrams. The Confluent data quality rule is shown as printed (JSON, with the schema elided). GDPR and CCPA are named in the chapter
+<ul>
+<li>no independent check.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/">Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-19-supportive-tooling/">Building Event-Driven Microservices 19: Supportive Tooling</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">Building Event-Driven Microservices 5: Designing Events</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/">&larr; Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-19-supportive-tooling/">Building Event-Driven Microservices 19: Supportive Tooling &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

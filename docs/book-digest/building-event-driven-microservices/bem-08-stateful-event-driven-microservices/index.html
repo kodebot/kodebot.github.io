@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Building Event-Driven Microservices 8: Stateful Event-Driven Microservices</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/building-event-driven-microservices/">Contents</a><span class="ttl">Building Event-Driven Microservices</span><span class="sp"></span><a class="btn" href="/book-digest/building-event-driven-microservices/bem-07-denormalization-and-eventification/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="building-event-driven-microservices-8-stateful-event-driven-microservices">Building Event-Driven Microservices 8: Stateful Event-Driven Microservices</h1>
+<p>Source: Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition (O'Reilly, 2025), chapter 8. Previous: <a href="/book-digest/building-event-driven-microservices/bem-07-denormalization-and-eventification/">Building Event-Driven Microservices 7: Denormalization and Eventification</a>. Next: <a href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/">Building Event-Driven Microservices 9: Deterministic Stream Processing</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Almost every useful microservice keeps <strong>state</strong>, and <strong>state goes hand in hand with partition assignment</strong>: when a partition moves, its state must too.</li>
+<li><strong>Internal</strong> stores (RocksDB on local SSD) scale with the broker and are fast; <strong>external</strong> stores survive restarts and give full data locality but add latency, cost and operational work.</li>
+<li><strong>Changelogs</strong> (compacted streams of state changes) are the usual way to rebuild internal state; <strong>hot replicas</strong> trade disk for zero-downtime failover.</li>
+<li>To change an external store's data model, <strong>rebuild it from the input stream; avoid data migrations</strong>.</li>
+<li><strong>Effectively once</strong> processing comes from broker transactions, or from deduplication, or from committing state and offsets in one store transaction.</li>
+</ul>
+</div></div>
+<h2 id="8-1-partition-assignment-repartitioning-and-copartitioning">8.1 Partition assignment, repartitioning and copartitioning</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-08-partitions.svg" alt="Partitions" loading="lazy" /></p>
+<ul>
+<li>Most event-driven microservices do three things:
+<ul>
+<li><strong>react</strong> to an event (a stream, a request, a sensor reading, a row insert)</li>
+<li><strong>process</strong> it</li>
+<li><strong>produce</strong> output events. State is needed beyond toy complexity, and each microservice is responsible for its own state (create, read, update, destroy).</li>
+</ul>
+</li>
+<li>Each service has a <strong>consumer group</strong> tracking offsets, plus <strong>partition assignment</strong> to instances
+<ul>
+<li><strong>Kafka</strong> delegates assignment to the first online client of the group (the <strong>leader</strong>); <strong>Apache Pulsar</strong> keeps it in the <strong>broker</strong></li>
+<li>Both use group identities for progress.</li>
+</ul>
+</li>
+<li>Work is momentarily <strong>suspended</strong> during reassignment so revoked partitions are no longer processed by another instance (no duplicate output)
+<ul>
+<li>A <strong>rebalance</strong> runs when an instance joins, or when one leaves and does not rejoin within a period (for example one minute).</li>
+</ul>
+</li>
+<li>State built from previously assigned partitions may need reassignment too: use a framework's internal stores (Chapters 12, 13) or external stores independent of repartitioning.</li>
+</ul>
+<h3 id="repartitioning">Repartitioning</h3>
+<ul>
+<li>Event streams are partitioned by key and the producer's <strong>partitioner</strong>, usually a deterministic hash (same key, same partition)
+<ul>
+<li><strong>Repartitioning</strong> produces a new stream with a <strong>different partition count</strong> (more parallelism, or a count to copartition with another stream), <strong>different key</strong> (rekey on data in the value) or <strong>different partitioner</strong>.</li>
+</ul>
+</li>
+<li>Example (Figure 8-1): unkeyed user interaction events carry an <code>id</code> and other data <code>x</code>; the service keys them by <code>id</code> into a new stream with 3 partitions. Observations:
+<ul>
+<li>Events can be introduced <strong>out of order</strong> (id=2 has events in partitions 0 and 1 of the original; their order in the output is not deterministic; see &quot;Out-of-Order and Late-Arriving Events&quot;).</li>
+<li>Repartitioning gives <strong>parallelism and key locality, not throughput</strong>: a 2-partition stream repartitioned to 1,000 partitions is still limited by the 2-partition input.</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> if order is extremely important, generate it in order and in the same partition (here key by <code>id</code> from the start).</li>
+</ul>
+<h3 id="copartitioning">Copartitioning</h3>
+<ul>
+<li><strong>Copartitioning</strong>
+<ul>
+<li>is repartitioning into a new stream with the <strong>same partition count and same assignor</strong> as another stream</li>
+<li>Joins and multi-stream aggregations need all events of a key at one instance</li>
+<li>Example (Figure 8-2): join the repartitioned user event stream with a user entity stream keyed on the same <code>id</code>; each join runs on its own instance.</li>
+</ul>
+</li>
+</ul>
+<h3 id="assigning-partitions-within-a-consumer-group">Assigning partitions within a consumer group</h3>
+<ul>
+<li>With no relationships, <strong>round-robin</strong> is enough. Full-featured frameworks (Chapters 12, 13) infer which streams must be copartitioned or repartitioned and assign accordingly
+<ul>
+<li>basic consumer clients usually do not, so you manage it manually, which is hard with several copartitioned sets.</li>
+</ul>
+</li>
+<li>Figure 8-3:
+<ul>
+<li>two instances, three streams (two copartitioned for a join)</li>
+<li>C0 has two sets of copartitioned partitions and C1 one. Figure 8-4: adding two instances causes a rebalance</li>
+<li>C2 gets the copartitioned P2s plus stream A's P2, C3 only stream A's P3. <strong>More instances than partitions add no parallelism.</strong></li>
+</ul>
+</li>
+<li><strong>Warning:</strong> mechanics depend on your broker and framework; read the documentation and test before production.</li>
+</ul>
+<h2 id="8-2-selecting-a-state-store">8.2 Selecting a state store</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-08-state-stores.svg" alt="State stores" loading="lazy" /></p>
+<ul>
+<li>Example service (Figure 8-5):
+<ul>
+<li>package customer orders against available inventory</li>
+<li>It materialises <strong>Orders</strong> and <strong>Inventory</strong>, decides what ships now and what waits (at worst an order is delayed awaiting inventory, and packing has no flaws), and prepares the box with label</li>
+<li>Which store?</li>
+</ul>
+</li>
+<li><strong>Internal state stores:</strong> in the same container or VM, typically in memory or on volatile disk, online only when the service is; restarting the service restarts the store.</li>
+<li><strong>External state stores:</strong> outside the container or VM, largely independent of the service's life cycle, with a durability objective; failures do not affect the data.</li>
+</ul>
+<h2 id="8-3-internal-state-stores">8.3 Internal state stores</h2>
+<ul>
+<li>Each instance <strong>materialises the events of its assigned partitions</strong>, keeping each partition's data logically separate, so after a rebalance it can <strong>drop the state of a revoked partition</strong>. That avoids leaks and multiple sources of truth
+<ul>
+<li>new assignments are rebuilt from input events or the changelog.</li>
+</ul>
+</li>
+<li><strong>RocksDB</strong>
+<ul>
+<li>(a high-performance key-value store) is typical: efficient with local SSDs for data sets beyond main memory</li>
+<li>Relational or document stores are possible but must live inside each instance.</li>
+</ul>
+</li>
+<li>Internal stores are volatile, so state must be reloaded from a snapshot to an external location or from a <strong>changelog</strong>.</li>
+</ul>
+<h3 id="changelog-as-state-recovery">Changelog as state recovery</h3>
+<ul>
+<li>A <strong>changelog</strong> records all changes to the state store:
+<ul>
+<li>the <strong>stream half of table-stream duality</strong></li>
+<li>a permanent copy outside the instance that serves as a checkpoint (Figure 8-6). <strong>Tip:</strong> changelogs let a recovering processor avoid reprocessing all input events.</li>
+</ul>
+</li>
+<li>Figure 8-6:
+<ul>
+<li>an <code>orders</code> table of orders ready to package</li>
+<li>once packed, the record is deleted, which writes a <strong>tombstone</strong> for key 181 to the orders changelog. Changelogs live in the broker with <strong>read and write permissions limited to the owning application</strong>, and are commonly <strong>compacted</strong> (they restore state, not track history).</li>
+</ul>
+</li>
+<li>Restoration (Figure 8-7):
+<ul>
+<li>the new instance loads its changelog partitions as fast as events can be read and inserted</li>
+<li>key 181 may already be compacted, or loaded then deleted</li>
+<li><strong>no business logic is triggered</strong> during restoration.</li>
+</ul>
+</li>
+<li>Changelogs are built in (Kafka Streams client) or implemented by the developer; basic producer/consumer clients do not provide them.</li>
+</ul>
+<h3 id="global-state">Global state</h3>
+<ul>
+<li>A <strong>global (broadcast) state store</strong> materialises <strong>all partitions</strong> of a stream on every instance (Figure 8-8)
+<ul>
+<li>Example: the full inventory in every packaging instance, so each can check availability before asking the warehouse</li>
+<li>Fits when every instance needs the whole data set and it is <strong>small, commonly used and seldom changing</strong>; used for lookups, not to drive event-driven logic.</li>
+</ul>
+</li>
+</ul>
+<h3 id="advantages-of-internal-state-stores">Advantages of internal state stores</h3>
+<ul>
+<li><strong>Scalability offloaded</strong> to the broker and compute cluster (change the instance count); the capability team provides common scaling mechanisms.</li>
+<li><strong>High-performance disk:</strong>
+<ul>
+<li>keeping everything in memory is not always possible</li>
+<li>local SSDs suit random access. A RocksDB random read from SSD is about <strong>65 microseconds</strong>, so a single thread tops out near <strong>15.4k requests/second</strong></li>
+<li>in-memory serves millions per second.</li>
+</ul>
+</li>
+<li><strong>Flexibility to use network-attached disk:</strong>
+<ul>
+<li>much higher latency; with a <strong>1 ms round trip</strong> the same pattern is capped at about <strong>939 requests/second</strong>, and events must be processed in offset order so parallelism is limited</li>
+<li>Generally fine for modest-performance services</li>
+<li>Benefit: the volume can be <strong>reattached</strong> to new hardware so state is not rebuilt (less downtime, flexible movement across cheap on-demand nodes).</li>
+</ul>
+</li>
+</ul>
+<h3 id="disadvantages-of-internal-state-stores">Disadvantages of internal state stores</h3>
+<ul>
+<li><strong>Limited to runtime-defined disk:</strong> changing volume size or count usually means halting; many platforms only let volumes grow.</li>
+<li><strong>Wasted disk space:</strong> cyclical traffic (3 p.m. versus 3 a.m.) needs large peak disk but little otherwise; external services charging per byte can be cheaper.</li>
+</ul>
+<h3 id="scaling-and-recovery-of-internal-state">Scaling and recovery of internal state</h3>
+<ul>
+<li>A new or recovered instance must materialise its state before processing; the quickest way is to <strong>reload the changelog</strong> for each stateful store.</li>
+<li><strong>Hot replicas:</strong>
+<ul>
+<li>materialise a standby copy of a partition on another instance (Kafka Streams has a simple configuration setting): highly available state, tolerating instance failure with <strong>zero downtime</strong>
+<ul>
+<li>Example (Figure 8-9): orders and inventory copartitioned on <code>productId</code>, one partition per instance</li>
+</ul>
+</li>
+<li>a failure otherwise means stopping, moving partitions, reloading the changelog, resuming
+<ul>
+<li>With a replication factor of 2 (Figure 8-10), each partition is primary on one instance and replica on another (replicas drive no logic)</li>
+<li>When an instance terminates (Figure 8-11), the leader's assignor places the partitions on the instance holding the hot replicas</li>
+</ul>
+</li>
+<li>new replicas are then built from the changelog to restore the minimum count</li>
+<li>if the original returns, workloads move back once it has rebuilt state.</li>
+</ul>
+</li>
+<li><strong>Note:</strong>
+<ul>
+<li>details are framework-specific</li>
+<li>Hot replicas cost disk and replica maintenance in exchange for less downtime: valuable for low-latency use cases, unnecessary where higher latency and periodic outages are tolerable.</li>
+</ul>
+</li>
+<li><strong>Restoring from changelogs:</strong> the instance should not process new events while loading (nondeterministic, erroneous results).</li>
+<li><strong>Restoring from input event streams</strong>
+<ul>
+<li>(no changelog): consume from the beginning of assigned partitions in strict order, update state and produce output events</li>
+<li><strong>Warning:</strong> consider output from full reprocessing: downstream consumers may need to process idempotently or drop duplicates, or you can halt output until a progress condition is met</li>
+<li>It is much slower; use only for simple topologies where duplicate output does not matter, entity streams are well compacted and input retention is short.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-4-external-state-stores">8.4 External state stores</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-08-internal-vs-external.svg" alt="Internal versus external" loading="lazy" /></p>
+<ul>
+<li>On dedicated hardware, in its own container or VM, or (most commonly now) a <strong>managed cloud service</strong>: relational, document, graph, geospatial, distributed key-value
+<ul>
+<li>Choose by the problem space</li>
+<li>The data set must stay <strong>logically isolated</strong> from other microservices, or coupling makes refactoring the internal model very hard.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> do not share direct state access between microservices; each materialises its own copy (extra processing and storage buys decoupling).</li>
+<li><strong>Advantages:</strong>
+<ul>
+<li><strong>Full data locality:</strong>
+<ul>
+<li>each instance can reach all the data (lookups, foreign-key relational queries, geospatial queries), while still processing only its assigned partitions</li>
+<li><strong>Tip:</strong> use stores with <strong>strong read-after-write guarantees</strong> to avoid inconsistent results across instances.</li>
+</ul>
+</li>
+<li><strong>State survives outages:</strong> independent of instance life cycles; restarts need no rebuild.</li>
+<li><strong>Technology options:</strong> familiar stores speed delivery; good for basic producer/consumer (Chapter 11) and functions as a service (Chapter 15).</li>
+</ul>
+</li>
+<li><strong>Drawbacks:</strong>
+<ul>
+<li><strong>Management of multiple technologies:</strong>
+<ul>
+<li>the owner must scale and monitor the store (managed services help). <strong>Note:</strong> each team fully manages its stores</li>
+<li>keep a <strong>list of acceptable external data services with guides</strong> rather than creating a technical cross-team dependency.</li>
+</ul>
+</li>
+<li><strong>Network latency:</strong> caching and parallelisation add complexity and cost, and many patterns just block awaiting a reply.</li>
+<li><strong>Financial cost:</strong> hosted stores charge by transactions, payload size and retention, may need over-provisioning; on-demand pricing may help if performance holds.</li>
+<li><strong>Full data locality has a catch:</strong>
+<ul>
+<li>data comes from many processors, each at its own rate, so it is hard to reason about and debug</li>
+<li><strong>race conditions and nondeterminism</strong> arise because each instance has its <strong>own stream time</strong> (one instance may join on a foreign key another has not populated yet; reprocessing later may produce a different, nonreproducible result).</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="scaling-and-recovery-with-external-state-stores">Scaling and recovery with external state stores</h3>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-08-recovery.svg" alt="Recovery" loading="lazy" /></p>
+<ul>
+<li>Scaling the service is easy: a new instance with credentials. Scaling and recovery of the store depend on the technology. Strategies: <strong>source streams</strong>, <strong>changelogs</strong>, <strong>snapshots</strong>.
+<ul>
+<li><strong>Source streams:</strong>
+<ul>
+<li>rewind offsets to the start</li>
+<li>longest downtime but easily reproducible, relying only on the broker</li>
+<li>a full application reset that reproduces output events unless discarded.</li>
+</ul>
+</li>
+<li><strong>Changelogs:</strong>
+<ul>
+<li>external stores seldom use broker changelogs, but you may</li>
+<li>create a fresh store and rebuild everything before resuming. <strong>Warning:</strong> both of these can be prohibitively slow from network latency</li>
+<li>check SLAs.</li>
+</ul>
+</li>
+<li><strong>Snapshots or checkpoints:</strong>
+<ul>
+<li>the store offloads an image (for example to Amazon S3); far more common</li>
+<li>The challenge is aligning <strong>consumer offsets</strong> with the restored state: too late loses events, too early duplicates</li>
+<li>If idempotent, set offsets before the snapshot time (<strong>at-least-once</strong>)</li>
+<li>Otherwise <strong>store partition offsets with the data in one atomic transaction</strong>, then restore the offsets from the snapshot for <strong>effectively once</strong> semantics.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="rebuilding-the-external-state-store">Rebuilding the external state store</h3>
+<ul>
+<li>New requirements (extra fields, new joins, newly derived data) usually mean <strong>rebuilding rather than migrating</strong> the store
+<ul>
+<li><strong>Warning:</strong> data migrations are very risky and can be inconsistent with the source of truth; &quot;any time or money saved ..</li>
+<li>is often accounted for tenfold&quot; in fixing consequences.</li>
+</ul>
+</li>
+<li>Steps:
+<ul>
+<li>update and test the code</li>
+<li>create a <strong>new</strong> store and <strong>keep the old</strong> as a fallback</li>
+<li><strong>rewind</strong> the consumer offsets to the very start</li>
+<li>start and repopulate (you may need to <strong>mute</strong> output events, or just emit new results)</li>
+<li>verify, then delete the old store and any changelogs or snapshots</li>
+</ul>
+</li>
+<li><strong>Tip:</strong> if the service depends critically on input data, keep it available for reprocessing; it is your snapshot.</li>
+<li>Example (Figure 8-12):
+<ul>
+<li>the company starts international shipping and collects customer <strong>Country</strong></li>
+<li>the customer stream's schema evolves, and the packaging service rewinds to the start of the customer stream to rebuild its store with country.</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-5-transactions-and-effectively-once-processing">8.5 Transactions and effectively once processing</h2>
+<p><img src="/book-digest/building-event-driven-microservices/img/bem-08-effectively-once.svg" alt="Effectively once" loading="lazy" /></p>
+<ul>
+<li><strong>Effectively once processing</strong>
+<ul>
+<li>guarantees that updates to the single source of truth are applied consistently regardless of producer, consumer or broker failure, notably by committing <strong>consumer offsets and output stream records in one transaction</strong></li>
+<li>It needs <strong>transactional support</strong> (Apache Kafka and Apache Pulsar), which atomically writes several events to several streams.</li>
+</ul>
+</li>
+<li>It is also called &quot;exactly once&quot;, which is <strong>not quite accurate</strong>: a service may process data several times (crash before committing offsets) and still run the business logic and <strong>side effects</strong> (external endpoints, third parties) for every event.</li>
+<li><strong>Idempotent writes</strong>
+<ul>
+<li>(Kafka, Pulsar): an event is written to a stream once, using unique process IDs and monotonically increasing sequences to fence out duplicates</li>
+<li>safe producer retries. Not every broker supports transactions or idempotent production</li>
+<li>sometimes it does not matter, sometimes you build a workaround.</li>
+</ul>
+</li>
+</ul>
+<h3 id="example-inventory-accounting">Example: inventory accounting</h3>
+<ul>
+<li>Emits an event when an item's stock is low from a chain of additions (shipments received, returns, found stock) and subtractions (sales, damage, theft) in one stream (Figure 8-13)
+<ul>
+<li>a running total in its data store, a threshold that triggers a purchase event</li>
+<li>Every input must be applied <strong>effectively once</strong>: at-least-once and at-most-once give wrong results</li>
+<li>It suits effectively once because it is entirely event-driven, makes no external requests, and can commit state and offsets atomically.</li>
+</ul>
+</li>
+</ul>
+<h3 id="with-client-broker-transactions">With client-broker transactions</h3>
+<ul>
+<li>Output events, changelog events and consumer offset events commit <strong>atomically</strong> (Figure 8-14)
+<ul>
+<li>If failure outlasts retry timeouts the broker aborts and commits nothing (Figure 8-15); transient errors can retry since commit is idempotent</li>
+<li>Consumers do not process events from <strong>uncommitted transactions</strong> but respect offset order, waiting for commit or abort.</li>
+</ul>
+</li>
+<li>After a fatal producer error the replacement restores from changelogs and the last good input offsets from the offset stream (Figure 8-16)
+<ul>
+<li>the broker fails and cleans up incomplete transactions. Mechanisms vary by broker.</li>
+</ul>
+</li>
+</ul>
+<h3 id="without-client-broker-transactions">Without client-broker transactions</h3>
+<ul>
+<li>More work and careful duplicate handling:
+<ul>
+<li>(1) identify and filter duplicates created upstream</li>
+<li>(2) update state and offsets in a <strong>local transaction</strong>, so the state matches the logical narrative of the inputs.</li>
+</ul>
+</li>
+<li><strong>Warning:</strong> prefer a broker and client with <strong>idempotent writes</strong>; deduplicating after the fact does not scale (each consumer must implement safeguards).</li>
+<li><strong>Duplicates arise when:</strong>
+<ul>
+<li>the producer <strong>does not receive an ack and retries</strong> (same data, maybe same timestamps, new offsets; idempotent production filters these), or <strong>crashes after writing but before updating its offsets</strong> (logically identical copies with new timestamps and offsets, hard to recognise)</li>
+<li><strong>Note:</strong> idempotent production handles crash and retry failures between client and broker, <strong>not duplicates from faulty business logic</strong>.</li>
+</ul>
+</li>
+<li><strong>Identifying duplicates:</strong>
+<ul>
+<li>first check whether duplicates matter at all (often negligible)
+<ul>
+<li>Otherwise have the producer generate a <strong>unique dedupe ID</strong> (a hash of key, value and event time, or the query time of a triggering request): works for events with large data domains (a bank transfer's source, destination, amount, date and time; an order's products, purchaser, time, total and payment provider; inventory debited per <code>orderId</code>), poorly for logically equivalent events</li>
+<li>The ID should have <strong>high-cardinality</strong> elements</li>
+</ul>
+</li>
+<li>best generated <strong>with the event</strong> so all consumers benefit and the logic can change freely
+<ul>
+<li><strong>Warning:</strong> unkeyed events are extremely hard to guard because partition locality is not guaranteed</li>
+</ul>
+</li>
+<li>produce with keys, respect partition locality and use idempotent writes.</li>
+</ul>
+</li>
+<li><strong>Guarding against duplicates:</strong>
+<ul>
+<li>an effectively once consumer must identify and discard duplicates, perform idempotent operations, or use idempotent producers. Dedupe stores can grow very large</li>
+<li>in practice deduplication is a <strong>rolling time or offset window, best effort</strong>
+<ul>
+<li><strong>Tip:</strong> use <strong>TTL</strong>, a <strong>maximum cache size</strong> and periodic deletion</li>
+<li>Deduplicate <strong>within a single partition</strong> (across partitions is prohibitively expensive; keyed events always map to one)</li>
+<li>Figure 8-17: events pass through a dedupe store (TTL arbitrarily 8,000 seconds, to be set from business needs) before the business logic</li>
+</ul>
+</li>
+<li>also keep <strong>durable backups</strong> of the dedupe table, which must be rebuilt before resuming.</li>
+</ul>
+</li>
+<li><strong>State store transactions:</strong>
+<ul>
+<li>use the data store's own transactions: move the input offset management from the broker into the data store</li>
+<li>one transaction updates state and offsets (Figures 8-18 to 8-20). On a failure such as a commit timeout, abandon the transaction and revert to the last good state</li>
+<li>consumption halts until the store returns, then resumes from the last good offset
+<ul>
+<li><strong>Note:</strong> this gives effectively once <strong>processing</strong> but <strong>not production</strong>: output remains at-least-once (no atomic transaction between producer and broker).</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Internal stores support high-performance processing; external stores give flexible options; latency, throughput, cost, scaling and access patterns decide.</li>
+<li>Changelogs are native to a narrow range of frameworks; alternatively use a transactional database with scheduled snapshots.</li>
+<li>Brokers with transactions give powerful effectively once processing; deduplication provides it where they are unavailable.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Partition assignment</strong>, <strong>rebalance</strong>, <strong>repartitioning</strong>, <strong>copartitioning</strong>.</li>
+<li><strong>Internal and external state store</strong>; <strong>RocksDB</strong>; <strong>changelog</strong>; <strong>global state</strong>; <strong>hot replica</strong>.</li>
+<li><strong>Effectively once</strong>; <strong>idempotent write</strong>; <strong>dedupe ID</strong>; <strong>client-broker transaction</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Adam Bellemare, <em>Building Event-Driven Microservices</em>, 2nd edition, O'Reilly 2025, chapter 8: <a href="https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch08.html" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/building-event-driven-microservices/9798341622180/ch08.html</a></li>
+<li>Figures 8-1 to 8-20 are redrawn in grouped diagrams
+<ul>
+<li>The latency and throughput figures are the book's estimates for RocksDB on local SSD (65 microseconds, about 15.4k per second) and with a 1 ms network round trip (939 per second).</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/building-event-driven-microservices/bem-07-denormalization-and-eventification/">Building Event-Driven Microservices 7: Denormalization and Eventification</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/">Building Event-Driven Microservices 9: Deterministic Stream Processing</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-02-fundamentals-of-events-and-event-streams/">Building Event-Driven Microservices 2: Fundamentals of Events and Event Streams</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/building-event-driven-microservices/bem-07-denormalization-and-eventification/">&larr; Building Event-Driven Microservices 7: Denormalization and Eventification</a><a href="/book-digest/building-event-driven-microservices/">Contents</a><a href="/book-digest/building-event-driven-microservices/bem-09-deterministic-stream-processing/">Building Event-Driven Microservices 9: Deterministic Stream Processing &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

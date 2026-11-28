@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 29: Clean Embedded Architecture</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-28-the-test-boundary/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-30-the-database-is-a-detail/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-29-clean-embedded-architecture">Clean Architecture 29: Clean Embedded Architecture</h1>
+<p>Source: James Grenning (guest chapter) in Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 29. Own-words digest. Previous: <a href="/book-digest/clean-architecture/ca-28-the-test-boundary/">Clean Architecture 28: The Test Boundary</a>. Next: <a href="/book-digest/clean-architecture/ca-30-the-database-is-a-detail/">Clean Architecture 30: The Database Is a Detail</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>&quot;Although software does not wear out, firmware and hardware become obsolete&quot;</strong> (Doug Schmidt). Grenning adds: software can be <strong>destroyed from within by unmanaged dependencies on firmware and hardware</strong>.</li>
+<li><strong>Code is firmware because of what it depends on and how hard it is to change</strong>, not because it is stored in ROM. <strong>Stop writing so much firmware.</strong></li>
+<li>Passing the <strong>App-titude test</strong> (it works) is not enough. The <strong>target-hardware bottleneck</strong> slows teams that can test only on the target; a <strong>clean embedded architecture is a testable one</strong>.</li>
+<li>Tools: a <strong>HAL</strong> (hardware abstraction layer), a <strong>PAL</strong> (processor abstraction layer), an <strong>OSAL</strong> (operating system abstraction layer), <strong>interfaces and substitutability</strong>, and <strong>no repeated conditional compilation</strong> (DRY).</li>
+</ul>
+</div></div>
+<h2 id="29-1-software-firmware-and-hardware">29.1 Software, firmware and hardware</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-29-embedded.svg" alt="Embedded layers" loading="lazy" /></p>
+<ul>
+<li>Written by <strong>James Grenning</strong>. He read &quot;The Growing Importance of Sustaining Software for the DoD&quot; on <strong>Doug Schmidt's</strong> blog (SEI): &quot;Although software does not wear out, firmware and hardware become obsolete, thereby requiring software modifications.&quot; Software can have a <strong>long useful life</strong>
+<ul>
+<li>firmware becomes obsolete as hardware evolves (hardware is continually evolving; features keep adding to the software's complexity).</li>
+</ul>
+</li>
+<li>Grenning's addition: <strong>&quot;Although software does not wear out, it can be destroyed from within by unmanaged dependencies on firmware and hardware.&quot;</strong> Embedded software is often denied a long life by being <strong>infected with dependencies on hardware</strong>.</li>
+<li>Common definitions of firmware (code in non-volatile memory such as ROM, EPROM or flash; software programmed on a hardware device; software embedded in hardware; software written to ROM) are &quot;wrong, or at least obsolete&quot;: **&quot;It's not firmware because of where it is stored
+<ul>
+<li>rather, it is firmware because of what it depends on and how hard it is to change as hardware evolves.&quot;** Hardware evolves (look at your phone), so structure embedded code accordingly. &quot;What we really need is <strong>less firmware and more software</strong>.&quot;</li>
+</ul>
+</li>
+<li><strong>Non-embedded engineers write firmware too</strong>:
+<ul>
+<li>when you <strong>bury SQL in your code</strong> or <strong>spread platform dependencies</strong> through it</li>
+<li><strong>Android app developers</strong> write firmware when they do not separate <strong>business logic from the Android API</strong>.</li>
+</ul>
+</li>
+<li><strong>Story 1:</strong>
+<ul>
+<li>in the late 1990s Grenning helped redesign a communications subsystem moving from <strong>time-division multiplexing (TDM)</strong> (state of the art in the 1950s and 1960s, widely deployed in the 1980s and 1990s) to <strong>voice over IP (VOIP)</strong></li>
+<li>Asked how a call should react, the systems engineer would disappear and return with a detailed answer from <strong>the current product's code</strong>: <strong>&quot;The tangled legacy code was the spec for the new product!&quot;</strong> There was no separation between TDM and the business logic of making calls: the whole product was hardware- and technology-dependent from top to bottom: it had &quot;essentially become firmware&quot;.</li>
+</ul>
+</li>
+<li><strong>Story 2:</strong>
+<ul>
+<li>command messages arrive over a <strong>serial port</strong></li>
+<li>a <strong>message processor/dispatcher</strong> parses and dispatches them, but it sits <strong>in the same file as the code touching the UART</strong> (the device that controls the serial port): it is &quot;polluted with UART details&quot; and could have been long-lived software but is firmware.</li>
+</ul>
+</li>
+<li>For engineers: &quot;Stop writing so much firmware and give your code a chance at a long useful life.&quot;</li>
+</ul>
+<h2 id="29-2-the-app-titude-test">29.2 The App-titude test</h2>
+<ul>
+<li>Why does so much potential embedded software become firmware? Emphasis falls on <strong>getting it to work</strong>, not on structuring it for a long life. <strong>Kent Beck's</strong> three activities: **</li>
+<li>&quot;First make it work&quot;** (you are out of business if it does not); **</li>
+<li>&quot;Then make it right&quot;** (refactor so you and others can understand and evolve it); **</li>
+<li>&quot;Then make it fast&quot;** (refactor for needed performance)
+<ul>
+<li>Much embedded code is written for &quot;make it work&quot;, plus an obsession with &quot;make it fast&quot; via micro-optimisations</li>
+<li>Fred Brooks (<em>The Mythical Man-Month</em>): &quot;plan to throw one away&quot;</li>
+<li>They give virtually the same advice: <strong>learn what works, then make a better solution</strong></li>
+</ul>
+</li>
+<li>Embedded software is not special here:
+<ul>
+<li>most non-embedded apps are also built just to work. <strong>Getting an app to work is the &quot;App-titude test&quot;</strong></li>
+<li>programmers concerned only with that &quot;are doing their products and employers a disservice&quot;.</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>one file of a small embedded system lists, in source order, interrupt handlers (<code>ISR(TIMER1_vect)</code>, <code>ISR(INT2_vect)</code>), a button handler, <code>calc_RPM</code>, <code>Read_RawData</code>, <code>Do_Average</code>, sensor zeroing, device control, <strong>flash setup load and save</strong>, data set store and recall, <code>bytes2float</code>, <code>Sensor_init</code> and <code>uC_Sleep</code>
+<ul>
+<li>Grouped by concern: <strong>domain logic</strong> (<code>calc_RPM</code>, <code>Do_Average</code>, <code>Get_Next_Measurement</code>, <code>Zero_Sensor_1/2</code>)</li>
+</ul>
+</li>
+<li><strong>hardware platform setup</strong> (the ISRs, <code>uC_Sleep</code>)</li>
+<li><strong>on/off button</strong> reaction</li>
+<li><strong>A/D input reading</strong> (<code>Read_RawData</code>)</li>
+<li><strong>persistent storage</strong> (flash setup and data set functions, <code>bytes2float</code>)</li>
+<li>and <strong>a function that does not do what its name implies</strong> (<code>Sensor_init</code>).</li>
+</ul>
+</li>
+<li>Other files showed many impediments to understanding and a structure implying the code can be tested <strong>only on the embedded target</strong>
+<ul>
+<li>virtually all of it knows it is on a <strong>special microprocessor</strong> and uses &quot;extended&quot; C tied to a tool chain: <strong>no long life</strong> unless the product never changes hardware</li>
+<li>&quot;This application works: the engineer passed the App-titude test</li>
+<li>But ..</li>
+<li>can't be said to have a clean embedded architecture.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="29-3-the-target-hardware-bottleneck">29.3 The target-hardware bottleneck</h2>
+<ul>
+<li>Embedded developers face special concerns:
+<ul>
+<li><strong>limited memory, real-time deadlines, limited IO, unconventional user interfaces, sensors and real-world connections</strong>
+<ul>
+<li>hardware is often developed <strong>concurrently</strong> with software and firmware, so you may have <strong>no place to run the code</strong>, and the hardware has its own defects</li>
+</ul>
+</li>
+<li>&quot;Embedded is special ..</li>
+<li>but not so special that the principles in this book are not applicable.&quot;</li>
+</ul>
+</li>
+<li>The <strong>target-hardware bottleneck</strong>: if code is structured without clean architecture and <strong>can be tested only on the target</strong>, you are slowed down.</li>
+</ul>
+<h2 id="29-4-a-clean-embedded-architecture-is-a-testable-embedded-architecture">29.4 A clean embedded architecture is a testable embedded architecture</h2>
+<ul>
+<li><strong>Layers</strong>
+<ul>
+<li>(Figure 29.1: three layers): at the bottom, the <strong>hardware</strong>, which will change with technology advances and Moore's law (parts obsolete; new parts cheaper, faster, lower power)</li>
+<li>Hardware must be separated from the rest (Figure 29.2), but nothing stops hardware knowledge from polluting all the code, making it hard to change, whether for hardware changes, user requests or bug fixes.</li>
+</ul>
+</li>
+<li><strong>Software and firmware intermingling is an anti-pattern</strong>: it resists changes, makes them <strong>dangerous</strong> (unintended consequences), needs full regression tests even for minor changes, and without externally instrumented tests leaves boring manual tests and new bug reports.</li>
+<li><strong>The hardware is a detail:</strong>
+<ul>
+<li>the software/firmware line is fuzzier than the code/hardware line (Figure 29.3)</li>
+<li>an embedded developer's job is to <strong>firm it up</strong>. The boundary is the <strong>hardware abstraction layer (HAL)</strong> (Figure 29.4), long used in PCs.</li>
+<li>The HAL exists <strong>for the software above it</strong> and its API is <strong>tailored to that software's needs</strong>: firmware can store bytes and arrays in flash, but the application needs to store and read <strong>name/value pairs</strong> to some persistence mechanism (flash, spinning disk, cloud or core memory: a detail).</li>
+<li>An LED tied to a <strong>GPIO</strong> bit:
+<ul>
+<li>firmware or a board support package may offer <code>Led_TurnOn(5)</code>, while the HAL offers <strong><code>Indicate_LowBattery()</code></strong>: expressing a <strong>service the application needs</strong>
+<ul>
+<li>GPIO assignments are hidden</li>
+</ul>
+</li>
+<li>&quot;Layers may contain layers..</li>
+<li>a repeating fractal pattern.&quot;</li>
+</ul>
+</li>
+<li><strong>&quot;Don't reveal hardware details to the user of the HAL.&quot;</strong> A successful HAL is a <strong>seam</strong> for <strong>off-target testing</strong>.</li>
+</ul>
+</li>
+<li><strong>The processor is a detail:</strong>
+<ul>
+<li>vendor tool chains give header files and <strong>take liberties with C</strong>, adding keywords and what look like global variables for registers, IO ports, timers and interrupt controllers</li>
+<li>code using them <strong>is no longer C</strong> and may not compile for another processor or even another compiler. Limit which files know about the extensions.</li>
+<li>Example:
+<ul>
+<li>an <strong>ACME</strong> DSP header <code>acmetypes.h</code> (with <code>_ACME_X42</code> and <code>_ACME_A42</code> branches defining <code>Uint_32</code>, <code>Int_16</code> and so on)</li>
+<li>Do not use it directly: your types would be wrong off-target, and porting would be harder</li>
+<li>Use <strong><code>stdint.h</code></strong>; if the target compiler lacks it, write one that uses <code>acmetypes.h</code> for target builds (<code>typedef Uint_32 uint32_t;</code> and so on).</li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>a <code>say_hi()</code> function writing &quot;hi&quot; to the serial port by setting <strong><code>IE</code></strong> (interrupt enable bits) and <strong><code>SBUF0</code></strong> (serial output buffer) and waiting on <strong><code>TI_0</code></strong> (transmit buffer empty interrupt), even using <code>0b11000000</code> binary notation, which is <strong>not C</strong></li>
+<li>A clean embedded architecture uses such registers directly in <strong>very few places, confined to firmware</strong>; whatever knows them becomes firmware, bound to the silicon</li>
+<li>Firmware may isolate them with a <strong>processor abstraction layer (PAL)</strong>, so firmware above it can be tested off-target.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>The operating system is a detail:</strong>
+<ul>
+<li>in bare-metal systems a HAL may suffice, but with an <strong>RTOS</strong> or embedded Linux or Windows, treat the OS as a detail too</li>
+<li>The OS separates software from firmware (Figure 29.5), and using it directly causes problems: the supplier may be bought, <strong>royalties rise or quality falls</strong>, or your needs outgrow it, forcing syntactic and <strong>semantic</strong> changes</li>
+<li>Isolate with an <strong>operating system abstraction layer (OSAL)</strong> (Figure 29.6): sometimes just renaming a function, sometimes wrapping several</li>
+<li>Moving between RTOSes is painful; with an OSAL you mostly <strong>write a new OSAL to a defined interface</strong> (&quot;This is not a trick question. I choose the latter&quot;)</li>
+<li>Worried about bloat? The layer isolates the duplication of using an OS, and can give applications a <strong>common structure</strong> (message passing instead of every thread handcrafting concurrency) and <strong>test points</strong> so application code can be tested <strong>off-target and off-OS</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="29-5-programming-to-interfaces-and-substitutability">29.5 Programming to interfaces and substitutability</h2>
+<ul>
+<li>Beyond HAL and OSAL in each major layer (software, OS, firmware, hardware), apply the book's principles: <strong>separation of concerns, programming to interfaces, substitutability</strong>
+<ul>
+<li>Layering rests on programming to interfaces: when modules interact through an interface you can <strong>substitute one provider for another</strong>: a home-grown <code>printf</code> for deployment on the target is substitutable if its interface matches the standard.</li>
+</ul>
+</li>
+<li>Rule of thumb:
+<ul>
+<li><strong>use header files as interface definitions</strong>, limited to <strong>function declarations plus the constants and struct names the functions need</strong>. Do not clutter them with data structures, constants and typedefs needed only by the implementation: it breeds <strong>unwanted dependencies</strong></li>
+<li>&quot;Expect the implementation details to change.&quot;</li>
+</ul>
+</li>
+<li>&quot;A clean embedded architecture is <strong>testable within the layers</strong> because modules interact through interfaces&quot;: each interface is a seam for off-target testing.</li>
+</ul>
+<h2 id="29-6-dry-conditional-compilation-directives">29.6 DRY conditional compilation directives</h2>
+<ul>
+<li>Embedded C and C++ often use <strong>conditional compilation</strong> for different targets or operating systems
+<ul>
+<li>Grenning recalls <code>#ifdef BOARD_V2</code> appearing <strong>several thousand times</strong> in a telecom application (<strong>six thousand</strong> in the text's example): a violation of <strong>DRY</strong> (Hunt and Thomas, <em>The Pragmatic Programmer</em>): once is fine, six thousand an &quot;extreme problem&quot;</li>
+<li>With a <strong>HAL</strong>, the hardware type becomes a detail hidden below it
+<ul>
+<li>the HAL provides interfaces and you connect software to hardware with <strong>the linker or runtime binding</strong> instead of conditional compilation.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="29-7-conclusion">29.7 Conclusion</h2>
+<ul>
+<li>Embedded developers have much to learn from outside embedded work
+<ul>
+<li>&quot;<strong>Letting all code become firmware</strong> is not good for your product's long-term health</li>
+<li><strong>Being able to test only in the target hardware</strong> is not good for your product's long-term health</li>
+<li><strong>A clean embedded architecture is good</strong> for your product's long-term health.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Software outlives hardware if it does not depend on it; firmware is defined by dependency, not storage.</li>
+<li>HAL, PAL and OSAL make hardware, processor and OS details; they create off-target test seams.</li>
+<li>Interfaces in headers, substitutability and one-place variation (not scattered <code>#ifdef</code>s).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Firmware versus software</strong>; <strong>App-titude test</strong>; <strong>target-hardware bottleneck</strong>.</li>
+<li><strong>HAL</strong>, <strong>PAL</strong>, <strong>OSAL</strong>; <strong>off-target testing</strong>; <strong>DRY</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>James Grenning, guest chapter in Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 29: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch29.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch29.xhtml</a></li>
+<li>The Schmidt quotation is from the SEI blog post cited in the chapter (<a href="https://insights.sei.cmu.edu/sei_blog/2011/08/the-growing-importance-of-sustaining-software-for-thedod.html" target="_blank" rel="noopener noreferrer">https://insights.sei.cmu.edu/sei_blog/2011/08/the-growing-importance-of-sustaining-software-for-thedod.html</a>). Code listings (function lists, headers, <code>say_hi</code>) are summarised
+<ul>
+<li>Figures 29.1 to 29.6 are redrawn as one layer diagram.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-28-the-test-boundary/">Clean Architecture 28: The Test Boundary</a></li>
+<li><a href="/book-digest/clean-architecture/ca-30-the-database-is-a-detail/">Clean Architecture 30: The Database Is a Detail</a></li>
+<li><a href="/book-digest/clean-architecture/ca-17-boundaries-drawing-lines/">Clean Architecture 17: Boundaries, Drawing Lines</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-28-the-test-boundary/">&larr; Clean Architecture 28: The Test Boundary</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-30-the-database-is-a-detail/">Clean Architecture 30: The Database Is a Detail &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

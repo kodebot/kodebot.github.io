@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 25: Layers and Boundaries</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-24-partial-boundaries/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-26-the-main-component/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-25-layers-and-boundaries">Clean Architecture 25: Layers and Boundaries</h1>
+<p>Source: Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 25. Own-words digest. Previous: <a href="/book-digest/clean-architecture/ca-24-partial-boundaries/">Clean Architecture 24: Partial Boundaries</a>. Next: <a href="/book-digest/clean-architecture/ca-26-the-main-component/">Clean Architecture 26: The Main Component</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Systems are not just <strong>UI, business rules and database</strong>: most have <strong>more components</strong>. Finding every <strong>axis of change</strong> reveals boundaries, as the <strong>Hunt the Wumpus</strong> example shows (language, text delivery, storage, networking, even rule levels).</li>
+<li>Each boundary's <strong>API is defined and owned by the user (upstream) component</strong>, implemented by the other side.</li>
+<li>Data flows into <strong>multiple streams</strong> that meet at the <strong>highest-level policy</strong> and may later <strong>split</strong> again; boundaries can appear when a part becomes a <strong>service</strong>.</li>
+<li>Boundaries are <strong>expensive to build and expensive to add late</strong>: watch for friction and build each <strong>at the inflection point</strong> where implementing costs less than ignoring.</li>
+</ul>
+</div></div>
+<h2 id="25-1-hunt-the-wumpus">25.1 Hunt the Wumpus</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-25-streams.svg" alt="Streams" loading="lazy" /></p>
+<ul>
+<li>It is easy to think of systems as three components, <strong>UI, business rules, database</strong>; for simple systems that suffices but for most the number is larger
+<ul>
+<li>Take a simple computer game: the UI handles messages from the player to the <strong>game rules</strong>, which store state in some persistent data structure</li>
+<li>Is that all?</li>
+</ul>
+</li>
+<li>The game is the venerable <em><strong>Hunt the Wumpus</strong></em> (1972):
+<ul>
+<li>text-based, with simple commands like <strong>GO EAST</strong> and <strong>SHOOT WEST</strong></li>
+<li>the computer reports what the player sees, smells, hears and experiences</li>
+<li>the player hunts a <strong>Wumpus</strong> in a system of caverns, avoiding <strong>traps, pits</strong> and other dangers.</li>
+</ul>
+</li>
+<li>Keep the text UI but <strong>decouple it from the game rules</strong> so the product can use <strong>different languages in different markets</strong>: the rules talk to the UI through a <strong>language-independent API</strong> and the UI translates it into a human language
+<ul>
+<li>With dependencies managed properly (Figure 25.1) <strong>any number of UI components can reuse the same game rules</strong>, which neither know nor care which language is used.</li>
+</ul>
+</li>
+<li>Likewise the <strong>state</strong> may live in flash, the cloud or RAM: the rules should not know, so an <strong>API</strong> to the storage component with dependencies directed by the <strong>Dependency Rule</strong> (Figure 25.2).</li>
+</ul>
+<h2 id="25-2-clean-architecture">25.2 Clean architecture?</h2>
+<ul>
+<li>We could apply the clean architecture here (footnote:
+<ul>
+<li>we <strong>would not</strong> for something this trivial</li>
+<li>it is probably 200 lines or fewer, here a <strong>proxy for a much larger system</strong>) with use cases, boundaries, entities and data structures. But have we found <strong>all the significant boundaries</strong>?</li>
+</ul>
+</li>
+<li><strong>Language is not the only axis of change</strong>
+<ul>
+<li>for the UI: we might also vary the <strong>mechanism that communicates the text</strong>: a normal shell window, <strong>text messages</strong> or a <strong>chat application</strong></li>
+<li>That is a <strong>potential boundary</strong> on another axis: add an API isolating language from the communications mechanism (Figure 25.3).</li>
+</ul>
+</li>
+<li>In Figure 25.3 <strong>dashed outlines mark abstract components</strong> defining an API implemented by components above or below (the Language API is implemented by <strong>English and Spanish</strong>). **<code>GameRules</code> communicates with <code>Language</code> through an API <code>GameRules</code> defines and <code>Language</code> implements
+<ul>
+<li><code>Language</code> communicates with <code>TextDelivery</code> through an API <code>Language</code> defines and <code>TextDelivery</code> implements: &quot;The API is defined and owned by the <strong>user</strong>, rather than by the implementer.&quot;**</li>
+</ul>
+</li>
+<li>Inside <code>GameRules</code> you would find <strong>polymorphic Boundary interfaces</strong> used by its code and implemented by code in <code>Language</code> (and the reverse), and the same inside <code>Language</code> with <code>TextDelivery</code>: in each case the API defined by the Boundary interfaces is <strong>owned by the upstream component</strong>
+<ul>
+<li>Variations such as <strong>English, SMS and CloudData</strong> are provided by polymorphic interfaces defined in the abstract API component and implemented by the concrete components.</li>
+</ul>
+</li>
+<li><strong>Simplified (Figure 25.4):</strong>
+<ul>
+<li>oriented so <strong>all arrows point up</strong>, putting <code>GameRules</code> at the top as the component with the <strong>highest-level policies</strong> (footnote: arrows show <strong>source dependencies, not data flow</strong>)
+<ul>
+<li><strong>Information flow:</strong> input comes from the user through <strong><code>TextDelivery</code></strong> (bottom left), rises through <strong><code>Language</code></strong>, getting translated into commands for <code>GameRules</code></li>
+</ul>
+</li>
+<li><code>GameRules</code> processes it and sends data down to <strong><code>DataStorage</code></strong> (lower right)</li>
+<li>output goes back down to <code>Language</code>, which translates the API back into the human language and delivers it through <code>TextDelivery</code>.</li>
+</ul>
+</li>
+<li>So the flow of data divides into <strong>two streams</strong>:
+<ul>
+<li>the left stream <strong>communicates with the user</strong>, the right deals with <strong>persistence</strong></li>
+<li>they <strong>meet at the top at <code>GameRules</code></strong>, the ultimate processor of data from both (footnote: formerly the <strong>Central Transform</strong>; Page-Jones, <em>Practical Guide to Structured Systems Design</em>, 2nd ed., 1988).</li>
+</ul>
+</li>
+</ul>
+<h2 id="25-3-crossing-and-splitting-the-streams">25.3 Crossing and splitting the streams</h2>
+<ul>
+<li>Not always two streams:
+<ul>
+<li>for <strong>multiplayer play over the net</strong> add a <strong>network component</strong> (Figure 25.5), giving <strong>three streams</strong> all controlled by <code>GameRules</code></li>
+<li>As systems grow the component structure may split into many streams.</li>
+</ul>
+</li>
+<li>Do all streams eventually meet in one component at the top? &quot;If only life were so simple!&quot; <strong><code>GameRules</code> itself has levels:</strong> part deals with <strong>map mechanics</strong> (how the caverns connect, what is in each, moving the player, deciding the events the player must handle), but another set of policies is <strong>even higher level</strong>: they know the <strong>player's health</strong> and the <strong>cost or benefit of events</strong>: losing health gradually, gaining it by finding food
+<ul>
+<li>The lower-level mechanics policy <strong>declares events</strong> to this higher-level policy (<strong><code>FoundFood</code>, <code>FellInPit</code></strong>), which manages the player's state and eventually decides <strong>win or lose</strong> (Figure 25.6).</li>
+</ul>
+</li>
+<li>Is that an <strong>architectural boundary</strong> between <strong><code>MoveManagement</code></strong> and <strong><code>PlayerManagement</code></strong>? Add <strong>micro-services</strong>: in a <strong>massively multiplayer</strong> version <code>MoveManagement</code> runs on the player's computer while <strong><code>PlayerManagement</code> runs on a server</strong> offering a <strong>micro-service API</strong> to all connected <code>MoveManagement</code> components (Figure 25.7; the Network elements are more complex than shown)
+<ul>
+<li>A <strong>full-fledged boundary</strong> exists between them.</li>
+</ul>
+</li>
+</ul>
+<h2 id="25-4-conclusion">25.4 Conclusion</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-25-inflection.svg" alt="Inflection point" loading="lazy" /></p>
+<ul>
+<li>Why extrapolate a program &quot;which could be implemented in <strong>200 lines of Kornshell</strong>&quot; into all these crazy boundaries? To show that <strong>architectural boundaries exist everywhere</strong>
+<ul>
+<li>Architects must recognise when they are needed</li>
+<li>fully implemented boundaries are <strong>expensive</strong></li>
+<li>but boundaries ignored are <strong>very expensive to add later</strong>, &quot;even in the presence of comprehensive test-suites and refactoring discipline&quot;.</li>
+</ul>
+</li>
+<li>The answer is &quot;dissatisfying&quot;
+<ul>
+<li>Very smart people say not to anticipate abstraction: <strong>YAGNI</strong>, with real wisdom since <strong>over-engineering is often much worse than under-engineering</strong></li>
+<li>But when you truly need a boundary where none exists, <strong>adding it can be very costly and risky</strong></li>
+<li>&quot;O Software Architect, you must see the future</li>
+<li>You must guess, intelligently.&quot; Weigh costs and decide which boundaries to implement <strong>fully, partially or not at all</strong>.</li>
+</ul>
+</li>
+<li>It is <strong>not a one-time decision at the start</strong>:
+<ul>
+<li><strong>watch</strong>
+<ul>
+<li>as the system evolves, note where boundaries may be required, and watch carefully for the <strong>first inkling of friction</strong> from a missing one</li>
+<li>then weigh the cost of implementing against the cost of ignoring, and <strong>review that decision frequently</strong></li>
+</ul>
+</li>
+<li>The goal is to implement each boundary <strong>right at the inflection point where the cost of implementing becomes less than the cost of ignoring</strong></li>
+<li>&quot;It takes a watchful eye.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Look for every axis of change (language, delivery mechanism, storage, network); each can define a boundary.</li>
+<li>APIs are owned by the user component; dependencies point up toward the highest-level policy.</li>
+<li>Streams meet and split; services create full boundaries. Build boundaries at the inflection point of cost.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Axis of change</strong>; <strong>abstract API component</strong>; <strong>API owned by the user</strong>.</li>
+<li><strong>Streams</strong> (user, persistence, network); <strong>Central Transform</strong>.</li>
+<li><strong>Inflection point</strong> (cost of implementing versus ignoring).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 25: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch25.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch25.xhtml</a></li>
+<li>Figures 25.1 to 25.7 are summarised; the stream diagram is drawn from the chapter's text.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-24-partial-boundaries/">Clean Architecture 24: Partial Boundaries</a></li>
+<li><a href="/book-digest/clean-architecture/ca-26-the-main-component/">Clean Architecture 26: The Main Component</a></li>
+<li><a href="/book-digest/clean-architecture/ca-17-boundaries-drawing-lines/">Clean Architecture 17: Boundaries, Drawing Lines</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-24-partial-boundaries/">&larr; Clean Architecture 24: Partial Boundaries</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-26-the-main-component/">Clean Architecture 26: The Main Component &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

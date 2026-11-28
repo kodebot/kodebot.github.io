@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 34: The Missing Chapter</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-33-case-study-video-sales/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-35-afterword/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-34-the-missing-chapter">Clean Architecture 34: The Missing Chapter</h1>
+<p>Source: Simon Brown (guest chapter) in Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 34. Own-words digest. Previous: <a href="/book-digest/clean-architecture/ca-33-case-study-video-sales/">Clean Architecture 33: Case Study, Video Sales</a>. Next: <a href="/book-digest/clean-architecture/ca-35-afterword/">Clean Architecture 35: Afterword</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Good design intentions can be destroyed &quot;in a flash&quot; by <strong>implementation details</strong>. Brown compares four ways to organise the same code: <strong>package by layer</strong>, <strong>by feature</strong>, <strong>ports and adapters</strong>, and his own <strong>package by component</strong>.</li>
+<li>A layered architecture's <strong>acyclic graph can hide violations</strong> (a &quot;relaxed&quot; layered architecture). Rely on the <strong>compiler</strong> to enforce architecture rather than discipline or after-the-fact tools.</li>
+<li><strong>Overusing <code>public</code></strong> turns packages into mere folders, making all four styles <strong>identical</strong>. Use access modifiers, module systems and separate source trees as <strong>decoupling modes</strong>.</li>
+</ul>
+</div></div>
+<h2 id="34-1-the-question-view-order-status">34.1 The question: view order status</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-34-styles.svg" alt="Styles" loading="lazy" /></p>
+<ul>
+<li>By <strong>Simon Brown</strong>
+<ul>
+<li>All the preceding advice helps design software with clear boundaries, responsibilities and controlled dependencies, but &quot;the devil is in the implementation details, and it's really easy to <strong>fall at the last hurdle</strong>&quot;.</li>
+</ul>
+</li>
+<li>Running example:
+<ul>
+<li>an <strong>online book store</strong> with a use case letting customers <strong>view the status of their orders</strong></li>
+<li>A Java example, but the principles apply to other languages</li>
+<li>Setting the Clean Architecture aside for a moment, look at several ways to organise code.</li>
+</ul>
+</li>
+</ul>
+<h2 id="34-2-package-by-layer">34.2 Package by layer</h2>
+<ul>
+<li>The traditional <strong>horizontal layered architecture</strong> (Figure 34.1), separating code by technical function: a layer for <strong>web</strong>, one for <strong>business logic</strong>, one for <strong>persistence</strong>. In a <strong>strict layered architecture</strong> a layer depends only on the <strong>next adjacent lower layer</strong>
+<ul>
+<li>in Java layers are packages and all dependencies point <strong>down</strong>.</li>
+</ul>
+</li>
+<li>Types:
+<ul>
+<li><strong><code>OrdersController</code></strong> (a web controller, say Spring MVC)</li>
+<li><strong><code>OrdersService</code></strong> (interface for business logic)</li>
+<li><strong><code>OrdersServiceImpl</code></strong> (implementation; &quot;arguably a horrible way to name a class, but ... perhaps it doesn't really matter&quot;)</li>
+<li><strong><code>OrdersRepository</code></strong> (interface for persistent order data), and <strong><code>JdbcOrdersRepository</code></strong>.</li>
+</ul>
+</li>
+<li><strong>Martin Fowler</strong>
+<ul>
+<li>(&quot;Presentation Domain Data Layering&quot;) calls a layered architecture a <strong>good way to get started</strong></li>
+<li>many books, tutorials and samples teach it, and it is quick to get running without much complexity. The problem: as software grows, <strong>three big buckets are not enough</strong> and you must modularise further.</li>
+</ul>
+</li>
+<li>As Uncle Bob said, a layered architecture <strong>doesn't scream anything about the business domain</strong>: two layered systems from different domains look &quot;eerily similar: web, services, and repositories&quot;
+<ul>
+<li>There is &quot;another huge problem&quot; (see 34.5).</li>
+</ul>
+</li>
+</ul>
+<h2 id="34-3-package-by-feature">34.3 Package by feature</h2>
+<ul>
+<li>A <strong>vertical slicing</strong> by related features, domain concepts or <strong>aggregate roots</strong> (DDD terms); typically <strong>all the types in one package</strong> named for the concept (Figure 34.2)
+<ul>
+<li>It is a simple refactoring from package by layer, and the top-level organisation now <strong>screams something about the domain</strong> (orders, not web, services and repositories)</li>
+<li>It is also potentially <strong>easier to find all the code</strong> when the &quot;view orders&quot; use case changes (a benefit much reduced by modern IDE navigation, footnote).</li>
+</ul>
+</li>
+<li>Teams often realise horizontal layering is a problem and switch to vertical layering: &quot;In my opinion, <strong>both are suboptimal</strong>.&quot;</li>
+</ul>
+<h2 id="34-4-ports-and-adapters">34.4 Ports and adapters</h2>
+<ul>
+<li>As Uncle Bob has said
+<ul>
+<li><strong>ports and adapters</strong>, the <strong>hexagonal architecture</strong></li>
+<li><strong>boundaries, controllers, entities</strong> and the like aim to make business and domain code <strong>independent of technical details</strong> such as frameworks and databases</li>
+<li>Code bases have an <strong>&quot;inside&quot; (domain)</strong> and an <strong>&quot;outside&quot; (infrastructure)</strong> (Figure 34.3): UIs, databases, third-party integrations</li>
+<li><strong>The outside depends on the inside, never the other way</strong> (Figure 34.4: <code>com.mycompany.myapp.domain</code> is the inside).</li>
+</ul>
+</li>
+<li><code>OrdersRepository</code> has been renamed simply <strong><code>Orders</code></strong>: from <strong>domain-driven design</strong>, everything inside is named in the <strong>ubiquitous domain language</strong> (&quot;we talk about 'orders' ..., not the 'orders repository'&quot;)
+<ul>
+<li>The diagram is <strong>simplified</strong>: interactors and objects to marshal data across boundaries are missing.</li>
+</ul>
+</li>
+</ul>
+<h2 id="34-5-package-by-component">34.5 Package by component</h2>
+<ul>
+<li>Brown agrees with <strong>SOLID, REP, CCP, CRP</strong> and most of the book but concludes differently about code organisation
+<ul>
+<li>His career:
+<ul>
+<li>enterprise software, mostly Java, across business domains and styles (web, client-server, distributed, message-based)</li>
+<li>the common theme was <strong>a traditional layered architecture</strong></li>
+</ul>
+</li>
+<li>(Footnote: his first job in 1996 built client-server desktop apps with <strong>PowerBuilder</strong>, a 4GL; then Java client-server apps pre-JDBC with their own database connectivity and GUI toolkits on <strong>AWT</strong>.)</li>
+</ul>
+</li>
+<li><strong>Layering problems beyond the above:</strong>
+<ul>
+<li>layers equate to Java packages, so for the controller to depend on <code>OrdersService</code>, that interface <strong>must be <code>public</code></strong>, and likewise <code>OrdersRepository</code> so <code>OrdersServiceImpl</code> can see it</li>
+<li>A strict layered architecture wants a clean <strong>acyclic</strong> dependency graph, but &quot;we can <strong>cheat</strong> by introducing some undesirable dependencies, yet still create a nice, acyclic dependency graph&quot;.</li>
+</ul>
+</li>
+<li><strong>The newcomer story:</strong>
+<ul>
+<li>a new hire wants to impress
+<ul>
+<li>finds <code>OrdersController</code>, decides the new orders page goes there, discovers <code>OrdersRepository</code> and <strong>injects the implementation straight into the controller</strong></li>
+</ul>
+</li>
+<li>It works (Figure 34.5) and the arrows still point downward, but the controller is <strong>bypassing <code>OrdersService</code></strong>: a <strong>relaxed layered architecture</strong>, where layers may skip adjacent neighbours</li>
+<li>Sometimes intended (e.g. <strong>CQRS</strong>, with separate update and read patterns), but often undesirable, especially if the business layer <strong>ensures authorised access to individual records</strong></li>
+<li>Brown sees it often as a consultant, usually revealed when teams <strong>visualise their code base</strong> for the first time.</li>
+</ul>
+</li>
+<li>A guideline such as &quot;<strong>web controllers should never access repositories directly</strong>&quot; needs <strong>enforcement</strong>:
+<ul>
+<li><strong>Discipline and code review</strong> (&quot;we trust our developers&quot;): fails &quot;when budgets and deadlines start looming&quot;.</li>
+<li><strong>Static analysis</strong>
+<ul>
+<li>(<strong>NDepend, Structure101, Checkstyle</strong>) at build time, with rules like &quot;types in <code>**/web</code> should not access types in <code>**/data</code>&quot;, run after compilation: <strong>crude</strong>, but can report violations and fail the build</li>
+<li>both approaches are <strong>fallible</strong> with a <strong>longer feedback loop</strong></li>
+<li>unchecked, the code base becomes a &quot;<strong>big ball of mud</strong>&quot; (Foote and Yoder's paper, <a href="http://www.laputan.org/mud/" target="_blank" rel="noopener noreferrer">http://www.laputan.org/mud/</a>).</li>
+</ul>
+</li>
+<li>Brown would &quot;like to use the <strong>compiler</strong> to enforce my architecture if at all possible&quot;.</li>
+</ul>
+</li>
+<li><strong>Package by component</strong>
+<ul>
+<li>(Figure 34.6) is a <strong>hybrid</strong>: bundle all responsibilities of one <strong>coarse-grained component</strong> into <strong>a single Java package</strong>, a <strong>service-centric view</strong> like micro-services</li>
+<li>As ports and adapters treat the web as just another delivery mechanism, here the <strong>UI stays separate</strong> from these components</li>
+<li><strong>Business logic and persistence code are bundled into one &quot;component&quot;</strong>.</li>
+</ul>
+</li>
+<li>Definitions differ
+<ul>
+<li>Martin: components are <strong>units of deployment</strong>, the smallest deployable entities (jar files)</li>
+<li>Brown: &quot;<strong>a grouping of related functionality behind a nice clean interface, which resides inside an execution environment like an application</strong>&quot;, from his <strong>C4 model</strong> (<a href="https://www.structurizr.com/help/c4" target="_blank" rel="noopener noreferrer">https://www.structurizr.com/help/c4</a>): software systems contain <strong>containers</strong> (web apps, mobile apps, databases, file systems), containers contain <strong>components</strong>, components are implemented by <strong>classes</strong></li>
+<li>Whether a component lives in its own jar is <strong>orthogonal</strong>.</li>
+</ul>
+</li>
+<li>Benefit:
+<ul>
+<li>for anything involving orders there is <strong>one place to go, the <code>OrdersComponent</code></strong></li>
+<li>inside, <strong>business logic and persistence are still separated</strong>, but as a hidden implementation detail. It resembles a separate <code>OrdersService</code> in a micro-services or SOA design</li>
+<li>the key difference is the <strong>decoupling mode</strong>. Well-defined components in a monolith are &quot;a <strong>stepping stone</strong> to a micro-services architecture&quot;.</li>
+</ul>
+</li>
+</ul>
+<h2 id="34-6-the-devil-is-in-the-implementation-details">34.6 The devil is in the implementation details</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-34-enforcement.svg" alt="Enforcement" loading="lazy" /></p>
+<ul>
+<li>The four approaches look like different <strong>architectural styles</strong>, but &quot;this perception starts to unravel very quickly if you get the implementation details wrong&quot;
+<ul>
+<li><strong>Overly liberal <code>public</code></strong> is common: &quot;in our muscle memory&quot; (look at samples on GitHub), regardless of style</li>
+<li>It ignores the language's <strong>encapsulation</strong>; &quot;nothing preventing somebody from ..</li>
+<li>instantiating a concrete implementation class directly&quot;.</li>
+</ul>
+</li>
+<li><strong>Organisation versus encapsulation:</strong>
+<ul>
+<li>if all types are public, packages are merely <strong>folders</strong> for organisation, not encapsulation
+<ul>
+<li>you can effectively ignore them, so <strong>all four styles are exactly the same</strong> (Figure 34.7): conceptually different, <strong>syntactically identical</strong>: really &quot;just four ways to describe a traditional horizontally layered architecture&quot;</li>
+</ul>
+</li>
+<li>&quot;Of course nobody would ever make all of their Java types public</li>
+<li>Except when they do</li>
+<li>And I've seen it.&quot;</li>
+</ul>
+</li>
+<li>Java's access modifiers are <strong>not perfect</strong> (footnote:
+<ul>
+<li>packages look hierarchical but you cannot restrict access by package/subpackage</li>
+<li>hierarchy exists only in names and directories), but ignoring them &quot;is just asking for trouble&quot;. Figure 34.8 greys out the types whose modifier can be <strong>tightened</strong>:</li>
+<li><strong>Package by layer:</strong>
+<ul>
+<li><code>OrdersService</code> and <code>OrdersRepository</code> must be public (inbound dependencies from other packages)</li>
+<li><code>OrdersServiceImpl</code> and <code>JdbcOrdersRepository</code> can be <strong>package protected</strong> (implementation details).</li>
+</ul>
+</li>
+<li><strong>Package by feature:</strong>
+<ul>
+<li><code>OrdersController</code> is the <strong>sole entry point</strong>, so everything else can be package protected</li>
+<li>caveat: nothing outside can access orders information except through the controller, &quot;which may or may not be desirable&quot;.</li>
+</ul>
+</li>
+<li><strong>Ports and adapters:</strong> the <code>OrdersService</code> and <code>Orders</code> interfaces are public; implementations package protected and <strong>dependency injected</strong> at runtime.</li>
+<li><strong>Package by component:</strong>
+<ul>
+<li>only the <strong><code>OrdersComponent</code> interface</strong> has an inbound dependency (from the controller)</li>
+<li>everything else is package protected: &quot;The fewer public types you have, the smaller the number of potential dependencies.&quot; Nothing outside the package can use <code>OrdersRepository</code> directly (barring <strong>reflection</strong>, &quot;but please don't do that!&quot;), so <strong>the compiler enforces the principle</strong>. In <strong>.NET</strong> use <strong><code>internal</code></strong>, with a <strong>separate assembly per component</strong>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>All of this concerns a <strong>monolithic application</strong> in one source tree: lean on the compiler rather than self-discipline and post-compilation tooling.</li>
+</ul>
+<h2 id="34-7-other-decoupling-modes">34.7 Other decoupling modes</h2>
+<ul>
+<li><strong>Module systems:</strong>
+<ul>
+<li>in Java, <strong>OSGi</strong> and the (then new) <strong>Java 9 module system</strong> let you distinguish <strong>public</strong> from <strong>published</strong> types: an Orders module with all types public but only a small subset published for external use</li>
+<li>Brown hopes Java 9 modules will &quot;spark people's interest in design thinking once again&quot;.</li>
+</ul>
+</li>
+<li><strong>Separate source trees</strong>
+<ul>
+<li>per concern: for ports and adapters, three trees: <strong>business and domain</strong> (<code>OrdersService</code>, <code>OrdersServiceImpl</code>, <code>Orders</code>)
+<ul>
+<li><strong>web</strong> (<code>OrdersController</code>)</li>
+<li><strong>persistence</strong> (<code>JdbcOrdersRepository</code>)</li>
+</ul>
+</li>
+<li>The latter two have a <strong>compile-time dependency</strong> on the domain tree, which knows nothing of them; configure with separate <strong>Maven, Gradle or MSBuild</strong> modules</li>
+<li>Ideally repeat this per component, but it is <strong>idealistic</strong>: real-world <strong>performance, complexity and maintenance</strong> issues.</li>
+</ul>
+</li>
+<li><strong>Two trees:</strong>
+<ul>
+<li><strong>domain</strong> (the &quot;inside&quot;) and <strong>infrastructure</strong> (the &quot;outside&quot;), mapping onto the common ports and adapters diagram (Figure 34.9), with a compile-time dependency from infrastructure to domain</li>
+<li>It works, but beware the <strong>&quot;Périphérique anti-pattern of ports and adapters&quot;</strong>: like the Boulevard Périphérique ring road around <strong>Paris</strong>, all infrastructure in one tree means infrastructure in one area (a web controller) can <strong>call infrastructure in another (a database repository) directly without going through the domain</strong>, especially if access modifiers are forgotten.</li>
+</ul>
+</li>
+</ul>
+<h2 id="34-8-conclusion-the-missing-advice">34.8 Conclusion: the missing advice</h2>
+<ul>
+<li>&quot;Your best design intentions can be destroyed in a flash if you don't consider the intricacies of the <strong>implementation strategy</strong>.&quot; Think about <strong>mapping your design onto code structures</strong>, <strong>organising the code</strong>, and which <strong>decoupling modes</strong> to apply at runtime and compile time
+<ul>
+<li><strong>Leave options open</strong>, but be <strong>pragmatic</strong>: consider <strong>team size, skill level, solution complexity, time and budget</strong></li>
+<li>Use the <strong>compiler</strong> to enforce your chosen style, and watch for coupling elsewhere, such as <strong>data models</strong></li>
+<li>&quot;The devil is in the implementation details.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Layered and feature packaging each fall short; component packaging hides persistence behind a clean interface.</li>
+<li>Acyclic dependency graphs do not guarantee the intended architecture; enforce with the compiler.</li>
+<li><code>public</code> everywhere erases the difference between styles; use access modifiers, modules and source trees.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Package by layer / feature / component</strong>; <strong>ports and adapters</strong>.</li>
+<li><strong>Relaxed layered architecture</strong>; <strong>big ball of mud</strong>; <strong>Périphérique anti-pattern</strong>.</li>
+<li><strong>Public versus published</strong>; <strong>C4 model</strong> (container, component, class).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Simon Brown, guest chapter in Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 34: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch34.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch34.xhtml</a></li>
+<li>Referenced by the chapter:
+<ul>
+<li>Martin Fowler, &quot;Presentation Domain Data Layering&quot;, <a href="https://martinfowler.com/bliki/PresentationDomainDataLayering.html" target="_blank" rel="noopener noreferrer">https://martinfowler.com/bliki/PresentationDomainDataLayering.html</a></li>
+<li>&quot;Big Ball of Mud&quot;, <a href="http://www.laputan.org/mud/" target="_blank" rel="noopener noreferrer">http://www.laputan.org/mud/</a></li>
+<li>the C4 model, <a href="https://www.structurizr.com/help/c4" target="_blank" rel="noopener noreferrer">https://www.structurizr.com/help/c4</a>.</li>
+</ul>
+</li>
+<li>Figures 34.1 to 34.9 are redrawn as summary diagrams here, not the book's figures.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-33-case-study-video-sales/">Clean Architecture 33: Case Study, Video Sales</a></li>
+<li><a href="/book-digest/clean-architecture/ca-35-afterword/">Clean Architecture 35: Afterword</a></li>
+<li><a href="/book-digest/clean-architecture/ca-21-screaming-architecture/">Clean Architecture 21: Screaming Architecture</a></li>
+<li><a href="/book-digest/clean-architecture/ca-12-components/">Clean Architecture 12: Components</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/">Learning Domain Driven Design: contents</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-33-case-study-video-sales/">&larr; Clean Architecture 33: Case Study, Video Sales</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-35-afterword/">Clean Architecture 35: Afterword &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

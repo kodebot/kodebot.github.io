@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 12: Components</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-11-dip-the-dependency-inversion-principle/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-13-component-cohesion/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-12-components">Clean Architecture 12: Components</h1>
+<p>Source: Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 12. Own-words digest. Previous: <a href="/book-digest/clean-architecture/ca-11-dip-the-dependency-inversion-principle/">Clean Architecture 11: DIP, the Dependency Inversion Principle</a>. Next: <a href="/book-digest/clean-architecture/ca-13-component-cohesion/">Clean Architecture 13: Component Cohesion</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Components are the units of deployment</strong>: the smallest entities that can be deployed (jar, gem, DLL; in all languages, &quot;the granule of deployment&quot;).</li>
+<li>Well-designed components stay <strong>independently deployable</strong> and so <strong>independently developable</strong>, however they are finally packaged.</li>
+<li>History: non-relocatable programs and library source, then <strong>relocatable binaries</strong>, the <strong>linking loader</strong>, the separate <strong>linker</strong>, and finally fast dynamic linking, which made the <strong>component plugin architecture</strong> a casual default after about <strong>50 years</strong>.</li>
+</ul>
+</div></div>
+<h2 id="12-1-what-a-component-is">12.1 What a component is</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-12-history.svg" alt="History" loading="lazy" /></p>
+<ul>
+<li><strong>Components are the units of deployment.</strong>
+<ul>
+<li>In Java they are <strong>jar files</strong>, in Ruby <strong>gem files</strong>, in .NET <strong>DLLs</strong></li>
+<li>in compiled languages aggregations of <strong>binary files</strong>, in interpreted languages aggregations of <strong>source files</strong>. In all languages they are the <strong>granule of deployment</strong>.</li>
+</ul>
+</li>
+<li>They can be linked into a <strong>single executable</strong>, aggregated into a <strong>single archive</strong> such as a <code>.war</code>, or deployed independently as <strong>dynamically loaded plugins</strong> (<code>.jar</code>, <code>.dll</code>, <code>.exe</code>)
+<ul>
+<li>However deployed, well-designed components <strong>always retain the ability to be independently deployable and therefore independently developable</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-2-a-brief-history-of-components">12.2 A brief history of components</h2>
+<ul>
+<li><strong>Early years:</strong>
+<ul>
+<li>programmers controlled the <strong>memory location and layout</strong> of programs</li>
+<li>one of the first lines was the <strong>origin statement</strong> giving the load address
+<ul>
+<li>Martin's example is a <strong>PDP-8</strong> program with a subroutine <code>GETSTR</code> that reads a string from the keyboard into a buffer, plus a small unit-test program</li>
+</ul>
+</li>
+<li>the <code>*200</code> at the start makes the compiler generate code loaded at address <strong>200 (octal)</strong>. Programs were <strong>not relocatable</strong>.</li>
+</ul>
+</li>
+<li><strong>Libraries were kept in source:</strong> programmers included the library functions' source with their application code and compiled it all as one program (footnote: Martin's first employer kept several dozen decks of subroutine library source on a shelf and you slapped one onto the end of your deck).</li>
+<li>The problem:
+<ul>
+<li>devices were <strong>slow and memory expensive and limited</strong>, so compilers made <strong>several passes over the source</strong> and had to re-read it from slow devices each time</li>
+<li>Compiling a large program could take <strong>hours</strong>, and the larger the function library the longer it took.</li>
+</ul>
+</li>
+<li><strong>First fix:</strong>
+<ul>
+<li>compile the function library <strong>separately</strong> and load the binary at a known address (say 2000 octal), creating a <strong>symbol table</strong> for the library compiled with the application</li>
+<li>To run, load the binary library first (footnote: most old machines used <strong>core memory</strong>, which survived power-off, so the library was often left loaded for days), then the application (Figure 12.1).</li>
+</ul>
+</li>
+<li>This worked while the application fitted between <strong>0000 and 1777 octal</strong>
+<ul>
+<li>Soon applications outgrew it and had to be <strong>split into two address segments</strong>, jumping around the library (Figure 12.2)</li>
+<li>As the library grew it exceeded its bounds and needed more space (near 7000 octal): <strong>fragmentation</strong> that would continue as memory grew</li>
+<li>&quot;Clearly, something had to be done.&quot;</li>
+</ul>
+</li>
+</ul>
+<p><img src="/book-digest/clean-architecture/img/ca-12-memory-layouts.svg" alt="Memory layouts" loading="lazy" /></p>
+<h2 id="12-3-relocatability">12.3 Relocatability</h2>
+<ul>
+<li>The solution:
+<ul>
+<li><strong>relocatable binaries</strong>. The compiler output binary code that a <strong>smart loader</strong> could place in memory</li>
+<li>the code was instrumented with <strong>flags</strong> telling the loader which parts to alter for the chosen address (usually adding the start address to memory references)
+<ul>
+<li>Programmers could now tell the loader where to load the library and the application</li>
+</ul>
+</li>
+<li>the loader accepted <strong>several binary inputs</strong> and loaded them one after another, relocating as it went, so only needed functions were loaded.</li>
+</ul>
+</li>
+<li>The compiler also emitted <strong>function names as metadata</strong>:
+<ul>
+<li>a call to a library function emitted the name as an <strong>external reference</strong>, a definition as an <strong>external definition</strong></li>
+<li>the loader <strong>linked references to definitions</strong> once it knew where it had loaded them. &quot;And the linking loader was born.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-4-linkers">12.4 Linkers</h2>
+<ul>
+<li>The linking loader let programmers divide programs into <strong>separately compilable and loadable segments</strong>: fine for small programs with small libraries. In the <strong>late 1960s and early 1970s</strong> programs got much bigger and linking loaders became <strong>too slow</strong>: libraries lived on slow <strong>magnetic tape</strong> (even disks were slow) and the loader had to read dozens or hundreds of binary libraries to resolve references
+<ul>
+<li>loading could take <strong>more than an hour</strong>.</li>
+</ul>
+</li>
+<li>So loading and linking were <strong>separated into two phases</strong>:
+<ul>
+<li>the slow linking went into a separate application, the <strong>linker</strong>, whose output (a linked relocatable) a relocating loader could load <strong>very quickly</strong></li>
+<li>Programmers could prepare an executable with the slow linker and load it fast at any time.</li>
+</ul>
+</li>
+<li><strong>The 1980s:</strong>
+<ul>
+<li>C and other high-level languages</li>
+<li>programs of hundreds of thousands of lines were common. <code>.c</code> files were compiled to <code>.o</code> files and fed to the linker</li>
+<li>compiling each module was fast, all of them took a while, and the linker more
+<ul>
+<li>Turnaround was <strong>an hour or more</strong> again</li>
+<li>Through the 1960s, 1970s and 1980s every speed-up was defeated by program growth: <strong>Murphy's law of program size: &quot;Programs will grow to fill all available compile and link time.&quot;</strong></li>
+</ul>
+</li>
+</ul>
+</li>
+<li>Then <strong>Moore</strong> (footnote:
+<ul>
+<li>Moore's law: computer speed, memory and density double every 18 months</li>
+<li>held from the 1950s to 2000, then stopped cold for clock rates) won the late-1980s battle: disks shrank and became significantly faster, <strong>RAM so cheap that much disk data was cached</strong>, clock rates rose from <strong>1 MHz to 100 MHz</strong>. By the <strong>mid-1990s</strong> link time was shrinking faster than programs grew, often to <strong>seconds</strong>, making a linking loader feasible again for small jobs.</li>
+</ul>
+</li>
+<li>This was the era of <strong>Active-X, shared libraries and the beginnings of <code>.jar</code> files</strong>: linking at <strong>load time</strong>, joining several <code>.jar</code> files or shared libraries in seconds. &quot;And so the component plugin architecture was born.&quot; Today we routinely ship <code>.jar</code> files, DLLs or shared libraries as plugins: a <strong>Minecraft</strong> mod is a custom <code>.jar</code> in a folder
+<ul>
+<li><strong>Resharper</strong> plugs into Visual Studio as DLLs.</li>
+</ul>
+</li>
+</ul>
+<h2 id="12-5-conclusion">12.5 Conclusion</h2>
+<ul>
+<li>These <strong>dynamically linked files that can be plugged together at runtime are the software components of our architectures</strong>
+<ul>
+<li>It took <strong>50 years</strong>, but a component plugin architecture can now be the <strong>casual default</strong> rather than a herculean effort.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>A component is a unit of deployment; good ones are independently deployable and developable.</li>
+<li>History: relocatability, linkers and faster hardware turned plug-in components from impossible to ordinary.</li>
+<li>The next chapters ask how to group classes into components (cohesion) and how components relate (coupling).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Component</strong> (jar, gem, DLL); <strong>granule of deployment</strong>.</li>
+<li><strong>Relocatable binary</strong>; <strong>linking loader</strong>; <strong>linker</strong>; <strong>Murphy's law of program size</strong>.</li>
+<li><strong>Component plugin architecture</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 12: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch12.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch12.xhtml</a></li>
+<li>Addresses are octal as in the book (the page text shows them as 2008, 20008 and 17778 with subscripts lost)
+<ul>
+<li>Figures 12.1 and 12.2 are redrawn as simple memory layouts. The PDP-8 listing is summarised, not reproduced.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-11-dip-the-dependency-inversion-principle/">Clean Architecture 11: DIP, the Dependency Inversion Principle</a></li>
+<li><a href="/book-digest/clean-architecture/ca-13-component-cohesion/">Clean Architecture 13: Component Cohesion</a></li>
+<li><a href="/book-digest/clean-architecture/ca-05-object-oriented-programming/">Clean Architecture 5: Object-Oriented Programming</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-11-dip-the-dependency-inversion-principle/">&larr; Clean Architecture 11: DIP, the Dependency Inversion Principle</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-13-component-cohesion/">Clean Architecture 13: Component Cohesion &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

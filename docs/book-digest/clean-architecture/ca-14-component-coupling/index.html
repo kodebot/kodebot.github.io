@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 14: Component Coupling</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-13-component-cohesion/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-15-what-is-architecture/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-14-component-coupling">Clean Architecture 14: Component Coupling</h1>
+<p>Source: Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 14. Own-words digest. Previous: <a href="/book-digest/clean-architecture/ca-13-component-cohesion/">Clean Architecture 13: Component Cohesion</a>. Next: <a href="/book-digest/clean-architecture/ca-15-what-is-architecture/">Clean Architecture 15: What Is Architecture?</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>Three principles govern <strong>relationships between components</strong>, balancing develop-ability against logical design: <strong>ADP</strong> (Acyclic Dependencies), <strong>SDP</strong> (Stable Dependencies) and <strong>SAP</strong> (Stable Abstractions).</li>
+<li><strong>ADP:</strong> no cycles in the component dependency graph; break them with <strong>DIP</strong> or a <strong>new component</strong>. The structure <strong>evolves</strong> (it &quot;jitters&quot;) and is <strong>not designed top-down</strong>.</li>
+<li><strong>SDP:</strong> depend in the direction of stability, measured by <strong>I = Fan-out / (Fan-in + Fan-out)</strong>; <strong>SAP:</strong> a component should be <strong>as abstract as it is stable</strong> (<strong>A = Na / Nc</strong>).</li>
+<li>Plot components on the <strong>I/A graph</strong>; aim for the <strong>Main Sequence</strong>, avoid the <strong>Zones of Pain and Uselessness</strong>; <strong>D = |A + I - 1|</strong> measures distance. Metrics are &quot;imperfect, at best&quot;.</li>
+</ul>
+</div></div>
+<h2 id="14-1-the-acyclic-dependencies-principle">14.1 The Acyclic Dependencies Principle</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-14-acyclic.svg" alt="Acyclic dependencies" loading="lazy" /></p>
+<ul>
+<li><strong>&quot;Allow no cycles in the component dependency graph.&quot;</strong> The forces on component structure are <strong>technical, political and volatile</strong>.</li>
+<li><strong>The morning after syndrome:</strong>
+<ul>
+<li>you get things working, go home, and next morning they do not, because <strong>somebody stayed later and changed something you depend on</strong></li>
+<li>It occurs where many developers modify the same source files
+<ul>
+<li>on small projects it is minor, but as project and team grow it becomes &quot;nightmarish&quot;: weeks may pass without a stable build as everyone keeps changing code to fit the last change</li>
+</ul>
+</li>
+<li>Two solutions evolved, <strong>both from the telecommunications industry</strong>: the <strong>weekly build</strong> and the <strong>ADP</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-weekly-build">The weekly build</h3>
+<ul>
+<li>Common in medium-sized projects:
+<ul>
+<li>developers <strong>ignore each other for the first four days</strong>, working on private copies, then on <strong>Friday integrate and build</strong></li>
+<li>Advantage: living in an isolated world four days in five</li>
+<li>Disadvantage: a <strong>large integration penalty on Friday</strong></li>
+<li>As the project grows, integration overflows into <strong>Saturday</strong>, then starts on <strong>Thursday</strong>, creeping toward mid-week
+<ul>
+<li>the duty cycle of development versus integration falls and so does efficiency, until managers move to a <strong>biweekly build</strong>, and so on</li>
+</ul>
+</li>
+<li>To stay efficient the schedule keeps lengthening, which <strong>increases project risk</strong>: integration and testing get harder and the team <strong>loses rapid feedback</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="eliminating-dependency-cycles">Eliminating dependency cycles</h3>
+<ul>
+<li>The solution:
+<ul>
+<li><strong>partition the development environment into releasable components</strong>, units of work for a developer or team</li>
+<li>When a component works it is <strong>released</strong> with a <strong>release number</strong> into a directory others use, and the owners keep changing a private copy while everyone else uses the released version</li>
+<li>Other teams decide <strong>whether and when to adopt</strong> each new release</li>
+<li>So no team is at the mercy of others; integration happens in <strong>small increments</strong>, with no point where everyone must integrate everything.</li>
+</ul>
+</li>
+<li>It works only if you <strong>manage the dependency structure: no cycles</strong>. With cycles, the morning after syndrome cannot be avoided.</li>
+<li><strong>Figure 14.1</strong>
+<ul>
+<li>(a typical component diagram): components are nodes and dependencies directed edges</li>
+<li>whichever component you start from you <strong>cannot follow dependencies back</strong> to it: a <strong>directed acyclic graph (DAG)</strong>.</li>
+<li>A new <strong>Presenters</strong> release affects whoever depends on it (follow arrows backward): <strong>View and Main</strong>, who decide when to integrate.</li>
+<li>Releasing <strong>Main</strong> affects nobody (&quot;they don't know about Main&quot;).</li>
+<li>To test <strong>Presenters</strong> you build it with the <strong>Interactors and Entities</strong> versions it uses; nothing else.</li>
+<li>A whole-system release goes <strong>bottom up</strong>: <strong>Entities</strong> first, then <strong>Database and Interactors</strong>, then <strong>Presenters, View, Controllers, Authorizer</strong>, and <strong>Main</strong> last: &quot;We know how to build the system because we understand the dependencies between its parts.&quot;</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-effect-of-a-cycle">The effect of a cycle</h3>
+<ul>
+<li>A new requirement makes the <code>User</code> class in <strong>Entities</strong> use the <code>Permissions</code> class in <strong>Authorizer</strong> (Figure 14.2): a <strong>cycle</strong>
+<ul>
+<li>Database must now be compatible with Authorizer, which depends on Interactors: much harder to release</li>
+<li><strong>Entities, Authorizer and Interactors become in effect one large component</strong>: all their developers suffer the morning after syndrome because they must use exactly the same release of each other's components</li>
+<li>Testing Entities now requires building and integrating <strong>Authorizer and Interactors</strong>.</li>
+</ul>
+</li>
+<li>This is why a simple unit test sometimes drags in so many libraries: <strong>cycles make components hard to isolate</strong>, unit testing and releasing become error-prone, and <strong>build issues grow geometrically with the number of modules</strong>. It can be hard to work out the build order
+<ul>
+<li>&quot;there probably is no correct order&quot;, causing nasty problems in languages like Java that read declarations from compiled binaries.</li>
+</ul>
+</li>
+</ul>
+<h3 id="breaking-the-cycle">Breaking the cycle</h3>
+<ul>
+<li>It is <strong>always possible</strong> to break a cycle and restore a DAG, by:
+<ol>
+<li><strong>DIP:</strong> create an interface with the methods <code>User</code> needs, put it <strong>in Entities</strong>, and have Authorizer inherit it: this <strong>inverts</strong> the Entities-to-Authorizer dependency (Figure 14.3).</li>
+<li><strong>A new component</strong> that both depend on: move the classes both need into it (Figure 14.4).</li>
+</ol>
+</li>
+<li><strong>The &quot;jitters&quot;:</strong> the second solution means the structure is <strong>volatile</strong> under changing requirements: as an application grows the dependency structure jitters and grows, so <strong>monitor for cycles</strong> and break them, sometimes by creating new components.</li>
+</ul>
+<h3 id="top-down-design">Top-down design</h3>
+<ul>
+<li>&quot;The component structure <strong>cannot be designed from the top down</strong>&quot;: it is not among the first things designed but <strong>evolves as the system grows and changes</strong>
+<ul>
+<li>This is counterintuitive:
+<ul>
+<li>large-grained groupings are expected to be high-level functional decompositions, yet <strong>component dependency diagrams have little to do with describing the application's function</strong></li>
+<li>they are &quot;a <strong>map to the buildability and maintainability</strong>&quot; of the application</li>
+</ul>
+</li>
+<li>With no software yet there is nothing to build or maintain, so no such map</li>
+<li>As modules accumulate we need to manage dependencies to avoid the morning after syndrome, and to localise changes we attend to <strong>SRP and CCP</strong>.</li>
+</ul>
+</li>
+<li>A key concern is <strong>isolation of volatility</strong>:
+<ul>
+<li>components that change frequently and capriciously must not affect stable ones (cosmetic GUI changes should not hit business rules; report changes should not hit the highest-level policies)</li>
+<li>The graph is created and moulded by architects to <strong>protect stable high-value components from volatile ones</strong></li>
+<li>As the application grows, <strong>CRP</strong> shapes components; as cycles appear, <strong>ADP</strong> is applied and the graph jitters and grows</li>
+<li>Designing it before any classes would likely &quot;fail rather badly&quot;: you would not know about common closure or reusable elements and would almost certainly create cycles.</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-2-the-stable-dependencies-principle">14.2 The Stable Dependencies Principle</h2>
+<ul>
+<li><strong>&quot;Depend in the direction of stability.&quot;</strong>
+<ul>
+<li>Designs cannot be completely static; <strong>CCP</strong> makes components sensitive to some changes and immune to others, and some are <strong>designed to be volatile</strong></li>
+<li>A component we expect to be volatile <strong>should not be depended on by a component that is difficult to change</strong>, or it becomes hard to change too</li>
+<li>It is the &quot;perversity of software&quot; that a module designed to be easy to change can be made hard to change by <strong>someone hanging a dependency on it</strong>, without a line of its source changing</li>
+<li>SDP ensures easy-to-change modules are not depended on by harder-to-change ones.</li>
+</ul>
+</li>
+</ul>
+<h3 id="stability">Stability</h3>
+<ul>
+<li>Stand a <strong>penny on its side</strong>:
+<ul>
+<li>it stays that way until disturbed, yet &quot;unstable&quot;. So stability is <strong>not directly about frequency of change</strong>: per Webster's &quot;not easily moved&quot;, it is the <strong>amount of work required to make a change</strong></li>
+<li>the penny is unstable (little work to topple), a table is stable.</li>
+</ul>
+</li>
+<li>Many factors make a component hard to change (size, complexity, clarity) but Martin focuses on one sure way: <strong>make lots of other components depend on it</strong>
+<ul>
+<li>A component with many incoming dependencies is very stable because reconciling a change with all its dependents is a lot of work.</li>
+</ul>
+</li>
+<li>Figure 14.5: <strong>X</strong> has three dependents (&quot;three good reasons not to change&quot;): <strong>responsible</strong>
+<ul>
+<li>it depends on nothing so no outside influence: <strong>independent</strong>
+<ul>
+<li>Figure 14.6: <strong>Y</strong> has no dependents (<strong>irresponsible</strong>) and three dependencies (changes can come from three sources): <strong>dependent</strong></li>
+</ul>
+</li>
+<li>very unstable.</li>
+</ul>
+</li>
+</ul>
+<h3 id="stability-metrics">Stability metrics</h3>
+<ul>
+<li><strong>Fan-in:</strong>
+<ul>
+<li>incoming dependencies: the number of classes <strong>outside</strong> the component that depend on classes inside</li>
+<li><strong>Fan-out:</strong> outgoing: classes <strong>inside</strong> that depend on classes outside</li>
+<li><strong>I (Instability)</strong> = Fan-out / (Fan-in + Fan-out), in [0, 1]: <strong>I = 0 maximally stable, I = 1 maximally unstable</strong></li>
+<li>(Earlier publications called Fan-out and Fan-in <strong>Efferent and Afferent</strong> couplings, Ce and Ca: &quot;just hubris&quot;.)</li>
+</ul>
+</li>
+<li>Example (Figure 14.7): component <strong>Cc</strong> has three outside classes depending on it (Fan-in 3) and one outside class it depends on (Fan-out 1): <strong>I = 1/4</strong>. In C++ dependencies appear as <code>#include</code> (easiest with one class per source file)
+<ul>
+<li>in Java count <code>import</code> statements and qualified names.</li>
+</ul>
+</li>
+<li><strong>I = 1:</strong>
+<ul>
+<li>Fan-in 0 and Fan-out &gt; 0: <strong>irresponsible and dependent</strong>, as unstable as it gets: no reason not to change, plenty of reason to</li>
+<li><strong>I = 0:</strong> Fan-in &gt; 0 and Fan-out 0: <strong>responsible and independent</strong>, as stable as it gets.</li>
+</ul>
+</li>
+<li><strong>SDP:</strong> the I of a component should be <strong>larger than the I of the components it depends on</strong>; I metrics should <strong>decrease in the direction of dependency</strong>.</li>
+</ul>
+<h3 id="not-all-components-should-be-stable">Not all components should be stable</h3>
+<ul>
+<li>If everything were maximally stable the system would be <strong>unchangeable</strong>
+<ul>
+<li>Design so <strong>some are unstable and some stable</strong>: Figure 14.8, three components with the changeable ones <strong>on top</strong> depending on the stable one below</li>
+<li>Convention: <strong>any arrow pointing up violates SDP</strong> (and ADP).</li>
+</ul>
+</li>
+<li>Figure 14.9: <strong>Flexible</strong> (designed easy to change, so unstable) has had a dependency hung on it from <strong>Stable</strong> (I much smaller): a change to Flexible now forces dealing with Stable and all its dependents
+<ul>
+<li>Suppose a class <code>U</code> in Stable uses class <code>C</code> in Flexible (Figure 14.10)</li>
+<li>Fix with <strong>DIP</strong> (Figure 14.11): create an interface <code>US</code> in a new component <strong>UServer</strong> declaring what <code>U</code> needs</li>
+<li>make <code>C</code> implement it. Both components now depend on UServer, which is very stable (<strong>I = 0</strong>), while Flexible keeps its needed instability (<strong>I = 1</strong>)</li>
+<li>&quot;all the dependencies now flow in the direction of decreasing I&quot;.</li>
+</ul>
+</li>
+<li><strong>Abstract components:</strong>
+<ul>
+<li>a component with only an interface and no executable code looks strange but is a <strong>common and necessary tactic in statically typed languages</strong> like Java and C#: stable, so ideal targets for less stable components</li>
+<li>In dynamic languages (Ruby, Python) they do not exist, nor the dependencies targeting them: dependency structures are <strong>much simpler</strong> since inversion needs no declared or inherited interfaces.</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-3-the-stable-abstractions-principle">14.3 The Stable Abstractions Principle</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-14-stability-and-abstraction.svg" alt="Stability and abstraction" loading="lazy" /></p>
+<ul>
+<li><strong>&quot;A component should be as abstract as it is stable.&quot;</strong></li>
+<li><strong>Where does high-level policy go?</strong>
+<ul>
+<li>Some software should change rarely: <strong>high-level architecture and policy decisions</strong>. So it belongs in <strong>stable components (I = 0)</strong></li>
+<li>unstable components (I = 1) hold only volatile code. But policy in stable components is hard to change, making the architecture inflexible</li>
+<li>how can a maximally stable component withstand change? Via <strong>OCP</strong>: classes flexible enough to extend without modification: <strong>abstract classes</strong>.</li>
+</ul>
+</li>
+<li><strong>SAP</strong>
+<ul>
+<li>sets a relationship between stability and abstractness: a <strong>stable component should be abstract</strong> so stability does not prevent extension</li>
+<li>an <strong>unstable component should be concrete</strong> so its instability lets the concrete code change easily. A stable component should consist of <strong>interfaces and abstract classes</strong></li>
+<li>stable and extensible components are flexible and do not over-constrain the architecture.</li>
+</ul>
+</li>
+<li><strong>SDP + SAP = DIP for components:</strong>
+<ul>
+<li>SDP says dependencies run toward stability, SAP says stability implies abstraction, so dependencies run toward abstraction. DIP deals with <strong>classes</strong>, where there are &quot;no shades of gray&quot; (abstract or not)</li>
+<li>SDP and SAP deal with <strong>components</strong>, which can be <strong>partially abstract and partially stable</strong>.</li>
+</ul>
+</li>
+</ul>
+<h3 id="measuring-abstraction">Measuring abstraction</h3>
+<ul>
+<li><strong>A = Na / Nc</strong>,
+<ul>
+<li>where <strong>Nc</strong> is the number of classes in the component and <strong>Na</strong> the number of <strong>abstract classes and interfaces</strong></li>
+<li>A ranges from <strong>0</strong> (no abstract classes) to <strong>1</strong> (only abstract classes).</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-main-sequence">The Main Sequence</h3>
+<ul>
+<li>Plot <strong>A on the vertical axis and I on the horizontal</strong> (Figure 14.12)
+<ul>
+<li>The maximally stable and abstract components are at the <strong>upper left (0, 1)</strong>; maximally unstable and concrete ones at the <strong>lower right (1, 0)</strong></li>
+<li>Not every component sits at a corner: for example one abstract class often derives from another, so the derivative is abstract but <strong>has a dependency</strong>, lowering its stability</li>
+<li>So there is a <strong>locus</strong> of reasonable positions, found by identifying the <strong>zones of exclusion</strong> (Figure 14.13).</li>
+</ul>
+</li>
+<li><strong>Zone of Pain, near (0, 0):</strong>
+<ul>
+<li>highly stable and concrete: <strong>rigid</strong>: cannot be extended (not abstract) and is hard to change (stable)</li>
+<li>Example: a <strong>database schema</strong>, &quot;notoriously volatile, extremely concrete, and highly depended on&quot; (why the OO-to-database interface is so hard and schema updates painful)</li>
+<li>Also <strong>concrete utility libraries</strong> (I = 1 in a sense, but nonvolatile: <strong>String</strong> is concrete yet changing it would create chaos, so it is nonvolatile)</li>
+<li><strong>Nonvolatile components are harmless there</strong>; only <strong>volatile</strong> ones are painful, so volatility could be a third axis (Figure 14.13 shows the plane where volatility = 1).</li>
+</ul>
+</li>
+<li><strong>Zone of Uselessness, near (1, 1):</strong>
+<ul>
+<li>maximally abstract yet <strong>no dependents</strong>: useless</li>
+<li>&quot;detritus&quot;: leftover abstract classes <strong>nobody ever implemented</strong>. A component deep in this zone contains a significant fraction of them.</li>
+</ul>
+</li>
+<li><strong>The Main Sequence</strong>
+<ul>
+<li>is the line connecting <strong>(1, 0) and (0, 1)</strong>, maximally distant from both zones (Martin borrows the term from astronomy: &quot;arrogance&quot;)</li>
+<li>A component on it is neither too abstract for its stability nor too unstable for its abstractness: <strong>depended on to the extent that it is abstract and depends on others to the extent that it is concrete</strong></li>
+<li>The best positions are the <strong>endpoints</strong>; good architects put most components there, and the rest (neither perfectly abstract nor stable) do best on or near the Main Sequence.</li>
+</ul>
+</li>
+</ul>
+<h3 id="distance-from-the-main-sequence">Distance from the Main Sequence</h3>
+<ul>
+<li><strong>D = |A + I - 1|</strong>,
+<ul>
+<li>in [0, 1] (earlier called D′): <strong>0 means on the Main Sequence, 1 as far as possible.</strong> Compute D for each component and re-examine those not near zero</li>
+<li>You can also compute the <strong>mean and variance</strong> of D (a conforming design has both near zero) and use the variance for <strong>control limits</strong> to flag exceptional components.</li>
+</ul>
+</li>
+<li>Figure 14.14, a scatterplot: most components lie along the Main Sequence, some more than <strong>one standard deviation (Z = 1)</strong> from the mean: worth a look (very abstract with few dependents, or very concrete with many). Figure 14.15, a mock-up plotting <strong>D over time</strong> for a Payroll component: strange dependencies crept in over recent releases
+<ul>
+<li>with a control threshold at <strong>D = 0.1</strong>, the <strong>R2.1</strong> release exceeded it, so investigate.</li>
+</ul>
+</li>
+</ul>
+<h2 id="14-4-conclusion">14.4 Conclusion</h2>
+<ul>
+<li>The metrics measure how well a design conforms to a pattern of dependency and abstraction that Martin believes is &quot;good&quot;, reflecting experience that some dependencies are good and others bad
+<ul>
+<li>&quot;A metric is not a god; it is merely a measurement against an arbitrary standard</li>
+<li>These metrics are imperfect, at best&quot;, but he hopes they help.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>ADP: no cycles; break with DIP or a new component; structure evolves and is not designed top-down.</li>
+<li>SDP: depend toward stability (I decreases along dependencies); SAP: stable means abstract (A).</li>
+<li>Aim for the Main Sequence (D near 0) and avoid the Zones of Pain (volatile, concrete, stable) and Uselessness (abstract, unused).</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>ADP</strong>, <strong>DAG</strong>, <strong>morning after syndrome</strong>, <strong>weekly build</strong>.</li>
+<li><strong>SDP</strong>; <strong>Fan-in</strong>, <strong>Fan-out</strong>, <strong>I</strong>; <strong>SAP</strong>; <strong>A</strong>; <strong>Main Sequence</strong>; <strong>D</strong>.</li>
+<li><strong>Zone of Pain</strong>; <strong>Zone of Uselessness</strong>; <strong>abstract component</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 14: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch14.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch14.xhtml</a></li>
+<li>Figures 14.1 to 14.15 are summarised or redrawn
+<ul>
+<li>the cycle and fix diagrams show only the Entities, Authorizer and Interactors components</li>
+<li>the I/A chart is schematic. The formulas I, A and D are as printed in the chapter.</li>
+</ul>
+</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-13-component-cohesion/">Clean Architecture 13: Component Cohesion</a></li>
+<li><a href="/book-digest/clean-architecture/ca-15-what-is-architecture/">Clean Architecture 15: What Is Architecture?</a></li>
+<li><a href="/book-digest/clean-architecture/ca-11-dip-the-dependency-inversion-principle/">Clean Architecture 11: DIP, the Dependency Inversion Principle</a></li>
+<li><a href="/book-digest/clean-architecture/ca-08-ocp-the-open-closed-principle/">Clean Architecture 8: OCP, the Open-Closed Principle</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-13-component-cohesion/">&larr; Clean Architecture 13: Component Cohesion</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-15-what-is-architecture/">Clean Architecture 15: What Is Architecture? &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

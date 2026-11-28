@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 17: Boundaries, Drawing Lines</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-16-independence/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-18-boundary-anatomy/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-17-boundaries-drawing-lines">Clean Architecture 17: Boundaries, Drawing Lines</h1>
+<p>Source: Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 17. Own-words digest with short attributed quotes. Previous: <a href="/book-digest/clean-architecture/ca-16-independence/">Clean Architecture 16: Independence</a>. Next: <a href="/book-digest/clean-architecture/ca-18-boundary-anatomy/">Clean Architecture 18: Boundary Anatomy</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Software architecture is the art of drawing lines (boundaries)</strong> that separate software elements and restrict those on one side from knowing about those on the other. Early lines <strong>defer decisions</strong> and keep them from polluting the <strong>core business logic</strong>.</li>
+<li>The enemy is <strong>coupling to premature decisions</strong> (frameworks, databases, web servers, utility libraries, dependency injection): decisions unrelated to the <strong>use cases</strong>.</li>
+<li>Draw lines <strong>between things that matter and things that do not</strong>: business rules versus GUI and database. Dependency arrows point <strong>toward the business rules</strong>, so the <strong>UI and database are plugins</strong>.</li>
+<li>Boundaries sit on an <strong>axis of change</strong> (SRP again); the arrangement applies <strong>DIP and the Stable Abstractions Principle</strong>.</li>
+</ul>
+</div></div>
+<h2 id="17-1-why-draw-lines-coupling-to-premature-decisions">17.1 Why draw lines: coupling to premature decisions</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-17-boundaries-and-plugins.svg" alt="Boundaries and plugins" loading="lazy" /></p>
+<ul>
+<li>Boundaries separate software elements and <strong>restrict those on one side from knowing about those on the other</strong>
+<ul>
+<li>Some are drawn very early, even before any code; others much later</li>
+<li>Early ones are drawn to <strong>defer decisions for as long as possible</strong> and to keep them from <strong>polluting the core business logic</strong>.</li>
+</ul>
+</li>
+<li>The architect's goal is to minimise the human resources required to build and maintain the system
+<ul>
+<li>What saps that people-power? <strong>Coupling, and especially coupling to premature decisions.</strong></li>
+</ul>
+</li>
+<li><strong>Premature decisions</strong>
+<ul>
+<li>are those with nothing to do with the business requirements (the use cases): <strong>frameworks, databases, web servers, utility libraries, dependency injection</strong> and the like</li>
+<li>A good architecture renders these <strong>ancillary and deferrable</strong>, does not depend on them, and lets them be made &quot;at the latest possible moment, without significant impact&quot;.</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-2-a-couple-of-sad-stories">17.2 A couple of sad stories</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-17-stories-and-fitnesse.svg" alt="Sad stories and FitNesse" loading="lazy" /></p>
+<ul>
+<li><strong>Company P</strong>
+<ul>
+<li>(a warning about premature decisions)</li>
+<li>In the <strong>1980s</strong> its founders wrote a simple monolithic desktop application that grew through the 1990s into a popular <strong>desktop GUI</strong> product</li>
+<li>In the <strong>late 1990s</strong> the web emerged and customers demanded a web version; P hired &quot;a bunch of hotshot twenty-something Java programmers&quot; to webify it.</li>
+<li>They adopted a rich <strong>three-tiered &quot;architecture&quot;</strong> (footnote:
+<ul>
+<li>three-tier is &quot;not an architecture</li>
+<li>it's a topology&quot;, the kind of decision a good architecture defers) distributed over server farms: servers for the GUI, middleware and database. <strong>Every domain object had three instantiations</strong> (one per tier) and method invocations between tiers became <strong>serialised, marshalled objects</strong>.</li>
+</ul>
+</li>
+<li>A simple feature such as <strong>adding a field</strong> to a record meant changing the classes in all three tiers and several inter-tier messages: data travelled both ways, so <strong>four message protocols</strong> were needed, each with a sending and a receiving side: <strong>eight protocol handlers</strong>
+<ul>
+<li>In all: <strong>three executables, each with three updated business objects, four new messages and eight new handlers</strong>, plus all the instantiation, serialisation, marshalling, message building and parsing, socket communication, timeout managers and retry scenarios needed for the simplest feature.</li>
+</ul>
+</li>
+<li>During development there was <strong>no server farm</strong>:
+<ul>
+<li>they ran the three executables as three processes on <strong>one machine</strong> for years, yet kept all that machinery</li>
+<li>The irony: <strong>P never sold a system that required a server farm</strong>: every deployment was a <strong>single server</strong>, still running all of it &quot;in anticipation of a server farm that never existed&quot;</li>
+<li>The premature decision &quot;multiplied the development effort enormously&quot;</li>
+<li>The story, Martin says, is a superposition of many places.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Company W</strong> (a worse fate): a local business managing <strong>fleets of company cars</strong> hired an &quot;Architect&quot; who wanted a full-blown, enterprise-scale <strong>service-oriented &quot;ARCHITECTURE&quot;</strong>: a huge domain model of all the business's &quot;objects&quot; and a suite of services to manage them, &quot;putting all the developers on a path to Hell&quot;.
+<ul>
+<li>Example:
+<ul>
+<li>to add a contact person's name, address and phone number to a <strong>sales record</strong>, look up the <strong>ContactService</strong> ID in the <strong>ServiceRegistry</strong>, send it a <strong>CreateContact</strong> message with <strong>dozens of required fields</strong> the programmer did not have (so <strong>fake the data</strong>), then put the new contact's ID into the sales record and send <strong>UpdateContact</strong> to the <strong>SaleRecordService</strong></li>
+<li>Testing meant starting every needed service one by one, plus the <strong>message bus</strong> and a <strong>BPel server</strong>, with <strong>propagation delays</strong> as messages bounced through queues</li>
+<li>New features meant coupling across services, &quot;the sheer volume of WSDLs&quot; to change and the redeployments they forced: &quot;Hell starts to seem like a nice place by comparison.&quot;</li>
+</ul>
+</li>
+<li>&quot;There's nothing intrinsically wrong with a software system that is structured around services.&quot; The error was the <strong>premature adoption and enforcement of a suite of tools that promised SOA</strong>: a massive suite of domain object services
+<ul>
+<li>the cost: &quot;person-hours in droves flushed down the SoA vortex&quot;.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-3-fitnesse-an-architectural-success">17.3 FitNesse: an architectural success</h2>
+<ul>
+<li><strong>Micah and Robert Martin started FitNesse in 2001</strong>:
+<ul>
+<li>a simple <strong>wiki</strong> wrapping <strong>Ward Cunningham's FIT</strong> tool for writing acceptance tests. This was before Maven &quot;solved&quot; the jar file problem</li>
+<li>Martin insisted users download <strong>only one jar</strong> (rule: <strong>&quot;Download and Go&quot;</strong>), which drove many decisions.</li>
+</ul>
+</li>
+<li><strong>Own web server:</strong>
+<ul>
+<li>one of the first decisions was to <strong>write their own web server</strong> for FitNesse's needs</li>
+<li>It sounds absurd (plenty of open source servers existed in 2001) but a bare-bones server is simple and it let them <strong>postpone any web framework decision</strong> (footnote: years later they slipped the <strong>Velocity</strong> framework in).</li>
+</ul>
+</li>
+<li><strong>Avoiding the database:</strong> they had <strong>MySQL</strong> in mind but purposely delayed it with a design making the decision irrelevant: an <strong>interface between all data accesses and the repository</strong>, an interface named <strong><code>WikiPage</code></strong> with methods to <strong>find, fetch and save</strong> pages.
+<ul>
+<li>At first the methods were stubbed in <strong><code>MockWikiPage</code></strong>; for <strong>three months</strong> they worked only on translating wiki text to HTML, which needed no storage.</li>
+<li>When stubs were insufficient they made <strong><code>InMemoryPage</code></strong>, managing a <strong>hash table of pages in RAM</strong>, which let them write feature after feature for <strong>a full year</strong>: the whole first version worked (create pages, links, wiki formatting, running tests with FIT) but <strong>could not save any work</strong>.</li>
+<li>For persistence they thought again of MySQL but saw it would be easy to write the hash tables to <strong>flat files</strong>: <strong><code>FileSystemWikiPage</code></strong>
+<ul>
+<li><strong>Three months later</strong> the flat files were judged good enough and they <strong>abandoned MySQL</strong>: &quot;We deferred that decision into nonexistence and never looked back.&quot;</li>
+</ul>
+</li>
+<li>A customer later wanted the wiki in MySQL
+<ul>
+<li>shown the <code>WikiPage</code> architecture, he came back <strong>a day later</strong> with the whole system working in MySQL by writing a <strong><code>MySqlWikiPage</code></strong> derivative. They bundled it for a while</li>
+<li>nobody else used it, so they dropped it, as did the customer.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Lesson:</strong>
+<ul>
+<li>an early line between <strong>business rules and databases</strong> meant the business rules knew only simple data access methods</li>
+<li>It allowed deferring the database for <strong>well over a year</strong>, trying the file system, changing direction for a better solution, <strong>and</strong> still moving in the original MySQL direction when someone wanted it</li>
+<li>For <strong>18 months</strong> there was no database, so no schema, query, server, password or connection-time issues, and <strong>all tests ran fast</strong></li>
+<li>&quot;Drawing the boundary lines helped us delay and defer decisions, and it ultimately saved us an enormous amount of time and headaches</li>
+<li>And that's what a good architecture should do.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-4-which-lines-and-when">17.4 Which lines, and when?</h2>
+<ul>
+<li><strong>Draw lines between things that matter and things that don't.</strong>
+<ul>
+<li>The GUI does not matter to the business rules, so a line</li>
+<li>the database does not matter to the GUI, so a line</li>
+<li>the database does not matter to the business rules, so a line.</li>
+</ul>
+</li>
+<li>Many reject that last statement, taught that the <strong>database is inextricably connected to the business rules</strong> or even <strong>embodies them</strong>
+<ul>
+<li>Martin: misguided (a later chapter shows why): <strong>the database is a tool the business rules use indirectly</strong></li>
+<li>They need not know the <strong>schema, the query language</strong> or other details; they only need a <strong>set of functions to fetch or save data</strong>, so the database goes <strong>behind an interface</strong>.</li>
+</ul>
+</li>
+<li><strong>Figure 17.1:</strong>
+<ul>
+<li><code>BusinessRules</code> use <code>DatabaseInterface</code> to load and save data</li>
+<li><code>DatabaseAccess</code> implements the interface and directs the actual <code>Database</code>. (Classes are symbolic: a real system has many of each following the same pattern.)</li>
+</ul>
+</li>
+<li><strong>Figure 17.2:</strong>
+<ul>
+<li>the boundary is drawn <strong>across the inheritance relationship, just below <code>DatabaseInterface</code></strong></li>
+<li>The two arrows leaving <code>DatabaseAccess</code> point <strong>away</strong> from it: none of the other classes knows it exists.</li>
+</ul>
+</li>
+<li><strong>Figure 17.3</strong>,
+<ul>
+<li>at component level: the <strong>Database component knows about BusinessRules; BusinessRules do not know about the Database</strong></li>
+<li>So the <strong><code>DatabaseInterface</code> classes live in the BusinessRules component</strong>, and the <code>DatabaseAccess</code> classes in the <strong>Database component</strong></li>
+<li>The direction matters: the Database does not matter to the BusinessRules, <strong>but the Database cannot exist without them</strong></li>
+<li>Why? The Database component holds the code that <strong>translates the BusinessRules' calls into the database's query language</strong>, and that translation code knows about the BusinessRules.</li>
+</ul>
+</li>
+<li>So the BusinessRules could use <strong>any kind of database</strong>: Oracle, MySQL, Couch, Datomic or flat files; the decision can be deferred while you write and test business rules.</li>
+</ul>
+<h2 id="17-5-what-about-input-and-output">17.5 What about input and output?</h2>
+<ul>
+<li>Developers and customers confuse <strong>the GUI with the system</strong>, defining it in terms of the GUI and expecting to see it work immediately
+<ul>
+<li>They miss a critical principle: <strong>&quot;The IO is irrelevant.&quot;</strong> Example: a <strong>video game</strong> feels dominated by screen, mouse, buttons and sounds, but behind it is a <strong>model</strong> (data structures and functions) that does not need the interface and would model all the game's events without ever displaying anything</li>
+<li><strong>The interface does not matter to the model, the business rules.</strong></li>
+</ul>
+</li>
+<li>So again a boundary between <strong>GUI and BusinessRules</strong> (Figure 17.4), and the <strong>less relevant component depends on the more relevant one</strong>: the arrows show which component knows about, and therefore <strong>cares about</strong>, the other: the GUI cares about the BusinessRules
+<ul>
+<li>The GUI could be replaced by any other interface and the rules would not care.</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-6-plugin-architecture">17.6 Plugin architecture</h2>
+<ul>
+<li>These two decisions form a <strong>pattern for adding other components</strong>: the same pattern as systems accepting <strong>third-party plugins</strong>
+<ul>
+<li>&quot;The history of software development technology is the story of how to conveniently create plugins to establish a scalable and maintainable system architecture.&quot; The <strong>core business rules</strong> are kept separate from, and independent of, the components that are <strong>optional or can take many forms</strong> (Figure 17.5).</li>
+</ul>
+</li>
+<li>Because the <strong>UI is a plugin</strong>, many kinds can plug in:
+<ul>
+<li>web, client/server, SOA, console or any other</li>
+<li>The <strong>database as plugin</strong> can be replaced by any SQL, NoSQL or file system database</li>
+<li>Replacements may not be trivial (a client-server UI after a web one may need the communications reworked), but starting from a plugin structure at least makes the change <strong>practical</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-7-the-plugin-argument">17.7 The plugin argument</h2>
+<ul>
+<li><strong>ReSharper and Visual Studio</strong>
+<ul>
+<li>are made by completely different teams in different companies: <strong>JetBrains</strong> (Russia) and <strong>Microsoft</strong> (Redmond)</li>
+<li>Which can damage the other? The dependency structure answers (Figure 17.6): <strong>ReSharper's source depends on Visual Studio's</strong>, so the ReSharper team <strong>cannot disturb</strong> the Visual Studio team, but the Visual Studio team <strong>could completely disable</strong> ReSharper.</li>
+</ul>
+</li>
+<li>That <strong>deeply asymmetric relationship</strong> is what we want in our own systems: certain modules <strong>immune</strong> to others (business rules should not break when a web page format or database schema changes)
+<ul>
+<li>A plugin architecture creates <strong>firewalls across which changes cannot propagate</strong>: if the GUI plugs in to the business rules, GUI changes cannot affect them.</li>
+</ul>
+</li>
+<li><strong>Boundaries are drawn where there is an axis of change</strong>:
+<ul>
+<li>components on one side change at <strong>different rates and for different reasons</strong> than those on the other</li>
+<li>GUIs change at different times and rates than business rules
+<ul>
+<li>business rules change at different times and for different reasons than <strong>dependency injection frameworks</strong>: so boundaries between them</li>
+</ul>
+</li>
+<li>&quot;This is simply the <strong>Single Responsibility Principle</strong> again</li>
+<li>The SRP tells us where to draw our boundaries.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="17-8-conclusion">17.8 Conclusion</h2>
+<ul>
+<li>To draw boundaries, first <strong>partition the system into components</strong>: some are <strong>core business rules</strong>, others are <strong>plugins</strong> with necessary functions not directly related to the core
+<ul>
+<li>Then arrange the code so the arrows between components <strong>point in one direction, toward the core business</strong>: an application of the <strong>Dependency Inversion Principle</strong> and the <strong>Stable Abstractions Principle</strong>: dependency arrows point <strong>from lower-level details to higher-level abstractions</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Coupling to premature decisions is what drains effort; boundaries defer those decisions.</li>
+<li>Business rules depend on nothing; the database, GUI and frameworks are plugins that depend on them.</li>
+<li>Draw lines on axes of change (SRP); P and W show the cost of premature architecture, FitNesse the payoff of deferral.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Boundary</strong>; <strong>premature decision</strong>; <strong>plugin architecture</strong>.</li>
+<li><strong>Axis of change</strong>; <strong>asymmetric dependency</strong> (ReSharper and Visual Studio).</li>
+<li><strong>Defer decisions</strong> (FitNesse <code>WikiPage</code>).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 17: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch17.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch17.xhtml</a></li>
+<li>Company P and W are anonymised as in the book; the FitNesse history is Martin's account. Figures 17.1 to 17.6 are redrawn with arrows.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-16-independence/">Clean Architecture 16: Independence</a></li>
+<li><a href="/book-digest/clean-architecture/ca-18-boundary-anatomy/">Clean Architecture 18: Boundary Anatomy</a></li>
+<li><a href="/book-digest/clean-architecture/ca-15-what-is-architecture/">Clean Architecture 15: What Is Architecture?</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-17-integrating-event-driven-and-request-response-microservices/">Building Event-Driven Microservices 17: Integrating Event-Driven and Request-Response Microservices</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-16-independence/">&larr; Clean Architecture 16: Independence</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-18-boundary-anatomy/">Clean Architecture 18: Boundary Anatomy &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

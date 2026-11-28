@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 18: Boundary Anatomy</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-17-boundaries-drawing-lines/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-19-policy-and-level/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-18-boundary-anatomy">Clean Architecture 18: Boundary Anatomy</h1>
+<p>Source: Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 18. Own-words digest. Previous: <a href="/book-digest/clean-architecture/ca-17-boundaries-drawing-lines/">Clean Architecture 17: Boundaries, Drawing Lines</a>. Next: <a href="/book-digest/clean-architecture/ca-19-policy-and-level/">Clean Architecture 19: Policy and Level</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>A system's architecture is its <strong>components and the boundaries between them</strong>. At runtime a <strong>boundary crossing is a function on one side calling a function on the other</strong>, passing data; the trick is managing <strong>source code dependencies</strong>.</li>
+<li>Boundaries come in increasing strength: <strong>monolith (source level)</strong>, <strong>deployment components</strong>, <strong>local processes</strong>, <strong>services</strong>; <strong>threads</strong> are not boundaries.</li>
+<li>Stronger boundaries are <strong>costlier to cross</strong>: function calls are cheap and chatty; OS-level crossings are moderately expensive; network services are slow (tens of milliseconds to seconds).</li>
+<li>Whatever the form, the <strong>dependency rule</strong> is the same: source dependencies point <strong>toward the higher-level component</strong>; lower-level components plug in.</li>
+</ul>
+</div></div>
+<h2 id="18-1-boundary-crossing">18.1 Boundary crossing</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-18-crossings.svg" alt="Boundary crossings" loading="lazy" /></p>
+<ul>
+<li>&quot;The architecture of a system is defined by a set of software components and the boundaries that separate them.&quot; At runtime a <strong>boundary crossing is nothing more than a function on one side of the boundary calling a function on the other side and passing along some data.</strong> The trick is <strong>managing the source code dependencies</strong>: when one source module changes, others may have to change or be recompiled and redeployed, and boundaries are <strong>firewalls against that change</strong>.</li>
+</ul>
+<h2 id="18-2-the-dreaded-monolith">18.2 The dreaded monolith</h2>
+<ul>
+<li>The simplest and most common boundary has <strong>no strict physical representation</strong>: a <strong>disciplined segregation of functions and data within a single processor and a single address space</strong>, the <strong>source-level decoupling mode</strong>
+<ul>
+<li>Deployed, it is a <strong>single executable file</strong> (a statically linked C or C++ project, a set of Java class files in an executable jar, .NET binaries in one <code>.EXE</code>): the &quot;so-called monolith&quot;.</li>
+</ul>
+</li>
+<li>That the boundaries are invisible at deployment does not mean they are not present and meaningful: independently developing and marshalling the components for final assembly is &quot;immensely valuable&quot;.</li>
+<li>Such architectures almost always depend on <strong>dynamic polymorphism</strong> to manage internal dependencies (footnote: <strong>static polymorphism</strong>, generics or templates, can sometimes work in monoliths, especially in C++, but it cannot protect from recompilation and redeployment the way dynamic polymorphism can)
+<ul>
+<li>That is one reason <strong>OO</strong> became so important: without it architects must fall back on the <strong>dangerous practice of function pointers</strong>, which most find too risky, so they <strong>abandon component partitioning</strong>.</li>
+</ul>
+</li>
+<li><strong>Figure 18.1:</strong>
+<ul>
+<li>the simplest boundary crossing is a <strong>function call from a lower-level client to a higher-level service</strong>: runtime and compile-time dependencies <strong>point the same way</strong>, toward the higher-level component. The <code>Client</code> calls <code>f()</code> on the <code>Service</code> passing an instance of <code>Data</code> (<code>&lt;DS&gt;</code> = data structure)</li>
+<li>the <code>Data</code> definition is on the <strong>called</strong> side.</li>
+</ul>
+</li>
+<li><strong>Figure 18.2:</strong>
+<ul>
+<li>when a <strong>high-level client must invoke a lower-level service</strong>, dynamic polymorphism <strong>inverts the dependency against the flow of control</strong>: control still crosses left to right, with the high-level <code>Client</code> calling <code>f()</code> on the lower-level <code>ServiceImpl</code> through the <code>Service</code> interface</li>
+<li>but <strong>all dependencies cross right to left toward the higher-level component</strong>, and the <code>Data</code> definition is on the <strong>calling</strong> side.</li>
+</ul>
+</li>
+<li>Even in a statically linked monolith this disciplined partitioning greatly helps development, testing and deployment: teams work independently on their components without treading on each other, and high-level components stay independent of lower-level details.</li>
+<li>Communication inside a monolith is just <strong>function calls</strong>, very fast and inexpensive, so crossings can be <strong>very chatty</strong>
+<ul>
+<li>Because deployment needs compilation and static linking, components are typically <strong>delivered as source code</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="18-3-deployment-components">18.3 Deployment components</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-18-boundary-strengths.svg" alt="Boundary strengths" loading="lazy" /></p>
+<ul>
+<li>The simplest <strong>physical</strong> representation of a boundary is a <strong>dynamically linked library</strong>: a .NET <strong>DLL</strong>, Java <strong>jar</strong>, Ruby <strong>Gem</strong> or UNIX <strong>shared library</strong>: the <strong>deployment-level decoupling mode</strong>
+<ul>
+<li>Deployment involves <strong>no compilation</strong>: components arrive in <strong>binary or equivalent deployable form</strong>, and deployment is just gathering the units, for example into a <strong>WAR file</strong> or even a directory.</li>
+</ul>
+</li>
+<li>Otherwise they are the same as monoliths:
+<ul>
+<li>functions generally live in the <strong>same processor and address space</strong>, and the strategies for segregating components and managing dependencies are the same (footnote: though static polymorphism is not an option)</li>
+<li>Crossings are <strong>function calls</strong>, so very inexpensive: maybe a <strong>one-time hit for dynamic linking or runtime loading</strong>, but still chatty.</li>
+</ul>
+</li>
+</ul>
+<h2 id="18-4-threads">18.4 Threads</h2>
+<ul>
+<li>Both monoliths and deployment components can use threads, but <strong>threads are not architectural boundaries or units of deployment</strong>: they are a way to organise the <strong>schedule and order of execution</strong>, wholly inside one component or spread across many.</li>
+</ul>
+<h2 id="18-5-local-processes">18.5 Local processes</h2>
+<ul>
+<li>A <strong>much stronger</strong> physical boundary:
+<ul>
+<li>created typically from the command line or an equivalent system call, a local process runs on the same processor (or set of cores) but in a <strong>separate address space</strong></li>
+<li>memory protection generally prevents shared memory (shared partitions are often used). They usually communicate through <strong>sockets</strong> or other OS facilities such as <strong>mailboxes or message queues</strong>.</li>
+</ul>
+</li>
+<li>Each local process may be a statically linked monolith or composed of dynamically linked deployment components (several monolithic processes may compile in the same components, or share deployment components)
+<ul>
+<li>&quot;Think of a local process as a kind of <strong>uber-component</strong>&quot;: it consists of lower-level components managing their dependencies by dynamic polymorphism.</li>
+</ul>
+</li>
+<li>The segregation strategy is the same:
+<ul>
+<li><strong>source dependencies point the same way across the boundary, always toward the higher-level component</strong></li>
+<li>So the source of <strong>higher-level processes must not contain the names, physical addresses or registry lookup keys of lower-level processes</strong>: lower-level processes should be <strong>plugins</strong> to higher-level ones.</li>
+</ul>
+</li>
+<li>Crossing involves <strong>OS calls, data marshalling and decoding, and interprocess context switches</strong>: moderately expensive, so <strong>limit chattiness carefully</strong>.</li>
+</ul>
+<h2 id="18-6-services">18.6 Services</h2>
+<ul>
+<li><strong>The strongest boundary.</strong>
+<ul>
+<li>A service is a process generally started from the command line or an equivalent system call</li>
+<li>Services <strong>do not depend on their physical location</strong>: two communicating services may or may not run on the same processor or multicore, and they assume all communication is over the <strong>network</strong>.</li>
+</ul>
+</li>
+<li>Crossings are <strong>very slow</strong> compared to function calls: turnaround from <strong>tens of milliseconds to seconds</strong>. Avoid chatting where possible and <strong>deal with high latency</strong>.</li>
+<li>Otherwise the same rules apply as for local processes: lower-level services <strong>plug in</strong> to higher-level ones, and the source of higher-level services must <strong>not hold specific physical knowledge (such as a URI)</strong> of any lower-level service.</li>
+</ul>
+<h2 id="18-7-conclusion">18.7 Conclusion</h2>
+<ul>
+<li>Most systems other than monoliths use <strong>more than one</strong> boundary strategy: a system with service boundaries may also have local process boundaries
+<ul>
+<li>indeed &quot;a service is often just a <strong>facade</strong> for a set of interacting local processes&quot;</li>
+<li>A service or local process is almost certainly either a <strong>monolith of source components</strong> or a <strong>set of dynamically linked deployment components</strong></li>
+<li>So a system's boundaries are often a <strong>mixture of local chatty boundaries and boundaries more concerned with latency</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>A crossing is a function call; control the source dependency direction (toward higher level), inverting with polymorphism when needed.</li>
+<li>Strength ladder: monolith, deployment components, local process, service; threads are not boundaries.</li>
+<li>Cost rises with strength: chatty and cheap inside a process, latency-conscious across a network.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Boundary crossing</strong>; <strong>monolith</strong>; <strong>deployment component</strong>; <strong>local process</strong>; <strong>service</strong>.</li>
+<li><strong>Dynamic versus static polymorphism</strong>; <strong>chattiness and latency</strong>.</li>
+<li>Higher-level source must not name lower-level processes or URIs.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 18: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch18.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch18.xhtml</a></li>
+<li>Figures 18.1 and 18.2 are redrawn with arrows; the footnotes on static polymorphism are folded in.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-17-boundaries-drawing-lines/">Clean Architecture 17: Boundaries, Drawing Lines</a></li>
+<li><a href="/book-digest/clean-architecture/ca-19-policy-and-level/">Clean Architecture 19: Policy and Level</a></li>
+<li><a href="/book-digest/clean-architecture/ca-16-independence/">Clean Architecture 16: Independence</a></li>
+<li><a href="/book-digest/clean-architecture/ca-05-object-oriented-programming/">Clean Architecture 5: Object-Oriented Programming</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-17-boundaries-drawing-lines/">&larr; Clean Architecture 17: Boundaries, Drawing Lines</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-19-policy-and-level/">Clean Architecture 19: Policy and Level &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 6: Functional Programming</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-05-object-oriented-programming/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-07-srp-the-single-responsibility-principle/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-6-functional-programming">Clean Architecture 6: Functional Programming</h1>
+<p>Source: Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 6. Own-words digest with short attributed quotes. Previous: <a href="/book-digest/clean-architecture/ca-05-object-oriented-programming/">Clean Architecture 5: Object-Oriented Programming</a>. Next: <a href="/book-digest/clean-architecture/ca-07-srp-the-single-responsibility-principle/">Clean Architecture 7: SRP, the Single Responsibility Principle</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li><strong>Functional programming</strong> rests on Alonzo Church's lambda calculus (1930s); its key property is that <strong>variables do not vary</strong> (immutability).</li>
+<li><strong>All race conditions, deadlocks and concurrent update problems are due to mutable variables.</strong> Immutability removes them, but is practical only with compromises.</li>
+<li>Compromises: <strong>segregate mutability</strong> (immutable components plus protected mutable ones, using <strong>transactional memory</strong>) and <strong>event sourcing</strong> (store transactions, not state).</li>
+<li>The three paradigms are disciplines on <strong>direct control transfer</strong>, <strong>indirect control transfer</strong> and <strong>assignment</strong>; none added power. Software is still sequence, selection, iteration and indirection.</li>
+</ul>
+</div></div>
+<h2 id="6-1-squares-of-integers">6.1 Squares of integers</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-06-functional.svg" alt="Functional programming" loading="lazy" /></p>
+<ul>
+<li>The concepts predate programming itself, strongly based on <strong>Alonzo Church's lambda calculus (1930s)</strong>. To explain it, take a problem: print the squares of the first 25 integers. In Java:</li>
+</ul>
+<pre class="hl"><code><span class="kd">public</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Squint</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="n">String</span><span class="w"> </span><span class="n">args</span><span class="o">[]</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">25</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="w">            </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">i</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre>
+<ul>
+<li>In <strong>Clojure</strong> (a Lisp derivative and functional):</li>
+</ul>
+<pre class="hl"><code><span class="p">(</span><span class="nb">println </span><span class="p">(</span><span class="nb">take </span><span class="mi">25</span><span class="w"> </span><span class="p">(</span><span class="nb">map </span><span class="p">(</span><span class="k">fn </span><span class="p">[</span><span class="nv">x</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="nb">* </span><span class="nv">x</span><span class="w"> </span><span class="nv">x</span><span class="p">))</span><span class="w"> </span><span class="p">(</span><span class="nf">range</span><span class="p">))))</span>
+</code></pre>
+<ul>
+<li>Annotated:
+<ul>
+<li><code>println</code> prints</li>
+<li><code>take 25</code> takes the first 25</li>
+<li><code>map (fn [x] (* x x))</code> squares</li>
+<li><code>(range)</code> is the integers. In Lisp you call a function by putting it in parentheses</li>
+<li><code>(fn [x] (* x x))</code> is an <strong>anonymous function</strong> computing a square. Read from the innermost call: <code>range</code> returns a <strong>never-ending list</strong> of integers from 0</li>
+<li><code>map</code> calls the squaring function on each, producing a never-ending list of squares</li>
+<li><code>take</code> returns a list of only the first 25</li>
+<li><code>println</code> prints it. Only 25 elements are created because <strong>no element of a never-ending list is evaluated until accessed</strong>. Martin does not aim to teach Clojure here.</li>
+</ul>
+</li>
+<li>The point:
+<ul>
+<li>the Java program uses a <strong>mutable variable</strong> (the loop variable <code>i</code>, which changes state during execution)</li>
+<li>the Clojure program has none: variables like <code>x</code> are initialised but never modified. Hence: <strong>&quot;Variables in functional languages do not vary.&quot;</strong></li>
+</ul>
+</li>
+</ul>
+<h2 id="6-2-immutability-and-architecture">6.2 Immutability and architecture</h2>
+<ul>
+<li>Why should an architect care? The answer is &quot;absurdly simple&quot;:
+<ul>
+<li><strong>all race conditions, deadlock conditions and concurrent update problems are due to mutable variables.</strong> You cannot have a race condition or concurrent update problem if no variable is ever updated, and you cannot have deadlocks without mutable locks</li>
+<li>Every problem in applications with <strong>multiple threads and processors</strong> cannot happen without mutable variables.</li>
+</ul>
+</li>
+<li>Architects care about concurrency (systems must be robust across threads and processors), so the question is whether <strong>immutability is practicable</strong>. With <strong>infinite storage and infinite processor speed</strong>, yes
+<ul>
+<li>without, &quot;a bit more nuanced&quot;: yes, <strong>if certain compromises are made</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-3-segregation-of-mutability">6.3 Segregation of mutability</h2>
+<ul>
+<li>A common compromise:
+<ul>
+<li><strong>segregate the application, or the services within it, into mutable and immutable components</strong></li>
+<li>Immutable components work in a purely functional way with no mutable variables and communicate with one or more components that are not purely functional and allow variable state to change (Figure 6.1).</li>
+</ul>
+</li>
+<li>Mutating state exposes those components to all concurrency problems, so it is common to protect the mutable variables with <strong>transactional memory</strong>: it treats variables in memory like a database treats records on disk, protecting them with a <strong>transaction- or retry-based scheme</strong> (footnote: &quot;I know... What's a disk?&quot;).</li>
+<li>A simple example is Clojure's <strong>atom</strong>:</li>
+</ul>
+<pre class="hl"><code><span class="p">(</span><span class="k">def </span><span class="nv">counter</span><span class="w"> </span><span class="p">(</span><span class="nf">atom</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span><span class="w">  </span><span class="c1">; initialize counter to 0</span>
+<span class="p">(</span><span class="nf">swap!</span><span class="w"> </span><span class="nv">counter</span><span class="w"> </span><span class="nv">inc</span><span class="p">)</span><span class="w">     </span><span class="c1">; safely increment counter</span>
+</code></pre>
+<ul>
+<li><code>counter</code> is an <strong>atom</strong>: a special variable whose value may mutate only under disciplined conditions enforced by <strong><code>swap!</code></strong>, which takes the atom and a function computing the new value (here <code>inc</code>)
+<ul>
+<li><code>swap!</code> uses <strong>compare and swap</strong>: read <code>counter</code> and pass it to <code>inc</code></li>
+<li>when <code>inc</code> returns, <strong>lock</strong> <code>counter</code> and compare it to the value passed in</li>
+<li>if equal, store the result and release the lock</li>
+<li>otherwise release the lock and <strong>retry from the beginning</strong>.</li>
+</ul>
+</li>
+<li>Atoms suit simple applications but <strong>cannot completely safeguard against concurrent updates and deadlocks when multiple dependent variables</strong> are involved
+<ul>
+<li>more elaborate facilities exist then.</li>
+</ul>
+</li>
+<li>Well-structured applications are segregated into components that do not mutate variables and those that do, with the mutated variables protected by suitable disciplines
+<ul>
+<li><strong>Architects would be wise to push as much processing as possible into the immutable components and drive as much code as possible out of those that must allow mutation.</strong></li>
+</ul>
+</li>
+</ul>
+<h2 id="6-4-event-sourcing">6.4 Event sourcing</h2>
+<ul>
+<li>Limits of storage and processing power &quot;have been rapidly receding&quot;: billions of instructions a second and billions of bytes of RAM
+<ul>
+<li><strong>The more memory and speed, the less we need mutable state.</strong></li>
+</ul>
+</li>
+<li>Example:
+<ul>
+<li>a bank maintaining account balances mutates them on each deposit or withdrawal</li>
+<li>Instead <strong>store only the transactions</strong>, and compute a balance by adding all transactions for the account from the beginning of time: <strong>no mutable variables</strong></li>
+<li>It sounds absurd (transactions grow without bound; infinite resources would be needed to run forever), but perhaps we need it to work only for the application's <strong>reasonable lifetime</strong>.</li>
+</ul>
+</li>
+<li>That is <strong>event sourcing</strong> (credit:
+<ul>
+<li>Greg Young): <strong>store the transactions, not the state</strong></li>
+<li>when state is needed apply all transactions from the beginning of time. <strong>Shortcuts:</strong> compute and save the state every midnight and apply only the transactions since.</li>
+</ul>
+</li>
+<li>Storage:
+<ul>
+<li>a lot is needed, but offline storage grows so fast that &quot;trillions of bytes&quot; are small</li>
+<li>More importantly <strong>nothing is ever deleted or updated</strong>, so applications are <strong>not CRUD but CR</strong>, and with no updates or deletions there can be <strong>no concurrent update issues</strong></li>
+<li>With enough storage and processing power applications can be <strong>entirely immutable and therefore entirely functional</strong></li>
+<li>This is exactly how your <strong>source code control system</strong> works.</li>
+</ul>
+</li>
+</ul>
+<h2 id="6-5-conclusion">6.5 Conclusion</h2>
+<ul>
+<li>Structured programming is <strong>discipline imposed upon direct transfer of control</strong>
+<ul>
+<li>object-oriented programming is <strong>discipline upon indirect transfer of control</strong></li>
+<li>functional programming is <strong>discipline upon variable assignment</strong>
+<ul>
+<li>Each <strong>took something away</strong> and none added power: &quot;What we have learned over the last half-century is what not to do.&quot;</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>The unwelcome fact:
+<ul>
+<li><strong>software is not a rapidly advancing technology</strong></li>
+<li>The rules are the same as in <strong>1946, when Alan Turing wrote the very first code</strong> to execute in an electronic computer; tools and hardware changed but the essence did not</li>
+<li>Software is composed of <strong>sequence, selection, iteration and indirection</strong>: &quot;Nothing more</li>
+<li>Nothing less.&quot;</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>Immutability removes the entire class of concurrency bugs; it is feasible with segregated mutability and, where affordable, event sourcing.</li>
+<li>Architects should maximise immutable components and protect the rest (transactional memory).</li>
+<li>The paradigms restrict; they do not add; software's essence is unchanged.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>Immutability</strong>; <strong>race condition</strong>, <strong>deadlock</strong>, <strong>concurrent update</strong>.</li>
+<li><strong>Segregation of mutability</strong>; <strong>transactional memory</strong> (Clojure <strong>atom</strong>, <code>swap!</code>).</li>
+<li><strong>Event sourcing</strong> (CR, not CRUD).</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 6: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch6.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch6.xhtml</a></li>
+<li>Code listings are as printed with indentation restored; Figure 6.1 is summarised. The Greg Young credit and the 1946 Turing statement are as given in the book.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-05-object-oriented-programming/">Clean Architecture 5: Object-Oriented Programming</a></li>
+<li><a href="/book-digest/clean-architecture/ca-07-srp-the-single-responsibility-principle/">Clean Architecture 7: SRP, the Single Responsibility Principle</a></li>
+<li><a href="/book-digest/building-event-driven-microservices/bem-05-designing-events/">Building Event-Driven Microservices 5: Designing Events</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-05-object-oriented-programming/">&larr; Clean Architecture 5: Object-Oriented Programming</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-07-srp-the-single-responsibility-principle/">Clean Architecture 7: SRP, the Single Responsibility Principle &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>

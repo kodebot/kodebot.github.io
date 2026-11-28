@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Clean Architecture 7: SRP, the Single Responsibility Principle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/book-digest/style.css">
+</head><body>
+<div class="top"><a class="btn" href="/book-digest/">&#9776; Index</a><a class="btn" href="/book-digest/clean-architecture/">Contents</a><span class="ttl">Clean Architecture</span><span class="sp"></span><a class="btn" href="/book-digest/clean-architecture/ca-06-functional-programming/" aria-label="Previous">&lsaquo; Prev</a><a class="btn" href="/book-digest/clean-architecture/ca-08-ocp-the-open-closed-principle/" aria-label="Next">Next &rsaquo;</a></div>
+<main>
+<h1 id="clean-architecture-7-srp-the-single-responsibility-principle">Clean Architecture 7: SRP, the Single Responsibility Principle</h1>
+<p>Source: Robert C. Martin, <em>Clean Architecture: A Craftsman's Guide to Software Structure and Design</em> (Pearson, 2017), chapter 7. Own-words digest with short attributed quotes. Previous: <a href="/book-digest/clean-architecture/ca-06-functional-programming/">Clean Architecture 6: Functional Programming</a>. Next: <a href="/book-digest/clean-architecture/ca-08-ocp-the-open-closed-principle/">Clean Architecture 8: OCP, the Open-Closed Principle</a>.</p>
+<div class="callout c-abstract"><div class="callout-title">Takeaways</div><div class="callout-body">
+<ul>
+<li>SRP is <strong>not</strong> &quot;every module does one thing&quot; (that rule, &quot;a function should do one, and only one, thing&quot;, is a different, low-level rule). The principle is: <strong>a module should be responsible to one, and only one, actor.</strong></li>
+<li>An <strong>actor</strong> is a group of people (users or stakeholders) who require the same change; a <strong>module</strong> is a source file or a cohesive set of functions and data structures.</li>
+<li>Symptoms of violation: <strong>accidental duplication</strong> and <strong>merges</strong>. Solution: <strong>separate code that different actors depend on</strong> (data structure plus separate classes, optionally a <strong>Facade</strong>).</li>
+<li>SRP reappears at larger scales as the <strong>Common Closure Principle</strong> (components) and the <strong>Axis of Change</strong> that drives <strong>architectural boundaries</strong>.</li>
+</ul>
+</div></div>
+<h2 id="7-1-what-srp-means">7.1 What SRP means</h2>
+<ul>
+<li>Of the SOLID principles SRP may be the <strong>least well understood</strong>, probably because its name is inappropriate: programmers hear it and assume every module should do just one thing
+<ul>
+<li>There <em>is</em> such a principle (a function should do one thing; used when refactoring large functions into smaller ones, at the lowest levels) but it is <strong>not SRP</strong>.</li>
+</ul>
+</li>
+<li><strong>Historical wording:</strong>
+<ul>
+<li>&quot;A module should have one, and only one, reason to change.&quot; Software changes to satisfy users and stakeholders: those are the &quot;reason to change&quot;</li>
+<li>Rephrased: &quot;A module should be responsible to one, and only one, user or stakeholder.&quot; But &quot;user&quot; and &quot;stakeholder&quot; are not quite right: several people may want the same change, so Martin refers to the group as an <strong>actor</strong></li>
+<li>Final form: <strong>&quot;A module should be responsible to one, and only one, actor.&quot;</strong></li>
+</ul>
+</li>
+<li><strong>Module:</strong>
+<ul>
+<li>the simplest definition is a <strong>source file</strong></li>
+<li>where code is not in source files it is a <strong>cohesive set of functions and data structures</strong>. &quot;Cohesive&quot; implies the SRP: <strong>cohesion is the force that binds together the code responsible to a single actor.</strong></li>
+</ul>
+</li>
+<li>The best way to understand it is through the symptoms of violation.</li>
+</ul>
+<h2 id="7-2-symptom-1-accidental-duplication">7.2 Symptom 1: accidental duplication</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-07-employee-problem.svg" alt="Employee problem" loading="lazy" /></p>
+<ul>
+<li>Martin's favourite example:
+<ul>
+<li>the <code>Employee</code> class of a payroll application with three methods: <code>calculatePay()</code>, <code>reportHours()</code> and <code>save()</code> (Figure 7.1)</li>
+<li>It violates SRP because the methods are responsible to <strong>three very different actors</strong>:</li>
+<li><code>calculatePay()</code>: specified by the <strong>accounting department</strong>, reporting to the <strong>CFO</strong>.</li>
+<li><code>reportHours()</code>: specified and used by <strong>human resources</strong>, reporting to the <strong>COO</strong>.</li>
+<li><code>save()</code>: specified by the <strong>database administrators (DBAs)</strong>, reporting to the <strong>CTO</strong>.</li>
+</ul>
+</li>
+<li>Putting them in one class <strong>couples the actors to each other</strong>, so what the CFO's team does can affect something the COO's team depends on.</li>
+<li>Example:
+<ul>
+<li><code>calculatePay()</code> and <code>reportHours()</code> share an algorithm for <strong>non-overtime hours</strong>, which careful, non-duplicating developers put in <code>regularHours()</code> (Figure 7.2)
+<ul>
+<li>The CFO's team decides the calculation needs a tweak</li>
+</ul>
+</li>
+<li>HR does <strong>not</strong> want it (they use non-overtime hours for another purpose)
+<ul>
+<li>A developer sees <code>regularHours()</code> called by <code>calculatePay()</code> but <strong>does not notice <code>reportHours()</code> also calls it</strong>, makes and tests the change</li>
+</ul>
+</li>
+<li>the CFO's team validates it and it deploys. HR keeps using <code>reportHours()</code> reports that are now <strong>wrong</strong></li>
+<li>when found, the COO is &quot;livid because the bad data has cost his budget millions of dollars&quot;.</li>
+</ul>
+</li>
+<li>&quot;We've all seen things like this happen&quot;: the problems come from putting code that <strong>different actors depend on</strong> in close proximity
+<ul>
+<li>The SRP says to <strong>separate the code that different actors depend on</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-3-symptom-2-merges">7.3 Symptom 2: merges</h2>
+<ul>
+<li>Merges are common in source files with many methods, especially if they serve different actors
+<ul>
+<li>Example: the CTO's DBAs decide on a <strong>schema change</strong> to the Employee table, while the COO's HR clerks need a change to the <strong>hours report format</strong></li>
+<li>Two developers, possibly on different teams, check out <code>Employee</code> and their changes collide: a <strong>merge</strong></li>
+<li>Merges are risky (&quot;no tool can deal with every merge case&quot;); here the merge puts the <strong>CTO and the COO at risk</strong>, and possibly the CFO.</li>
+</ul>
+</li>
+<li>Many other symptoms exist but all involve <strong>several people changing the same source file for different reasons</strong>. The cure is again to separate code that supports different actors.</li>
+</ul>
+<h2 id="7-4-solutions">7.4 Solutions</h2>
+<p><img src="/book-digest/clean-architecture/img/ca-07-solutions.svg" alt="Solutions" loading="lazy" /></p>
+<ul>
+<li>Many solutions exist; each <strong>moves functions into different classes</strong>.
+<ul>
+<li><strong>Separate the data from the functions</strong>
+<ul>
+<li>(Figure 7.3): the three classes (pay calculation, hour reporting, saving) share access to <strong><code>EmployeeData</code></strong>, a simple data structure with no methods</li>
+<li>Each class holds only the code for its function and the three are <strong>not allowed to know about each other</strong>, so accidental duplication is avoided.</li>
+</ul>
+</li>
+<li>Downside:
+<ul>
+<li>developers must instantiate and track <strong>three classes</strong></li>
+<li>A common remedy is the <strong>Facade pattern</strong> (Figure 7.4): an <strong><code>EmployeeFacade</code></strong> with very little code that instantiates and delegates to the classes.</li>
+</ul>
+</li>
+<li>Some prefer to keep the <strong>most important business rules closer to the data</strong>: keep the most important method in the original <code>Employee</code> class and use that class as a Facade for the lesser functions (Figure 7.5).</li>
+</ul>
+</li>
+<li>Objection:
+<ul>
+<li>&quot;every class would contain just one function&quot;</li>
+<li>Not so: calculating pay, generating a report or saving likely needs many functions, so each class has <strong>many private methods</strong></li>
+<li>Each such class is a <strong>scope</strong>: outside it no one knows the private members exist.</li>
+</ul>
+</li>
+</ul>
+<h2 id="7-5-conclusion">7.5 Conclusion</h2>
+<ul>
+<li>SRP is about <strong>functions and classes</strong>, but returns in different forms at two more levels: at the <strong>component</strong> level as the <strong>Common Closure Principle</strong>
+<ul>
+<li>at the <strong>architectural</strong> level as the <strong>Axis of Change</strong> responsible for creating <strong>architectural boundaries</strong>.</li>
+</ul>
+</li>
+</ul>
+<h2 id="summary-points">Summary points</h2>
+<ul>
+<li>One actor per module; cohesion binds the code that answers to one actor.</li>
+<li>Violations show up as accidental duplication (shared code changed for one actor, breaking another) and merges.</li>
+<li>Separate by actor (data plus classes, Facade); the same idea scales to components and architecture.</li>
+</ul>
+<details class="callout c-note"><summary>Terms to carry forward</summary><div class="callout-body">
+<ul>
+<li><strong>SRP</strong>: one, and only one, <strong>actor</strong>.</li>
+<li><strong>Accidental duplication</strong>; <strong>merge</strong> conflicts; <strong>Facade</strong>.</li>
+<li><strong>Common Closure Principle</strong>; <strong>Axis of Change</strong>.</li>
+</ul>
+</div></details>
+<h2 id="q-a">Q&amp;A</h2>
+<h2 id="source">Source</h2>
+<ul>
+<li>Robert C. Martin, <em>Clean Architecture</em>, Pearson 2017, chapter 7: <a href="https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch7.xhtml" target="_blank" rel="noopener noreferrer">https://learning.oreilly.com/library/view/clean-architecture-a/9780134494272/ch7.xhtml</a></li>
+<li>Figures 7.1 to 7.5 are redrawn as boxes; the book's class diagrams are images.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="/book-digest/clean-architecture/ca-06-functional-programming/">Clean Architecture 6: Functional Programming</a></li>
+<li><a href="/book-digest/clean-architecture/ca-08-ocp-the-open-closed-principle/">Clean Architecture 8: OCP, the Open-Closed Principle</a></li>
+<li><a href="/book-digest/learning-domain-driven-design/">Learning Domain Driven Design: contents</a></li>
+</ul>
+<nav class="pager"><a href="/book-digest/clean-architecture/ca-06-functional-programming/">&larr; Clean Architecture 6: Functional Programming</a><a href="/book-digest/clean-architecture/">Contents</a><a href="/book-digest/clean-architecture/ca-08-ocp-the-open-closed-principle/">Clean Architecture 8: OCP, the Open-Closed Principle &rarr;</a></nav></main>
+<style>
+main img{cursor:zoom-in}
+#zb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;touch-action:none;overflow:hidden}
+#zb img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;background:#fff;border-radius:6px;user-select:none;-webkit-user-drag:none;cursor:grab}
+#zx{position:fixed;top:10px;right:12px;z-index:10000;display:none;font:600 15px system-ui;color:#fff;background:rgba(255,255,255,.18);border:0;border-radius:20px;padding:8px 14px}
+</style>
+<div id="zb"></div><button id="zx" aria-label="Close">Close</button>
+<script>
+(function(){
+var zb=document.getElementById('zb'),zx=document.getElementById('zx'),im=null,s=1,x=0,y=0,mn=1,P={},d0=0,s0=1,last=0,moved=false;
+function ap(){im.style.transform='translate('+x+'px,'+y+'px) scale('+s+')';}
+function fit(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth||W,h=im.naturalHeight||H;mn=Math.min(W/w,H/h,1);im.style.width=w+'px';im.style.height=h+'px';s=mn;x=(W-w*s)/2;y=(H-h*s)/2;ap();}
+function clamp(){var W=zb.clientWidth,H=zb.clientHeight,w=im.naturalWidth*s,h=im.naturalHeight*s;x=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,x));y=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,y));}
+function zoomAt(cx,cy,ns){ns=Math.max(mn,Math.min(ns,mn*8));x=cx-(cx-x)*ns/s;y=cy-(cy-y)*ns/s;s=ns;clamp();ap();}
+function open(src,alt){im=new Image();im.alt=alt||'';im.draggable=false;zb.innerHTML='';zb.appendChild(im);zb.style.display='block';zx.style.display='block';document.body.style.overflow='hidden';im.onload=fit;im.src=src;if(im.complete&&im.naturalWidth)fit();}
+function close(){zb.style.display='none';zx.style.display='none';zb.innerHTML='';document.body.style.overflow='';P={};}
+document.addEventListener('click',function(e){var t=e.target;if(t.tagName==='IMG'&&t.closest('main')&&zb.style.display!=='block'){e.preventDefault();open(t.currentSrc||t.src,t.alt);}});
+zx.addEventListener('click',close);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+zb.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,s*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+zb.addEventListener('pointerdown',function(e){zb.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};moved=false;var k=Object.keys(P);if(k.length===2){var a=P[k[0]],b=P[k[1]];d0=Math.hypot(a.x-b.x,a.y-b.y);s0=s;}});
+zb.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;var k=Object.keys(P),o=P[e.pointerId];if(k.length===1){x+=e.clientX-o.x;y+=e.clientY-o.y;if(Math.abs(e.clientX-o.x)+Math.abs(e.clientY-o.y)>2)moved=true;P[e.pointerId]={x:e.clientX,y:e.clientY};clamp();ap();}else if(k.length===2){P[e.pointerId]={x:e.clientX,y:e.clientY};var a=P[k[0]],b=P[k[1]];moved=true;zoomAt((a.x+b.x)/2,(a.y+b.y)/2,s0*Math.hypot(a.x-b.x,a.y-b.y)/d0);}});
+function up(e){if(!P[e.pointerId])return;var wasOne=Object.keys(P).length===1;delete P[e.pointerId];if(wasOne&&!moved){var n=Date.now();if(n-last<300){zoomAt(e.clientX,e.clientY,s>mn*1.5?mn:mn*3);last=0;}else last=n;}}
+zb.addEventListener('pointerup',up);zb.addEventListener('pointercancel',function(e){delete P[e.pointerId];});
+})();
+</script>
+</body></html>
